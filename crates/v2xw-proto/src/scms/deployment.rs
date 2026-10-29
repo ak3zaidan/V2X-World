@@ -234,6 +234,321 @@ impl Region {
     }
 }
 
+/// Where a site's point comes from (08-settings-ux-and-gaps §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointSource {
+    /// The cloud names the city; the point is that place's internal point in the US
+    /// Census Bureau's 2024 Gazetteer places file (`INTPTLAT`, `INTPTLONG`).
+    PublishedCity,
+    /// The cloud names only a state (or nothing, for today's six regions); the point is a
+    /// named metro, an ASSUMPTION.
+    AssumedMetro,
+    /// The user's own coordinates (`lat_deg`, `lon_deg`), the user's assumption.
+    Custom,
+}
+
+impl PointSource {
+    /// The id the manifest prints.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            PointSource::PublishedCity => "published-city",
+            PointSource::AssumedMetro => "assumed-metro",
+            PointSource::Custom => "custom",
+        }
+    }
+}
+
+/// The 2024 Census Gazetteer places file the published-city points are read from.
+pub const GAZETTEER_2024: &str = "https://www2.census.gov/geo/docs/maps-data/data/gazetteer/\
+                                  2024_Gazetteer/2024_Gaz_place_national.zip";
+/// Google Cloud's region list (read 2026-10-28): every US region with its city.
+pub const GCP_REGIONS: &str = "https://docs.cloud.google.com/compute/docs/regions-zones";
+/// Azure's region list (read 2026-10-28): every US region with its state or city.
+pub const AZURE_REGIONS: &str = "https://learn.microsoft.com/en-us/azure/reliability/regions-list";
+/// AWS's region list (read 2026-10-28): every US region with its state.
+pub const AWS_REGIONS: &str =
+    "https://docs.aws.amazon.com/global-infrastructure/latest/regions/aws-regions.html";
+
+/// How far a city point can sit from a campus in that city, km: about the radius of a
+/// large US metro (ASSUMPTION, 08 §5), stated in the manifest with its latency bound.
+pub const CITY_POINT_ERROR_KM: f64 = 30.0;
+
+/// A server site: a public-cloud region's published location, one of today's six assumed
+/// regions, or the user's own coordinates (08-settings-ux-and-gaps §5). *Which* site a
+/// provider uses stays an ASSUMPTION (01 §2.3: no provider publishes it); *where* a cloud
+/// region is, is cited.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Site {
+    /// The setting's id, e.g. `gcp-us-west1`.
+    pub id: &'static str,
+    /// `assumed` (today's regions), `google`, `azure`, `aws` or `custom`.
+    pub cloud: &'static str,
+    /// The location as the cloud publishes it (`The Dalles, Oregon`; `Virginia`).
+    pub published: &'static str,
+    /// Where that location is published.
+    pub source: &'static str,
+    /// The point's latitude, degrees north.
+    pub lat_deg: f64,
+    /// The point's longitude, degrees east.
+    pub lon_deg: f64,
+    /// The place the point stands for.
+    pub metro: &'static str,
+    /// Where the point comes from.
+    pub point_source: PointSource,
+}
+
+const fn assumed_region(r: Region) -> Site {
+    Site {
+        id: r.name,
+        cloud: "assumed",
+        published: "not published (01 §2.3)",
+        source: "",
+        lat_deg: r.lat_deg,
+        lon_deg: r.lon_deg,
+        metro: r.metro,
+        point_source: PointSource::AssumedMetro,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+const fn cloud_site(
+    id: &'static str,
+    cloud: &'static str,
+    published: &'static str,
+    source: &'static str,
+    lat_deg: f64,
+    lon_deg: f64,
+    metro: &'static str,
+    point_source: PointSource,
+) -> Site {
+    Site {
+        id,
+        cloud,
+        published,
+        source,
+        lat_deg,
+        lon_deg,
+        metro,
+        point_source,
+    }
+}
+
+const fn gcp(id: &'static str, city: &'static str, lat: f64, lon: f64) -> Site {
+    cloud_site(
+        id,
+        "google",
+        city,
+        GCP_REGIONS,
+        lat,
+        lon,
+        city,
+        PointSource::PublishedCity,
+    )
+}
+
+/// The site catalogue (08 §5). Today's six regions keep their coordinates, so a scenario
+/// naming one as a site runs exactly as with `region`. Published-city points are the 2024
+/// Gazetteer place internal points ([`GAZETTEER_2024`], read 2026-10-29). For a state-only
+/// listing the metro is an ASSUMPTION: AWS's four regions take today's catalogue point in
+/// that state (us-east-1 → Ashburn, as `us-east`); Azure's take the metro of the campus
+/// the trade press reports for that region (Boydton VA for eastus/eastus2: Data Center
+/// Knowledge and Data Center Map; the others as commonly reported), each a Gazetteer point.
+pub const SITES: [Site; 28] = [
+    assumed_region(REGIONS[0]),
+    assumed_region(REGIONS[1]),
+    assumed_region(REGIONS[2]),
+    assumed_region(REGIONS[3]),
+    assumed_region(REGIONS[4]),
+    assumed_region(REGIONS[5]),
+    gcp(
+        "gcp-us-central1",
+        "Council Bluffs, IA",
+        41.235_987,
+        -95.853_163,
+    ),
+    gcp("gcp-us-east1", "Moncks Corner, SC", 33.199_763, -79.986_603),
+    gcp("gcp-us-east4", "Ashburn, VA", 39.027_296, -77.471_322),
+    gcp("gcp-us-east5", "Columbus, OH", 39.983_938, -82.984_882),
+    gcp("gcp-us-south1", "Dallas, TX", 32.793_333, -96.766_513),
+    gcp("gcp-us-west1", "The Dalles, OR", 45.598_386, -121.152_411),
+    gcp("gcp-us-west2", "Los Angeles, CA", 34.019_394, -118.410_825),
+    gcp(
+        "gcp-us-west3",
+        "Salt Lake City, UT",
+        40.776_928,
+        -111.930_991,
+    ),
+    gcp("gcp-us-west4", "Las Vegas, NV", 36.233_499, -115.264_037),
+    cloud_site(
+        "azure-eastus",
+        "azure",
+        "Virginia",
+        AZURE_REGIONS,
+        36.666_06,
+        -78.390_727,
+        "Boydton, VA",
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "azure-eastus2",
+        "azure",
+        "Virginia",
+        AZURE_REGIONS,
+        36.666_06,
+        -78.390_727,
+        "Boydton, VA",
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "azure-centralus",
+        "azure",
+        "Iowa",
+        AZURE_REGIONS,
+        41.549_937,
+        -93.781_351,
+        "West Des Moines, IA",
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "azure-northcentralus",
+        "azure",
+        "Illinois",
+        AZURE_REGIONS,
+        41.837_045,
+        -87.684_939,
+        "Chicago, IL",
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "azure-southcentralus",
+        "azure",
+        "Texas",
+        AZURE_REGIONS,
+        29.462_809,
+        -98.524_635,
+        "San Antonio, TX",
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "azure-westcentralus",
+        "azure",
+        "Wyoming",
+        AZURE_REGIONS,
+        41.128_702,
+        -104.790_778,
+        "Cheyenne, WY",
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "azure-westus",
+        "azure",
+        "California",
+        AZURE_REGIONS,
+        37.364_621,
+        -121.967_973,
+        "Santa Clara, CA",
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "azure-westus2",
+        "azure",
+        "Washington",
+        AZURE_REGIONS,
+        47.235_877,
+        -119.849_079,
+        "Quincy, WA",
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "azure-westus3",
+        "azure",
+        "Phoenix",
+        AZURE_REGIONS,
+        33.572_154,
+        -112.090_132,
+        "Phoenix, AZ",
+        PointSource::PublishedCity,
+    ),
+    cloud_site(
+        "aws-us-east-1",
+        "aws",
+        "N. Virginia",
+        AWS_REGIONS,
+        REGIONS[0].lat_deg,
+        REGIONS[0].lon_deg,
+        REGIONS[0].metro,
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "aws-us-east-2",
+        "aws",
+        "Ohio",
+        AWS_REGIONS,
+        REGIONS[1].lat_deg,
+        REGIONS[1].lon_deg,
+        REGIONS[1].metro,
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "aws-us-west-1",
+        "aws",
+        "N. California",
+        AWS_REGIONS,
+        REGIONS[5].lat_deg,
+        REGIONS[5].lon_deg,
+        REGIONS[5].metro,
+        PointSource::AssumedMetro,
+    ),
+    cloud_site(
+        "aws-us-west-2",
+        "aws",
+        "Oregon",
+        AWS_REGIONS,
+        REGIONS[4].lat_deg,
+        REGIONS[4].lon_deg,
+        REGIONS[4].metro,
+        PointSource::AssumedMetro,
+    ),
+];
+
+/// The site id for the user's own coordinates.
+pub const CUSTOM_SITE: &str = "custom";
+
+impl Site {
+    /// The catalogue site named `id` (not `custom`, which carries the user's point).
+    #[must_use]
+    pub fn catalogue(id: &str) -> Option<Site> {
+        SITES.iter().copied().find(|s| s.id == id)
+    }
+
+    /// The user's own site at `(lat_deg, lon_deg)`.
+    #[must_use]
+    pub const fn custom(lat_deg: f64, lon_deg: f64) -> Site {
+        cloud_site(
+            CUSTOM_SITE,
+            "custom",
+            "your coordinates",
+            "",
+            lat_deg,
+            lon_deg,
+            "custom coordinates",
+            PointSource::Custom,
+        )
+    }
+
+    /// The site as the point every latency is measured from.
+    #[must_use]
+    pub const fn region(&self) -> Region {
+        Region {
+            name: self.id,
+            lat_deg: self.lat_deg,
+            lon_deg: self.lon_deg,
+            metro: self.metro,
+        }
+    }
+}
+
 /// Mean Earth radius, km (IUGG R1 = 6371.0088 km; Moritz, *Geodetic Reference System
 /// 1980*, J. Geodesy 74 (2000)).
 pub const EARTH_RADIUS_KM: f64 = 6_371.008_8;
@@ -315,9 +630,19 @@ pub struct Provider {
     /// Whose published certificate chain its certificates follow: lifetimes, regions,
     /// the RA's permission form and the CRACA (gov L-1, L-5, F-1; crypto CF-CRACA).
     pub cert_profile: crate::scms::governance::CertProfile,
+    /// The server site it was placed at (`providers[].site`, 08 §5), whose point is then
+    /// [`Provider::region`]; `None` keeps the region of the preset or the `region` key.
+    pub site: Option<Site>,
 }
 
 impl Provider {
+    /// Places its servers at `site`: every latency is then measured from the site's point,
+    /// and the manifest names the site and where its point comes from.
+    pub fn place(&mut self, site: Site) {
+        self.region = site.region();
+        self.site = Some(site);
+    }
+
     /// How many instances of `role` it runs.
     #[must_use]
     pub fn count(&self, role: &str) -> u32 {
@@ -338,6 +663,7 @@ impl Provider {
             fleet_share: share,
             on_ctl: true,
             cert_profile: crate::scms::governance::CertProfile::default(),
+            site: None,
         }
     }
 }
@@ -791,11 +1117,17 @@ impl Deployment {
     pub fn assumptions(&self) -> Vec<String> {
         let mut out = Vec::new();
         for p in &self.providers {
-            out.push(format!(
-                "ASSUMPTION: {} runs in region {} (point: {}); no provider publishes its \
-                 data-centre locations (01 §2.3)",
-                p.name, p.region.name, p.region.metro
-            ));
+            match p.site {
+                None => out.push(format!(
+                    "ASSUMPTION: {} runs in region {} (point: {}); no provider publishes its \
+                     data-centre locations (01 §2.3)",
+                    p.name, p.region.name, p.region.metro
+                )),
+                Some(s) => out.push(site_assumption(&p.name, "", &s)),
+            }
+        }
+        if self.providers.iter().any(|p| p.site.is_some()) {
+            out.push(site_error_bound(self.latency));
         }
         if self.providers.len() > 1 {
             out.push(
@@ -818,6 +1150,46 @@ impl Deployment {
         );
         out
     }
+}
+
+/// The manifest line for a provider's site (`role` empty for the provider's own site).
+fn site_assumption(provider: &str, role: &str, s: &Site) -> String {
+    let what = if role.is_empty() {
+        provider.to_string()
+    } else {
+        format!("{provider}'s {role}")
+    };
+    let source = if s.source.is_empty() {
+        String::new()
+    } else {
+        format!("; location from {}", s.source)
+    };
+    format!(
+        "ASSUMPTION: {what} runs at site {} ({}: {}, point {} at {:.6}, {:.6}, point_source \
+         {}{source}); no provider publishes which site it uses (01 §2.3)",
+        s.id,
+        s.cloud,
+        s.published,
+        s.metro,
+        s.lat_deg,
+        s.lon_deg,
+        s.point_source.id(),
+    )
+}
+
+/// The manifest's statement of how far a site's point can be from the real campus.
+fn site_error_bound(latency: LatencyModel) -> String {
+    let ms = match latency {
+        LatencyModel::Region { fibre_fraction, .. } => {
+            CITY_POINT_ERROR_KM / (C_KM_S * fibre_fraction) * 1e3
+        }
+        LatencyModel::Flat => 0.0,
+    };
+    format!(
+        "ASSUMPTION: a site's point is within about {CITY_POINT_ERROR_KM} km of any campus in \
+         that city, at most {ms:.3} ms one way (city points: the 2024 Census Gazetteer, {})",
+        GAZETTEER_2024
+    )
 }
 
 #[cfg(test)]
@@ -945,6 +1317,40 @@ mod tests {
         d.electors = 4;
         d.validate().unwrap();
         assert!(!d.is_us(), "four electors is not the US system");
+    }
+
+    /// The site catalogue: unique ids, today's six regions at their points, every cloud
+    /// site with its published location and source, every point inside the contiguous US.
+    #[test]
+    fn the_site_catalogue_is_unique_cited_and_in_the_us() {
+        let mut ids: Vec<&str> = SITES.iter().map(|s| s.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), SITES.len());
+        assert!(Site::catalogue(CUSTOM_SITE).is_none());
+        for r in REGIONS {
+            assert_eq!(Site::catalogue(r.name).map(|s| s.region()), Some(r));
+        }
+        for s in SITES {
+            assert!(
+                (24.0..50.0).contains(&s.lat_deg) && (-125.0..-66.0).contains(&s.lon_deg),
+                "{}",
+                s.id
+            );
+            if s.cloud != "assumed" {
+                assert!(s.source.starts_with("https://") && !s.published.is_empty());
+            }
+            if s.point_source == PointSource::PublishedCity {
+                assert_ne!(s.cloud, "aws", "AWS publishes states only");
+            }
+        }
+        let mut p = Deployment::preset(Preset::UsProduction2025);
+        let before = p.assumptions();
+        p.providers[1].place(Site::catalogue("gcp-us-west1").unwrap());
+        assert_eq!(p.providers[1].region.name, "gcp-us-west1");
+        let after = p.assumptions();
+        assert_eq!(after.len(), before.len() + 1, "{after:#?}");
+        assert_eq!(after[0], before[0]);
     }
 
     /// Haversine against an independent computation (Python `math` with the same formula

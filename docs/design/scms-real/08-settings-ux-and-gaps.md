@@ -416,6 +416,34 @@ The `scms_deployment` goldens are re-run, with no re-bless.
 * C1a: the catalogue, keys, parser, latency and tests 1, 3 and 4.
 * C1b: per-role sites, test 2, guide and option words.
 
+**Status, C1a (2026-10-29): built.** `deployment::SITES` holds the 28 catalogue sites
+(`Site`: id, cloud, published location, source URL, point, `PointSource`), and `custom`
+takes `lat_deg`/`lon_deg`. Today's six regions keep their coordinates as sites. Google's
+nine and Azure westus3 are `published-city` points, each the 2024 Census Gazetteer place
+internal point (`2024_Gaz_place_national.zip`, read 2026-10-29). Example: The Dalles city,
+OR, GEOID 4172950, 45.598386, -121.152411. The state-only listings are `assumed-metro`
+(§9 rule). AWS's four take today's point in that state, so us-east-1 is Ashburn as in
+`us-east`. Azure's take the metro of the campus the trade press reports for the region.
+eastus and eastus2 are Boydton VA (Data Center Knowledge and Data Center Map, which list
+Microsoft's Boydton campus under East US / East US 2). centralus is West Des Moines,
+northcentralus Chicago, southcentralus San Antonio, westcentralus Cheyenne, westus Santa
+Clara and westus2 Quincy WA. Each is an ASSUMPTION and the manifest says so.
+`Provider::place` moves the provider's point, so its city leg and its MA-to-MA links are
+measured from the site. The loader and `deployment_of` both refuse: `site` together with
+`region` (at `.site`), coordinates without `site: custom`, and `custom` without both
+coordinates (each at its own path). An unknown site or a coordinate out of range is
+refused as malformed. The manifest prints each placed provider's site, published location,
+point, `point_source` and source, plus one line for the 30 km / 0.150 ms error bound.
+`site`, `lat_deg` and `lon_deg` are now `wired` in `scms_topology::KEY_STATUS`, and their
+site menu is available. `sites.<role>` stays refused, and its menu says so, until C1b. The
+`publish` module-keys test now checks each key's status against its module's own row
+instead of `refused` everywhere. Tests: `tests/scms_sites.rs` (accept tests 1, 3 and 4,
+plus "today's regions as sites and the default are unchanged") and
+`deployment::tests::the_site_catalogue_is_unique_cited_and_in_the_us`. No golden moved: a
+provider with no site prints today's manifest line and builds today's `Deployment`. Left
+for A3: guide rows, and the schema doc comments in `schema.rs` that still say "Not built
+yet".
+
 ---
 
 ## 6. Gap 2: server capacity as settings

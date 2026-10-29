@@ -1,6 +1,6 @@
 //! Where each SCMS server runs, how much it can serve, and how deep each provider's CA
 //! hierarchy is (docs/design/scms-real/08-settings-ux-and-gaps.md §5, §6 and §8).
-//! **Scaffolding (piece A0).**
+//! **Scaffolding (piece A0); built: C1a (`site`, `lat_deg`, `lon_deg`).**
 //!
 //! What is here: the keys' menus, ranges, titles and status, the refusal, and the three
 //! calls [`crate::phase2`] already makes ([`apply_sites`] and [`ica_levels`] for each
@@ -13,7 +13,7 @@
 //! [`KEY_STATUS`] and its refusal in [`refusals`] (§11).
 
 use serde_json::{Value, json};
-use v2xw_proto::scms::deployment::{Provider, ROLES};
+use v2xw_proto::scms::deployment::{CUSTOM_SITE, Provider, ROLES, Site};
 use v2xw_proto::scms::run::ScmsRun;
 
 use crate::error::{EngineError, Result, ScenarioError};
@@ -77,9 +77,11 @@ pub const SITE_IDS: [&str; 29] = [
 pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: SITE,
-        status: Status::Refused,
-        note: "Not built yet (08-settings-ux-and-gaps §5, piece C1a): any site is refused; \
-               a provider runs at its region.",
+        status: Status::Wired,
+        note: "Places every server of the provider at the site's point: its city and \
+               inter-provider latencies are measured from there (08 §5). Which site a \
+               provider uses is an ASSUMPTION; where a cloud region is, is cited. Not with \
+               region.",
     },
     KeyStatus {
         path: SITES,
@@ -89,15 +91,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: LAT,
-        status: Status::Refused,
-        note: "Not built yet (08-settings-ux-and-gaps §5, piece C1a): custom coordinates \
-               are refused.",
+        status: Status::Wired,
+        note: "The custom site's latitude (your assumption); only with site: custom, \
+               together with lon_deg.",
     },
     KeyStatus {
         path: LON,
-        status: Status::Refused,
-        note: "Not built yet (08-settings-ux-and-gaps §5, piece C1a): custom coordinates \
-               are refused.",
+        status: Status::Wired,
+        note: "The custom site's longitude (your assumption); only with site: custom, \
+               together with lat_deg.",
     },
     KeyStatus {
         path: CAPACITY,
@@ -260,185 +262,157 @@ const fn site(value: &'static str, label: &'static str, description: &'static st
         value,
         label,
         description,
-        available: false,
+        available: true,
     }
 }
 
-/// The site menu (08 §5 table; cloud pages read 2026-10-28). Every site is refused until
-/// C1a builds the catalogue's points.
+/// The site menu (08 §5 table; cloud pages read 2026-10-28, Gazetteer points 2026-10-29),
+/// in `SITE_IDS` order; each value's point is `deployment::SITES`.
 static SITE_MENU: &[Opt] = &[
     site(
         "us-east",
         "Assumed region us-east: Ashburn, VA",
-        "Today's catalogue point for us-east (ASSUMPTION). Not built yet as a site (08 §5, \
-         piece C1a); set region instead.",
+        "Today's catalogue point for region us-east (ASSUMPTION: no provider publishes where it runs); the same point as setting region: us-east.",
     ),
     site(
         "us-east-2",
         "Assumed region us-east-2: Columbus, OH",
-        "Today's catalogue point for us-east-2 (ASSUMPTION). Not built yet as a site (08 \
-         §5, piece C1a); set region instead.",
+        "Today's catalogue point for region us-east-2 (ASSUMPTION: no provider publishes where it runs); the same point as setting region: us-east-2.",
     ),
     site(
         "us-central",
         "Assumed region us-central: Council Bluffs, IA",
-        "Today's catalogue point for us-central (ASSUMPTION). Not built yet as a site (08 \
-         §5, piece C1a); set region instead.",
+        "Today's catalogue point for region us-central (ASSUMPTION: no provider publishes where it runs); the same point as setting region: us-central.",
     ),
     site(
         "us-south",
         "Assumed region us-south: San Antonio, TX",
-        "Today's catalogue point for us-south (ASSUMPTION). Not built yet as a site (08 \
-         §5, piece C1a); set region instead.",
+        "Today's catalogue point for region us-south (ASSUMPTION: no provider publishes where it runs); the same point as setting region: us-south.",
     ),
     site(
         "us-west",
         "Assumed region us-west: Boardman, OR",
-        "Today's catalogue point for us-west (ASSUMPTION). Not built yet as a site (08 \
-         §5, piece C1a); set region instead.",
+        "Today's catalogue point for region us-west (ASSUMPTION: no provider publishes where it runs); the same point as setting region: us-west.",
     ),
     site(
         "us-west-1",
         "Assumed region us-west-1: Santa Clara, CA",
-        "Today's catalogue point for us-west-1 (ASSUMPTION). Not built yet as a site (08 \
-         §5, piece C1a); set region instead.",
+        "Today's catalogue point for region us-west-1 (ASSUMPTION: no provider publishes where it runs); the same point as setting region: us-west-1.",
     ),
     site(
         "gcp-us-central1",
         "Google us-central1: Council Bluffs, IA (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for Council Bluffs, IA, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "gcp-us-east1",
         "Google us-east1: Moncks Corner, SC (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for Moncks Corner, SC, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "gcp-us-east4",
         "Google us-east4: Ashburn, VA (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for Ashburn, VA, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "gcp-us-east5",
         "Google us-east5: Columbus, OH (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for Columbus, OH, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "gcp-us-south1",
         "Google us-south1: Dallas, TX (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for Dallas, TX, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "gcp-us-west1",
         "Google us-west1: The Dalles, OR (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for The Dalles, OR, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "gcp-us-west2",
         "Google us-west2: Los Angeles, CA (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for Los Angeles, CA, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "gcp-us-west3",
         "Google us-west3: Salt Lake City, UT (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for Salt Lake City, UT, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "gcp-us-west4",
         "Google us-west4: Las Vegas, NV (published city)",
-        "Google Cloud names the city (regions and zones page). Not built yet (08 §5, piece \
-         C1a).",
+        "Google Cloud names the city on its regions page; the point is the 2024 Census Gazetteer's for Las Vegas, NV, within about 30 km (0.15 ms) of any campus there.",
     ),
     site(
         "azure-eastus",
         "Azure eastus: Virginia (published state; metro assumed)",
-        "Microsoft names the state only (Azure regions list), so the point is a named \
-         metro marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Microsoft names the state only, so the point is Boydton, VA, the campus the trade press reports for this region (ASSUMPTION).",
     ),
     site(
         "azure-eastus2",
         "Azure eastus2: Virginia (published state; metro assumed)",
-        "Microsoft names the state only (Azure regions list), so the point is a named \
-         metro marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Microsoft names the state only, so the point is Boydton, VA, the campus the trade press reports for this region (ASSUMPTION).",
     ),
     site(
         "azure-centralus",
         "Azure centralus: Iowa (published state; metro assumed)",
-        "Microsoft names the state only (Azure regions list), so the point is a named \
-         metro marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Microsoft names the state only, so the point is West Des Moines, IA, the campus the trade press reports for this region (ASSUMPTION).",
     ),
     site(
         "azure-northcentralus",
         "Azure northcentralus: Illinois (published state; metro assumed)",
-        "Microsoft names the state only (Azure regions list), so the point is a named \
-         metro marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Microsoft names the state only, so the point is Chicago, IL, the campus the trade press reports for this region (ASSUMPTION).",
     ),
     site(
         "azure-southcentralus",
         "Azure southcentralus: Texas (published state; metro assumed)",
-        "Microsoft names the state only (Azure regions list), so the point is a named \
-         metro marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Microsoft names the state only, so the point is San Antonio, TX, the campus the trade press reports for this region (ASSUMPTION).",
     ),
     site(
         "azure-westcentralus",
         "Azure westcentralus: Wyoming (published state; metro assumed)",
-        "Microsoft names the state only (Azure regions list), so the point is a named \
-         metro marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Microsoft names the state only, so the point is Cheyenne, WY, the campus the trade press reports for this region (ASSUMPTION).",
     ),
     site(
         "azure-westus",
         "Azure westus: California (published state; metro assumed)",
-        "Microsoft names the state only (Azure regions list), so the point is a named \
-         metro marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Microsoft names the state only, so the point is Santa Clara, CA, the campus the trade press reports for this region (ASSUMPTION).",
     ),
     site(
         "azure-westus2",
         "Azure westus2: Washington (published state; metro assumed)",
-        "Microsoft names the state only (Azure regions list), so the point is a named \
-         metro marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Microsoft names the state only, so the point is Quincy, WA, the campus the trade press reports for this region (ASSUMPTION).",
     ),
     site(
         "azure-westus3",
         "Azure westus3: Phoenix, AZ (published city)",
-        "Microsoft names the city (Azure regions list). Not built yet (08 §5, piece C1a).",
+        "Microsoft names the city on its regions list; the point is the 2024 Census Gazetteer's for Phoenix, AZ.",
     ),
     site(
         "aws-us-east-1",
         "AWS us-east-1: N. Virginia (published state; metro assumed)",
-        "Amazon names the state only (AWS regions page), so the point is a named metro \
-         marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Amazon names the state only, so the point is Ashburn, VA, today's us-east point (ASSUMPTION).",
     ),
     site(
         "aws-us-east-2",
         "AWS us-east-2: Ohio (published state; metro assumed)",
-        "Amazon names the state only (AWS regions page), so the point is a named metro \
-         marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Amazon names the state only, so the point is Columbus, OH, today's us-east-2 point (ASSUMPTION).",
     ),
     site(
         "aws-us-west-1",
         "AWS us-west-1: N. California (published state; metro assumed)",
-        "Amazon names the state only (AWS regions page), so the point is a named metro \
-         marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Amazon names the state only, so the point is Santa Clara, CA, today's us-west-1 point (ASSUMPTION).",
     ),
     site(
         "aws-us-west-2",
         "AWS us-west-2: Oregon (published state; metro assumed)",
-        "Amazon names the state only (AWS regions page), so the point is a named metro \
-         marked ASSUMPTION. Not built yet (08 §5, piece C1a).",
+        "Amazon names the state only, so the point is Boardman, OR, today's us-west point (ASSUMPTION).",
     ),
     site(
         "custom",
-        "Custom coordinates",
-        "Your own site at lat_deg and lon_deg, for an on-premises server (your \
-         assumption). Not built yet (08 §5, piece C1a).",
+        "Custom coordinates…",
+        "Your own site at lat_deg and lon_deg, for an on-premises server (your assumption); set both.",
     ),
 ];
 
@@ -459,6 +433,20 @@ static SERVICE_MENU: &[Opt] = &[
         available: false,
     },
 ];
+
+/// The per-role site menu: the site menu, each value refused until per-role sites are
+/// built (08 §5, piece C1b).
+fn per_role_site_menu() -> Vec<Value> {
+    SITE_MENU
+        .iter()
+        .map(|o| {
+            json!({"value": o.value, "label": o.label,
+                   "description": "Not built yet as a per-role site (08 §5, piece C1b); \
+                                   set the provider's site instead.",
+                   "available": false})
+        })
+        .collect()
+}
 
 /// The ICA-level menu: numbers, with the US value first and the chain limit stated.
 fn levels_menu() -> Vec<Value> {
@@ -500,7 +488,8 @@ pub fn words(path: &str) -> Option<&'static KeyWords> {
 /// The menu for `path`, and whether it is closed.
 pub fn options(path: &str) -> Option<(Vec<Value>, bool)> {
     match path {
-        SITE | SITES_EACH => Some((module_keys::rows(SITE_MENU), true)),
+        SITE => Some((module_keys::rows(SITE_MENU), true)),
+        SITES_EACH => Some((per_role_site_menu(), true)),
         "security.scms.deployment.capacity.*.service"
         | "security.scms.deployment.providers[].capacity.*.service" => {
             Some((module_keys::rows(SERVICE_MENU), true))
@@ -557,11 +546,58 @@ fn provider_refusals(p: &ProviderSpec, group: Group, e: &mut Vec<ScenarioError>)
             "leave it unset or 1, the US hierarchy",
         ),
     };
+    let mut malformed = false;
     for leaf in module_keys::leaves(&v, &at, PROV, &[SITES, PROV_CAPACITY], &map_keys, e) {
         if let Some(err) = module_keys::malformed(&leaf) {
+            malformed = true;
             e.push(err);
-        } else if !(leaf.template == LEVELS && leaf.value == json!(US_ICA_LEVELS)) {
+        } else if !(leaf.template == LEVELS && leaf.value == json!(US_ICA_LEVELS)
+            || [SITE, LAT, LON].contains(&leaf.template.as_str()))
+        {
             e.push(module_keys::not_built(&leaf, piece, instead));
+        }
+    }
+    if group == Group::Sites && !malformed {
+        site_conflicts(p, &at, e);
+    }
+}
+
+/// The combinations of `site`, `region`, `lat_deg` and `lon_deg` that cannot run: a site
+/// replaces the region, and coordinates are the custom site's and come as a pair.
+fn site_conflicts(p: &ProviderSpec, at: &str, e: &mut Vec<ScenarioError>) {
+    let coords = [("lat_deg", p.lat_deg), ("lon_deg", p.lon_deg)];
+    match p.site.as_deref() {
+        Some(site) if p.region.is_some() => e.push(ScenarioError::conflict(
+            &format!("{at}.site"),
+            format!(
+                "is {site}, set together with {at}.region; a site replaces the region, so set \
+                 one of them"
+            ),
+        )),
+        Some(CUSTOM_SITE) => {
+            for (k, v) in coords {
+                if v.is_none() {
+                    e.push(ScenarioError::conflict(
+                        &format!("{at}.{k}"),
+                        "is unset; site: custom places the servers at lat_deg and lon_deg, so \
+                         set both"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        site => {
+            for (k, v) in coords {
+                if v.is_some() {
+                    e.push(ScenarioError::conflict(
+                        &format!("{at}.{k}"),
+                        format!(
+                            "is set with {}; coordinates apply only to site: custom",
+                            site.map_or("no site".to_string(), |s| format!("site: {s}"))
+                        ),
+                    ));
+                }
+            }
         }
     }
 }
@@ -620,10 +656,22 @@ fn first(e: Vec<ScenarioError>) -> Result<()> {
 ///
 /// # Errors
 /// The first refusal of the provider's site keys.
-pub(crate) fn apply_sites(p: &ProviderSpec, _provider: &mut Provider) -> Result<()> {
+pub(crate) fn apply_sites(p: &ProviderSpec, provider: &mut Provider) -> Result<()> {
     let mut e = Vec::new();
     provider_refusals(p, Group::Sites, &mut e);
-    first(e)
+    first(e)?;
+    let site = match (p.site.as_deref(), p.lat_deg, p.lon_deg) {
+        (None, ..) => return Ok(()),
+        (Some(CUSTOM_SITE), Some(lat), Some(lon)) => Site::custom(lat, lon),
+        (Some(id), ..) => Site::catalogue(id).ok_or_else(|| {
+            EngineError::Scenario(ScenarioError::conflict(
+                &format!("security.scms.deployment.providers.{}.site", p.name),
+                format!("'{id}' is not in the site catalogue"),
+            ))
+        })?,
+    };
+    provider.place(site);
+    Ok(())
 }
 
 /// `providers[].ica_levels` onto one provider of the deployment (`phase2::deployment_of`).
@@ -688,19 +736,17 @@ mod tests {
         assert!(refused(provider(json!({"ica_levels": 1}))).is_empty());
         assert!(refused(json!({"capacity": {"ra": {}}})).is_empty());
         let at = "security.scms.deployment.providers.provider-a";
+        assert!(refused(provider(json!({"site": "gcp-us-west1"}))).is_empty());
+        assert!(
+            refused(provider(
+                json!({"site": "custom", "lat_deg": 40.0, "lon_deg": -100.0})
+            ))
+            .is_empty()
+        );
         let cases = [
-            (
-                provider(json!({"site": "gcp-us-west1"})),
-                format!("{at}.site"),
-            ),
             (
                 provider(json!({"sites": {"ma": "us-west"}})),
                 format!("{at}.sites.ma"),
-            ),
-            (provider(json!({"lat_deg": 40.0})), format!("{at}.lat_deg")),
-            (
-                provider(json!({"lon_deg": -100.0})),
-                format!("{at}.lon_deg"),
             ),
             (
                 provider(json!({"capacity": {"ra": {"workers": 4}}})),
@@ -729,12 +775,20 @@ mod tests {
         }
     }
 
-    /// Each menu offers exactly its `_IDS` constant, in order.
+    /// Each menu offers exactly its `_IDS` constant, in order, and the site ids are the
+    /// proto catalogue's plus `custom`, each loadable.
     #[test]
     fn menus_offer_exactly_their_ids() {
         let vals = |o: &[Opt]| o.iter().map(|x| x.value).collect::<Vec<_>>();
         assert_eq!(vals(SITE_MENU), SITE_IDS);
         assert_eq!(vals(SERVICE_MENU), SERVICE_IDS);
+        let catalogue: Vec<&str> = v2xw_proto::scms::deployment::SITES
+            .iter()
+            .map(|s| s.id)
+            .chain([CUSTOM_SITE])
+            .collect();
+        assert_eq!(catalogue, SITE_IDS);
+        assert!(SITE_MENU.iter().all(|o| o.available));
     }
 
     /// A malformed value is refused as malformed: six ICA levels name the chain limit, an
@@ -762,7 +816,10 @@ mod tests {
     /// level hooks for every provider, and the capacity hook refuses on its own.
     #[test]
     fn the_build_refuses_without_the_loader() {
-        for fields in [json!({"site": "gcp-us-west1"}), json!({"ica_levels": 3})] {
+        for fields in [
+            json!({"sites": {"ma": "us-west"}}),
+            json!({"ica_levels": 3}),
+        ] {
             let s = scenario(provider(fields.clone()));
             let got = crate::phase2::deployment_of(&s, true);
             assert!(
