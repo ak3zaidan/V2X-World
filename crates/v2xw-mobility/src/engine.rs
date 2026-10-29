@@ -851,6 +851,91 @@ impl VehicleDynamicsParams {
     }
 }
 
+/// How near its stop line an emergency vehicle at a red must be, metres, to count as at
+/// the line and judge the junction clear ([`EmergencyYieldParams::red_pass_speed_mps`]):
+/// the stop a red asks for stands [`STOP_LINE_OFFSET_M`] short of it, with slack.
+const EV_RED_LINE_M: f64 = 3.0;
+
+/// Below this speed a conflicting claimant short of its line is taken to be yielding to an
+/// emergency vehicle at a red, m/s: the cross street stops for it (NY VTL §1144(a)).
+const EV_RED_STANDING_MPS: f64 = 0.5;
+
+/// The fastest an emergency vehicle creeps from its stop at a red to the line, m/s:
+/// 5 mi/h. **A choice**: "proceed with caution" has no figure.
+const EV_RED_CREEP_MPS: f64 = 2.235;
+
+/// A conflicting vehicle that will reach its own stop line within this time keeps an
+/// emergency vehicle at a red waiting, seconds. **A choice**: a 20 m junction crossed
+/// from rest at the emergency class's 2.6 m/s² takes about 3.9 s.
+const EV_RED_CLEAR_S: f64 = 4.0;
+
+/// Traffic yields to emergency vehicles (WP-20, `traffic.emergency_yield`).
+///
+/// A driver reacts when an emergency-class vehicle running its beacons
+/// ([`crate::lamps::LampParams::emergency_beacons`]) is behind them on the same
+/// carriageway (a lane of their own edge), its front bumper no more than
+/// `reaction_distance_m` short of their rear: the siren trigger. How they make way is the
+/// jurisdiction's ([`crate::rules::EmergencyYield`]):
+///
+/// * in the emergency vehicle's own lane, with a lane to the right: they change right at
+///   the speed the traffic allows, re-planning the route if that lane cannot make their
+///   next turn;
+/// * in the emergency vehicle's lane with no lane to the right: they drive on (there is
+///   nowhere to pull over to that lets it past; the sub-lane edge offset of P20.2 moves
+///   them to the edge);
+/// * in any other lane of the carriageway, once any lane change is complete: they slow
+///   at their comfortable deceleration and stop, unless the stop line ahead is nearer
+///   than that stop needs ("clear of any intersection", NY VTL §1144(a)), and stand until
+///   it has passed.
+///
+/// The emergency vehicle itself keeps left: it makes no discretionary change to the
+/// right, and passes a red after stopping ([`Self::red_pass_speed_mps`]).
+///
+/// Off by default; a reaction reads ground truth (the siren is heard, the lightbar seen),
+/// which the plan's V2X trigger (P20.4) replaces with belief.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EmergencyYieldParams {
+    /// Whether drivers yield at all. `traffic.emergency_yield.enabled`.
+    pub enabled: bool,
+    /// The reaction distance, metres: from the emergency vehicle's front bumper to the
+    /// driver's rear. 25 m, SUMO's bluelight device `reactiondist` default
+    /// (`docs/design/frameworks/sumo.md` §3.8; S-P5: calibrate against siren audibility).
+    /// `traffic.emergency_yield.reaction_distance_m`.
+    pub reaction_distance_m: f64,
+    /// How drivers make way: the jurisdiction's ([`crate::rules::TrafficRules::apply`]).
+    pub rule: crate::rules::EmergencyYield,
+    /// The speed an emergency vehicle slows to at a red before it passes, m/s; 0 is a
+    /// full stop. UVC §11-106(b)2 lets it "proceed past a red or stop signal ... but only
+    /// after slowing down as may be necessary for safe operation" without a figure
+    /// (**secondary**, not re-read); fire-service practice is a complete stop at a red
+    /// and at every negative right-of-way intersection (NFPA 1451 §7.1.3 as Fire
+    /// Apparatus Magazine quotes it; VFIS *Intersection Practices*; municipal SOPs such as
+    /// MTAS Tennessee's: stop, then go only once all oncoming traffic is accounted for —
+    /// all **secondary**, read 2026-10-28). 0 by default, the stricter practice.
+    /// `traffic.emergency_yield.red_pass_speed_mps`.
+    pub red_pass_speed_mps: f64,
+}
+
+impl Default for EmergencyYieldParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            reaction_distance_m: 25.0,
+            rule: crate::rules::EmergencyYield::PullRight,
+            red_pass_speed_mps: 0.0,
+        }
+    }
+}
+
+impl EmergencyYieldParams {
+    /// True when yielding is off (the default, and the serialisation skip).
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_off(&self) -> bool {
+        !self.enabled
+    }
+}
+
 /// Half the window the grade is judged over, metres: θ is `(z(s+5) − z(s−5)) / 10` along
 /// the lane's (3-D) arc length, so it is `sin θ` directly. **This crate's choice**: a
 /// 10 m chord averages out a DEM drape's cell steps (SRTM 1″ is 30 m) without missing a
@@ -1031,6 +1116,10 @@ pub struct EngineParams {
     /// by default; `traffic.vehicle_dynamics`.
     #[serde(default, skip_serializing_if = "VehicleDynamicsParams::is_off")]
     pub vehicle_dynamics: VehicleDynamicsParams,
+    /// Traffic yields to emergency vehicles ([`EmergencyYieldParams`]). Off by default;
+    /// `traffic.emergency_yield`.
+    #[serde(default, skip_serializing_if = "EmergencyYieldParams::is_off")]
+    pub emergency_yield: EmergencyYieldParams,
     /// A multiplier on the HCM critical gaps and follow-up times at unsignalised
     /// junctions ([`GapAcceptanceParams::gap_factor`]); 1.0.
     pub critical_gap_factor: f64,
@@ -1208,6 +1297,7 @@ impl Default for EngineParams {
             depart_speed_max: false,
             lane_bend_speed: false,
             vehicle_dynamics: VehicleDynamicsParams::default(),
+            emergency_yield: EmergencyYieldParams::default(),
             permitted_left_critical_headway_s:
                 crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
             critical_gap_factor: 1.0,
@@ -1361,6 +1451,9 @@ struct Actor {
     amber_commit: Option<JunctionId>,
     /// The junction whose amber the vehicle has already seen and decided on.
     amber_seen: Option<JunctionId>,
+    /// The junction whose red this emergency vehicle has stopped (or slowed) for and is
+    /// now passing ([`EmergencyYieldParams::red_pass_speed_mps`]).
+    ev_red_go: Option<JunctionId>,
     /// The junction whose amber or red this driver has already judged for a violation
     /// ([`crate::drivers::ViolationParams`]): they decide once, as at the amber.
     signal_look: Option<JunctionId>,
@@ -2745,6 +2838,7 @@ impl NativeMobility {
                     a.transition = None;
                     a.amber_commit = None;
                     a.amber_seen = None;
+                    a.ev_red_go = None;
                     a.signal_look = None;
                     a.violation = 0;
                     a.release_at = None;
@@ -3100,6 +3194,7 @@ impl NativeMobility {
                 trail: Vec::new(),
                 amber_commit: None,
                 amber_seen: None,
+                ev_red_go: None,
                 signal_look: None,
                 held_at: None,
                 violation: 0,
@@ -3857,6 +3952,7 @@ impl NativeMobility {
                 trail: Vec::new(),
                 amber_commit: None,
                 amber_seen: None,
+                ev_red_go: None,
                 signal_look: None,
                 held_at: None,
                 violation: 0,
@@ -5572,6 +5668,12 @@ impl NativeMobility {
                 return true;
             }
         }
+        if self
+            .standing_foe_in_path(world, snapshot, occupancy, actor, movement, 0.0)
+            .is_some()
+        {
+            return true;
+        }
         let Some(exit) = self.zones.exit_of(movement) else {
             return false;
         };
@@ -5602,6 +5704,142 @@ impl NativeMobility {
         }
         let _ = world;
         room < need
+    }
+
+    /// Whether `actor` is an emergency vehicle responding, as the yielding rules see it:
+    /// emergency class, beacons on, and `traffic.emergency_yield` on.
+    fn ev_runs_beacons(&self, actor: &Actor) -> bool {
+        self.params.emergency_yield.enabled
+            && self.lamp_params.emergency_beacons
+            && actor.class == VehicleClass::Emergency
+    }
+
+    /// The nearest emergency vehicle running its beacons behind `actor` on its own
+    /// carriageway (a lane of its edge), its front within the reaction distance of the
+    /// actor's rear ([`EmergencyYieldParams`]); `None` when yielding is off, for an
+    /// emergency vehicle or a vulnerable road user itself, and inside a junction.
+    fn emergency_behind(
+        &self,
+        world: &World,
+        snapshot: &ActorSnapshot,
+        actor: &Actor,
+    ) -> Option<EmergencyBehind> {
+        let p = self.params.emergency_yield;
+        if !p.enabled
+            || !self.lamp_params.emergency_beacons
+            || actor.class == VehicleClass::Emergency
+            || actor.class.is_vru()
+        {
+            return None;
+        }
+        let lane = world.lane(actor.lane);
+        if lane.kind == LaneKind::Internal {
+            return None;
+        }
+        let rear = actor.s_m - actor.class.spec().length_m;
+        let mut best: Option<EmergencyBehind> = None;
+        for l in &world.edge(lane.edge).lanes {
+            for &(s, id) in snapshot.on_lane(*l) {
+                // Behind, or alongside until its rear has passed the driver's front: the
+                // driver stays put "until the authorized emergency vehicle has passed".
+                if id == actor.id || rear - s > p.reaction_distance_m {
+                    continue;
+                }
+                let Some(v) = snapshot
+                    .view(id)
+                    .filter(|v| v.class == VehicleClass::Emergency)
+                else {
+                    continue;
+                };
+                if s - v.dims.length_m >= actor.s_m {
+                    continue;
+                }
+                let gap_m = (rear - s).max(0.0);
+                if best.is_none_or(|b| gap_m < b.gap_m) {
+                    best = Some(EmergencyBehind { lane: *l, gap_m });
+                }
+            }
+        }
+        best
+    }
+
+    /// The first front arc length along connector `movement`, at or past `from_s`, at
+    /// which `actor`'s body would touch the body of a vehicle standing inside the junction
+    /// on a conflicting (non-merging) movement: `None` if its path is free of them.
+    ///
+    /// The conflict zones ([`ConflictZones`]) place a crossing where two centrelines meet
+    /// and judge a vehicle clear of it by arc length. Two left turns from adjacent
+    /// approaches cross mid-turn and then run back towards each other in a narrow wedge,
+    /// so a car standing at the end of one connector (its exit full, VTL §1175) sits
+    /// 0.7 m "past" the zone by arc length with its rear corner still in the other path:
+    /// the crossing car drove into it (kerbside `tests/realism.rs`, actors 1 and 209 at
+    /// j13, 10 overlap steps). A driver yields to a vehicle "lawfully within the
+    /// intersection" (UVC §11-202(a)1, NY VTL §1111(a)1) that is in their way, wherever
+    /// a zone's arithmetic puts it; this tests the bodies themselves, laid out as the
+    /// auditor lays them out ([`crate::audit::bodies_touch`]), at 0.5 m steps.
+    fn standing_foe_in_path(
+        &self,
+        world: &World,
+        snapshot: &ActorSnapshot,
+        occupancy: &BTreeMap<LaneId, Vec<(ActorId, f64, f64)>>,
+        actor: &Actor,
+        movement: LaneId,
+        from_s: f64,
+    ) -> Option<f64> {
+        const STEP_M: f64 = 0.5;
+        let zones = self.zones.of(movement);
+        let mut seen: BTreeSet<ActorId> = BTreeSet::new();
+        let mut standing: Vec<(Vec3, f64, f64, f64)> = Vec::new();
+        for (lane, list) in occupancy {
+            if *lane == movement || !zones.iter().any(|z| z.other == *lane && !z.merge) {
+                continue;
+            }
+            for (other, _, _) in list {
+                if *other == actor.id
+                    || snapshot
+                        .view(*other)
+                        .is_none_or(|v| v.speed_mps >= STUCK_SPEED_MPS)
+                {
+                    continue;
+                }
+                if seen.insert(*other)
+                    && let Some(k) = snapshot.kinematics(*other)
+                {
+                    standing.push((k.pos, k.heading_rad, k.dims.length_m, k.dims.width_m));
+                }
+            }
+        }
+        if standing.is_empty() {
+            return None;
+        }
+        let conn = world.lane(movement);
+        let approach = self.zones.approach_of(movement).map(|l| world.lane(l));
+        let dims = actor.class.dims();
+        let length = actor.class.spec().length_m;
+        let body_at = |s: f64| {
+            let front = smooth_offset_point(conn, s, 0.0);
+            let s_rear = s - length;
+            let rear = if s_rear >= 0.0 {
+                smooth_offset_point(conn, s_rear, 0.0)
+            } else if let Some(app) = approach {
+                smooth_offset_point(app, (app.length_m + s_rear).max(0.0), 0.0)
+            } else {
+                let (sin0, cos0) = math::sin_cos(conn.heading_at(0.0));
+                let p = conn.point_at(0.0);
+                Vec3::new(p.x + s_rear * cos0, p.y + s_rear * sin0, p.z)
+            };
+            let heading = math::atan2(front.y - rear.y, front.x - rear.x);
+            (rear, heading, length, dims.width_m)
+        };
+        let mut s = from_s.max(0.0);
+        while s <= conn.length_m {
+            let me = body_at(s);
+            if standing.iter().any(|b| crate::audit::bodies_touch(me, *b)) {
+                return Some(s);
+            }
+            s += STEP_M;
+        }
+        None
     }
 
     /// The constraint other vehicles inside a junction put on `actor`, as a virtual leader.
@@ -5766,6 +6004,17 @@ impl NativeMobility {
                     }
                 }
             }
+        }
+        // A vehicle standing in the path, wherever the zones put it: stop short of it.
+        // One the body touches already is not braked for (that would only freeze two
+        // vehicles into each other).
+        if inside
+            && let Some(hit) =
+                self.standing_foe_in_path(world, snapshot, occupancy, actor, movement, pos)
+            && hit > pos
+        {
+            let l = LeaderView::virtual_obstacle((hit - pos - 0.5).max(0.0), 0.0);
+            best = Self::closest(best, Some(l));
         }
         Some(JunctionConstraint {
             crossing: best,
@@ -6107,6 +6356,15 @@ enum Insertion {
 /// longer than any signal cycle a queue could be waiting on.
 const MAX_DEPART_DELAY: Duration = Duration::from_secs(120);
 
+/// An emergency vehicle close behind a driver ([`NativeMobility::emergency_behind`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct EmergencyBehind {
+    /// The lane it is on.
+    lane: LaneId,
+    /// From its front bumper to the driver's rear, metres.
+    gap_m: f64,
+}
+
 /// One actor's buffered decision, the output of pass 6.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Decision {
@@ -6119,6 +6377,8 @@ struct Decision {
     amber_commit: Option<JunctionId>,
     /// The junction whose amber this vehicle has decided on, carried to the next step.
     amber_seen: Option<JunctionId>,
+    /// The red an emergency vehicle is passing, carried to the next step.
+    ev_red_go: Option<JunctionId>,
     /// The junction whose amber or red the driver has judged for a violation.
     signal_look: Option<JunctionId>,
     /// The nearest junction ahead whose entry the driver decided this step not to make
@@ -6137,6 +6397,9 @@ struct Decision {
     /// route's next movement, the trip is re-planned from it rather than the change
     /// refused.
     detour_ok: bool,
+    /// An emergency vehicle is close behind in this vehicle's lane and the lane to its
+    /// right exists: the lane-change walk moves it there ([`EmergencyYieldParams`]).
+    ev_move_right: bool,
     /// Where across its lane the sub-lane model steers the vehicle this step.
     lateral: Option<crate::lateral::LateralDecision>,
     /// The driver's next perception errors and this step's car-following decision, when
@@ -6468,6 +6731,10 @@ impl Mobility for NativeMobility {
             let mut binding_stop_line: Option<f64> = None;
             // A signal's "stop" hidden behind a car ahead that is going on (see below).
             let mut signal_stop: Option<(LeaderView, f64)> = None;
+            // An emergency vehicle passing a red creeps to the line at no more than this
+            // ([`EmergencyYieldParams::red_pass_speed_mps`]).
+            let mut ev_red_cap: Option<f64> = None;
+            let mut ev_red_go: Option<JunctionId> = None;
             for junction in self.junctions_ahead(world, actor, t0) {
                 let conflicts = self.conflicts_for(world, &junction, &ego, &claims, t0);
                 let mut decision = self.entry_decision(world, &ego, &junction, &conflicts);
@@ -6670,6 +6937,90 @@ impl Mobility for NativeMobility {
                             _ => f64::INFINITY,
                         });
                     }
+                }
+                // Every other driver yields the right of way to an emergency vehicle at the
+                // junction (NY VTL §1144(a) binds "the driver of every other vehicle", the
+                // cross street included, and keeps them clear of the intersection): one
+                // approaching a junction where an emergency vehicle with beacons is within
+                // the reaction distance of its own line on a movement whose path meets
+                // this one stops at the line, if it can at its comfortable deceleration.
+                if along
+                    && self.params.emergency_yield.enabled
+                    && self.lamp_params.emergency_beacons
+                    && actor.class != VehicleClass::Emergency
+                    && !actor.class.is_vru()
+                    && decision == EntryDecision::Proceed
+                    && junction.stop_line_gap_m > 0.0
+                    && let Some(movement) = junction
+                        .movement_lane
+                        .filter(|l| world.lane(*l).kind == LaneKind::Internal)
+                    && conflicts.iter().any(|c| {
+                        c.actor != actor.id
+                            && c.stop_line_gap_m >= 0.0
+                            && c.stop_line_gap_m <= self.params.emergency_yield.reaction_distance_m
+                            && snapshot
+                                .view(c.actor)
+                                .is_some_and(|v| v.class == VehicleClass::Emergency)
+                            && c.movement_lane.is_some_and(|m| {
+                                m != movement
+                                    && self.zones.of(movement).iter().any(|z| z.other == m)
+                            })
+                    })
+                {
+                    let room = (junction.stop_line_gap_m - STOP_LINE_OFFSET_M).max(0.0);
+                    let b = actor.driver.comfort_decel_mps2.max(0.5);
+                    if ego.speed_mps * ego.speed_mps / (2.0 * b) <= room + 0.5 {
+                        decision = EntryDecision::Stop { gap_m: room };
+                    }
+                }
+                // An emergency vehicle at a red (UVC §11-106(b)2): it stops, or slows to
+                // `red_pass_speed_mps`, at the line, and goes on once no vehicle is inside
+                // on a conflicting path, the exit has room and no conflicting vehicle
+                // will reach its own line within `EV_RED_CLEAR_S` — the pass tagged as an
+                // intended red entry so the auditor counts it as behaviour, not a defect.
+                if along
+                    && self.params.junction_clearance
+                    && self.ev_runs_beacons(actor)
+                    && matches!(
+                        junction.signal,
+                        Some(SignalState::Red | SignalState::RedAmber | SignalState::Amber)
+                    )
+                    && matches!(decision, EntryDecision::Stop { .. })
+                    && junction.stop_line_gap_m > 0.0
+                    && junction.stop_line_gap_m <= EV_RED_LINE_M
+                    // Slowed (or stopped) at the line, or already creeping on from it.
+                    && (actor.ev_red_go == Some(junction.id)
+                        || ego.speed_mps
+                            <= self
+                                .params
+                                .emergency_yield
+                                .red_pass_speed_mps
+                                .max(STANDSTILL_MPS)
+                                + 0.05)
+                    && let Some(movement) = junction
+                        .movement_lane
+                        .filter(|l| world.lane(*l).kind == LaneKind::Internal)
+                    && !self.junction_blocked(world, &snapshot, &occupancy, actor, movement)
+                    // A claimant standing short of its line is yielding (the rule above);
+                    // one still moving towards it may not be able to.
+                    && !conflicts.iter().any(|c| {
+                        c.conflicts
+                            && c.actor != actor.id
+                            && c.speed_mps > EV_RED_STANDING_MPS
+                            && c.arrival_s.unwrap_or_else(|| {
+                                c.stop_line_gap_m.max(0.0) / c.speed_mps.max(0.1)
+                            }) < EV_RED_CLEAR_S
+                    })
+                {
+                    decision = EntryDecision::Proceed;
+                    violation |= crate::audit::intent::RED_RUN;
+                    ev_red_go = Some(junction.id);
+                    ev_red_cap = Some(
+                        self.params
+                            .emergency_yield
+                            .red_pass_speed_mps
+                            .max(EV_RED_CREEP_MPS),
+                    );
                 }
                 // On a green, the last car in on the cross street's amber goes first.
                 if along
@@ -7133,6 +7484,69 @@ impl Mobility for NativeMobility {
                 );
                 accel = accel.min(a_stop);
             }
+            // An emergency vehicle close behind ([`EmergencyYieldParams`]): ease off and
+            // move right in its lane, stop beside it in any other.
+            if let Some(cap) = ev_red_cap {
+                accel = accel.min((cap - ego.speed_mps) / dt_s);
+            }
+            let ev_yield = if along {
+                self.emergency_behind(world, &snapshot, actor)
+            } else {
+                None
+            };
+            let mut ev_move_right = false;
+            // Where across the lane the yielding driver pulls over to, when a sub-lane
+            // model is on (`None` keeps the lane centre): the rule's edge.
+            let mut ev_edge: Option<bool> = None;
+            if let Some(ev) = ev_yield {
+                let right = snapshot
+                    .adjacent_lane(world, &ego, Side::Right, actor.class.class_mask())
+                    .is_some();
+                let lanes_here = world
+                    .edge(lane.edge)
+                    .lanes
+                    .iter()
+                    .filter(|l| world.lane(**l).kind.is_motorised())
+                    .count();
+                let leftmost = !world.edge(lane.edge).lanes.iter().any(|l| {
+                    let o = world.lane(*l);
+                    o.kind.is_motorised() && o.index > lane.index
+                });
+                // The rescue lane (StVO §11(2)) needs the sub-lane model to open the gap
+                // between the leftmost lane and the one beside it: every driver stays in
+                // lane, the leftmost moving to its left edge and the others to their
+                // right. Without it, and on a single lane, drivers clear the way to the
+                // right as the US rule has them do.
+                let rescue = self.lateral.is_some()
+                    && lanes_here >= 2
+                    && self.params.emergency_yield.rule == crate::rules::EmergencyYield::RescueLane;
+                if self.lateral.is_some() {
+                    ev_edge = Some(rescue && leftmost);
+                }
+                if ev.lane == actor.lane && !rescue {
+                    // Out of its way first, at the speed the traffic allows: slowing in
+                    // its lane only holds it up (the corridor runs of
+                    // `tests/emergency_yield.rs`).
+                    ev_move_right = right;
+                } else if actor.transition.is_none() {
+                    // A driver part-way across a lane change finishes it before stopping:
+                    // stopped mid-change, the body stood across the emergency vehicle's
+                    // lane and held it 16 s (`tests/emergency_yield.rs`, seed 11).
+                    let v = ego.speed_mps;
+                    let b = actor.driver.comfort_decel_mps2.max(0.5);
+                    let to_line = lane.length_m - actor.s_m;
+                    // Clear of any intersection: a stop that does not fit before the line
+                    // is not made; the driver clears the junction and stops beyond it.
+                    if v * v / (2.0 * b) + actor.driver.min_gap_m < to_line {
+                        let stop = if v > STANDSTILL_MPS {
+                            -b.min(v / dt_s)
+                        } else {
+                            0.0
+                        };
+                        accel = accel.min(stop);
+                    }
+                }
+            }
             // Any braking short of an emergency builds at a service-brake rate, whatever
             // asked for it — a car ahead braking, a merge partner, a pedestrian stepping
             // out — not only a stop line: the car-following model has no jerk term, and a
@@ -7284,18 +7698,32 @@ impl Mobility for NativeMobility {
                     lane_change: LaneChangeDecision::Stay,
                     amber_commit,
                     amber_seen,
+                    ev_red_go,
                     signal_look,
                     holds_at,
                     violation,
                     release_at,
                     advance_cap_m,
                     detour_ok: false,
+                    ev_move_right,
                     human: human_next,
                     lateral: self
                         .lateral
                         .as_ref()
                         .filter(|_| actor.transition.is_none())
                         .map(|m| {
+                            // Pulled over for an emergency vehicle: to the rule's edge,
+                            // the body kept inside the lane.
+                            if let Some(left) = ev_edge {
+                                return crate::lateral::LateralDecision {
+                                    target_m: crate::lateral::pull_over_offset(
+                                        left,
+                                        ego.dims.width_m,
+                                        lane.width_m,
+                                    ),
+                                    speed_mps: crate::lateral::PULL_OVER_SPEED_LAT_MPS,
+                                };
+                            }
                             crate::lateral::decide_in_lane(
                                 &**m,
                                 &snapshot,
@@ -7351,6 +7779,19 @@ impl Mobility for NativeMobility {
                     lc_updates.push((actor.id, st));
                 }
                 if actor.transition.is_some() || t0 < actor.cooldown_until {
+                    continue;
+                }
+                // Making way for an emergency vehicle comes before the route and anything
+                // discretionary: move right when the lane beside has room
+                // ([`Self::move_to_kerb`]'s safety rule), re-planning the route from it if
+                // it cannot make the next turn ([`EmergencyYieldParams`]).
+                if decision.ev_move_right {
+                    if let Some((ego, nbrs)) = neighbours.get(&decision.actor)
+                        && let Some(change) = self.move_to_kerb(ctx.world(), &mobil, ego, nbrs)
+                    {
+                        decision.lane_change = change;
+                        decision.detour_ok = true;
+                    }
                     continue;
                 }
                 // A strategic change still owed by the no-change zone is the one change the
@@ -7459,6 +7900,21 @@ impl Mobility for NativeMobility {
                     }
                     _ => mobil.decide(ctx, ego, nbrs, &self.weather),
                 };
+                // An emergency vehicle responding keeps left of the traffic pulling right:
+                // no discretionary change to the right (a strategic one, which its route
+                // needs, is taken above). Moving right put it behind a bus at its stop
+                // (`tests/emergency_yield.rs`, seed 11).
+                if self.ev_runs_beacons(actor)
+                    && matches!(
+                        decision.lane_change,
+                        LaneChangeDecision::Change {
+                            side: Side::Right,
+                            ..
+                        }
+                    )
+                {
+                    decision.lane_change = LaneChangeDecision::Stay;
+                }
                 // Heavy goods vehicles keep out of a motorway's leftmost lane where the
                 // carriageway has three or more ([`crate::drivers`], StVO §18(11)).
                 if self.params.human.truck_lane_restriction
@@ -7537,6 +7993,7 @@ impl Mobility for NativeMobility {
             actor.accel_mps2 = decision.accel_mps2;
             actor.amber_commit = decision.amber_commit;
             actor.amber_seen = decision.amber_seen;
+            actor.ev_red_go = decision.ev_red_go;
             actor.release_at = decision.release_at;
             if let Some((wg, wr, decided)) = decision.human {
                 actor.human.w_gap = wg;
@@ -8983,6 +9440,19 @@ pub fn card(params: &EngineParams, car_following: &str) -> ModelCard {
         ],
     };
     // Listed only when set, so a card of the default engine is unchanged.
+    if params.emergency_yield.enabled {
+        card.parameters.push(Parameter::new(
+            "emergency_yield",
+            "-, m",
+            serde_json::json!(params.emergency_yield),
+            Source::new(
+                SourceKind::Standard,
+                "NY VTL §1144(a) and UVC §11-405(a) (pull to the right-hand edge clear of any \
+                 intersection and stop), StVO §38(1)/§11(2) (crate::rules::EmergencyYield); \
+                 reaction distance 25 m, SUMO's bluelight device reactiondist default",
+            ),
+        ));
+    }
     if params.depart_at_speed {
         card.parameters.push(Parameter::new(
             "depart_at_speed",
@@ -11217,6 +11687,211 @@ mod tests {
         );
     }
 
+    /// One emergency vehicle and one civilian on a two-lane ring, for 12 s: the
+    /// civilian's lane index (0 = right) and speed each step, and the emergency vehicle's
+    /// front arc length along its first lane relative to the civilian's, each step.
+    fn ev_and_civilian(yielding: bool, civilian_lane: u8, civilian_s: f64) -> Vec<(u8, f64, f64)> {
+        let world = ring(&RingParams {
+            circumference_m: 800.0,
+            segments: 4,
+            lanes: 2,
+            ..RingParams::default()
+        })
+        .expect("a ring");
+        let params = EngineParams {
+            intersections: IntersectionMode::None,
+            lane_changes: true,
+            dynamic_rerouting: false,
+            emergency_yield: EmergencyYieldParams {
+                enabled: yielding,
+                ..EmergencyYieldParams::default()
+            },
+            ..EngineParams::default()
+        };
+        let rng = RngRegistry::new(23);
+        let mut engine = NativeMobility::new(params);
+        {
+            let mut ctx = MobilityCtx::new(0, &world, &rng);
+            engine
+                .init(&mut ctx, Box::new(NoDemand::new()))
+                .expect("init");
+        }
+        let cycle = |i: u8| -> Vec<LaneId> {
+            let c = crate::worlds::ring_cycle(&world, i);
+            c.iter().cycle().take(c.len() * 4).copied().collect()
+        };
+        let ev = engine
+            .spawn_with_route(
+                &world,
+                0,
+                VehicleClass::Emergency,
+                IdmPreset::Kesting2010.profile(VehicleClass::Emergency),
+                cycle(1),
+                20.0,
+            )
+            .expect("ev");
+        let car = engine
+            .spawn_with_route(
+                &world,
+                0,
+                VehicleClass::Passenger,
+                IdmPreset::Kesting2010.profile(VehicleClass::Passenger),
+                cycle(civilian_lane),
+                civilian_s,
+            )
+            .expect("car");
+        engine.set_speed(ev, 12.0).expect("speed");
+        engine.set_speed(car, 6.0).expect("speed");
+        let mut out = Vec::new();
+        let mut t = 0u64;
+        for _ in 0..120 {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            engine.step(&mut ctx, params.step);
+            t += params.step.as_nanos();
+            let (Some(c), Some(e)) = (engine.actors.get(&car), engine.actors.get(&ev)) else {
+                break;
+            };
+            let lane = world.lane(c.lane);
+            let ahead = if world.lane(e.lane).edge == lane.edge {
+                e.s_m - c.s_m
+            } else {
+                f64::NAN
+            };
+            out.push((lane.index, c.speed_mps, ahead));
+        }
+        out
+    }
+
+    #[test]
+    fn drivers_move_right_and_stop_for_an_emergency_vehicle_behind() {
+        // In the emergency vehicle's lane (left), 15.5 m ahead of its front: the driver
+        // moves to the right-hand lane (NY VTL §1144(a)). Off, nothing makes them.
+        let on = ev_and_civilian(true, 1, 40.0);
+        assert!(
+            on.iter().take(40).any(|(lane, _, _)| *lane == 0),
+            "the driver in the emergency vehicle's lane never moved right: {:?}",
+            on.iter().step_by(10).collect::<Vec<_>>()
+        );
+        let off = ev_and_civilian(false, 1, 40.0);
+        assert!(off.iter().take(40).all(|(lane, _, _)| *lane == 1));
+        // In the right-hand lane beside its path, 25.5 m ahead and caught up with: the
+        // driver stops while it is behind, and drives on once it has passed.
+        let on = ev_and_civilian(true, 0, 50.0);
+        // Its rear has passed the driver's front once its front is a body length ahead.
+        let ev_len = VehicleClass::Emergency.spec().length_m;
+        let stopped = on
+            .iter()
+            .position(|(_, v, ahead)| *v < 0.05 && *ahead < ev_len)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the driver beside the emergency vehicle's path never stopped: {:?}",
+                    on.iter().step_by(5).collect::<Vec<_>>()
+                )
+            });
+        let passed = on
+            .iter()
+            .position(|(_, _, ahead)| *ahead > ev_len)
+            .expect("the emergency vehicle never passed");
+        assert!(stopped < passed, "stopped at {stopped}, passed at {passed}");
+        // It stands until then.
+        assert!(on[stopped..passed].iter().all(|(_, v, _)| *v < 0.05));
+        let (_, v_end, _) = on.last().copied().expect("steps");
+        assert!(
+            v_end > 1.0,
+            "the driver never moved off again: {v_end:.2} m/s"
+        );
+        let off = ev_and_civilian(false, 0, 50.0);
+        assert!(
+            off.iter().all(|(_, v, _)| *v > 3.0),
+            "without yielding the driver still slowed: {:?}",
+            off.iter().map(|x| x.1).fold(f64::INFINITY, f64::min)
+        );
+    }
+
+    /// Three lanes, the sub-lane model on, an emergency vehicle in the middle lane and a
+    /// car beside it in each outer lane, 20.5 m ahead of its front: each car's offset from
+    /// its lane centre after 4 s, `(leftmost, rightmost)`.
+    fn rescue_lane_offsets(rule: crate::rules::EmergencyYield) -> (f64, f64) {
+        let world = ring(&RingParams {
+            circumference_m: 800.0,
+            segments: 4,
+            lanes: 3,
+            ..RingParams::default()
+        })
+        .expect("a ring");
+        let params = EngineParams {
+            intersections: IntersectionMode::None,
+            lane_changes: true,
+            dynamic_rerouting: false,
+            emergency_yield: EmergencyYieldParams {
+                enabled: true,
+                rule,
+                ..EmergencyYieldParams::default()
+            },
+            ..EngineParams::default()
+        };
+        let rng = RngRegistry::new(29);
+        let mut engine = NativeMobility::new(params).with_lateral(Arc::new(
+            crate::lateral::Sl2015::new(crate::lateral::Sl2015Params::default()),
+        ));
+        {
+            let mut ctx = MobilityCtx::new(0, &world, &rng);
+            engine
+                .init(&mut ctx, Box::new(NoDemand::new()))
+                .expect("init");
+        }
+        let cycle = |i: u8| -> Vec<LaneId> {
+            let c = crate::worlds::ring_cycle(&world, i);
+            c.iter().cycle().take(c.len() * 4).copied().collect()
+        };
+        let mut spawn = |class: VehicleClass, lane: u8, s: f64, v: f64| {
+            let id = engine
+                .spawn_with_route(
+                    &world,
+                    0,
+                    class,
+                    IdmPreset::Kesting2010.profile(class),
+                    cycle(lane),
+                    s,
+                )
+                .expect("spawn");
+            engine.set_speed(id, v).expect("speed");
+            id
+        };
+        let _ev = spawn(VehicleClass::Emergency, 1, 20.0, 5.0);
+        let left = spawn(VehicleClass::Passenger, 2, 45.0, 3.0);
+        let right = spawn(VehicleClass::Passenger, 0, 45.0, 3.0);
+        let mut t = 0u64;
+        for _ in 0..40 {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            engine.step(&mut ctx, params.step);
+            t += params.step.as_nanos();
+        }
+        (
+            engine.actors[&left].lateral_m,
+            engine.actors[&right].lateral_m,
+        )
+    }
+
+    #[test]
+    fn rescue_lane_on_a_three_lane_road() {
+        // StVO §11(2): the leftmost lane to the left, the others to the right.
+        let (l, r) = rescue_lane_offsets(crate::rules::EmergencyYield::RescueLane);
+        assert!(l > 0.5 && r < -0.5, "leftmost {l:.2} m, rightmost {r:.2} m");
+        // Each body stays inside its lane (3.5 m lanes on the ring by default).
+        let half = 0.5 * (3.5 - VehicleClass::Passenger.dims().width_m);
+        assert!(
+            l <= half + 1e-9 && r >= -half - 1e-9,
+            "{l:.3} {r:.3} past {half:.3}"
+        );
+        // The US rule pulls everyone right.
+        let (l, r) = rescue_lane_offsets(crate::rules::EmergencyYield::PullRight);
+        assert!(
+            l < -0.5 && r < -0.5,
+            "leftmost {l:.2} m, rightmost {r:.2} m"
+        );
+    }
+
     #[test]
     fn the_lane_change_cooldown_is_the_models_own_rule() {
         // The engine reconstructed the cooldown inline as `max(2·duration, 5 s)` instead of
@@ -11966,6 +12641,220 @@ mod tests {
     /// junction ahead while it shows red, tag set — so the decision pass keeps its tag. A
     /// bare tag on a vehicle committed to nothing is cleared by that pass, as it must be: a
     /// driver who is not violating anything is untagged before the collision check reads it.
+    /// An emergency vehicle 40 m short of a red that lasts at least 20 s more, at 8 m/s,
+    /// for 20 s (with `foe`, a car on a conflicting green arriving as it stands at the line):
+    /// whether it entered the junction while the red showed, its lowest speed over the
+    /// last 5 m before the line, the steps at which it and the car entered, and the audit.
+    fn ev_at_a_red(
+        yielding: bool,
+        red_pass_speed_mps: f64,
+        foe: bool,
+    ) -> (
+        bool,
+        f64,
+        (Option<u64>, Option<u64>),
+        crate::audit::AuditReport,
+    ) {
+        let world = grid(true);
+        // A straight-on movement into a four-way signalised junction, so a cross street
+        // runs over its path.
+        let (approach, beyond) = world
+            .roads
+            .lanes()
+            .iter()
+            .filter(|l| l.kind == LaneKind::Driving)
+            .find_map(|l| {
+                let j = world.roads.try_junction(world.edge(l.edge).to)?;
+                if !matches!(j.control, JunctionControl::Signalised { .. }) || j.incoming.len() < 4
+                {
+                    return None;
+                }
+                let c = world.successors(l.id).iter().find(|c| {
+                    c.permitted && c.via.is_some() && c.direction == TurnDirection::Straight
+                })?;
+                Some((l.id, c.to_lane))
+            })
+            .expect("a four-way signalised junction");
+        let route = vec![approach, beyond];
+        let rng = RngRegistry::new(31);
+        let junction = world.edge(world.lane(approach).edge).to;
+        let plan = match world.roads.junction(junction).control {
+            JunctionControl::Signalised { plan } => world.signal_plan(plan).expect("a plan"),
+            _ => unreachable!("chosen signalised"),
+        };
+        let movement = world
+            .successors(approach)
+            .iter()
+            .find(|c| c.to_lane == beyond)
+            .and_then(|c| c.via)
+            .expect("an internal connector");
+        let step_ns = EngineParams::default().step.as_nanos();
+        let red_at = |t: SimTime| {
+            FixedTimeSignals::default().state_for(plan, movement, ns_to_secs(t))
+                == Some(SignalState::Red)
+        };
+        // The first step at which the red has at least 20 s to run.
+        let t0 = (0..)
+            .map(|k| k * step_ns)
+            .find(|t| (0..=200).all(|i| red_at(*t + i * step_ns)))
+            .expect("a long enough red");
+        let params = EngineParams {
+            intersections: IntersectionMode::SignalsOnly,
+            lane_changes: false,
+            emergency_yield: EmergencyYieldParams {
+                enabled: yielding,
+                red_pass_speed_mps,
+                ..EmergencyYieldParams::default()
+            },
+            ..EngineParams::default()
+        };
+        let mut engine = engine_on(&world, params, &rng);
+        let line = world.lane(approach).length_m;
+        let ev = engine
+            .spawn_with_route(
+                &world,
+                t0,
+                VehicleClass::Emergency,
+                engine.driver_for(VehicleClass::Emergency),
+                route,
+                line - 40.0,
+            )
+            .expect("spawn");
+        engine.set_speed(ev, 8.0).expect("speed");
+        // A conflicting straight-on movement into the same junction, green at t0.
+        let foe_path = foe.then(|| {
+            let (lane, via, to) = world
+                .roads
+                .lanes()
+                .iter()
+                .filter(|l| l.kind == LaneKind::Driving && world.edge(l.edge).to == junction)
+                .find_map(|l| {
+                    world.successors(l.id).iter().find_map(|c| {
+                        let via = c.via.filter(|_| c.permitted)?;
+                        // Green from within 3 s of t0 (the red's first second may be the
+                        // cross street's all-red).
+                        let green = (0..=30).any(|i| {
+                            matches!(
+                                FixedTimeSignals::default().state_for(
+                                    plan,
+                                    via,
+                                    ns_to_secs(t0 + i * step_ns)
+                                ),
+                                Some(SignalState::Green | SignalState::GreenYield)
+                            )
+                        });
+                        // From a perpendicular approach, straight on: it crosses.
+                        let a = world.lane(approach);
+                        let turn = v2xw_world::model::normalise_angle(
+                            l.heading_at(l.length_m) - a.heading_at(a.length_m),
+                        )
+                        .abs();
+                        let crosses = c.direction == TurnDirection::Straight
+                            && (turn - core::f64::consts::FRAC_PI_2).abs() < 0.3;
+                        (green && crosses).then_some((l.id, via, c.to_lane))
+                    })
+                })
+                .expect("a conflicting green");
+            (lane, via, to)
+        });
+        let mut foe_on: Option<(ActorId, LaneId)> = None;
+        let mut entries = (None, None);
+        let mut auditor =
+            crate::audit::TrafficAuditor::new(&world, crate::audit::AuditParams::default());
+        let mut entered_on_red = false;
+        let mut slowest = f64::INFINITY;
+        let mut t = t0;
+        while t < t0 + 200 * step_ns {
+            // The car is put 25 m short of its line at 8 m/s (about 3 s out) the moment
+            // the emergency vehicle stands at its own line: it is approaching, not yet
+            // inside, when the emergency vehicle judges the junction.
+            if let Some((lane, via, to)) = foe_path
+                && foe_on.is_none()
+                && engine
+                    .actors
+                    .get(&ev)
+                    .is_some_and(|a| a.speed_mps < 0.2 && line - a.s_m < EV_RED_LINE_M)
+            {
+                let len = world.lane(lane).length_m;
+                let car = engine
+                    .spawn_with_route(
+                        &world,
+                        t,
+                        VehicleClass::Passenger,
+                        engine.driver_for(VehicleClass::Passenger),
+                        vec![lane, to],
+                        len - 25.0,
+                    )
+                    .expect("spawn foe");
+                engine.set_speed(car, 8.0).expect("speed");
+                foe_on = Some((car, via));
+            }
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            let update = engine.step(&mut ctx, params.step);
+            let t1 = t + step_ns;
+            let actors = engine.audit_actors(&world, t1);
+            auditor.observe(&world, t, t1, &actors, &update.despawned);
+            if let Some(a) = engine.actors.get(&ev) {
+                if a.lane == approach && line - a.s_m <= 5.0 {
+                    slowest = slowest.min(a.speed_mps);
+                }
+                if a.lane == movement && red_at(t1) {
+                    entered_on_red = true;
+                }
+                if a.lane == movement && entries.0.is_none() {
+                    entries.0 = Some((t1 - t0) / step_ns);
+                }
+            }
+            if let Some((car, via)) = foe_on
+                && engine.actors.get(&car).is_some_and(|c| c.lane == via)
+                && entries.1.is_none()
+            {
+                entries.1 = Some((t1 - t0) / step_ns);
+            }
+            t = t1;
+        }
+        (entered_on_red, slowest, entries, auditor.report())
+    }
+
+    #[test]
+    fn ev_passes_red_after_slowing() {
+        use crate::audit::Check;
+        for v_pass in [0.0, 3.0] {
+            let (entered, slowest, _, r) = ev_at_a_red(true, v_pass, false);
+            assert!(
+                entered,
+                "v_pass {v_pass}: the emergency vehicle waited out the red"
+            );
+            assert!(
+                slowest <= v_pass + 0.5,
+                "v_pass {v_pass}: it took the line at {slowest:.2} m/s"
+            );
+            assert_eq!(r.count(Check::RedEntry), 0, "{:?}", r.examples);
+            assert!(r.stats.intended_red_entries >= 1, "the pass was not tagged");
+            for c in [Check::ConflictZone, Check::Overlap, Check::AmberEntry] {
+                assert_eq!(r.count(c), 0, "v_pass {v_pass}: {:?}", r.counts);
+            }
+        }
+        // Without the yielding rules it is a vehicle like any other: it waits.
+        let (entered, _, _, r) = ev_at_a_red(false, 0.0, false);
+        assert!(!entered);
+        assert_eq!(r.count(Check::RedEntry), 0);
+        // A car arriving on the conflicting green is let through first.
+        let (entered, _, (ev_in, foe_in), r) = ev_at_a_red(true, 0.0, true);
+        let foe_in = foe_in.expect("the car never entered");
+        assert!(
+            entered,
+            "the emergency vehicle never passed once the car had gone"
+        );
+        assert!(
+            ev_in.is_some_and(|e| e > foe_in),
+            "ev {ev_in:?}, car {foe_in}"
+        );
+        for c in [Check::ConflictZone, Check::Overlap, Check::RedEntry] {
+            assert_eq!(r.count(c), 0, "{:?}", r.counts);
+        }
+    }
+
     #[test]
     fn a_collision_becomes_a_crash_that_blocks_the_lane_until_cleared() {
         let world = grid(true);

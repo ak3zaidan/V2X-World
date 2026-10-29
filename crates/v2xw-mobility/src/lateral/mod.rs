@@ -158,6 +158,20 @@ impl SublaneFilter {
     }
 }
 
+/// The lateral speed a driver pulls over at, m/s: SUMO's vType `maxSpeedLat` default
+/// (1.0 m/s), the same figure [`Sl2015Params::max_speed_lat_mps`] defaults to.
+pub const PULL_OVER_SPEED_LAT_MPS: f64 = 1.0;
+
+/// The offset from the lane centreline at which a body `width_m` wide stands against the
+/// lane's left (`left`) or right edge in a lane `lane_width_m` wide, metres, positive
+/// left: the body's outer side on the lane line, never past it, so no wheel leaves the
+/// carriageway (WP-20's pull-over for an emergency vehicle). A body as wide as the lane
+/// or wider stays on the centreline.
+pub fn pull_over_offset(left: bool, width_m: f64, lane_width_m: f64) -> f64 {
+    let half = 0.5 * (lane_width_m - width_m).max(0.0);
+    if left { half } else { -half }
+}
+
 /// A same-lane neighbour as a lateral model sees it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LateralNeighbor {
@@ -265,6 +279,25 @@ impl LateralSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pull_over_offset_is_clamped_to_the_edge() {
+        // A 1.8 m car in a 3.5 m lane: its right side on the right lane line.
+        let r = pull_over_offset(false, 1.8, 3.5);
+        assert!((r + 0.85).abs() < 1e-12, "{r}");
+        assert!((pull_over_offset(true, 1.8, 3.5) - 0.85).abs() < 1e-12);
+        // The body never crosses the line, however narrow the lane.
+        for (w, lane) in [(2.55, 3.0), (2.16, 2.5), (0.9, 3.5), (2.6, 2.6), (2.6, 2.4)] {
+            for left in [false, true] {
+                let d = pull_over_offset(left, w, lane);
+                assert!(
+                    d.abs() + 0.5 * w <= 0.5 * lane.max(w) + 1e-12,
+                    "{w} in {lane}: {d}"
+                );
+            }
+        }
+        assert_eq!(pull_over_offset(false, 2.6, 2.4), 0.0);
+    }
     use crate::carfollowing::testkit::vehicle;
     use crate::views::DriverProfile;
     use v2xw_core::geom::Dims;

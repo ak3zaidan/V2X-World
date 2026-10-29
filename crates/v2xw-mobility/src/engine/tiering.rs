@@ -239,6 +239,7 @@ impl NativeMobility {
                 trail: Vec::new(),
                 amber_commit: None,
                 amber_seen: None,
+                ev_red_go: None,
                 traits: h.traits,
                 release_at: None,
                 forced_brake: None,

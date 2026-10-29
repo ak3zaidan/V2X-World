@@ -1738,6 +1738,25 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the median delivery dwell",
     },
+    // SUMO's bluelight device reacts at 25 m by default (`reactiondist`); a siren is heard
+    // and a lightbar seen over a few hundred metres in a quiet street, much less in
+    // traffic (S-P5: calibrate against siren audibility). 1-500 m covers both.
+    Bound {
+        path: "traffic.emergency_yield.reaction_distance_m",
+        lo: 1.0,
+        hi: 500.0,
+        exclusive_lo: false,
+        what: "the emergency-vehicle reaction distance",
+    },
+    // UVC 11-106(b)2 gives no figure; 0 (a full stop) to 10 m/s (36 km/h) covers a stop,
+    // a crawl and the slow roll some ambulance services allow.
+    Bound {
+        path: "traffic.emergency_yield.red_pass_speed_mps",
+        lo: 0.0,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the emergency-vehicle red-pass speed",
+    },
     // SUMO's speedFactor: observed urban free-flow means are about 0.9-1.2 of the limit;
     // 0.5-1.5 covers it with room either side. The spread multiplies SUMO's speedDev
     // (0.1 for a car): 3 is a 30 % deviation.
@@ -4147,6 +4166,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Grade-aware, power-limited acceleration: grade subtracts g sin(theta) of the draped lane from the driver's acceleration (KraussPS); power_limit caps it at eta P/(m v) less rolling and air resistance for passenger cars (PHEMlight PC_D_EU4) and tractor-trailers (Green Book 120 kg/kW). Native engine only.",
     },
     KeyStatus {
+        path: "traffic.emergency_yield",
+        status: Status::Wired,
+        note: "Drivers with an emergency vehicle running its beacons within reaction_distance_m behind on the same carriageway yield by the jurisdiction's rule (rules::EmergencyYield): in the US they move to the right-hand lane and stop clear of the junction (NY VTL 1144(a), UVC 11-405). The emergency vehicle passes a red after stopping (or slowing to red_pass_speed_mps) once the junction is clear (UVC 11-106(b)2). Native engine only.",
+    },
+    KeyStatus {
         path: "traffic.depart_at_speed",
         status: Status::Wired,
         note: "Vehicles entering at the map's edge are put on at the lane's start at their desired speed, capped by the safe speed to the leader and the lane end (SUMO departSpeed).",
@@ -5520,6 +5544,27 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 bounded_at(path, path, v, e);
             }
         }
+        if let Some(y) = &t.emergency_yield {
+            for (path, v) in [
+                (
+                    "traffic.emergency_yield.reaction_distance_m",
+                    y.reaction_distance_m,
+                ),
+                (
+                    "traffic.emergency_yield.red_pass_speed_mps",
+                    y.red_pass_speed_mps,
+                ),
+            ] {
+                let Some(v) = v else { continue };
+                bounded_at(path, path, v, e);
+                if y.enabled != Some(true) {
+                    e.push(conflict(
+                        path,
+                        "is set, and traffic.emergency_yield.enabled is not true".to_string(),
+                    ));
+                }
+            }
+        }
         if let Some(k) = &t.kerbside {
             for (path, v) in [
                 ("traffic.kerbside.bus_stop_spacing_m", k.bus_stop_spacing_m),
@@ -5583,6 +5628,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.reroute_share.is_some()
             || t.reroute_source.is_some()
             || t.vehicle_dynamics.is_some()
+            || t.emergency_yield.is_some()
             || t.kerbside.is_some();
         // The LC2013 factors act only on lane changes, and the strategic one only on the
         // changes a route needs.

@@ -304,6 +304,52 @@ impl Default for CamLowFrequency {
     }
 }
 
+/// An emergency vehicle's `EmergencyContainer` (ETSI TS 103 900 V2.1.1 `CAM-PDU-Descriptions`,
+/// the `specialVehicleContainer` choice for `vehicleRole` emergency; `LightBarSirenInUse`
+/// is the CDD's two-bit string, bit 0 `lightBarActivated`, bit 1 `sirenActivated`). The
+/// optional `incidentIndication` and `emergencyPriority` are not sent.
+///
+/// WP-20 P20.4 (the EU half): what a receiver needs to know that the vehicle is
+/// responding. The container rides with the low-frequency container, as TS 103 900 has
+/// every special vehicle container do, so [`build_cam`] encodes it only in a CAM that
+/// carries one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CamEmergency {
+    /// The light bar is on.
+    pub light_bar: bool,
+    /// The siren is on.
+    pub siren: bool,
+}
+
+impl CamEmergency {
+    fn to_container(self) -> crate::asn1::cam_asn1::SpecialVehicleContainer {
+        let mut bits = rasn::types::FixedBitString::<2usize>::ZERO;
+        bits.set(0, self.light_bar);
+        bits.set(1, self.siren);
+        crate::asn1::cam_asn1::SpecialVehicleContainer::emergencyContainer(
+            crate::asn1::cam_asn1::EmergencyContainer::new(
+                crate::asn1::cdd::LightBarSirenInUse(bits),
+                None,
+                None,
+            ),
+        )
+    }
+}
+
+/// The emergency container of a decoded CAM, if it carries one.
+pub fn emergency_of(cam: &CAM) -> Option<CamEmergency> {
+    match cam.cam.cam_parameters.special_vehicle_container.as_ref()? {
+        crate::asn1::cam_asn1::SpecialVehicleContainer::emergencyContainer(e) => {
+            let bits = &e.light_bar_siren_in_use.0;
+            Some(CamEmergency {
+                light_bar: bits[0],
+                siren: bits[1],
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Everything [`build_cam`] needs, in the simulator's own units and frames.
 ///
 /// Angles are ENU radians (D6), lengths metres, speeds m/s, accelerations m/s², yaw rate
@@ -343,6 +389,9 @@ pub struct CamInput {
     pub generation_time: TimestampIts,
     /// The low-frequency container, when this CAM carries one.
     pub low_frequency: Option<CamLowFrequency>,
+    /// An emergency vehicle's container ([`CamEmergency`]), sent with the low-frequency
+    /// container. `None` (the default) sends no special vehicle container.
+    pub emergency: Option<CamEmergency>,
 }
 
 impl CamInput {
@@ -376,6 +425,7 @@ impl CamInput {
             acceleration_accuracy_mps2: None,
             generation_time,
             low_frequency: None,
+            emergency: None,
         }
     }
 }
@@ -431,7 +481,12 @@ pub fn build_cam(input: &CamInput) -> Result<CAM, CodecError> {
         .as_ref()
         .map(|lf| low_frequency_container(lf, input));
 
-    let parameters = CamParameters::new(basic, high_frequency, low_frequency, None, None);
+    // A special vehicle container rides with the low-frequency one (TS 103 900).
+    let special = input
+        .emergency
+        .filter(|_| low_frequency.is_some())
+        .map(CamEmergency::to_container);
+    let parameters = CamParameters::new(basic, high_frequency, low_frequency, special, None);
     let payload = CamPayload::new(generation_delta_time(&input.generation_time), parameters);
     Ok(CAM::new(header, payload))
 }
@@ -677,6 +732,69 @@ mod tests {
         let cam = build_cam(&input).expect("builds");
         let bytes = encode_cam(&cam).expect("encodes").bytes;
         assert_eq!(decode_cam(&bytes).expect("decodes"), cam);
+    }
+
+    /// WP-20 P20.4: the emergency container round-trips bit for bit, lightbar and siren
+    /// apart, rides only with the low-frequency container, and is absent by default.
+    #[test]
+    fn the_emergency_container_round_trips_with_the_low_frequency_container() {
+        let lf = CamLowFrequency {
+            vehicle_role: VehicleRole::Emergency,
+            ..CamLowFrequency::default()
+        };
+        let mut sizes = Vec::new();
+        for e in [
+            CamEmergency {
+                light_bar: true,
+                siren: false,
+            },
+            CamEmergency {
+                light_bar: false,
+                siren: true,
+            },
+            CamEmergency {
+                light_bar: true,
+                siren: true,
+            },
+        ] {
+            let mut input = fixtures::car(ts());
+            input.low_frequency = Some(lf.clone());
+            input.emergency = Some(e);
+            let cam = build_cam(&input).expect("builds");
+            let bytes = encode_cam(&cam).expect("encodes").bytes;
+            let back = decode_cam(&bytes).expect("decodes");
+            assert_eq!(back, cam);
+            assert_eq!(emergency_of(&back), Some(e));
+            sizes.push(bytes.len());
+        }
+        // Without the low-frequency container nothing is sent.
+        let mut input = fixtures::car(ts());
+        input.emergency = Some(CamEmergency {
+            light_bar: true,
+            siren: true,
+        });
+        let cam = build_cam(&input).expect("builds");
+        assert_eq!(emergency_of(&cam), None);
+        assert_eq!(cam, build_cam(&fixtures::car(ts())).expect("builds"));
+        // The default sends none, so a CAM is byte for byte what it was.
+        let mut plain = fixtures::car(ts());
+        plain.low_frequency = Some(lf);
+        let plain_bytes = encode_cam(&build_cam(&plain).expect("builds"))
+            .expect("encodes")
+            .bytes;
+        assert_eq!(
+            emergency_of(&decode_cam(&plain_bytes).expect("decodes")),
+            None
+        );
+        // The choice index (3 bits, extensible root of 7), the container's optional-field
+        // bitmap (2 bits) and the 2-bit string: under a byte.
+        assert!(
+            sizes
+                .iter()
+                .all(|n| *n <= plain_bytes.len() + 1 && *n >= plain_bytes.len()),
+            "{sizes:?} against {}",
+            plain_bytes.len()
+        );
     }
 
     #[test]

@@ -292,6 +292,48 @@ pub struct Traffic {
     /// so a loaded truck crawls up a long climb. Unset is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vehicle_dynamics: Option<VehicleDynamicsSettings>,
+    /// Traffic yields to emergency vehicles (WP-20): a driver with an emergency vehicle
+    /// running its beacons close behind on the same carriageway moves over and stops as
+    /// the jurisdiction's law says (NY VTL §1144(a): to the right-hand edge, clear of any
+    /// intersection). Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emergency_yield: Option<EmergencyYieldSettings>,
+}
+
+/// Traffic yields to emergency vehicles ([`Traffic::emergency_yield`],
+/// [`v2xw_mobility::EmergencyYieldParams`]); each unset part keeps its default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmergencyYieldSettings {
+    /// Whether drivers yield at all. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// How far behind a driver an emergency vehicle with its siren on is noticed, metres
+    /// (gap from its front bumper to the driver's rear). Unset is 25 m, SUMO's bluelight
+    /// device `reactiondist` default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reaction_distance_m: Option<f64>,
+    /// The speed an emergency vehicle slows to at a red before it passes on, once the
+    /// junction is clear, m/s (UVC §11-106(b)2). Unset is 0: a full stop first, as
+    /// fire-service practice has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_pass_speed_mps: Option<f64>,
+}
+
+impl EmergencyYieldSettings {
+    /// The engine's parameters: `base` (the jurisdiction's, which names the yield rule)
+    /// with each set field in place.
+    pub fn apply(
+        self,
+        base: v2xw_mobility::EmergencyYieldParams,
+    ) -> v2xw_mobility::EmergencyYieldParams {
+        v2xw_mobility::EmergencyYieldParams {
+            enabled: self.enabled.unwrap_or(base.enabled),
+            reaction_distance_m: self.reaction_distance_m.unwrap_or(base.reaction_distance_m),
+            red_pass_speed_mps: self.red_pass_speed_mps.unwrap_or(base.red_pass_speed_mps),
+            ..base
+        }
+    }
 }
 
 /// Grade-aware, power-limited acceleration ([`Traffic::vehicle_dynamics`],
@@ -427,6 +469,7 @@ impl Default for Traffic {
             reroute_share: None,
             reroute_source: None,
             vehicle_dynamics: None,
+            emergency_yield: None,
         }
     }
 }
