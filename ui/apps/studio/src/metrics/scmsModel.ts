@@ -21,7 +21,7 @@
  */
 
 import type { BackendEntity, BackendSnapshot } from "../lib/backend.js";
-import { classify, noteOf, type HealthBand, type HealthLevel } from "./health.js";
+import { cellularPenetration, classify, noteOf, type HealthBand, type HealthLevel } from "./health.js";
 import { display, formatNumber, glanceNumber, readable, type GroupRow, type MetricFamily, type Series } from "./model.js";
 
 import { detectionPending, entityLoads, ENTITY_UTILISATION_LIMIT } from "./summaryModel.js";
@@ -1088,11 +1088,13 @@ export function busyPct(u: number): string {
   return glanceNumber(u * 100);
 }
 
-function backendSection(m: MetricReader, s: BackendSnapshot | null, tNs: number, first: string): ScmsSection | null {
+function backendSection(m: MetricReader, s: BackendSnapshot | null, tNs: number, first: string, penetration: number | null = null): ScmsSection | null {
   // Reaching the backend is coverage, not issuance: it answers here, beside the backend's load.
   const reach = metricTile(m, "backend_link_up", {
     title: "Vehicles that can reach the backend",
-    meaning: "Share with cellular or roadside-unit access to the credential system, newest window.",
+    meaning: `Share with cellular or roadside-unit access to the credential system, newest window.${
+      penetration !== null ? ` The scenario gives ${Math.round(penetration * 100)} % of vehicles a cellular modem; the rest reach the backend only through a roadside unit, and the band is scaled to that.` : ""
+    }`,
   });
   if (s === null) {
     if (reach === null) return null;
@@ -1253,7 +1255,7 @@ export function scmsOverview(
     misbehaviourSection(m, s, first, opts.finished === true),
     privacySection(m, s, first),
     costSection(m),
-    backendSection(m, s, opts.tNs, first),
+    backendSection(m, s, opts.tNs, first, cellularPenetration(opts.scenario)),
   ]);
   const raw =
     s === null

@@ -402,6 +402,7 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
     const r: MetricReader = { family: (x) => fams.find((f) => f.base === x), latest: (s) => (s === "backend_link_up" ? 0.723 : null), series: () => undefined, pooled: () => undefined };
     const backend = scmsOverview(snap, r, { tNs: snap.t, scenario }).sections.find((s) => s.id === "backend")!;
     expect(backend.tiles.find((t) => t.id === "backend_link_up")!.level).toBe("healthy");
+    expect(backend.tiles.find((t) => t.id === "backend_link_up")!.meaning).toContain("The scenario gives 60 % of vehicles a cellular modem");
   });
 
   it("writes a top-up count as requests and their outcome", () => {
