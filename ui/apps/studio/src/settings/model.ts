@@ -63,6 +63,7 @@ export function withOverlay(f: Field): Field {
     ...(o.max !== undefined && f.max === undefined ? { max: o.max } : {}),
     ...(o.emptyText ? { emptyText: o.emptyText } : {}),
     ...(o.noun ? { noun: o.noun } : {}),
+    ...(o.keywords ? { help: `${f.help ?? ""} ${o.keywords}`.trim() } : {}),
   };
 }
 

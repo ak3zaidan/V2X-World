@@ -242,10 +242,11 @@ export function localUsVerdict(
     defaultValue?: unknown;
     relevantWhen?: unknown;
   }[],
+  applies: (f: { pointer: string }) => boolean = () => true,
 ): { isUs: boolean; reasons: string[] } {
   const reasons: string[] = [];
   for (const f of fields) {
-    if (!f.choices || !f.pointer.startsWith("/security")) continue;
+    if (!f.choices || !f.pointer.startsWith("/security") || !applies(f)) continue;
     const raw = getPointer(doc, f.pointer);
     // A default counts only for a setting that always applies (not a committee's inner protocol).
     const v = raw === undefined && f.hasDefault && !f.relevantWhen ? f.defaultValue : raw;

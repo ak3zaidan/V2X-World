@@ -344,7 +344,7 @@ export function SettingsWindow({
         </div>
         {g.id === "group-run" ? runExtras : null}
         {g.id === "group-scms" ? (
-          <UsBanner verdict={validation?.usSystem} local={localUsVerdict(draft, fields)} protocol={getPointer(draft, "/security/protocol/id")} />
+          <UsBanner verdict={validation?.usSystem} local={localUsVerdict(draft, fields, (f) => irrelevantReason(f as Field, draft, fields) === undefined)} protocol={getPointer(draft, "/security/protocol/id")} />
         ) : null}
         {g.id === "group-scms" && movable.length > 0 ? (
           <div className="note setting-move top" data-testid="params-move-top">

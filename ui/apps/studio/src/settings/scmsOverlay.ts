@@ -27,6 +27,8 @@ export interface Overlay {
   readonly emptyText?: string;
   /** What one element of a list is called on its Add button. */
   readonly noun?: string;
+  /** Extra words a search finds the setting by. */
+  readonly keywords?: string;
 }
 
 const strategy = "security.pseudonym_change.strategy";
@@ -48,7 +50,11 @@ export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
     defaultValue: "us-production-2025",
     level: "basic",
   },
-  "/security/scms/deployment/providers": { label: "Provider details", level: "basic" },
+  "/security/scms/deployment/providers": {
+    label: "Provider details",
+    level: "basic",
+    keywords: "servers instances root ica eca ra aca pca la1 la2 linkage ma crlg crl generator pg policy lop share fleet region trust list ctl review revocation",
+  },
   "/security/scms/deployment/electors": { label: "Trust-list electors", help: "Electors who vote roots onto the trust list. US: 5.", defaultValue: 5, unit: "" },
   "/security/scms/deployment/quorum": { label: "Votes to sign the trust list", help: "Elector signatures a new trust list needs. US: 3.", defaultValue: 3, unit: "" },
   "/security/scms/deployment/options/lop": {
