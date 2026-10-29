@@ -122,6 +122,9 @@ pub struct MessageSchedule {
     services: ServiceSet,
     cam: CamTriggerState,
     bsm: BsmGenerator,
+    /// The instant, on the node's clock, the next BSM is aligned to (a sidelink
+    /// reservation, WP-34: [`MessageSchedule::align_to`]). `None`: the J2945/1 cadence.
+    bsm_aligned: Option<SimTime>,
     /// When the last SPaT and MAP were asked for, on the node's clock.
     last_spat: Option<SimTime>,
     last_map: Option<SimTime>,
@@ -143,6 +146,7 @@ impl MessageSchedule {
             services,
             cam: CamTriggerState::new(CamGenParams::en302637_2()),
             bsm: BsmGenerator::new(BsmGenParams::j2945_1()),
+            bsm_aligned: None,
             last_spat: None,
             last_map: None,
             spat_interval: SPAT_INTERVAL,
@@ -242,7 +246,7 @@ impl MessageSchedule {
             }
         }
         if self.services.bsm
-            && let Some(reason) = self.bsm.check(believed_now, dcc)
+            && let Some(reason) = self.bsm_check(believed_now, dcc)
         {
             out.push(GenRequest {
                 msg_type: MsgType::Bsm,
@@ -294,6 +298,85 @@ impl MessageSchedule {
         }
         self.generated = self.generated.saturating_add(out.len() as u32);
         out
+    }
+}
+
+/// How early an aligned BSM may go out: the check at `due − ALIGN_TOLERANCE` sends it.
+///
+/// The engine computes the aligned instant on the node's clock and wakes the node on the
+/// simulation's timeline; between the two the clock can move by its drift (a 100 ppm
+/// crystal moves 10 µs in 100 ms), and a check a few nanoseconds short of the instant
+/// would otherwise hold the BSM a whole step. Half a millisecond is far above any drift
+/// and far below `vMinITT`, so it can neither miss the instant nor send two BSMs.
+pub const ALIGN_TOLERANCE: Duration = Duration::from_micros(500);
+
+/// BSM generation aligned to a sidelink reservation (WP-34).
+///
+/// On LTE-V2X the BSM is carried on a semi-persistent reservation (TS 36.213 V14.4.0
+/// §14.1.1.6), and SAE J3161/1 has the application generate it just before the reserved
+/// subframe, so a BSM does not wait up to a whole period for its resource [J3161/1,
+/// second-hand via Abrar et al. 2026, arXiv 2608.05087; Molina-Masegosa & Gozalvez 2017
+/// on the mismatch]. The engine says where the reservation is; this moves the next
+/// periodic BSM there.
+impl MessageSchedule {
+    /// Aligns the next periodic BSM to a reservation: `at` is the instant, on the node's
+    /// clock, a BSM generated then reaches the MAC just before its reserved resource, and
+    /// `period` the reservation period. Returns the instant the next BSM is due, or `None`
+    /// when the node runs no BSM service.
+    ///
+    /// The next BSM is due at the first `at + k·period` (any integer `k`) at or after the
+    /// previous BSM's due instant plus the current interval ([`BsmGenerator::interval`],
+    /// `vMinITT` at least), so a realignment never shortens an interval below J2945/1's
+    /// floor or the DCC's stretch; and never later than the previous due instant plus
+    /// `vMaxITT`, where it is clamped and no longer aligned. Before the first BSM `at`
+    /// is taken as it is.
+    pub fn align_to(&mut self, at: SimTime, period: Duration, dcc: &DccState) -> Option<SimTime> {
+        if !self.services.bsm {
+            return None;
+        }
+        let due = match self.bsm.due_anchor() {
+            None => at,
+            Some(anchor) => {
+                let (_, max_itt) = self.bsm.itt_bounds();
+                let lo = self.bsm.interval(dcc).after(anchor);
+                let hi = max_itt.after(anchor);
+                let p = period.as_nanos();
+                let first = if p == 0 {
+                    at.max(lo)
+                } else if at >= lo {
+                    lo + (at - lo) % p
+                } else {
+                    let d = (lo - at) % p;
+                    if d == 0 { lo } else { lo + (p - d) }
+                };
+                first.min(hi)
+            }
+        };
+        self.bsm_aligned = Some(due);
+        Some(due)
+    }
+
+    /// The instant the next BSM is aligned to, if any.
+    pub fn aligned_bsm_due(&self) -> Option<SimTime> {
+        self.bsm_aligned
+    }
+
+    /// Drops the alignment: the next BSM follows the J2945/1 cadence again.
+    pub fn clear_alignment(&mut self) {
+        self.bsm_aligned = None;
+    }
+
+    /// The BSM decision: at the aligned instant when there is one, else the J2945/1
+    /// cadence ([`BsmGenerator::check`]).
+    fn bsm_check(&mut self, believed_now: SimTime, dcc: &DccState) -> Option<GenReason> {
+        match self.bsm_aligned {
+            None => self.bsm.check(believed_now, dcc),
+            Some(due) if believed_now.saturating_add(ALIGN_TOLERANCE.as_nanos()) >= due => {
+                self.bsm_aligned = None;
+                Some(self.bsm.fire_at(believed_now, due))
+            }
+            Some(_) => None,
+        }
     }
 }
 
@@ -522,5 +605,92 @@ mod tests {
         let (spat, map) = infra_counts(100, 1000, 100, 10, 1.0 - 50e-6);
         assert!((99..=100).contains(&spat), "{spat} SPaT in 10 s");
         assert!((9..=10).contains(&map), "{map} MAP in 10 s");
+    }
+
+    /// The instants (ms) a schedule checked every millisecond sends a BSM at, from
+    /// `from_ms` to `to_ms`.
+    fn bsm_instants(s: &mut MessageSchedule, from_ms: u64, to_ms: u64) -> Vec<u64> {
+        let b = belief_at(Vec3::ZERO, 0.0, 0.0);
+        let dcc = DccState::UNRESTRICTED;
+        (from_ms..=to_ms)
+            .filter(|ms| !s.due(ms * NS_PER_MS, &b, &dcc).is_empty())
+            .collect()
+    }
+
+    /// WP-34: aligned to a reservation, the next BSM goes out at the reserved instant and
+    /// the cadence continues from there, not from the old 100 ms grid.
+    #[test]
+    fn align_to_moves_the_next_bsm_to_the_reserved_instant() {
+        let mut s = MessageSchedule::new(ServiceSet::SAE);
+        assert_eq!(bsm_instants(&mut s, 0, 150), vec![0, 100]);
+        let dcc = DccState::UNRESTRICTED;
+        // A reservation whose BSM must be generated at 237 ms (period 100 ms): the first
+        // instant of that phase at least 100 ms after the last BSM (100 ms) is 237 ms.
+        let due = s.align_to(37 * NS_PER_MS, Duration::from_millis(100), &dcc);
+        assert_eq!(due, Some(237 * NS_PER_MS));
+        assert_eq!(s.aligned_bsm_due(), Some(237 * NS_PER_MS));
+        assert_eq!(bsm_instants(&mut s, 151, 400), vec![237, 337]);
+        assert_eq!(
+            s.aligned_bsm_due(),
+            None,
+            "an aligned BSM uses its alignment up"
+        );
+    }
+
+    /// WP-34: a realignment changes one interval, and keeps it inside J2945/1's bounds:
+    /// never shorter than `vMinITT` (100 ms), never longer than `vMaxITT` (600 ms).
+    #[test]
+    fn the_realigned_interval_stays_within_the_j2945_bounds() {
+        let dcc = DccState::UNRESTRICTED;
+        let p = Duration::from_millis(100);
+        // A reservation 30 ms after the last BSM: 30 ms is below vMinITT, so the BSM waits
+        // for the same phase one period later, 130 ms.
+        let mut s = MessageSchedule::new(ServiceSet::SAE);
+        assert_eq!(bsm_instants(&mut s, 0, 0), vec![0]);
+        assert_eq!(s.align_to(30 * NS_PER_MS, p, &dcc), Some(130 * NS_PER_MS));
+        // A reservation period longer than vMaxITT: the first instant of its phase at least
+        // 100 ms out is 900 ms, past vMaxITT, so it is clamped to 600 ms.
+        let mut s = MessageSchedule::new(ServiceSet::SAE);
+        assert_eq!(bsm_instants(&mut s, 0, 0), vec![0]);
+        let long = Duration::from_millis(1000);
+        assert_eq!(
+            s.align_to(900 * NS_PER_MS, long, &dcc),
+            Some(600 * NS_PER_MS)
+        );
+        // A DCC stretch of 150 ms is honoured: 70 ms + k·100 ms at or after 150 ms is 170 ms.
+        let mut s = MessageSchedule::new(ServiceSet::SAE);
+        assert_eq!(bsm_instants(&mut s, 0, 0), vec![0]);
+        let stretched = DccState {
+            t_off: Duration::from_millis(150),
+            ..DccState::UNRESTRICTED
+        };
+        assert_eq!(
+            s.align_to(70 * NS_PER_MS, p, &stretched),
+            Some(170 * NS_PER_MS)
+        );
+        // No BSM service, no alignment.
+        let mut cam = MessageSchedule::new(ServiceSet::ETSI);
+        assert_eq!(cam.align_to(50 * NS_PER_MS, p, &dcc), None);
+    }
+
+    /// WP-34: a check a drift's width short of the aligned instant still sends it, and the
+    /// tolerance cannot send two BSMs inside `vMinITT`.
+    #[test]
+    fn an_aligned_bsm_tolerates_clock_drift_and_is_sent_once() {
+        let mut s = MessageSchedule::new(ServiceSet::SAE);
+        let b = belief_at(Vec3::ZERO, 0.0, 0.0);
+        let dcc = DccState::UNRESTRICTED;
+        assert_eq!(s.due(0, &b, &dcc).len(), 1);
+        let due = s
+            .align_to(150 * NS_PER_MS, Duration::from_millis(100), &dcc)
+            .expect("aligned");
+        assert!(s.due(due - 200 * NS_PER_MS / 1000, &b, &dcc).len() == 1);
+        assert!(s.due(due, &b, &dcc).is_empty(), "sent once");
+        // With the alignment cleared, the cadence is the J2945/1 one from the last due.
+        let mut s = MessageSchedule::new(ServiceSet::SAE);
+        assert_eq!(s.due(0, &b, &dcc).len(), 1);
+        s.align_to(150 * NS_PER_MS, Duration::from_millis(100), &dcc);
+        s.clear_alignment();
+        assert_eq!(bsm_instants(&mut s, 1, 250), vec![100, 200]);
     }
 }

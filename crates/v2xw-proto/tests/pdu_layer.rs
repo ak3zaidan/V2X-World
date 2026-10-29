@@ -192,6 +192,9 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
             SpduKind::SecuredCrl => {
                 v2xw_sec::crl::decode_crl(b).expect("a SecuredCrl");
             }
+            SpduKind::InfoStatus => {
+                pdu::open_info_status(b, pki).expect("RA-signed");
+            }
             SpduKind::SecuredMisbehaviorReport => {
                 v2xw_proto::scms::mbr::ma_open_report(
                     b,

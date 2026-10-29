@@ -2447,6 +2447,19 @@ pub struct SidelinkSettings {
     /// steps). -94 dBm unless set; the CR limits and every CBR metric read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cbr_threshold_dbm: Option<f64>,
+    // WP-34
+    /// Whether each radio generates its periodic BSM just before its reserved resource,
+    /// as SAE J3161/1 has the application do, instead of on its own 100 ms clock: the BSM
+    /// then waits a margin for its resource rather than up to a whole period. The phase
+    /// follows every reselection; an interval it changes stays inside J2945/1's bounds.
+    /// Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align_generation: Option<bool>,
+    /// How long before its reserved resource an aligned BSM reaches the radio, ms, on top
+    /// of the device's longest signing time. Unset is the pool's processing time `T1`
+    /// (1 ms on LTE-V2X): an ASSUMPTION until J3161/1's figure is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align_margin_ms: Option<f64>,
 }
 
 impl SidelinkSettings {

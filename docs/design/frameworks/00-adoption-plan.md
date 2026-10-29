@@ -1024,6 +1024,52 @@ trustworthy or comparable; later waves add behaviours and radio features.
     95.5 s.
   - **Proposal for the owner:** `distraction: true` with `realism: human` on US presets.
     It moves G-TV.
+**WP-34 SPS-aligned BSM generation for LTE-V2X** (M, 2 pieces). Closes the matrix row
+`lte-latency-budget`. Plan: `wp25-plus-build-plans.md` §WP-34.
+- P34.1 (2026-10-28): done, nothing wired, no run changes. `SpsEngine::next_reserved_at`
+  (the next reserved slot, projected by whole periods when no block came round) and a
+  per-UE selection count (`selections_of`, `ReservedOccasion::selection`) that changes on
+  every reselection. `MessageSchedule::align_to(at, period, dcc)`: the next periodic BSM is
+  due at the first `at + k·period` at or after the last due instant plus the current
+  interval (`vMinITT` at least, the DCC stretch honoured), clamped to `vMaxITT`; an aligned
+  BSM fires at the first check within `ALIGN_TOLERANCE` (0.5 ms, clock drift) of its
+  instant. `ProfileServiceModel::service_time_bound` (the upper edge of a ranged cost) and
+  `ObuRuntime::sign_time_bound`/`align_bsm` give the engine the lead. Unit tests: 3 in
+  `generate.rs`, 2 in `sps.rs`, 1 in `server.rs`; six faults shown red.
+- P34.2 (2026-10-28): done, off by default (`radio.sidelink.align_generation`, all six
+  settings files; `align_margin_ms` unset = the pool's `T1`, 1 ms on LTE, an ASSUMPTION).
+  After each BSM's initial grant (`run/sidelink.rs`) the sender's next BSM is aligned to
+  its next reserved subframe minus `lead` = the OBU's signing bound + the timing's largest
+  hand-off jitter + the margin, and the node's step phase moves there (an extra step when
+  that window is already scheduled). A released reservation (counter expiry without keep)
+  leaves the old phase, and the BSM selects when it arrives (TS 36.321 §5.14.1.1). The
+  loader refuses it on 802.11p, with a synchronised generation timing, and with a mobility
+  step that does not divide the RRI. Run report: `sidelink.bsm_aligned`, `bsm_unaligned`
+  (the plan's `bsm_unaligned_event`: the engine has no event BSM, hard braking is a DENM),
+  `bsm_realigned_on_reselection`, all skipped when zero. Measured on 30 vehicles, 3 s,
+  J3161/1 pool (`tests/sidelink_align.rs`): generation-to-air mean 50.3 ms off, 11.7 ms
+  aligned (lead 10 ms), 95.8 % of BSMs on the air within lead + 1 subframe (3.2 % off);
+  with `probResourceKeep` 0, 89.1 % and 67 realignments. Rows: `networking.yaml` WP-34
+  (e2e down, PRR changes, family cv2x/nr). The matrix variant `lte-aligned` is added. No
+  golden moved; DSRC digests (`bsm_timing` 4, `phase2` 15) pass. Proposal for the owner:
+  `align_generation: true` for LTE-V2X profiles (moves every LTE digest).
+
+**WP-35 The `infoStatus` SPDU (A16)** (M, 2 pieces). Plan: `wp25-plus-build-plans.md` §WP-35.
+- P35.1 (2026-10-28): done, nothing wired. `v2xw-proto` `pdu.rs`: `InfoStatus` (crl, ctl,
+  caCcf, ma, ra lines), `cert_info_status` (the `cert.infoStatus` `ScmsPdu`),
+  `ra_info_status_spdu` (signed psid 35 with the RA certificate attached, as every RA
+  response), `open_info_status` (refuses a non-RA signer and an RA status without `ra`,
+  l.337), and `status_fetch` (what a device downloads: only what is strictly newer; the
+  composite CRL for a CRL change, the chain file for a CTL or `caCcf` change alone, the
+  MA or RA certificate; US profile preferences, 03 §4.1). The RA endpoint
+  `ScmsRun::ra_info_status` logs the SPDU as `SpduKind::InfoStatus`
+  (`CertificateManagementInformationStatusSpdu`); `ra_status_lines` gives the RA's own
+  lines. The codec is the generated rasn type; the test pins its COER byte for byte to a
+  vector written from X.696 (the asn1tools corpus has the same layout). Oracle rule
+  `INFO-STAT` and mutation `info-no-ra` added to `tools/oracle/scms_oracle/records.py`;
+  not yet exercised on a recording (no run emits the SPDU before P35.2). The codec test
+  sits in `v2xw-proto`, not `v2xw-msg` as the plan had it: the builders of every other
+  1609.2.1 PDU are there.
 
 ## 3. Deferred and dropped
 

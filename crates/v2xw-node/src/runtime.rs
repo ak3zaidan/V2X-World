@@ -1286,6 +1286,40 @@ impl ObuRuntime {
         Some(now.saturating_add(finish.saturating_sub(believed)))
     }
 
+    /// The longest this device's BSM signature can take ([`ProfileServiceModel::
+    /// service_time_bound`] of its signing operation): what it budgets when it has to have
+    /// a BSM signed before a sidelink reservation (WP-34). `None` when the profile costs
+    /// no signature.
+    #[must_use]
+    pub fn sign_time_bound(&self) -> Option<Duration> {
+        self.service
+            .service_time_bound(&OpDescriptor::sign(self.config.sign_op, 0))
+    }
+
+    /// Aligns the next periodic BSM to a sidelink reservation (WP-34,
+    /// [`MessageSchedule::align_to`]): `at` is the instant on the simulation's timeline a
+    /// BSM generated then reaches the MAC in time for the reserved resource, seen from
+    /// `now`, and `period` the reservation period. The node's clock stands a fixed offset
+    /// from the truth between two of its steps, so the instant is moved onto that clock and
+    /// the due instant back by the same offset. Returns the due instant on the
+    /// simulation's timeline, or `None` when the node runs no BSM service.
+    pub fn align_bsm(&mut self, now: SimTime, at: SimTime, period: Duration) -> Option<SimTime> {
+        let believed_now = self.clock.believed_time(now);
+        let on_clock = |t: SimTime| {
+            if t >= now {
+                believed_now.saturating_add(t - now)
+            } else {
+                believed_now.saturating_sub(now - t)
+            }
+        };
+        let due = self.schedule.align_to(on_clock(at), period, &self.dcc)?;
+        Some(if due >= believed_now {
+            now.saturating_add(due - believed_now)
+        } else {
+            now.saturating_sub(believed_now - due)
+        })
+    }
+
     /// Everything a switched-off node was handed, and every check it had in progress, is
     /// reported as reaching a node that was off, rather than vanishing.
     fn switched_off(

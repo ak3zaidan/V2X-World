@@ -542,6 +542,67 @@ impl ScmsRun {
         run
     }
 
+    /// RA side of 1609.2.1 §6.3.5.14 (WP-35, A16): the RA's signed
+    /// `CertificateManagementInformationStatusSpdu` for `status`, logged as a PDU from the
+    /// RA to `device` at `at`, as the RA answers a device's information-status poll.
+    /// `None` when the PDU layer is off (no RA key to sign with).
+    pub fn ra_info_status(
+        &mut self,
+        device: NodeId,
+        at: SimTime,
+        status: &crate::scms::pdu::InfoStatus,
+    ) -> Option<crate::scms::pdu::Pdu> {
+        let pki = self.state.pki.clone()?;
+        let p =
+            crate::scms::pdu::Pdu::new(crate::scms::pdu::ra_info_status_spdu(&pki, status).ok()?);
+        let keep = self.state.params.pdu.keep_bytes;
+        self.state.pdus.push(crate::scms::pdu::EmittedPdu {
+            kind: SpduKind::InfoStatus,
+            from: self.state.nodes.ra.index(),
+            to: device.index(),
+            at,
+            bytes: keep.then(|| p.clone()),
+            len: p.len(),
+            step: None,
+            preload: false,
+        });
+        Some(p)
+    }
+
+    /// The RA's own lines of an information status (WP-35): `(ctl, caCcf, ma, ra)`. The
+    /// CTL line is the home CTL (the US series, its sequence, its effective date); `caCcf`
+    /// is the same date, since the chain file carries the CTL; the MA line is BSM
+    /// misbehaviour (PSID 0x20, [SM-MBR]) dated by the MA certificate's validity start, and
+    /// `ra` the RA certificate's. The CRL lines are the caller's: the lists of the
+    /// composite CRL the RA serves, every provider's. `None` with the PDU layer off.
+    pub fn ra_status_lines(
+        &self,
+    ) -> Option<(
+        crate::scms::pdu::CtlStatusLine,
+        u32,
+        crate::scms::pdu::MaStatusLine,
+        u32,
+    )> {
+        let pki = self.state.pki.as_ref()?;
+        let ctl = &self.state.gov.ctl;
+        let start = |c: &v2xw_msg::sec_types::ieee1609_dot2::Certificate| {
+            u32::try_from(v2xw_sec::ctl::validity(c).0).unwrap_or(u32::MAX)
+        };
+        Some((
+            crate::scms::pdu::CtlStatusLine {
+                series_id: v2xw_sec::ctl::US_CTL_SERIES_ID,
+                sequence: u16::try_from(ctl.sequence).unwrap_or(u16::MAX),
+                last_update: ctl.effective,
+            },
+            ctl.effective,
+            crate::scms::pdu::MaStatusLine {
+                psids: vec![0x20],
+                updated: start(&pki.ma.cert),
+            },
+            start(&pki.ra.cert),
+        ))
+    }
+
     /// The single entry on the published CRL, for a test that needs to inspect it.
     pub fn crl_entry(&self) -> Option<&v2xw_sec::linkage::CrlLinkageEntry> {
         self.state.crl_store.entries.first()

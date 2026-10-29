@@ -184,6 +184,35 @@ impl ProfileServiceModel {
     pub fn profile(&self) -> &HardwareProfile {
         &self.profile
     }
+
+    /// The longest one operation can take: the upper edge of a ranged cost, which
+    /// [`ServiceModel::service_time`] draws below, and otherwise the fixed cost it
+    /// charges. No draw is made. `None` when the profile costs no such operation.
+    ///
+    /// What a stack budgets with when it has to have a message signed by a deadline, such
+    /// as a BSM aligned to a sidelink reservation (WP-34).
+    #[must_use]
+    pub fn service_time_bound(&self, op: &OpDescriptor) -> Option<Duration> {
+        let cost = match op.class {
+            OpClass::Sign | OpClass::Verify | OpClass::Hash => {
+                let ranged = (!self.unlimited)
+                    .then(|| self.profile.hsm.ops.get(self.profile.priced_op(op.op)))
+                    .flatten()
+                    .filter(|_| self.profile.hsm.kind != crate::profile::HsmKind::None)
+                    .and_then(crate::profile::HsmOp::range_us);
+                match ranged {
+                    Some([_, hi]) => Some(Duration::from_nanos((hi * 1e3) as u64)),
+                    None => self.profile.op_cost(op.op).map(|(d, _)| d),
+                }
+            }
+            OpClass::Parse | OpClass::Application | OpClass::CrlProcessing => self.app_task,
+        };
+        if self.unlimited {
+            cost.map(|_| Self::UNLIMITED_COST)
+        } else {
+            cost
+        }
+    }
 }
 
 impl Model for ProfileServiceModel {
@@ -670,5 +699,43 @@ mod tests {
         let facts = p.op_cost_facts("ecdsa-p256-sign").expect("costed");
         assert_eq!(facts.basis, crate::profile::CostBasis::WithinBound);
         assert_eq!(facts.range_us, Some([3000.0, 9000.0]));
+    }
+
+    /// WP-34: the bound is the upper edge of a ranged cost, every draw lies at or under it,
+    /// and a fixed cost is its own bound; at the abstract tier it is the tier's microsecond.
+    #[test]
+    fn the_service_time_bound_is_the_upper_edge_of_every_draw() {
+        let sign = OpDescriptor::sign("ecdsa-p256-sign", 64);
+        let fixed = ProfileServiceModel::new(profile(crate::profiles::REFERENCE_OBU));
+        assert_eq!(
+            fixed.service_time_bound(&sign),
+            Some(Duration::from_millis(9))
+        );
+        let mut p = profile(crate::profiles::REFERENCE_OBU);
+        p.hsm
+            .ops
+            .get_mut("ecdsa-p256-sign")
+            .expect("costed")
+            .latency_lower_us
+            .value = Some(3000.0);
+        let reg = RngRegistry::new(11);
+        let mut ctx = NodeRuntimeCtx::new(0, &reg);
+        let mut sm = ProfileServiceModel::new(p).for_node(v2xw_core::ids::NodeId::new(4));
+        let bound = sm.service_time_bound(&sign).expect("costed");
+        assert_eq!(bound, Duration::from_millis(9));
+        for _ in 0..50 {
+            let d = sm.service_time(&mut ctx, &sign).expect("costed");
+            assert!(d <= bound, "{d:?} over the bound {bound:?}");
+        }
+        let unlimited =
+            ProfileServiceModel::new(profile(crate::profiles::REFERENCE_OBU)).unlimited();
+        assert_eq!(
+            unlimited.service_time_bound(&sign),
+            Some(ProfileServiceModel::UNLIMITED_COST)
+        );
+        assert_eq!(
+            fixed.service_time_bound(&OpDescriptor::sign("no-such-primitive", 64)),
+            None
+        );
     }
 }

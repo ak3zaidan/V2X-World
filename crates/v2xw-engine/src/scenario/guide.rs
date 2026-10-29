@@ -725,6 +725,17 @@ const ADVANCED: &[Basic] = &[
         explain: "The signal level above which a C-V2X sub-channel counts as busy in the channel busy ratio, which drives congestion control.",
         recommended: "-94 dBm (this build's default); -112 to -80 dBm in 2 dB steps (TS 36.331).",
     },
+    // WP-34
+    Basic {
+        path: "radio.sidelink.align_generation",
+        explain: "Whether each C-V2X radio builds its safety message just before its reserved slot, as SAE J3161/1 has deployed radios do, so the message waits a millisecond or two for the air instead of up to a tenth of a second.",
+        recommended: "Off (today's default, every LTE-V2X run unchanged); on for a deployment-faithful LTE-V2X latency.",
+    },
+    Basic {
+        path: "radio.sidelink.align_margin_ms",
+        explain: "With aligned generation, how long before its reserved slot the signed message reaches the radio, on top of the longest time the device takes to sign it.",
+        recommended: "1 ms (the radio's processing time T1); an assumption until J3161/1's own figure is read.",
+    },
     Basic {
         path: "radio.dcc.reactive_table",
         explain: "Which ETSI reactive table sets the message rate in each congestion state: A.1 for frames up to 1 ms on air, A.2 (twice the rates) for frames up to 500 µs.",

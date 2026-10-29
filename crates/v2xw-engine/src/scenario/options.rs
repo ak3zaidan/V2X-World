@@ -1637,6 +1637,9 @@ pub fn title(path: &str) -> Option<&'static str> {
         "net.geonet.cbf_min_time_ms" => "Shortest forwarding wait (CBF)",
         "net.geonet.cbf_max_time_ms" => "Longest forwarding wait (CBF)",
         "net.geonet.max_comm_range_m" => "Assumed forwarding range (DIST_MAX)",
+        // WP-34
+        "radio.sidelink.align_generation" => "Build the BSM just before its reserved slot (C-V2X)",
+        "radio.sidelink.align_margin_ms" => "Aligned BSM lead margin (C-V2X)",
         "messages.spat_interval_ms" => "Signal phase (SPaT) interval",
         "messages.map_interval_ms" => "Intersection map (MAP) interval",
         "messages.cpm_interval_ms" => "Collective perception (CPM) check interval",

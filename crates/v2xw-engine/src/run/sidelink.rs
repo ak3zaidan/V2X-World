@@ -61,6 +61,20 @@
 //!   retransmissions and then the transport block, which ETSI TS 103 574 §5.3 allows; it
 //!   does not raise its MCS, which J3161/1's per-CBR MCS ranges would also allow.
 //! * **SAE J3161/1 §7.3.3's SPS + one-shot interleaving.**
+//!
+//! # BSM generation aligned to the reservation (WP-34)
+//!
+//! Off by default (`radio.sidelink.align_generation`). On, after each BSM's initial
+//! transmission the sender's next periodic BSM is aligned to its next reserved subframe
+//! (`SpsEngine::next_reserved_at`): it is generated `lead` before it, where `lead` is the
+//! device's longest signing time (`ObuRuntime::sign_time_bound`), the generation timing's
+//! largest hand-off jitter, and `align_margin_ms` (unset: the pool's `T1`). The node's
+//! step phase moves to that instant, so the next step generates it, and a reselection —
+//! counter expiry, a size or latency trigger, NR re-evaluation or pre-emption — moves the
+//! phase to the new reservation at the next grant. A BSM whose reservation was released
+//! (counter expiry without keep) is generated on the old phase and selects at arrival, as
+//! TS 36.321 §5.14.1.1 has it. The interval a realignment changes stays inside J2945/1's
+//! `vMinITT`..`vMaxITT` (`MessageSchedule::align_to`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -148,10 +162,34 @@ pub struct SidelinkReport {
     pub mean_cbr_at_grant_pm: u64,
     /// Largest CBR congestion control read at a grant, per mille.
     pub max_cbr_at_grant_pm: u64,
+    /// WP-34 (`radio.sidelink.align_generation`): BSMs granted that were generated at the
+    /// instant aligned to their sender's reservation.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bsm_aligned: u64,
+    /// WP-34: BSMs granted that were not (the first, one after its reservation was
+    /// released, one whose step came late). The engine generates no event-driven BSM
+    /// (hard braking is a DENM), so none of these is an event BSM.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bsm_unaligned: u64,
+    /// WP-34: alignments that moved to a new reservation after a reselection.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bsm_realigned_on_reselection: u64,
     #[serde(skip)]
     cbr_sum_pm: u64,
     #[serde(skip)]
     cbr_n: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+/// A UE's BSM alignment (WP-34): the reservation it was aligned to, by the selection that
+/// made it, and the instant its next BSM is due, `None` once the reservation is released.
+#[derive(Debug, Clone, Copy)]
+struct AlignState {
+    selection: u64,
+    due: Option<SimTime>,
 }
 
 /// A transport block's sidelink state across its transmissions.
@@ -244,6 +282,10 @@ pub(crate) struct SidelinkAccess {
     /// recorder is at hand.
     pub(crate) finalize: Vec<FrameSeq>,
     pub(crate) report: SidelinkReport,
+    /// WP-34: the alignment margin when `radio.sidelink.align_generation` is on.
+    align_margin: Option<Duration>,
+    /// WP-34: each UE's alignment.
+    align: BTreeMap<NodeId, AlignState>,
 }
 
 /// The transmission bandwidth, PRB, of a sidelink carrier `width_mhz` wide: TS 36.101
@@ -444,6 +486,14 @@ impl SidelinkAccess {
         }
         let refsens_cutoff = choice.refsens_cutoff;
         let (pool, mut params, profile) = configuration(scenario.radio.rat, choice)?;
+        // WP-34: the margin, unset the pool's processing time T1 (an ASSUMPTION until
+        // J3161/1's own figure is read).
+        let align_margin = (scenario.radio.sidelink.align_generation == Some(true)).then(|| {
+            scenario.radio.sidelink.align_margin_ms.map_or_else(
+                || Duration::from_nanos(pool.slot().as_nanos() * params.t1_slots),
+                |ms| Duration::from_nanos((ms * 1e6).round() as u64),
+            )
+        });
         // `radio.sidelink`: a researcher's numbers over the profile's.
         apply_tuning(&mut params, &pool, &scenario.radio.sidelink);
         // The channel the region's rules put this technology on (`radio.region`,
@@ -506,6 +556,8 @@ impl SidelinkAccess {
             slot_frames: BTreeMap::new(),
             finalize: Vec::new(),
             report,
+            align_margin,
+            align: BTreeMap::new(),
         })
     }
 
@@ -743,6 +795,16 @@ impl Engine {
                 .frames
                 .get(&frame)
                 .is_some_and(|f| f.air.after(now) <= horizon);
+            // WP-34: the BSM just granted, for the alignment of the sender's next one.
+            let aligned_bsm = (first
+                && self
+                    .sidelink
+                    .as_ref()
+                    .is_some_and(|sl| sl.align_margin.is_some()))
+            .then(|| self.frames.get(&frame))
+            .flatten()
+            .filter(|f| f.msg_type == v2xw_msg::MsgType::Bsm)
+            .map(|f| f.t_generated);
             if let Some(state) = self.frames.get_mut(&frame) {
                 state.start = now;
                 state.end = state.air.after(now);
@@ -769,6 +831,9 @@ impl Engine {
                     sl.finalize.push(frame);
                 }
             }
+            if let Some(t_generated) = aligned_bsm {
+                self.sidelink_align_bsm(node, t_generated, now, horizon);
+            }
         }
 
         // 4. The next time this UE has anything to do.
@@ -777,6 +842,97 @@ impl Engine {
             if at <= horizon {
                 self.schedule_sidelink_timer(node, at);
             }
+        }
+    }
+
+    /// WP-34: a BSM of `node`'s, generated at `t_generated`, has just had its initial
+    /// transmission: count it as aligned or not, and align the node's next BSM to its
+    /// next reserved subframe.
+    fn sidelink_align_bsm(
+        &mut self,
+        node: NodeId,
+        t_generated: SimTime,
+        now: SimTime,
+        horizon: SimTime,
+    ) {
+        if self.gen_timing.is_synchronised() {
+            // The loader refuses this; every node steps at one instant, with no phase.
+            return;
+        }
+        let tol = v2xw_node::generate::ALIGN_TOLERANCE.as_nanos();
+        let Some(sl) = self.sidelink.as_mut() else {
+            return;
+        };
+        let Some(margin) = sl.align_margin else {
+            return;
+        };
+        let prev = sl.align.get(&node).copied();
+        let was_aligned = prev
+            .and_then(|p| p.due)
+            .is_some_and(|due| t_generated + tol >= due && t_generated <= due + tol);
+        if was_aligned {
+            sl.report.bsm_aligned += 1;
+        } else {
+            sl.report.bsm_unaligned += 1;
+        }
+        let now_slot = sl.mac.pool().slot_of(now);
+        let Some(occ) = sl.mac.next_reserved_at(node, now_slot) else {
+            // Released at counter expiry: the next BSM comes on the old phase and selects
+            // when it arrives.
+            if let Some(p) = sl.align.get_mut(&node) {
+                p.due = None;
+            }
+            return;
+        };
+        let reselected = prev.is_some_and(|p| p.selection != occ.selection);
+        let jitter = self.gen_timing.max_jitter;
+        let Some(rt) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) else {
+            return;
+        };
+        let lead = rt
+            .sign_time_bound()
+            .unwrap_or(Duration::ZERO)
+            .as_nanos()
+            .saturating_add(jitter.as_nanos())
+            .saturating_add(margin.as_nanos());
+        let at = occ.at.saturating_sub(lead);
+        let Some(due) = rt.align_bsm(now, at, occ.period) else {
+            return;
+        };
+        let Some(sl) = self.sidelink.as_mut() else {
+            return;
+        };
+        if reselected {
+            sl.report.bsm_realigned_on_reselection += 1;
+        }
+        sl.align.insert(
+            node,
+            AlignState {
+                selection: occ.selection,
+                due: Some(due),
+            },
+        );
+        // The node steps at its phase in every mobility step, and the phase is where its
+        // generator sits: move it to the aligned instant. The step of the window `due`
+        // falls in is already scheduled when that window has begun; if it is on another
+        // phase, the node is also stepped at `due` itself.
+        let step_ns = self.scenario.time.mobility_step().as_nanos().max(1);
+        let phase = due % step_ns;
+        let old = self
+            .node_phase
+            .get(&node)
+            .map_or(0, |d| d.as_nanos() % step_ns);
+        self.node_phase.insert(node, Duration::from_nanos(phase));
+        let window_started = due - phase <= now - now % step_ns;
+        if window_started && phase != old && due > now && due <= horizon {
+            self.scheduler.schedule(
+                due,
+                v2xw_core::event::EventClass::NodeTask,
+                crate::event::Event::NodeTask {
+                    node,
+                    task: crate::event::NodeTask::Step,
+                },
+            );
         }
     }
 
