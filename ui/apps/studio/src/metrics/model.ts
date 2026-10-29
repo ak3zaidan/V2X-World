@@ -896,8 +896,123 @@ export function readable(v: number | null, unit: string): { value: string; unit:
     return { value: b.value, unit: `${b.unit}/s` };
   }
   if (u === "1/s") return { value: glanceNumber(v), unit: "per s" };
+  if (u === "1/(veh·h)") return { value: glanceNumber(v), unit: "per vehicle-hour" };
   if (u === "count") return { value: glanceNumber(v), unit: "" };
+  if (u === "ms") {
+    // A millisecond figure under a microsecond's thousandth reads as an exponent; in µs it does not.
+    const a = Math.abs(v);
+    if (a > 0 && a < 0.001) return { value: glanceNumber(v * 1e6), unit: "ns" };
+    if (a > 0 && a < 1) return { value: glanceNumber(v * 1000), unit: "µs" };
+    if (a >= 120_000) return readableDuration(v / 1000);
+  }
   return { value: glanceNumber(v), unit: u };
+}
+
+/**
+ * Ratios that are not shares: they can exceed 1, so a percentage or a 0–1 scale misreads them.
+ * `envelope_overhead` is security bytes per payload byte (1.26 means 26 % more security than payload).
+ */
+export const MULTIPLE_RATIOS: Readonly<Record<string, string>> = {
+  envelope_overhead: "× payload",
+};
+
+/** A metric's value as a card, a summary or a tile shows it: `readable`, with a multiple read as "1.26 × payload". */
+export function display(base: string, v: number | null, unit: string): { value: string; unit: string } {
+  const times = MULTIPLE_RATIOS[base];
+  if (times !== undefined && v !== null && Number.isFinite(v)) return { value: glanceNumber(v), unit: times };
+  return readable(v, unit);
+}
+
+/** `display` as one string: "93.6 %", "250 ms", "1.26 × payload", "38.5". */
+export function displayText(base: string, v: number | null, unit: string): string {
+  const s = display(base, v, unit);
+  return s.unit === "" ? s.value : `${s.value} ${s.unit}`;
+}
+
+/**
+ * Simulated time as a clock reads it, to the minute: "48 s", "9 min 48 s", "2 h 26 min", "5 days",
+ * "5 days 3 h". For the run's position and a judgement's "when".
+ */
+export function clockText(s: number): string {
+  if (!Number.isFinite(s)) return "—";
+  const a = Math.max(0, s);
+  if (a < 60) return `${glanceNumber(a)} s`;
+  if (a < 3600) {
+    if (a >= 600) return `${Math.round(a / 60)} min`;
+    let m = Math.floor(a / 60);
+    let r = Math.round(a - m * 60);
+    if (r === 60) {
+      m += 1;
+      r = 0;
+    }
+    return r === 0 ? `${m} min` : `${m} min ${r} s`;
+  }
+  if (a < 86_400) {
+    const h = Math.floor(a / 3600);
+    const m = Math.round((a - h * 3600) / 60);
+    return m === 0 ? `${h} h` : m === 60 ? `${h + 1} h` : `${h} h ${m} min`;
+  }
+  const d = Math.floor(a / 86_400);
+  const h = Math.round((a - d * 86_400) / 3600);
+  const days = (n: number): string => `${n} ${n === 1 ? "day" : "days"}`;
+  return h === 0 ? days(d) : h === 24 ? days(d + 1) : `${days(d)} ${h} h`;
+}
+
+/** Where a chart of `s` should look, and how sparse the series is over the run. */
+export interface DataView {
+  readonly from: number;
+  readonly to: number;
+  /** The windows that reported cover under a quarter of the run: on the run's axis the line is a sliver. */
+  readonly sparse: boolean;
+  /** `from`–`to` is the stretch where most windows are, not the whole run. */
+  readonly zoomed: boolean;
+  /** How many of the observed windows fall inside `from`–`to`, and how many there are. */
+  readonly inside: number;
+  readonly windows: number;
+}
+
+/**
+ * The x extent a chart of `s` should open on. Over the whole run (`0` to `runEndS`) unless the
+ * windows that reported cover under a quarter of it: a fast-forwarded run reports only while its
+ * radio runs (the first minutes of five days, then a few windows days apart), and on the run's
+ * axis that line is a sliver at the left edge (`sparse`). Then the extent is the largest burst of
+ * windows (windows split where a gap is far longer than their usual spacing), padded a little, when
+ * it holds at least half of them; `zoomed` says so and `inside` how many it holds, so the axis can
+ * tell the reader. Coverage is the windows' count times their spacing (the smallest gap).
+ */
+export function dataView(s: Series, runEndS: number): DataView {
+  const t: number[] = [];
+  for (let i = 0; i < s.t.length; i++) if (!Number.isNaN(s.v[i])) t.push(s.t[i]);
+  const n = t.length;
+  const last = n > 0 ? t[n - 1]! : 0;
+  const end = Math.max(runEndS, last);
+  const whole: DataView = { from: 0, to: end, sparse: false, zoomed: false, inside: n, windows: n };
+  if (end <= 0 || n === 0) return whole;
+  // One window (or one overview bin): on the run's axis a point at an edge, which reads as nothing.
+  if (n === 1) return { ...whole, sparse: true };
+  const gaps = t.slice(1).map((x, i) => x - t[i]!);
+  // The spacing of two neighbouring windows (or bins): the smallest gap. A median would take a
+  // binned overview's few far-apart bins for the spacing and miss that the run is mostly empty.
+  let step = Number.POSITIVE_INFINITY;
+  for (const g of gaps) if (g > 0 && g < step) step = g;
+  if (!Number.isFinite(step)) return whole;
+  if (n * step >= end * 0.25) return whole;
+  const sparse: DataView = { ...whole, sparse: true };
+  // Bursts: a new one starts where the gap is far longer than the usual spacing.
+  const split = Math.max(step * 50, end * 0.01);
+  let best = { lo: 0, hi: 0, count: 0 };
+  let start = 0;
+  for (let i = 1; i <= n; i++) {
+    if (i === n || gaps[i - 1]! > split) {
+      if (i - start > best.count) best = { lo: start, hi: i - 1, count: i - start };
+      start = i;
+    }
+  }
+  const lo = t[best.lo]!;
+  const hi = t[best.hi]!;
+  if (best.count < 2 || best.count < n / 2 || hi - lo >= end * 0.25) return sparse;
+  const pad = Math.max((hi - lo) * 0.03, step, 1e-3);
+  return { from: Math.max(0, lo - pad), to: Math.min(end, hi + pad), sparse: true, zoomed: true, inside: best.count, windows: n };
 }
 
 /** Seconds as a reader counts them: `850 ms`, `42 s`, `6.5 min`, `24 h`, `2.5 days`. */
@@ -918,8 +1033,9 @@ export function readableBytes(b: number): { value: string; unit: string } {
 }
 
 /** The unit an axis names: a ratio says its scale, because 0.9 and 90 % are different numbers. */
-export function axisUnit(unit: string): string {
+export function axisUnit(unit: string, base?: string): string {
   const u = unit.trim();
+  if (base !== undefined && MULTIPLE_RATIOS[base] !== undefined) return `ratio (${MULTIPLE_RATIOS[base]})`;
   if (u === "ratio") return "ratio (0–1)";
   if (u === "" || u === "1") return "unitless";
   return u;

@@ -5,13 +5,13 @@
  */
 
 import type { BackendSnapshot } from "../lib/backend.js";
-import { formatNumber, glanceNumber, readable, type GroupRow, type Series } from "./model.js";
+import { clockText, formatNumber, glanceNumber, readable, type GroupRow, type Series } from "./model.js";
 
 // ------------------------------------------------------------------------------------------------
 // The scenario in one line
 // ------------------------------------------------------------------------------------------------
 
-const RAT_NAMES: Readonly<Record<string, string>> = {
+export const RAT_NAMES: Readonly<Record<string, string>> = {
   "dsrc-80211p": "DSRC (IEEE 802.11p)",
   "its-g5": "ITS-G5 (802.11p)",
   "lte-v2x": "LTE-V2X sidelink",
@@ -67,7 +67,7 @@ export function scenarioLine(
   const parts: string[] = [];
   const shownS = run.tNs / 1e9;
   const endS = run.tEndNs / 1e9;
-  if (shownS > 0) parts.push(endS > 0 && Math.abs(endS - shownS) > 0.5 ? `${round(shownS)} of ${round(endS)} s simulated` : `${round(shownS)} s simulated`);
+  if (shownS > 0) parts.push(endS > 0 && Math.abs(endS - shownS) > 0.5 ? `${clockText(shownS)} of ${clockText(endS)} simulated` : `${clockText(shownS)} simulated`);
   if (run.actors > 0) parts.push(`${run.actors.toLocaleString("en-US")} road users at the end`);
   const rat = str(get(scenario, ["radio", "rat"]));
   if (rat !== null) parts.push(RAT_NAMES[rat] ?? rat);
@@ -87,9 +87,6 @@ export function scenarioPurpose(scenario: unknown): string | null {
   return m ? m[1] : flat;
 }
 
-function round(x: number): string {
-  return x >= 100 ? String(Math.round(x)) : String(Math.round(x * 10) / 10);
-}
 
 // ------------------------------------------------------------------------------------------------
 // The headline numbers
@@ -147,6 +144,7 @@ export const HEADLINES: readonly HeadlineGroup[] = [
     id: "security",
     title: "Security overhead",
     items: [
+      { series: "security_overhead", label: "Security's share of the bytes on air", reduce: "mean" },
       { series: "envelope_overhead", label: "Security bytes per payload byte", reduce: "mean" },
       { series: "verify_wait.p95", label: "Worst window's p95 verification wait", reduce: "max" },
       { series: "unverified_ratio", label: "Delivered without verification", reduce: "mean" },
@@ -156,7 +154,7 @@ export const HEADLINES: readonly HeadlineGroup[] = [
     id: "credentials",
     title: "Credentials and revocation",
     items: [
-      { series: "cert_pool_valid", label: "Lowest window's mean valid certificates", reduce: "min" },
+      { series: "cert_pool_valid", label: "Valid certificates per vehicle, lowest window's mean", reduce: "min" },
       { series: "crl_entries", label: "Revoked (CRL entries) at the end", reduce: "last" },
       { series: "det_recall", label: "Attackers detected", reduce: "last" },
       { series: "false_accusations", label: "False accusations", reduce: "sum" },
@@ -301,7 +299,16 @@ export interface BriefInput {
   readonly judged: { readonly unhealthy: number; readonly caution: number; readonly atTimes: number; readonly healthy: number; readonly worstLabel: string | null } | null;
   readonly delivery: { readonly pdr: number | null; readonly latencyMs: number | null } | null;
   readonly credentials: { readonly enrolled: number | null; readonly devices: number | null; readonly pool: number | null; readonly starved: number | null } | null;
-  readonly misbehaviour: { readonly filed: number | null; readonly revoked: number | null; readonly honestRevoked: number | null; readonly slowestStageS: number | null } | null;
+  readonly misbehaviour: {
+    readonly filed: number | null;
+    readonly revoked: number | null;
+    readonly honestRevoked: number | null;
+    readonly slowestStageS: number | null;
+    /** Why detection is not judged yet (`detectionPending`, the overview's rule), or null. */
+    readonly pending?: string | null;
+    /** The share of attacking vehicles revoked so far (det_recall, level = vehicle), when judged. */
+    readonly recall?: number | null;
+  } | null;
   readonly bottleneck: { readonly stage: string | null; readonly stageShare: number | null; readonly entity: string | null; readonly utilisation: number | null } | null;
 }
 
@@ -328,6 +335,70 @@ function cap(s: string): string {
  * messages got through, whether devices had certificates, what misbehaviour and revocation did, and
  * the one bottleneck that stands out. A part the run did not measure is left out, never guessed.
  */
+/**
+ * Why detection cannot be judged yet, or `null` when it can. One rule for the overview and the run
+ * summary: while nobody has been revoked and reports are still on their way (held in the RA's
+ * shuffle by design, or at the MA awaiting its decision), a low recall is the pipeline working, not
+ * detection failing. A finished run is always judged.
+ */
+export function detectionPending(p: {
+  readonly revoked: number;
+  readonly inShuffle: number;
+  readonly atMa: number;
+  readonly filed: number;
+  readonly shuffleS?: number | null;
+  readonly finished?: boolean;
+}): string | null {
+  if (p.finished === true || p.revoked > 0) return null;
+  if (p.inShuffle > 0)
+    return `${formatNumber(p.inShuffle)} ${p.inShuffle === 1 ? "report waits" : "reports wait"} in the RA's shuffle${p.shuffleS != null ? `, released every ${w(p.shuffleS, "s")}` : ""}; detection is judged once they reach the MA.`;
+  if (p.atMa > 0)
+    return `the MA has received ${formatNumber(p.atMa)} ${p.atMa === 1 ? "report" : "reports"} and not yet decided a revocation; detection is judged once it does.`;
+  if (p.filed > 0) return `${formatNumber(p.filed)} ${p.filed === 1 ? "report is" : "reports are"} on the way to the MA; detection is judged once it decides.`;
+  return null;
+}
+
+/** One row of the run summary's credential tile, from the authorities' own counts. */
+export interface CredentialRow {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  /** The published band's verdict, where one judges the row (detection recall). */
+  readonly level?: "healthy" | "caution" | "unhealthy" | null;
+}
+
+/**
+ * The credential tile's rows the catalogue cannot give (a count, not a per-window series): devices
+ * revoked, revocation lists signed, reports filed, and detection, which reads "pending" under the
+ * overview's rule while reports wait in the RA's shuffle and nobody is revoked yet.
+ */
+export function credentialRows(c: {
+  readonly revoked: number | null;
+  /** The CRL Generators' entries, added over providers (the crl_entries metric follows only the list published last). */
+  readonly crlEntries?: number | null;
+  readonly crlVersions: number | null;
+  readonly filed: number | null;
+  readonly inShuffle: number | null;
+  /** Reports the MAs have received, and whether the run has finished: the pending rule's other inputs. */
+  readonly atMa?: number | null;
+  readonly finished?: boolean;
+  readonly recall: number | null;
+  readonly recallLevel?: "healthy" | "caution" | "unhealthy" | null;
+}): CredentialRow[] {
+  const out: CredentialRow[] = [];
+  if (c.revoked !== null) out.push({ id: "revoked", label: "Devices revoked (by the MA)", value: formatNumber(c.revoked) });
+  if (c.crlEntries !== undefined && c.crlEntries !== null) out.push({ id: "crl-entries", label: "Entries on the revocation lists (CRLs), all providers", value: formatNumber(c.crlEntries) });
+  if (c.crlVersions !== null) out.push({ id: "crl-versions", label: "Revocation lists signed (CRL versions)", value: formatNumber(c.crlVersions) });
+  if (c.filed !== null) out.push({ id: "filed", label: "Misbehaviour reports filed", value: formatNumber(c.filed) });
+  const pending = detectionPending({ revoked: c.revoked ?? 0, inShuffle: c.inShuffle ?? 0, atMa: c.atMa ?? 0, filed: c.filed ?? 0, finished: c.finished === true });
+  if (pending !== null) {
+    const why = (c.inShuffle ?? 0) > 0 ? `${formatNumber(c.inShuffle!)} in the RA's shuffle` : (c.atMa ?? 0) > 0 ? `${formatNumber(c.atMa!)} at the MA, undecided` : "reports on the way";
+    out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: `pending: ${why}` });
+  }
+  else if (c.recall !== null) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: w(c.recall, "ratio"), level: c.recallLevel ?? null });
+  return out;
+}
+
 export function briefSentences(b: BriefInput): string[] {
   const out: string[] = [];
   const j = b.judged;
@@ -353,7 +424,7 @@ export function briefSentences(b: BriefInput): string[] {
     const parts: string[] = [];
     if (c.enrolled !== null && c.devices !== null)
       parts.push(c.enrolled >= c.devices ? `all ${formatNumber(c.devices)} devices were enrolled` : `${formatNumber(c.enrolled)} of ${formatNumber(c.devices)} devices were enrolled`);
-    if (c.pool !== null) parts.push(`vehicles held ${glanceNumber(c.pool)} valid pseudonym certificates on average at the lowest point`);
+    if (c.pool !== null) parts.push(`the vehicles' mean pool never fell below ${glanceNumber(c.pool)} valid pseudonym certificates`);
     if (parts.length > 0) {
       const tail = c.starved === null ? "" : c.starved === 0 ? "; none ran out" : `; ${formatNumber(c.starved)} ran out of certificates`;
       out.push(`${cap(parts.join(" and "))}${tail}.`);
@@ -367,8 +438,10 @@ export function briefSentences(b: BriefInput): string[] {
       const rv = m.revoked === 0 ? "no device was revoked" : `${formatNumber(m.revoked)} ${m.revoked === 1 ? "device was" : "devices were"} revoked`;
       s = s === "" ? cap(rv) : `${s} and ${rv}`;
       if (m.revoked > 0 && m.honestRevoked !== null) s += m.honestRevoked === 0 ? ", none of them honest" : `, ${formatNumber(m.honestRevoked)} of them honest`;
+      if (m.revoked > 0 && m.recall !== undefined && m.recall !== null) s += ` (${w(m.recall, "ratio")} of the attackers)`;
     }
     if (m.slowestStageS !== null) s += `; the slowest revocation step took ${w(m.slowestStageS, "s")} (p95)`;
+    if ((m.revoked ?? 0) === 0 && m.pending != null) s += `; ${m.pending.split(";")[0]}, so detection is not judged yet`;
     out.push(`${s}.`);
   }
 

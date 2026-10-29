@@ -71,7 +71,8 @@ describe("judge", () => {
     expect(j.cautionShare).toBeCloseTo(0.2);
     expect(j.outFromS).toBe(2);
     expect(j.outToS).toBe(3);
-    expect(whenText(j)).toContain("worst 0.75 at 3 s");
+    // A share reads as a percentage, the same as the cards and the overview.
+    expect(whenText(j)).toContain("worst 75 % at 3 s");
     const bad = judge("e2e", "ms", { ...CBR, caution: 50, unhealthy: 100 }, series([120, 130]))!;
     const fine = judge("x", "ratio", CBR, series([0.1, 0.2]))!;
     expect(outOfBand([fine, j, bad]).map((x) => x.base)).toEqual(["e2e", "cbr"]);
@@ -84,9 +85,9 @@ describe("judge", () => {
 
 describe("the expanded view's verdict line", () => {
   it("names the threshold that decides the level, then the run's shares and worst window", () => {
-    expect(limitText(CBR, "unhealthy", "ratio")).toBe("Above 0.68 limit");
-    expect(limitText(CBR, "caution", "ratio")).toBe("Above 0.5 target");
-    expect(limitText(PDR, "unhealthy", "ratio")).toBe("Below 0.9 limit");
+    expect(limitText(CBR, "unhealthy", "ratio")).toBe("Above 68 % limit");
+    expect(limitText(CBR, "caution", "ratio")).toBe("Above 50 % target");
+    expect(limitText(PDR, "unhealthy", "ratio")).toBe("Below 90 % limit");
     const lat: HealthBand = { ...CBR, caution: 500, unhealthy: 600 };
     expect(limitText(lat, "healthy", "ms")).toBe("Below 500 ms target");
     const j = judge("lat", "ms", lat, series([100, 700, 834, 650, 550]));
@@ -106,8 +107,10 @@ describe("the summary's pure half", () => {
       threats: { attackers: [{ fraction: 0.05 }] },
     };
     expect(scenarioLine(scenario, { tNs: 300e9, tEndNs: 300e9, actors: 113, nodes: 121 }, null)).toBe(
-      "manhattan-5min: 300 s simulated, 113 road users at the end, DSRC (IEEE 802.11p), US SCMS credentials, 5 % attackers.",
+      "manhattan-5min: 5 min simulated, 113 road users at the end, DSRC (IEEE 802.11p), US SCMS credentials, 5 % attackers.",
     );
+    // A long run part-way through reads in days and hours, not "357024 of 433200 s".
+    expect(scenarioLine(null, { tNs: 357_024e9, tEndNs: 433_200e9, actors: 0, nodes: 0 }, "long")).toBe("long: 4 days 3 h of 5 days simulated.");
     expect(scenarioLine(null, { tNs: 0, tEndNs: 0, actors: 0, nodes: 0 }, "fixture")).toBe("fixture.");
     expect(attackerShare({ threats: { attackers: [{ fraction: 0.7 }, { fraction: 0.6 }] } })).toBe(1);
   });

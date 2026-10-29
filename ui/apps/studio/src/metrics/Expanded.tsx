@@ -22,7 +22,7 @@ import { closePanel } from "../shell/route.js";
 import { useStudio } from "../state/store.js";
 import { BreakdownSection, type Range } from "./Breakdown.js";
 import { Brush, MainChart, type ChartLine } from "./Chart.js";
-import { classify, judge, judgedLabel, judgedSeries, verdictParts, type HealthLevel } from "./health.js";
+import { classify, isCumulative, judge, judgedLabel, judgedSeries, verdictParts, type HealthLevel } from "./health.js";
 import { BandTable, HealthChip } from "./HealthBadge.js";
 import { slotColour } from "./tokens.js";
 import { sideBAvailable } from "./data.js";
@@ -32,6 +32,8 @@ import { usePins } from "./pins.js";
 import {
   axisUnit,
   dimLabel,
+  clockText,
+  dataView,
   formatNumber,
   formatWithUnit,
   metricsHash,
@@ -157,9 +159,14 @@ export function Expanded({
   // The time the run has reached, and the range in view.
   const lastA = Math.max(0, ...lines.map((n) => lastT(a.series.get(n))));
   const extent = Math.max(run.tNs / 1e9, lastA, comparing ? Math.max(0, ...lines.map((n) => lastT(b.series.get(n)))) : 0, 1e-3);
-  const from = route.from ?? 0;
-  const to = route.to ?? extent;
-  const following = route.to === null;
+  // A fast-forwarded run reports only while its radio runs: over the whole run its line is a sliver
+  // at the left. With no range asked for, the chart then opens on the windows that reported, and
+  // "Whole run" is one click away (`model.ts` `dataView`).
+  const heroView = useMemo(() => dataView(a.series.get(lines[0] ?? "") ?? heroSeries, extent), [a.series, lines, heroSeries, extent]);
+  const dataFirst = route.from === null && route.to === null && heroView.zoomed;
+  const from = route.from ?? (dataFirst ? heroView.from : 0);
+  const to = route.to ?? (dataFirst ? heroView.to : extent);
+  const following = route.to === null && !dataFirst;
   const range: Range = { fromS: from, toS: following ? null : to };
 
   const chartLines: ChartLine[] = useMemo(() => {
@@ -249,7 +256,7 @@ export function Expanded({
   const group = GROUPS.find((g) => g.id === f.group);
   const all = seriesOf(f);
   const windows = [60, 600, 3600].filter((w) => extent > w * 1.5);
-  const wholeRun = route.from === null && route.to === null;
+  const wholeRun = (route.from === null && route.to === null && !dataFirst) || (route.from === 0 && route.to !== null && route.to >= extent - 1e-6);
 
   return (
     <div className="mx" data-testid="metric-expanded" data-metric={f.base}>
@@ -326,7 +333,25 @@ export function Expanded({
         ) : null}
         <div className="mx-range" role="group" aria-label="Time range">
           <span className="mx-seg">
-            <button type="button" className={wholeRun ? "on" : ""} aria-pressed={wholeRun} onClick={resetRange} data-testid="metric-range-all">
+            {heroView.zoomed ? (
+              <button
+                type="button"
+                className={dataFirst ? "on" : ""}
+                aria-pressed={dataFirst}
+                onClick={resetRange}
+                data-testid="metric-range-data"
+                title={`${heroView.inside} of this metric's ${heroView.windows} reporting windows fall between ${clockText(heroView.from)} and ${clockText(heroView.to)} of the ${clockText(extent)} run; Whole run shows them all`}
+              >
+                Windows with data
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={wholeRun ? "on" : ""}
+              aria-pressed={wholeRun}
+              onClick={heroView.zoomed ? () => setRoute({ from: 0, to: extent }) : resetRange}
+              data-testid="metric-range-all"
+            >
               Whole run
             </button>
             {windows.map((w) => (
@@ -337,6 +362,7 @@ export function Expanded({
           </span>
           <span className="mx-range-text" data-testid="metric-range-text" title="Drag across the chart or the strip under it to zoom; double-click the chart for the whole run.">
             {formatNumber(from)}–{formatNumber(to)} s of {formatNumber(extent)} s{following && run.state === "running" ? ", following the run" : ""}
+            {dataFirst ? `, where ${heroView.inside} of its ${heroView.windows} windows are` : ""}
           </span>
         </div>
       </div>
@@ -432,7 +458,7 @@ function Headline({
   const band = f.health;
   const latest = latestOf(series);
   const level: HealthLevel | null = band && judged ? classify(band, latest) : null;
-  const j = useMemo(() => (band && judged ? judge(f.base, f.unit, band, series, f.label) : null), [band, judged, f.base, f.unit, f.label, series]);
+  const j = useMemo(() => (band && judged ? judge(f.base, f.unit, band, series, f.label, isCumulative(f.definition)) : null), [band, judged, f.base, f.unit, f.label, f.definition, series]);
   const stat = band && judged ? judgedLabel(band) : seriesName === f.base ? "" : seriesLabel(f, seriesName);
   const whole = useMemo(() => (level === null ? rangeStats(series, 0, Math.max(extent, lastT(series))) : null), [level, series, extent]);
   let parts: string[] = [];

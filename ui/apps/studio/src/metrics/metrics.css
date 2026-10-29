@@ -524,7 +524,8 @@
 .scms-answer { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 10px; font-size: 13.5px; line-height: 1.45; color: var(--text); max-width: 120ch; }
 .scms-answer .lmark { flex: none; position: relative; top: -1px; }
 
-.scms-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 8px; }
+/* At most five tiles a row, none narrower than 200 px: a number and its unit always fit on one line. */
+.scms-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(200px, calc((100% - 32px) / 5)), 1fr)); gap: 8px; }
 .scms-tile {
   display: flex;
   flex-direction: column;
@@ -545,16 +546,22 @@
 .scms-tile.caution { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
 .scms-tile.unhealthy { border-color: color-mix(in srgb, var(--err) 65%, var(--border)); }
 .scms-tile-title { font-size: 11.5px; font-weight: 600; color: var(--text-dim); line-height: 1.3; min-width: 0; }
-.scms-tile-value { display: flex; align-items: baseline; gap: 4px; margin-top: 2px; min-width: 0; }
+.scms-tile-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; margin-top: 2px; min-width: 0; }
 .scms-tile-value .lmark { margin-left: auto; align-self: center; flex: none; }
-.scms-unit { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.scms-num, .scms-unit { white-space: nowrap; }
 .scms-num { font-size: 20px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.2; }
 .scms-unit { font-size: 12px; color: var(--text-dim); }
 .scms-tile-meaning { font-size: 11.5px; color: var(--text-dim); line-height: 1.35; }
 .scms-tile-cue { font-size: 11.5px; line-height: 1.35; font-weight: 600; }
 .scms-tile-cue.caution { color: color-mix(in srgb, var(--warn) 65%, var(--text)); }
 .scms-tile-cue.unhealthy { color: color-mix(in srgb, var(--err) 75%, var(--text)); }
-.scms-tile-split { font-size: 10.5px; color: var(--text-faint); }
+.scms-tile-split { font-size: 10.5px; color: var(--text-faint); display: flex; flex-wrap: wrap; column-gap: 4px; }
+.scms-split-part { white-space: nowrap; }
+.scms-actions { display: inline-flex; flex-wrap: nowrap; gap: 8px; }
+
+/* The header's buttons keep their words on one line; the run line wraps instead. */
+.metrics-panel .fullpanel-head > button { white-space: nowrap; flex: none; }
+.metrics-panel .fullpanel-head [data-testid="metrics-run"] { min-width: 0; }
 .scms-spark { display: block; width: 100%; height: 22px; margin-top: 3px; }
 .scms-spark path { fill: none; stroke: var(--viz-1); stroke-width: 1.6; stroke-linejoin: round; }
 
@@ -563,14 +570,24 @@
 .scms-chart-link { font-size: 11.5px; font-weight: 400; margin-left: auto; }
 .scms-note { font-size: 11.5px; margin: 6px 0 0; }
 
-.scms-funnel { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 6px 14px; }
-.scms-step { position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 0; border-radius: 4px; }
+/* The report flow: boxes left to right, the arrow between two says how many did not move on. */
+.scms-flow { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: stretch; row-gap: 8px; }
+.scms-flow-item { display: flex; align-items: stretch; min-width: 0; }
+.scms-step { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 92px; max-width: 150px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); }
 .scms-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.scms-step-num { font-size: 17px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
-.scms-step-label { font-size: 11px; color: var(--text-dim); line-height: 1.25; min-height: 2.5em; }
-.scms-step-bar { display: block; height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
-.scms-step-bar span { display: block; height: 100%; background: var(--viz-1); border-radius: 3px; }
-.scms-step-arrow { position: absolute; right: -12px; top: 3px; color: var(--text-faint); font-size: 12px; }
+.scms-step-num { font-size: 18px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.2; }
+.scms-step-label { font-size: 11.5px; color: var(--text-dim); line-height: 1.25; }
+.scms-flow-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 34px; max-width: 112px; padding: 0 6px; text-align: center; }
+.scms-flow-line { font-size: 20px; line-height: 1; color: var(--text-dim); }
+.scms-flow-drop { font-size: 11px; line-height: 1.25; color: color-mix(in srgb, var(--warn) 55%, var(--text-dim)); margin-top: 2px; }
+
+/* Pending: a hollow ring in the neutral colour; never a verdict. */
+.hdot.pending { background: none; border: 2px solid var(--text-faint); box-sizing: border-box; }
+.lmark.pending { color: var(--text-dim); border-style: dashed; }
+.scms-tile.pending { border-style: dashed; }
+.scms-tile-cue.pending { color: var(--text-dim); font-weight: 500; }
+.scms-panel.pending { border-left-color: var(--text-faint); }
+.scms-idle { font-size: 12.5px; margin: 2px 0 0; color: var(--text); max-width: 110ch; }
 
 .scms-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .scms-bar-row { display: grid; grid-template-columns: minmax(160px, 44%) minmax(0, 1fr) 64px; gap: 10px; align-items: center; font-size: 12px; }

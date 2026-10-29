@@ -27,15 +27,20 @@ import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
 import { AgentSlot } from "./AgentSlot.js";
 import { fetchCatalogue, fetchGroups, fetchSeries, metricPeriodNs } from "./data.js";
-import { classify, judge, judgedSeries, LEVEL_LABEL, noteOf, outOfBand, whenText, worseLevel, type HealthLevel, type Judgement } from "./health.js";
+import { classify, isCumulative, judge, judgedSeries, LEVEL_LABEL, noteOf, outOfBand, whenText, withExpectations, worseLevel, type HealthLevel, type Judgement } from "./health.js";
 import { BandTable, HealthDot, HealthLine } from "./HealthBadge.js";
 import { useRunKey } from "./hooks.js";
-import { chooseBinNs, familiesOf, formatNumber, formatWithUnit, worstFirst, type MetricFamily } from "./model.js";
-import { countOf, firstProvider } from "./scmsModel.js";
+import { chooseBinNs, clockText, displayText, familiesOf, formatNumber, worstFirst, type MetricFamily } from "./model.js";
+import { countOf, firstProvider, POOLED } from "./scmsModel.js";
+
+/** Metrics the credential overview pools over the run (no per-window value, but a run total). */
+const POOLED_IN_OVERVIEW: readonly string[] = POOLED.map((p) => p.metric);
 import {
   baseOf,
   briefSentences,
   causeName,
+  credentialRows,
+  detectionPending,
   dominant,
   entityLoads,
   reduceSeries,
@@ -44,6 +49,7 @@ import {
   stageName,
   ENTITY_UTILISATION_LIMIT,
   HEADLINES,
+  type CredentialRow,
   type EntityLoad,
 } from "./summaryModel.js";
 import { closeRunSummary, useRunSummary } from "./summaryStore.js";
@@ -67,13 +73,16 @@ interface SummaryData {
   readonly atS: number;
   /** The run in three to five sentences (`summaryModel.ts` `briefSentences`). */
   readonly brief: readonly string[];
+  /** The credential tile's rows from the authorities' counts (`summaryModel.ts` `credentialRows`). */
+  readonly credentialRows: readonly CredentialRow[];
 }
 
 type Load = { status: "idle" | "loading" } | { status: "error"; error: string } | { status: "ready"; data: SummaryData };
 
-async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
+async function collect(tNs: number, scenario: unknown, finished = false): Promise<SummaryData> {
   const defs = await fetchCatalogue();
-  const families = familiesOf(defs);
+  // Judged against this run's own expectation, as the dashboard judges it (`health.ts` `expectedBand`).
+  const families = withExpectations(familiesOf(defs), scenario);
   const known = new Set(defs.map((d) => d.name));
   const units = new Map(defs.map((d) => [d.name, d.unit] as const));
   const banded = families.filter((f) => f.health !== null && known.has(judgedSeries(f.base, f.health)));
@@ -87,7 +96,7 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
   const unmeasured: MetricFamily[] = [];
   for (const f of banded) {
     const s = series.get(judgedSeries(f.base, f.health!));
-    const j = s ? judge(f.base, f.unit, f.health!, s, f.label) : null;
+    const j = s ? judge(f.base, f.unit, f.health!, s, f.label, isCumulative(f.definition)) : null;
     if (j === null) unmeasured.push(f);
     else judgements.push(j);
   }
@@ -126,11 +135,12 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
       return null;
     }
   };
-  const [stageRows, causeRows, backend, accusations] = await Promise.all([
+  const [stageRows, causeRows, backend, accusations, recallRows] = await Promise.all([
     families.some((f) => f.base === "latency_stage_share") ? optional(() => fetchGroups("latency_stage_share", "stage", { fromNs: 0, toNs: tNs })) : null,
     families.some((f) => f.base === "pdr_by_cause") ? optional(() => fetchGroups("pdr_by_cause", "cause", { fromNs: 0, toNs: tNs })) : null,
     optional(() => engine.request("inspect.entity", { entity: "backend", limit: 40 }, { quiet: true, timeoutMs: 4000 })),
     families.some((f) => f.base === "false_accusations" && f.breakdowns.includes("level")) ? optional(() => fetchGroups("false_accusations", "level", { fromNs: 0, toNs: tNs })) : null,
+    families.some((f) => f.base === "det_recall" && f.breakdowns.includes("level")) ? optional(() => fetchGroups("det_recall", "level", { fromNs: 0, toNs: tNs })) : null,
   ]);
   const snap = backend === null ? null : snapshotOf(backend);
   const stage = stageRows ? dominant(stageRows.rows) : null;
@@ -142,6 +152,9 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
   const healthyThroughout = judgements.filter((j) => j.level === "healthy" && j.worstLevel === "healthy").length;
   const outs = outOfBand(judgements);
   const honest = accusations?.rows.find((r) => r.key === "vehicle")?.value ?? null;
+  // Detection recall per attacking vehicle (else per report), and its band's verdict.
+  const recallV = recallRows?.rows.find((r) => r.key === "vehicle")?.value ?? recallRows?.rows.find((r) => r.key === "report")?.value ?? null;
+  const recallBand = families.find((f) => f.base === "det_recall")?.health ?? null;
   const brief = briefSentences({
     judged:
       judgements.length === 0
@@ -165,6 +178,15 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
       revoked: count(["ma"], ["revocations"]),
       honestRevoked: honest,
       slowestStageS: headline.get("revocation_latency_stage.p95") ?? null,
+      pending: detectionPending({
+        revoked: count(["ma"], ["revocations"]) ?? 0,
+        inShuffle: count(["ra"], ["reports_in_shuffle"]) ?? 0,
+        atMa: count(["ma"], ["reports_received"]) ?? 0,
+        filed: count(["ee"], ["reports_filed"]) ?? 0,
+        shuffleS: snap?.entities.find((e) => e.id.split("/").pop() === "ra")?.state["shuffle_window_s"] as number | undefined,
+        finished,
+      }),
+      recall: recallV,
     },
     bottleneck: { stage: stage ? stageName(stage.key) : null, stageShare: stage?.share ?? null, entity: entities[0]?.name ?? null, utilisation: entities[0]?.utilisation ?? null },
   });
@@ -180,6 +202,17 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
     entities,
     atS: tNs / 1e9,
     brief,
+    credentialRows: credentialRows({
+      revoked: count(["ma"], ["revocations"]),
+      crlEntries: count(["crlg"], ["entries"]) ?? count(["ca"], ["ca_crl_entries"]),
+      crlVersions: count(["crlg"], ["versions_signed"]) ?? count(["ca"], ["ca_crl_sequence"]),
+      filed: count(["ee"], ["reports_filed"]),
+      inShuffle: count(["ra"], ["reports_in_shuffle"]),
+      atMa: count(["ma"], ["reports_received"]),
+      finished,
+      recall: recallV,
+      recallLevel: recallBand ? classify(recallBand, recallV) : null,
+    }),
   };
 }
 
@@ -235,10 +268,12 @@ function SummaryDialog(): React.JSX.Element {
   tRef.current = tNs;
   const scenarioRef = useRef(scenario);
   scenarioRef.current = scenario;
+  const finishedRef = useRef(run.state === "finished");
+  finishedRef.current = run.state === "finished";
 
   const refresh = useCallback(() => {
     setLoad({ status: "loading" });
-    collect(tRef.current, scenarioRef.current)
+    collect(tRef.current, scenarioRef.current, finishedRef.current)
       .then((data) => setLoad({ status: "ready", data }))
       .catch((e: unknown) => setLoad({ status: "error", error: e instanceof Error ? e.message : String(e) }));
   }, []);
@@ -282,7 +317,7 @@ function SummaryDialog(): React.JSX.Element {
       <div ref={host} className="rsum" role="dialog" aria-modal="true" aria-labelledby="rsum-title" tabIndex={-1} data-testid="run-summary">
         <header className="rsum-head">
           <h2 id="rsum-title">Run summary</h2>
-          <span className={`rsum-state ${finished ? "done" : ""}`}>{finished ? "Finished" : `Run so far · ${formatNumber(tNs / 1e9)} s`}</span>
+          <span className={`rsum-state ${finished ? "done" : ""}`}>{finished ? "Finished" : `Run so far · ${clockText(tNs / 1e9)}`}</span>
           <span className="grow" />
           <button type="button" className="small" onClick={refresh} disabled={load.status === "loading"} data-testid="run-summary-refresh">
             {load.status === "loading" ? "Reading…" : "Refresh"}
@@ -350,11 +385,13 @@ function SummaryDialog(): React.JSX.Element {
                 <h3>Headline results</h3>
                 <div className="rsum-tiles">
                   {HEADLINES.map((g) => {
-                    const items = g.items.filter((i) => (data.headline.get(i.series) ?? null) !== null);
+                    const extra = g.id === "credentials" ? data.credentialRows : [];
+                    // Detection reads from the authorities' rule (pending while reports wait in the shuffle), never twice.
+                    const items = g.items.filter((i) => (data.headline.get(i.series) ?? null) !== null && !(i.series === "det_recall" && extra.some((r) => r.id === "detection")) && !(i.series === "crl_entries" && extra.some((r) => r.id === "crl-entries")));
                     return (
                       <div key={g.id} className="rsum-tile" data-testid={`run-summary-tile-${g.id}`}>
                         <h4>{g.title}</h4>
-                        {items.length === 0 ? (
+                        {items.length === 0 && extra.length === 0 ? (
                           <p className="dim">Not measured in this run.</p>
                         ) : (
                           <dl>
@@ -368,11 +405,20 @@ function SummaryDialog(): React.JSX.Element {
                                   <dt>{i.label}</dt>
                                   <dd>
                                     {lv ? <HealthDot level={lv} /> : null}
-                                    <span className="mono">{v === null ? "—" : formatWithUnit(v, unit)}</span>
+                                    <span className="mono">{v === null ? "—" : displayText(baseOf(i.series), v, unit)}</span>
                                   </dd>
                                 </div>
                               );
                             })}
+                            {extra.map((r) => (
+                              <div key={r.id} className="rsum-item" data-testid={`run-summary-cred-${r.id}`}>
+                                <dt>{r.label}</dt>
+                                <dd>
+                                  {r.level ? <HealthDot level={r.level} /> : null}
+                                  <span className="mono">{r.value}</span>
+                                </dd>
+                              </div>
+                            ))}
                           </dl>
                         )}
                       </div>
@@ -406,9 +452,13 @@ function SummaryDialog(): React.JSX.Element {
                           </div>
                           <HealthLine band={j.band} value={j.level === "healthy" ? j.worst : j.mean} unit={j.unit} />
                           <p className="dim rsum-when">
-                            {j.level === "healthy" ? "Run mean healthy; " : `Run mean ${formatWithUnit(j.mean, j.unit)}; `}
-                            {whenText(j)}.
-                            {nodes && nodes.length > 0 ? ` Worst nodes: ${nodes.map((n) => `${n.key} (${formatWithUnit(n.value, j.unit)})`).join(", ")}.` : ""}
+                            {j.cumulative
+                              ? `Over the whole run ${displayText(j.base, j.mean, j.unit)}${j.level === "healthy" ? ", healthy" : ""}; `
+                              : j.level === "healthy"
+                                ? "Run mean healthy; "
+                                : `Run mean ${displayText(j.base, j.mean, j.unit)}; `}
+                            {whenText(j, data.atS)}.
+                            {nodes && nodes.length > 0 ? ` Worst nodes: ${nodes.map((n) => `${n.key} (${displayText(j.base, n.value, j.unit)})`).join(", ")}.` : ""}
                           </p>
                           {open ? <BandTable band={j.band} unit={j.unit} /> : null}
                         </li>
@@ -432,7 +482,7 @@ function SummaryDialog(): React.JSX.Element {
                     <ul className="rsum-healthy">
                       {healthy.map((j) => (
                         <li key={j.base} title={noteOf(j.band, "healthy")}>
-                          <HealthDot level="healthy" /> {j.label} <span className="dim mono">{formatWithUnit(j.mean, j.unit)}</span>
+                          <HealthDot level="healthy" /> {j.label} <span className="dim mono">{displayText(j.base, j.mean, j.unit)}</span>
                         </li>
                       ))}
                     </ul>
@@ -440,7 +490,12 @@ function SummaryDialog(): React.JSX.Element {
                     <p className="dim">None.</p>
                   )}
                   {data.unmeasured.length > 0 ? (
-                    <p className="dim">Not measured in this run, so not judged: {data.unmeasured.map((f) => f.label).join(", ")}.</p>
+                    <p className="dim" data-testid="run-summary-unmeasured">
+                      No window reported a value, so not judged here: {data.unmeasured.map((f) => f.label).join(", ")}.
+                      {data.unmeasured.some((f) => POOLED_IN_OVERVIEW.includes(f.base))
+                        ? " Detection and revocation metrics are pooled over the whole run instead: their run totals, and whether they can be judged yet, are in the metrics page's Credentials at a glance."
+                        : ""}
+                    </p>
                   ) : null}
                 </section>
               ) : null}
@@ -517,7 +572,7 @@ function Bottlenecks({ data }: { data: SummaryData }): React.JSX.Element {
         level: "unhealthy",
         text: (
           <>
-            <strong>{j.label}</strong> is worst at node {nodes[0]!.key} ({formatWithUnit(nodes[0]!.value, j.unit)}).
+            <strong>{j.label}</strong> is worst at node {nodes[0]!.key} ({displayText(j.base, nodes[0]!.value, j.unit)}).
           </>
         ),
       });

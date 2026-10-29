@@ -304,17 +304,18 @@ test.describe("the credential system at a glance", () => {
   test("a level reads without colour: each level's mark has its own shape", async ({ page }) => {
     await openScms(page);
     const shapes = await page.evaluate(() =>
-      ["healthy", "caution", "unhealthy"].map((l) => {
+      // Pending (not judged yet) is a fourth mark: a hollow ring.
+      ["healthy", "caution", "unhealthy", "pending"].map((l) => {
         const el = document.createElement("span");
         el.className = `hdot ${l}`;
         document.body.appendChild(el);
         const s = getComputedStyle(el);
-        const shape = `${s.clipPath}|${s.borderRadius}`;
+        const shape = `${s.clipPath}|${s.borderRadius}|${s.borderTopWidth}`;
         el.remove();
         return shape;
       }),
     );
-    expect(new Set(shapes).size).toBe(3);
+    expect(new Set(shapes).size).toBe(4);
   });
 
   test("the run summary opens with the run in a few sentences", async ({ page }) => {
@@ -332,5 +333,66 @@ test.describe("the credential system at a glance", () => {
     await expect(page.getByTestId("metric-meaning-cert_pool_valid")).toContainText("could sign with right now");
     const short = await page.locator(".mcard .mcard-meaning").evaluateAll((els) => els.filter((e) => (e.textContent ?? "").trim().length < 10).length);
     expect(short).toBe(0);
+  });
+
+  test("the cards below point at the overview for run totals, instead of saying there is no data", async ({ page }) => {
+    await openScms(page);
+    // Detection recall has no per-window value, only a run total: its group says where that total is.
+    const pooled = page.getByTestId("metrics-pooled-misbehaviour");
+    await expect(pooled).toContainText("Credentials at a glance", { timeout: 30_000 });
+    await expect(pooled).toContainText("Detection recall");
+    await expect(page.getByTestId("metrics-missing-misbehaviour")).not.toContainText("Detection recall");
+    // The navigation and the section share one name, and the navigation carries the worst verdict.
+    await expect(page.getByTestId("metrics-nav-scms")).toHaveText(await page.locator("#scms-title").innerText());
+    const levels = await page.locator("[data-testid^='scms-section-']").evaluateAll((els) => els.map((e) => e.getAttribute("data-level")));
+    const worst = ["unhealthy", "caution", "healthy"].find((l) => levels.includes(l));
+    expect(worst).toBeDefined();
+    await expect(page.getByTestId("metrics-nav-scms")).toHaveAttribute("data-level", worst!);
+  });
+
+  test("tiles read at a glance: five a row at most, a number never split from its unit, one decimal for rejections", async ({ page }) => {
+    await openScms(page);
+    // Once the authorities' counts are in, every question's tiles, row by row (the cost question has seven here).
+    await expect(page.getByTestId("scms-tile-enrolled")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("scms-tile-backend-messages")).toBeVisible();
+    await expect.poll(() => page.getByTestId("scms-section-cost").locator(".scms-tile").count()).toBeGreaterThan(5);
+    const rows = await page.locator(".scms-tiles").evaluateAll((grids) =>
+      grids.flatMap((g) => {
+        const tops = [...g.children].map((e) => Math.round(e.getBoundingClientRect().top));
+        return [...new Set(tops)].map((t) => tops.filter((x) => x === t).length);
+      }),
+    );
+    expect(rows.length).toBeGreaterThan(3);
+    expect(Math.max(...rows)).toBeLessThanOrEqual(5);
+    const split = await page.locator(".scms-tile-value").evaluateAll((els) =>
+      els.filter((e) => {
+        const n = e.querySelector(".scms-num")?.getBoundingClientRect();
+        const u = e.querySelector(".scms-unit")?.getBoundingClientRect();
+        return n !== undefined && (n.height > 40 || (u !== undefined && (u.height > 24 || Math.abs(u.bottom - n.bottom) > 8)));
+      }).length,
+    );
+    expect(split).toBe(0);
+    const shares = await page.locator("[data-testid='scms-bars-cost'] .scms-bar-val").allInnerTexts();
+    expect(shares.length).toBeGreaterThan(1);
+    for (const s of shares) expect(s).toMatch(/^(\d+\.\d %|\d{2,} %|< 0\.1 %)$/);
+    // The roadside-relay PSID drops are named as expected, not as a failed check.
+    await expect(page.getByTestId("scms-bar-psid-not-registered")).toContainText("expected");
+  });
+
+  test("detection says what is still on its way to the MA; the raw counts open in view", async ({ page }) => {
+    await openScms(page);
+    const inShuffle = fixtureTotal("ra", "reports_in_shuffle");
+    await expect(page.getByTestId("scms-tile-recall")).toContainText(`${inShuffle.toLocaleString("en-US")} reports still wait in the RA's shuffle`);
+    await page.getByTestId("scms-raw-toggle").click();
+    await expect(page.getByTestId("scms-raw")).toBeInViewport({ timeout: 5000 });
+  });
+
+  test("the run summary's credential tile has the authorities' counts", async ({ page }) => {
+    await openScms(page);
+    await page.getByTestId("metrics-open-summary").click();
+    await expect(page.getByTestId("run-summary-cred-revoked")).toContainText(String(fixtureTotal("ma", "revocations")), { timeout: 30_000 });
+    await expect(page.getByTestId("run-summary-cred-crl-entries")).toContainText(String(fixtureTotal("crlg", "entries")));
+    await expect(page.getByTestId("run-summary-cred-filed")).toContainText(fixtureTotal("ee", "reports_filed").toLocaleString("en-US"));
+    await expect(page.getByTestId("run-summary-cred-detection")).toBeVisible();
   });
 });

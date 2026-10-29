@@ -19,7 +19,28 @@ import { fetchGroups } from "./data.js";
 import { LevelMark } from "./HealthBadge.js";
 import { LIVE_REFRESH_MS, useRunKey, type Overview } from "./hooks.js";
 import { formatNumber, observedCount, type GroupRow, type MetricFamily, type Series } from "./model.js";
-import { hasCredentials, scmsOverview, POOLED, type FunnelStep, type MetricReader, type ScmsBars, type ScmsSection, type ScmsTile } from "./scmsModel.js";
+import { coveredMetrics, hasCredentials, scmsOverview, POOLED, type FunnelStep, type MetricReader, type ScmsBars, type ScmsSection, type ScmsTile } from "./scmsModel.js";
+import type { HealthLevel } from "./health.js";
+
+/** The section's name: the dashboard's navigation uses the same words. */
+export const SCMS_TITLE = "Credentials at a glance";
+
+const WORDS: Readonly<Record<number, string>> = { 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven" };
+
+/** What the overview tells the dashboard: each question's verdict, and the metrics it shows a value for. */
+export interface ScmsReport {
+  readonly verdicts: readonly ScmsVerdict[];
+  readonly covered: readonly string[];
+}
+
+/** One question's verdict, as the navigation marks it. */
+export interface ScmsVerdict {
+  readonly id: string;
+  readonly question: string;
+  readonly answer: string;
+  readonly level: HealthLevel | null;
+  readonly pending: boolean;
+}
 
 /** How often a playing run's SCMS numbers refresh: the snapshot is once a simulated second. */
 const SCMS_REFRESH_MS = Math.max(LIVE_REFRESH_MS, 3000);
@@ -95,6 +116,19 @@ function useScmsSources(families: readonly MetricFamily[], active: boolean): Sou
   return state;
 }
 
+/**
+ * Not judged yet, because the pipeline behind the number is still working by design (reports held in
+ * the RA's shuffle): a hollow ring and "Pending" in the neutral colour, never a verdict.
+ */
+export function PendingMark({ compact = false, title }: { compact?: boolean; title?: string }): React.JSX.Element {
+  return (
+    <span className={`lmark pending${compact ? " compact" : ""}`} data-level="pending" title={title ?? "Pending: not judged yet"} role={compact ? "img" : undefined} aria-label={compact ? `Pending${title ? `: ${title}` : ""}` : undefined}>
+      <span className="hdot pending" aria-hidden="true" />
+      {compact ? null : "Pending"}
+    </span>
+  );
+}
+
 /** A tile's trend: a line of the run so far, no axes; the card it opens has those. */
 function MiniSpark({ series, label }: { series: Series; label: string }): React.JSX.Element | null {
   const d = useMemo(() => {
@@ -132,7 +166,7 @@ function MiniSpark({ series, label }: { series: Series; label: string }): React.
 
 function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen: (base: string) => void }): React.JSX.Element {
   const spark = t.spark ? overview.series.get(t.spark) : undefined;
-  const tip = [t.cue, t.source, t.metric ? "Click to open its full chart." : null].filter(Boolean).join("\n\n");
+  const tip = [t.cue, t.pending, t.source, t.metric ? "Click to open its full chart." : null].filter(Boolean).join("\n\n");
   const body = (
     <>
       <span className="scms-tile-title">{t.title}</span>
@@ -141,15 +175,34 @@ function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen
           {t.value}
         </span>
         {t.unit !== "" ? <span className="scms-unit">{t.unit}</span> : null}
-        {t.level ? <LevelMark level={t.level} /> : null}
+        {t.level ? <LevelMark level={t.level} /> : t.pending ? <PendingMark /> : null}
       </span>
       <span className="scms-tile-meaning">{t.meaning}</span>
       {t.level && t.level !== "healthy" && t.cue ? <span className={`scms-tile-cue ${t.level}`}>{t.cue.split(". Thresholds:")[0]}</span> : null}
-      {t.split ? <span className="scms-tile-split mono">{t.split}</span> : null}
+      {t.pending ? (
+        <span className="scms-tile-cue pending" data-testid={`scms-pending-${t.id}`}>
+          {t.pending}
+        </span>
+      ) : null}
+      {t.split ? (
+        <span className="scms-tile-split mono">
+          {t.split.split(" · ").map((part, i) => (
+            <span key={part} className="scms-split-part">
+              {i > 0 ? "· " : ""}
+              {part}
+            </span>
+          ))}
+        </span>
+      ) : null}
       {spark ? <MiniSpark series={spark} label={t.title} /> : null}
     </>
   );
-  const common = { className: `scms-tile${t.level ? ` ${t.level}` : ""}${t.metric ? " opens" : ""}`, title: tip, "data-testid": `scms-tile-${t.id}`, "data-level": t.level ?? "none" };
+  const common = {
+    className: `scms-tile${t.level ? ` ${t.level}` : t.pending ? " pending" : ""}${t.metric ? " opens" : ""}`,
+    title: tip,
+    "data-testid": `scms-tile-${t.id}`,
+    "data-level": t.level ?? (t.pending ? "pending" : "none"),
+  };
   return t.metric ? (
     <button type="button" {...common} onClick={() => onOpen(t.metric!)}>
       {body}
@@ -161,24 +214,35 @@ function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen
   );
 }
 
+/**
+ * Where the reports are, as a left-to-right flow: each step a box with its count, and between two
+ * steps an arrow that says how many did not move on and why ("132 still on the vehicles").
+ */
 function Funnel({ steps }: { steps: readonly FunnelStep[] }): React.JSX.Element {
-  const max = Math.max(1, ...steps.map((s) => s.value));
   return (
     <div className="scms-block">
       <h5>Where the reports are</h5>
-      <ol className="scms-funnel" data-testid="scms-funnel" aria-label="Misbehaviour reports, from the vehicle to the Misbehaviour Authority">
+      <ol className="scms-flow" data-testid="scms-funnel" aria-label="Misbehaviour reports, from the vehicle to the Misbehaviour Authority">
         {steps.map((s, i) => (
-          <li key={s.id} className="scms-step" title={s.hint} tabIndex={0} data-testid={`scms-step-${s.id}`}>
-            <span className="scms-step-num mono">{formatNumber(s.value)}</span>
-            <span className="scms-step-label">{s.label}</span>
-            <span className="scms-step-bar" aria-hidden="true">
-              <span style={{ width: `${Math.max(s.value > 0 ? 3 : 0, (s.value / max) * 100)}%` }} />
+          <li key={s.id} className="scms-flow-item">
+            {i > 0 ? (
+              <span className="scms-flow-arrow" aria-hidden={s.drop === undefined} data-testid={`scms-drop-${s.id}`}>
+                <span className="scms-flow-line" aria-hidden="true">
+                  →
+                </span>
+                {s.drop !== undefined ? <span className="scms-flow-drop">{s.drop}</span> : null}
+              </span>
+            ) : null}
+            <span className="scms-step" title={s.hint} tabIndex={0} data-testid={`scms-step-${s.id}`} aria-label={`${s.label}: ${formatNumber(s.value)}. ${s.hint}`}>
+              <span className="scms-step-num mono">{formatNumber(s.value)}</span>
+              <span className="scms-step-label">{s.label}</span>
             </span>
-            {i < steps.length - 1 ? <span className="scms-step-arrow" aria-hidden="true">→</span> : null}
           </li>
         ))}
       </ol>
-      <p className="dim scms-note">Hover or focus a step for what it counts. Reports wait in the RA's shuffle by design, so the MA cannot tell who sent them.</p>
+      <p className="dim scms-note">
+        Hover or focus a step for what it counts. Reports wait in the RA's shuffle by design, so the MA cannot tell who sent them; cases and revocations count suspects, not reports.
+      </p>
     </div>
   );
 }
@@ -188,7 +252,7 @@ function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => vo
     <div className="scms-block" data-testid={testId}>
       <h5>
         {b.title}
-        {b.metric ? (
+        {b.metric && b.rows.length > 0 && b.idle === undefined ? (
           <button type="button" className="linklike scms-chart-link" onClick={() => onOpen(b.metric!)}>
             Full chart
           </button>
@@ -196,6 +260,10 @@ function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => vo
       </h5>
       {b.rows.length === 0 ? (
         <p className="dim scms-note">{b.empty}</p>
+      ) : b.idle !== undefined ? (
+        <p className="scms-idle" data-testid={`${testId}-idle`}>
+          {b.idle}
+        </p>
       ) : (
         <>
           <ul className="scms-bars">
@@ -222,11 +290,11 @@ function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => vo
 
 function Panel({ s, overview, onOpen }: { s: ScmsSection; overview: Overview; onOpen: (base: string) => void }): React.JSX.Element {
   return (
-    <article className={`scms-panel${s.level ? ` ${s.level}` : ""}`} id={`scms-${s.id}`} data-testid={`scms-section-${s.id}`} data-level={s.level ?? "none"} aria-labelledby={`scms-q-${s.id}`}>
+    <article className={`scms-panel${s.level ? ` ${s.level}` : s.pending ? " pending" : ""}`} id={`scms-${s.id}`} data-testid={`scms-section-${s.id}`} data-level={s.level ?? (s.pending ? "pending" : "none")} aria-labelledby={`scms-q-${s.id}`}>
       <header className="scms-panel-head">
         <h4 id={`scms-q-${s.id}`}>{s.question}</h4>
         <p className="scms-answer" data-testid={`scms-answer-${s.id}`}>
-          {s.level ? <LevelMark level={s.level} /> : null}
+          {s.level ? <LevelMark level={s.level} /> : s.pending ? <PendingMark /> : null}
           <span>{s.answer}</span>
         </p>
       </header>
@@ -248,17 +316,21 @@ export function ScmsOverview({
   overview,
   active,
   onOpen,
+  onReport,
 }: {
   families: readonly MetricFamily[];
   overview: Overview;
   active: boolean;
   onOpen: (f: MetricFamily) => void;
+  /** Each question's verdict (the navigation's marks) and the metrics shown here; called when they change. */
+  onReport?: (r: ScmsReport) => void;
 }): React.JSX.Element | null {
   const [open, setOpen] = useState(() => readFlag(OPEN_KEY, true));
   const [raw, setRaw] = useState(() => readFlag(RAW_KEY, false));
   const src = useScmsSources(families, active);
   const tNs = useStudio((s) => s.run.tNs);
   const scenario = useStudio((s) => s.scenario);
+  const finished = useStudio((s) => s.run.state === "finished");
   const reader = useMemo<MetricReader>(
     () => ({
       family: (b) => families.find((f) => f.base === b),
@@ -268,8 +340,29 @@ export function ScmsOverview({
     }),
     [families, overview, src.pooled],
   );
-  if (!hasCredentials(src.snapshot, reader)) return null;
-  const o = scmsOverview(src.snapshot, reader, { tNs: src.snapshot?.t ?? tNs, scenario });
+  const has = hasCredentials(src.snapshot, reader);
+  const o = has ? scmsOverview(src.snapshot, reader, { tNs: src.snapshot?.t ?? tNs, scenario, finished }) : null;
+  const covered = o === null ? [] : coveredMetrics(o);
+  const reportKey = o === null ? "" : `${o.sections.map((x) => `${x.id}:${x.level ?? (x.pending ? "pending" : "none")}:${x.answer}`).join("|")}#${covered.join(",")}`;
+  useEffect(() => {
+    if (onReport === undefined) return;
+    onReport({
+      verdicts: o === null ? [] : o.sections.map((x) => ({ id: x.id, question: x.question, answer: x.answer, level: x.level, pending: x.pending === true })),
+      covered,
+    });
+    // The key carries every verdict and metric; the sections themselves are rebuilt each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportKey, onReport]);
+  // Raw counts open below the six questions: when asked for, they are scrolled to, so the click
+  // visibly does something.
+  const rawRef = useRef<HTMLDivElement | null>(null);
+  const rawAsked = useRef(false);
+  useEffect(() => {
+    if (!raw || !rawAsked.current) return;
+    rawAsked.current = false;
+    rawRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [raw]);
+  if (o === null) return null;
   const openBase = (base: string): void => {
     const f = families.find((x) => x.base === base);
     if (f) onOpen(f);
@@ -291,7 +384,7 @@ export function ScmsOverview({
           <span className={`scms-caret${open ? " open" : ""}`} aria-hidden="true">
             ▸
           </span>
-          <h3 id="scms-title">Credentials and security</h3>
+          <h3 id="scms-title">{SCMS_TITLE}</h3>
         </button>
         <span className="scms-facts dim" data-testid="scms-facts">
           {o.system}
@@ -300,16 +393,19 @@ export function ScmsOverview({
         <span className="grow" />
         {!open ? (
           <span className="scms-mini" aria-label="Each question's verdict">
-            {o.sections.map((s) => (s.level ? <LevelMark key={s.id} level={s.level} compact title={`${s.question} ${s.answer}`} /> : null))}
+            {o.sections.map((s) =>
+              s.level ? <LevelMark key={s.id} level={s.level} compact title={`${s.question} ${s.answer}`} /> : s.pending ? <PendingMark key={s.id} compact title={`${s.question} ${s.answer}`} /> : null,
+            )}
           </span>
         ) : null}
         {src.snapshot !== null ? (
-          <>
+          <span className="scms-actions">
             <button
               type="button"
               className="small"
               aria-pressed={raw}
               onClick={() => {
+                rawAsked.current = !raw;
                 setRaw(!raw);
                 writeFlag(RAW_KEY, !raw);
                 if (!open) setOpen(true);
@@ -317,18 +413,24 @@ export function ScmsOverview({
               data-testid="scms-raw-toggle"
               title="Every authority's own counts, exactly as the engine reports them"
             >
-              {raw ? "Hide raw counts" : "Raw counts"}
+              {raw ? "Hide raw counts" : "Raw counts ↓"}
             </button>
-            <button type="button" className="small" onClick={() => openPanel("backend")} title="The authorities as a diagram, with every message between them">
-              Backend view
+            <button
+              type="button"
+              className="small"
+              onClick={() => openPanel("backend")}
+              title="The certificate system's own view: the authorities as a diagram, every certificate, and every message between them"
+              data-testid="scms-open-system"
+            >
+              Open certificate system
             </button>
-          </>
+          </span>
         ) : null}
       </header>
       {open ? (
         <div id="scms-body">
           <p className="dim scms-intro">
-            Five questions about the credential system, each answered from the engine's own counts and metrics. Hover or focus a number for where it comes from; click one with a
+            {o.sections.length === 1 ? "One question" : `${WORDS[o.sections.length] ?? o.sections.length} questions`} about the credential system, each answered from the engine's own counts and metrics. Hover or focus a number for where it comes from; click one with a
             chart to open it.
             {src.status === "loading" ? " Reading the authorities' counts…" : src.snapshot === null ? " The engine published no Backend snapshot, so only the catalogue's metrics appear." : ""}
           </p>
@@ -338,7 +440,7 @@ export function ScmsOverview({
             ))}
           </div>
           {raw && o.raw.length > 0 ? (
-            <div className="scms-raw" data-testid="scms-raw">
+            <div className="scms-raw" data-testid="scms-raw" ref={rawRef}>
               <h4>Raw counts, as each authority reports them</h4>
               <div className="scms-raw-grid">
                 {o.raw.map((e) => (
