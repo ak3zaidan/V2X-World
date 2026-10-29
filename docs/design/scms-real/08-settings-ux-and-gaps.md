@@ -914,6 +914,35 @@ facts they read, and the §10 Playwright spec with its twin. Items 2 (composite 
   when they are shown on the SCMS page. Conditions inside a list element (`failures[].extra_ms`
   under `slow`, `prov[].ma_review_s` under `manual-review`) are left to the loader's refusal.
 
+Checks, each shown red under its named fault and reverted: `publish::tests::
+the_authority_parameters_are_fields_and_relevance_names_real_values` (the corroborating
+pipeline's range check removed), vitest `test/scms-menus.test.ts` (the `x-typed-children`
+skip removed), and `e2e-engine/scms-settings.spec.ts` against the real engine: the main
+test (a keyed map reported as `json`) and its built-in twin (`check()` made a no-op: "expected
+to fail, but passed"). No golden moved.
+
+**Status, A3 (2026-10-29): built.** Words, presets and relevance for the §5-§8 keys.
+
+* Words: the modules' `Opt` rows (A0) already give every value a label and a sentence; A3 adds
+  a guide row (`x-explain`, `x-recommended`) for every §5-§8 key. A key that repeats under
+  several roots (`ma_policies.*.…`, `providers[].capacity.*.…`) has one row, written at its
+  first root, which `guide::hint` finds for the others.
+* Presets: `options::MODULE_PRESETS`, keyed by the path below the root
+  (`options::module_key`), so the same named values serve every root: the §6 capacity values
+  and the §7 MA policy values, each with its source or ASSUMPTION. `decay.hour_et` is the
+  same 24-hour menu as `report_decay_hour_et`.
+* Relevance: the MA policy's dependent fields (`decay.factor`/`hour_et` under
+  `daily-multiplier`, `half_life_s` under `half-life`, `population_guard.c`/`m` under
+  `cluster`, `decision.review_s` under `manual-review`, `evidence.tau_m` under `catch`) at the
+  fixed `ma_policy` root. Choice under §9: an absent mode is the preset's, which may be either,
+  so it does not grey the field (`null` in `x-relevant-when`).
+* Configuration-reference line added.
+
+Check, shown red under three named faults and reverted: `publish::tests::
+the_new_scms_keys_carry_help_presets_and_relevance` (the module presets not looked up; a key
+under its second root finding no guide row; `decay.factor`'s preset moved to 1.9). The first
+and third mask each other, so each ran in its own build. No golden moved.
+
 After A0, B and C edit only their own files. They make a key live by flipping their own
 module's `KEY_STATUS` and refusal, never by editing `validate.rs`.
 

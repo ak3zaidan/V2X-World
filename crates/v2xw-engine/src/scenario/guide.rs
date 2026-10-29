@@ -1317,6 +1317,178 @@ const ADVANCED: &[Basic] = &[
         explain: "The longest a certificate request may wait in the Registration Authority's mix before it is passed on, full batch or not. A longer wait hides each request among more others and delays a vehicle's certificates.",
         recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s. Like the batch size, it acts on a device's first request, which a run makes before the vehicle joins.",
     },
+    // The keys of 08-settings-ux-and-gaps §5-§8 (refused with "not built yet" until pieces
+    // B and C build them; the row says what each will do).
+    Basic {
+        path: "security.scms.deployment.providers[].site",
+        explain: "Where this provider's servers run: a public-cloud region at its published city, or your own coordinates. No provider publishes its hosting, so the choice is an assumption.",
+        recommended: "Unset (the preset's region).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].sites.*",
+        explain: "A different site for one server role, such as the MA in one region and the RA in another; the link between them then costs its great-circle distance.",
+        recommended: "Unset (every role at the provider's site).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].lat_deg",
+        explain: "Latitude of an on-premises site, used only with site: custom.",
+        recommended: "Your assumption, in degrees north.",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].lon_deg",
+        explain: "Longitude of an on-premises site, used only with site: custom.",
+        recommended: "Your assumption, in degrees east (negative in the US).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].ma_policy",
+        explain: "Which MA decision policy this provider's Misbehaviour Authority runs: a preset or a policy named under ma_policies.",
+        recommended: "Unset (the deployment's policy).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].ica_levels",
+        explain: "Intermediate CA levels under the provider's root. The US system has one; a receiver accepts at most eight certificates in a chain, so five is the most.",
+        recommended: "1 (US).",
+    },
+    Basic {
+        path: "security.scms.deployment.capacity.*.workers",
+        explain: "How many requests one server role works on at once; more workers shorten the queue a burst of devices builds.",
+        recommended: "4 (ASSUMPTION: no provider publishes its capacity); 1 to 64.",
+    },
+    Basic {
+        path: "security.scms.deployment.capacity.*.queue_limit",
+        explain: "How many requests may wait; a request beyond it is refused busy and the device retries later.",
+        recommended: "Unset (unlimited); 100 to 10,000 to study refusals.",
+    },
+    Basic {
+        path: "security.scms.deployment.capacity.*.overhead_ms",
+        explain: "A fixed cost every request pays on this server, on top of its cryptography.",
+        recommended: "1 ms (ASSUMPTION); 0 to 20 ms.",
+    },
+    Basic {
+        path: "security.scms.deployment.capacity.*.service",
+        explain: "Whether the workers serve in parallel behind one queue, or one request at a time.",
+        recommended: "mmc (workers in parallel).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.preset",
+        explain: "The MA decision policy to start from; fields written beside it override it.",
+        recommended: "cv-pilot-manual (today's MA, the CV pilots' manual review).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.identity",
+        explain: "What one case is about: one pseudonym certificate, or the whole device, linked through the linkage authorities.",
+        recommended: "The preset's.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.evidence.accuracy_weighting",
+        explain: "Whether a report's weight is discounted by what the accused's own stated accuracy explains (CATCH).",
+        recommended: "none, or the preset's.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.evidence.tau_m",
+        explain: "The position accuracy a report is held to when evidence is weighted by accuracy.",
+        recommended: "1 m (SM-MBR gpsDrift).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.evidence.event_window_s",
+        explain: "Reports about one subject within this long of the first are one event.",
+        recommended: "5 s (F2MD DELTA_REPORT_TIME).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.evidence.event_min_reporters",
+        explain: "Distinct reporters an event needs before it counts.",
+        recommended: "2.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.evidence.rules.*.score",
+        explain: "The score one report of this subtype adds to a case; 0 ignores the subtype.",
+        recommended: "The preset's; 0 to 100.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.threshold.min_events",
+        explain: "Corroborated events inside the window it takes to decide.",
+        recommended: "3.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.threshold.min_score",
+        explain: "The summed score that decides a case.",
+        recommended: "The preset's.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.threshold.min_reports",
+        explain: "The reports that decide a case, whoever filed them.",
+        recommended: "The preset's.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.threshold.min_distinct_reporters",
+        explain: "Different reporters a case needs; below 2 a single report can revoke, which is unsound.",
+        recommended: "3 (the legacy k); at least 2.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.threshold.window_s",
+        explain: "The window the evidence must fall in.",
+        recommended: "60 s for the online MA; a day or a week for a slower review.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.decay.mode",
+        explain: "How old evidence fades: not at all, by a daily multiplier (MBR v1.0) or with a half-life.",
+        recommended: "The preset's.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.decay.factor",
+        explain: "The daily multiplier applied to every case's evidence.",
+        recommended: "0.9 (MBR v1.0 §2.3.1).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.decay.hour_et",
+        explain: "The Eastern hour the daily multiplier applies at.",
+        recommended: "05:00 (MBR v1.0 §2.2).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.decay.half_life_s",
+        explain: "How long evidence takes to lose half its weight.",
+        recommended: "1 hour to 1 day.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.population_guard.mode",
+        explain: "Whether a class of devices accused all at once needs more reporters, so a coordinated campaign cannot revoke a whole model line.",
+        recommended: "off, or the preset's.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.population_guard.c",
+        explain: "Accused devices in one class that make it crowded.",
+        recommended: "10 (ASSUMPTION).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.population_guard.m",
+        explain: "How many times the reporters a crowded class needs.",
+        recommended: "2 (ASSUMPTION).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.defence.trusted_reporters",
+        explain: "Count only reporters the authority still trusts.",
+        recommended: "On.",
+    },
+    Basic {
+        path: "security.scms.ma_policy.defence.reputation_max",
+        explain: "A reporter accused this many times is no longer trusted.",
+        recommended: "40 (PipelineConfig.reputation_max).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.defence.report_budget",
+        explain: "Reports one reporter may file per window before it is rate-limited.",
+        recommended: "30 (PipelineConfig.report_budget).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.decision.mode",
+        explain: "Whether an operator reviews each case before revocation (the CV pilots) or the rule revokes at once.",
+        recommended: "manual-review (the CV pilots).",
+    },
+    Basic {
+        path: "security.scms.ma_policy.decision.review_s",
+        explain: "The operator's review time before a revocation is carried out.",
+        recommended: "8 h, one working shift (ASSUMPTION); 1 business day at most under the SCMS Manager SLA.",
+    },
     // The Misbehaviour Authority's parameters as fields (08-settings-ux-and-gaps §2.5).
     Basic {
         path: "detection.ma.params.event_window_s",
@@ -1475,7 +1647,22 @@ fn basic(path: &str) -> Option<&'static Basic> {
 }
 
 fn hint(path: &str) -> Option<&'static Basic> {
-    basic(path).or_else(|| ADVANCED.iter().find(|b| b.path == path))
+    basic(path)
+        .or_else(|| ADVANCED.iter().find(|b| b.path == path))
+        .or_else(|| {
+            // A key that repeats under several roots (08-settings-ux-and-gaps §6-§7) has one
+            // row, written at its first root.
+            let canonical = [
+                ("security.scms.ma_policies.*.", "security.scms.ma_policy."),
+                (
+                    "security.scms.deployment.providers[].capacity.*.",
+                    "security.scms.deployment.capacity.*.",
+                ),
+            ]
+            .iter()
+            .find_map(|(from, to)| path.strip_prefix(from).map(|rest| format!("{to}{rest}")))?;
+            ADVANCED.iter().find(|b| b.path == canonical)
+        })
 }
 
 /// The real-world sentence for a basic field, or an advanced one that carries one.

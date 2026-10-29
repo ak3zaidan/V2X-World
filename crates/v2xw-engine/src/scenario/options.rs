@@ -1589,6 +1589,8 @@ pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
         }
         // The hour the report store re-weights, as the 24 hours of the Eastern clock.
         "security.scms.lifecycle.report_decay_hour_et" => Some((hour_rows(), true)),
+        // The MA policy's daily multiplier hour, the same 24-hour menu (08 §7).
+        _ if module_key(path) == Some("decay.hour_et") => Some((hour_rows(), true)),
         // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
         _ => crate::scenario::module_keys::options(path),
     }
@@ -1604,7 +1606,7 @@ fn hour_rows() -> Vec<Value> {
                 "description": if h == 5 {
                     "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time (the US value)."
                 } else {
-                    "Stored reports are re-weighted every day at this Eastern hour."
+                    "Stored evidence is re-weighted every day at this Eastern hour."
                 },
                 "available": true,
             })
@@ -2610,12 +2612,201 @@ pub static SCMS_PRESETS: &[Preset] = &[
     ),
 ];
 
+/// The presets of the keys 08 §6-§7 add, by the key's path below its root (`module_key`):
+/// server capacity and the MA policy. The same named values serve every root the key
+/// appears under (the deployment's and a provider's capacity; `ma_policy` and each
+/// `ma_policies` entry).
+pub static MODULE_PRESETS: &[Preset] = &[
+    sp(
+        "workers",
+        "1 worker",
+        1.0,
+        "One request at a time: an M/M/1 queue.",
+    ),
+    sp(
+        "workers",
+        "4 workers",
+        4.0,
+        "ASSUMPTION: the engine's default; no provider publishes its server capacity.",
+    ),
+    sp("workers", "16 workers", 16.0, "A larger deployment."),
+    sp(
+        "workers",
+        "64 workers",
+        64.0,
+        "The abstract tier's capacity: in effect no queueing.",
+    ),
+    sp(
+        "queue_limit",
+        "100 requests",
+        100.0,
+        "A small queue: bursts are refused early.",
+    ),
+    sp(
+        "queue_limit",
+        "1,000 requests",
+        1_000.0,
+        "A moderate queue.",
+    ),
+    sp(
+        "queue_limit",
+        "10,000 requests",
+        10_000.0,
+        "A deep queue: bursts wait rather than being refused.",
+    ),
+    sp("overhead_ms", "0 ms", 0.0, "No fixed cost per request."),
+    sp(
+        "overhead_ms",
+        "1 ms",
+        1.0,
+        "ASSUMPTION: the engine's default fixed cost per request.",
+    ),
+    sp("overhead_ms", "5 ms", 5.0, "A slower stack."),
+    sp(
+        "overhead_ms",
+        "20 ms",
+        20.0,
+        "A heavily loaded or remote stack.",
+    ),
+    sp(
+        "evidence.tau_m",
+        "1 m",
+        1.0,
+        "SM-MBR gpsDrift: the position accuracy a report is held to.",
+    ),
+    sp(
+        "evidence.event_window_s",
+        "5 s",
+        5.0,
+        "F2MD DELTA_REPORT_TIME.",
+    ),
+    sp(
+        "evidence.event_min_reporters",
+        "2 reporters",
+        2.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.min_events",
+        "3 events",
+        3.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.min_distinct_reporters",
+        "3 reporters (the legacy k)",
+        3.0,
+        "The legacy engine's report_threshold_k; below 2 a single report can revoke.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 minute",
+        60.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 hour",
+        3_600.0,
+        "Evidence gathered over an hour.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 day",
+        86_400.0,
+        "Evidence gathered over a day.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 week",
+        604_800.0,
+        "Evidence gathered over a week.",
+    ),
+    sp(
+        "decay.factor",
+        "0.9 a day",
+        0.9,
+        "SCMS Manager MBR v1.0 §2.3.1 DailyMultiplier.",
+    ),
+    sp(
+        "decay.hour_et",
+        "05:00 ET",
+        5.0,
+        "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time.",
+    ),
+    sp(
+        "decay.half_life_s",
+        "1 hour",
+        3_600.0,
+        "Evidence halves every hour.",
+    ),
+    sp(
+        "decay.half_life_s",
+        "1 day",
+        86_400.0,
+        "Evidence halves every day.",
+    ),
+    sp(
+        "population_guard.c",
+        "10 devices",
+        10.0,
+        "ASSUMPTION: a class with ten accused devices is crowded.",
+    ),
+    sp(
+        "population_guard.m",
+        "2 ×",
+        2.0,
+        "ASSUMPTION: twice the reporters in a crowded class.",
+    ),
+    sp(
+        "defence.reputation_max",
+        "40 accusations",
+        40.0,
+        "The legacy engine's PipelineConfig.reputation_max.",
+    ),
+    sp(
+        "defence.report_budget",
+        "30 reports",
+        30.0,
+        "The legacy engine's PipelineConfig.report_budget.",
+    ),
+    sp("decision.review_s", "1 hour", 3_600.0, "A fast operator."),
+    sp(
+        "decision.review_s",
+        "8 h, one working shift",
+        28_800.0,
+        "ASSUMPTION: the CV pilots' manual review, one shift.",
+    ),
+    sp(
+        "decision.review_s",
+        "1 business day",
+        86_400.0,
+        "The SCMS Manager's one-business-day service level.",
+    ),
+];
+
+/// The roots the keys of 08 §6-§7 repeat under, as the prefix to strip.
+const MODULE_ROOTS: [&str; 4] = [
+    "security.scms.deployment.capacity.*.",
+    "security.scms.deployment.providers[].capacity.*.",
+    "security.scms.ma_policy.",
+    "security.scms.ma_policies.*.",
+];
+
+/// `path` below its module root (`security.scms.ma_policies.*.decay.factor` →
+/// `decay.factor`), or `None` for a path no module root holds.
+pub fn module_key(path: &str) -> Option<&str> {
+    MODULE_ROOTS.iter().find_map(|r| path.strip_prefix(r))
+}
+
 /// The presets for `path`, as `[{label, value, note}]`, or `None`.
 pub fn presets(path: &str) -> Option<Value> {
+    let key = module_key(path);
     let rows: Vec<Value> = PRESETS
         .iter()
         .chain(SCMS_PRESETS)
         .filter(|p| p.path == path)
+        .chain(MODULE_PRESETS.iter().filter(|p| Some(p.path) == key))
         .map(|p| json!({"label": p.label, "value": p.value, "note": p.note}))
         .collect();
     (!rows.is_empty()).then(|| Value::Array(rows))
@@ -3064,6 +3255,29 @@ pub fn relevant_when(path: &str) -> Option<(&'static str, Vec<Value>)> {
             ("security.threshold.protocol", vec![json!("umbrella")])
         }
         "net.rsu_ip.wsa_interval_ms" => ("net.rsu_ip.air", vec![json!("sch")]),
+        // The MA policy's dependent fields (08 §7); an absent mode is the preset's, which
+        // may be either, so it does not grey the field.
+        "security.scms.ma_policy.decay.factor" | "security.scms.ma_policy.decay.hour_et" => (
+            "security.scms.ma_policy.decay.mode",
+            vec![json!("daily-multiplier"), Value::Null],
+        ),
+        "security.scms.ma_policy.decay.half_life_s" => (
+            "security.scms.ma_policy.decay.mode",
+            vec![json!("half-life"), Value::Null],
+        ),
+        "security.scms.ma_policy.population_guard.c"
+        | "security.scms.ma_policy.population_guard.m" => (
+            "security.scms.ma_policy.population_guard.mode",
+            vec![json!("cluster"), Value::Null],
+        ),
+        "security.scms.ma_policy.decision.review_s" => (
+            "security.scms.ma_policy.decision.mode",
+            vec![json!("manual-review"), Value::Null],
+        ),
+        "security.scms.ma_policy.evidence.tau_m" => (
+            "security.scms.ma_policy.evidence.accuracy_weighting",
+            vec![json!("catch"), Value::Null],
+        ),
         "detection.ma.params.event_window_s"
         | "detection.ma.params.event_min_reporters"
         | "detection.ma.params.min_events"

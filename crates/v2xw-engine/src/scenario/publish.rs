@@ -2414,6 +2414,76 @@ mod tests {
         );
     }
 
+    /// The keys 08 §5-§8 add carry their help, presets and relevance (piece A3): every one of
+    /// them, under every root it repeats under, explains itself; every preset it publishes
+    /// lies inside its range; the MA policy's dependent fields name what they depend on.
+    #[test]
+    fn the_new_scms_keys_carry_help_presets_and_relevance() {
+        let owned = |p: &str| {
+            crate::ma_policy::KEY_STATUS
+                .iter()
+                .chain(crate::scms_topology::KEY_STATUS)
+                .any(|k| {
+                    p == k.path
+                        || p.strip_prefix(k.path)
+                            .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+                })
+        };
+        let mut bad = Vec::new();
+        let mut with_presets = Vec::new();
+        for f in fields() {
+            let path = f["x-path"].as_str().unwrap_or("").to_string();
+            if !owned(&path) {
+                continue;
+            }
+            if f.get("x-explain")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                bad.push(format!("{path}: no help"));
+            }
+            for p in f["x-presets"].as_array().into_iter().flatten() {
+                with_presets.push(path.clone());
+                let v = p["value"].as_f64().unwrap_or(f64::NAN);
+                match validate::bound_of(&path) {
+                    Some(b) if b.admits(v) => {}
+                    _ => bad.push(format!("{path}: preset {v} outside its range")),
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+        for p in [
+            "security.scms.deployment.capacity.*.workers",
+            "security.scms.deployment.providers[].capacity.*.overhead_ms",
+            "security.scms.ma_policy.decay.factor",
+            "security.scms.ma_policies.*.threshold.window_s",
+            "security.scms.ma_policy.decision.review_s",
+        ] {
+            assert!(with_presets.iter().any(|x| x == p), "{p} offers no presets");
+        }
+        let all = fields();
+        let at = |p: &str| {
+            all.iter()
+                .find(|f| f["x-path"].as_str() == Some(p))
+                .cloned()
+                .unwrap_or_else(|| panic!("{p} is not published"))
+        };
+        assert_eq!(
+            at("security.scms.ma_policy.decay.factor")["x-relevant-when"]["path"],
+            json!("security.scms.ma_policy.decay.mode")
+        );
+        for p in [
+            "security.scms.ma_policy.decay.hour_et",
+            "security.scms.ma_policies.*.decay.hour_et",
+        ] {
+            assert_eq!(
+                at(p)["x-options"].as_array().map(Vec::len),
+                Some(24),
+                "{p} is not the 24-hour menu"
+            );
+        }
+    }
+
     /// The surface bundle has every section the page is told to expect.
     #[test]
     fn the_surface_carries_every_section() {
