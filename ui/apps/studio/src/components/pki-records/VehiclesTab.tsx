@@ -387,7 +387,7 @@ function VehicleCard({
       <h4>
         Certificates by week{" "}
         <span className="faint" title="The current i-period: one week from the 2015-01-06 04:00 ET epoch (compressed in a compressed calendar)">
-          (this is week i = {d.current_i}; {d.jmax} certificates a week)
+          (this is <Term k="ij">week {d.current_i}</Term>; {d.jmax} certificates a week)
         </span>
       </h4>
       <CredentialGrid d={d} />
@@ -395,7 +395,7 @@ function VehicleCard({
       <ol className="pkir-history pki-history" data-testid="pki-pseudonyms">
         {d.pseudonyms.map((p, k) => (
           <li key={`${p.id8}/${p.since}`}>
-            <CertLink id8={p.id8} holder={d.device} label={p.id8} />
+            <CertLink id8={p.id8} holder={d.device} label={grouped(p.id8)} />
             <span className="faint">
               {" "}
               from {secondsText(p.since)}
@@ -456,7 +456,7 @@ export function CredentialGrid({ d }: { readonly d: Pick<VehicleDetail, "grid" |
               onMouseEnter={() => setHover(c)}
               onClick={c.id8 ? () => set({ cert: { id8: c.id8 as string, holder: d.device ?? null } }) : undefined}
             >
-              <title>{`week ${c.i}, certificate ${c.j}: ${CELL_LABEL[c.state as CellState] ?? c.state}${c.id8 ? ` · ${c.id8} (click for its card)` : ""}`}</title>
+              <title>{`week ${c.i}, certificate ${c.j + 1} of ${g.jmax}: ${CELL_LABEL[c.state as CellState] ?? c.state}${c.id8 ? ` · ${grouped(c.id8)} (click for its card)` : ""}`}</title>
             </rect>
           )),
         )}
@@ -491,8 +491,8 @@ export function CredentialGrid({ d }: { readonly d: Pick<VehicleDetail, "grid" |
       </div>
       <div className="faint mono pkir-hover">
         {hover
-          ? `week i ${hover.i} · certificate j ${hover.j} · ${CELL_LABEL[hover.state as CellState] ?? hover.state}${hover.id8 ? ` · ${hover.id8}` : ""}${hover.used ? " · has signed messages" : ""}`
-          : `weeks ${g.iMin}–${g.iMax} × j 0–${g.jmax - 1}${hidden > 0 ? ` · ${hidden} later weeks, not yet available, not drawn` : ""} · click a certificate for its card`}
+          ? `week ${hover.i} · certificate ${hover.j + 1} of ${g.jmax} · ${CELL_LABEL[hover.state as CellState] ?? hover.state}${hover.id8 ? ` · ${grouped(hover.id8)}` : ""}${hover.used ? " · has signed messages" : ""}`
+          : `weeks ${g.iMin}–${g.iMax} across, the week's ${g.jmax} certificates down${hidden > 0 ? ` · ${hidden} later weeks, not yet available, not drawn` : ""} · click a certificate for its card`}
       </div>
     </div>
   );

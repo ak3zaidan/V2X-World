@@ -43,7 +43,8 @@ test("the Vehicles tab draws a vehicle's grid exactly as node.credentials lists 
   for (const c of last.cells as { i: number; j: number; state: string }[]) {
     if (c.state !== "not-yet-available") expect(drawn.some(([i, j]) => i === c.i && j === c.j), `${c.i}/${c.j} drawn`).toBe(true);
   }
-  await expect(page.getByTestId("pki-pseudonyms")).toContainText(String(last.active));
+  // Certificate ids read in groups of four everywhere (`grouped`).
+  await expect(page.getByTestId("pki-pseudonyms")).toContainText(String(last.active).replace(/(.{4})(?=.)/g, "$1 "));
 });
 
 test("the Cases board holds each case in its pki.case column, and an entity's view names no one", async ({ page }) => {
