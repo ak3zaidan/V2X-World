@@ -1219,6 +1219,15 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the sidelink CBR threshold",
     },
+    // WP-34: the alignment margin, from none to half a 10 Hz period (beyond that the BSM
+    // is no longer generated "just before" its resource).
+    Bound {
+        path: "radio.sidelink.align_margin_ms",
+        lo: 0.0,
+        hi: 50.0,
+        exclusive_lo: false,
+        what: "the BSM alignment margin",
+    },
     Bound {
         path: "radio.dcc.reactive_hold_ms",
         lo: 0.0,
@@ -3173,6 +3182,22 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                probability, sensing threshold, sensing on or off, candidate percentage \
                (20; 35 or 50 on NR) and selection-window end T2, over the profile's \
                values. Refused on an 802.11p run.",
+    },
+    KeyStatus {
+        path: "radio.sidelink.align_generation",
+        status: Status::Wired,
+        note: "WP-34: each UE generates its periodic BSM its longest signing time plus \
+               align_margin_ms before its next reserved subframe (SAE J3161/1, second-hand), \
+               following every reselection; a changed interval stays inside J2945/1's \
+               bounds. Off by default; needs a desynchronised generation timing and a \
+               mobility step that divides the reservation interval.",
+    },
+    KeyStatus {
+        path: "radio.sidelink.align_margin_ms",
+        status: Status::Wired,
+        note: "WP-34: how long before the reserved subframe an aligned BSM reaches the MAC, \
+               on top of the signing bound. Unset is the pool's T1 (ASSUMPTION until \
+               J3161/1 is read). Only with align_generation.",
     },
     KeyStatus {
         path: "radio.dcc",
@@ -8971,6 +8996,54 @@ fn scms_lifecycle(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
 }
 
+/// WP-34: BSM generation aligned to the sidelink reservation. `radio_tuning` already refuses
+/// `radio.sidelink` on an 802.11p run; this refuses what would make the key do nothing.
+fn sidelink_alignment(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let sl = &s.radio.sidelink;
+    if let Some(m) = sl.align_margin_ms {
+        bounded_at(
+            "radio.sidelink.align_margin_ms",
+            "radio.sidelink.align_margin_ms",
+            m,
+            e,
+        );
+        if sl.align_generation != Some(true) {
+            e.push(conflict(
+                "radio.sidelink.align_margin_ms",
+                "would change nothing: radio.sidelink.align_generation is off".to_string(),
+            ));
+        }
+    }
+    if sl.align_generation != Some(true) {
+        return;
+    }
+    // The node steps on its own phase, and the phase is what the alignment moves; a
+    // synchronised generation timing steps every node at once, with no phase to move.
+    if crate::wiring::generation_timing(s).is_synchronised() {
+        e.push(conflict(
+            "radio.sidelink.align_generation",
+            "needs a desynchronised generation timing: messages.generator sets phase_window_ms \
+             and max_jitter_ms to 0, so every node generates at one instant"
+                .to_string(),
+        ));
+    }
+    // The node's step repeats the aligned phase only if the reservation period is a
+    // whole number of steps.
+    let rri_ns = u64::from(sl.reservation_interval_ms.unwrap_or(100)) * 1_000_000;
+    let step_ns = s.time.mobility_step().as_nanos().max(1);
+    if rri_ns % step_ns != 0 {
+        e.push(conflict(
+            "radio.sidelink.align_generation",
+            format!(
+                "needs a mobility step that divides the {} ms reservation interval; \
+                 time.mobility_step is {} ms",
+                rri_ns / 1_000_000,
+                step_ns as f64 / 1e6
+            ),
+        ));
+    }
+}
+
 fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
     let sl = &s.radio.sidelink;
     let d = &s.radio.dcc;
@@ -9067,6 +9140,7 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             Some(_) => {}
         }
     }
+    sidelink_alignment(s, e);
     // The sidelink pair rides on `radio.sidelink`, which `radio_tuning` already refuses on
     // an 802.11p run.
     if let Some(t) = sl.cbr_threshold_dbm

@@ -1,0 +1,10 @@
+# LTE-V2X PC5 mode 4 (SAE J3161/1) with the BSM generated just before its SPS reservation
+# (WP-34, radio.sidelink.align_generation), as J3161/1 has the application do.
+# A variant of ../midtown-scms-realism.yaml for the SCMS configuration matrix
+# (docs/design/scms-real/testing/matrix.md); the lte variant plus one change.
+schema: v2xw/scenario/1
+meta: {base: ../midtown-scms-realism.yaml, name: Midtown SCMS matrix lte-aligned}
+radio:
+  rat: lte-v2x-pc5
+  sidelink:
+    align_generation: true

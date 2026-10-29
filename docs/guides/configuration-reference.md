@@ -139,6 +139,8 @@ Refused on an 802.11p run.
 | `radio.sidelink.selection_window_ms` **new** | profile's T2 | 20-100 (LTE), 1-100 (NR) | End of the selection window T2. |
 | `radio.sidelink.noise_figure_db` **new** | 9 dB (TR 36.885 Annex A.1.1) | 0 to 15 dB | The UE receiver's noise figure: every sidelink noise floor and the candidate range. |
 | `radio.sidelink.cbr_threshold_dbm` **new** | -94 dBm | -112 to -8 dBm, 2 dB steps (TS 36.331 `sl-ThresS-RSSI-CBR`) | S-RSSI above which a sub-channel counts busy in the CBR that the CR limits and metrics read. |
+| `radio.sidelink.align_generation` **new** (WP-34) | off | bool | Each UE generates its periodic BSM just before its next reserved subframe (SAE J3161/1, second-hand), following every reselection; an interval it changes stays inside J2945/1's `vMinITT`..`vMaxITT`. Needs a desynchronised `messages.generator` and a mobility step dividing the RRI. Run report: `sidelink.bsm_aligned`, `bsm_unaligned`, `bsm_realigned_on_reselection`. |
+| `radio.sidelink.align_margin_ms` **new** (WP-34) | pool's `T1` (1 ms LTE), ASSUMPTION | 0 to 50 ms | How long before the reserved subframe an aligned BSM reaches the MAC, on top of the device's longest signing time. Only with `align_generation`. |
 
 Numerology is fixed by the profile (µ = 1, 30 kHz for NR), and mode 2 (autonomous) is
 the only mode. See below.

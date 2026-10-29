@@ -36,3 +36,9 @@
    source: "SAE J2945/1 6.3.6: the commanded rate at low density"}
 - {setting: messages.codec_tier, change: size-model, metric: psdu_bytes, expect: same, min_change: 0.05,
    source: "the size model stands in for the UPER encoder (ITU-T X.691) and is fitted to its output, so the mean frame size should agree within a few per cent"}
+
+# ---- C-V2X BSM generation aligned to the SPS reservation (WP-34) ----
+- {setting: radio.sidelink.align_generation, change: true, metric: e2e_ms_mean, expect: down, min_change: 0.1,
+   source: "generated just before its reserved subframe the BSM waits a margin, not up to the reservation period for a resource selected T1..T2 after it arrived (TS 36.213 V14.4.0 14.1.1.6; Molina-Masegosa and Gozalvez 2017; SAE J3161/1 alignment, second-hand via Abrar et al. 2026)"}
+- {setting: radio.sidelink.align_generation, change: true, metric: prr, expect: same, min_change: 0.005,
+   source: "an aligned UE keeps the resources it selected, so the SPS collisions, and with them the PRR, stay those of SPS; only the instant the BSM is built moves (wp25-plus-build-plans WP-34, whose 'changes' row was not predicted in sign; measured on cv2x 2026-10-28: 0.9815 -> 0.9814, e2e 54.0 -> 15.5 ms)"}

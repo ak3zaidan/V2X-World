@@ -885,6 +885,23 @@ trustworthy or comparable; later waves add behaviours and radio features.
   instant. `ProfileServiceModel::service_time_bound` (the upper edge of a ranged cost) and
   `ObuRuntime::sign_time_bound`/`align_bsm` give the engine the lead. Unit tests: 3 in
   `generate.rs`, 2 in `sps.rs`, 1 in `server.rs`; six faults shown red.
+- P34.2 (2026-10-28): done, off by default (`radio.sidelink.align_generation`, all six
+  settings files; `align_margin_ms` unset = the pool's `T1`, 1 ms on LTE, an ASSUMPTION).
+  After each BSM's initial grant (`run/sidelink.rs`) the sender's next BSM is aligned to
+  its next reserved subframe minus `lead` = the OBU's signing bound + the timing's largest
+  hand-off jitter + the margin, and the node's step phase moves there (an extra step when
+  that window is already scheduled). A released reservation (counter expiry without keep)
+  leaves the old phase, and the BSM selects when it arrives (TS 36.321 §5.14.1.1). The
+  loader refuses it on 802.11p, with a synchronised generation timing, and with a mobility
+  step that does not divide the RRI. Run report: `sidelink.bsm_aligned`, `bsm_unaligned`
+  (the plan's `bsm_unaligned_event`: the engine has no event BSM, hard braking is a DENM),
+  `bsm_realigned_on_reselection`, all skipped when zero. Measured on 30 vehicles, 3 s,
+  J3161/1 pool (`tests/sidelink_align.rs`): generation-to-air mean 50.3 ms off, 11.7 ms
+  aligned (lead 10 ms), 95.8 % of BSMs on the air within lead + 1 subframe (3.2 % off);
+  with `probResourceKeep` 0, 89.1 % and 67 realignments. Rows: `networking.yaml` WP-34
+  (e2e down, PRR changes, family cv2x/nr). The matrix variant `lte-aligned` is added. No
+  golden moved; DSRC digests (`bsm_timing` 4, `phase2` 15) pass. Proposal for the owner:
+  `align_generation: true` for LTE-V2X profiles (moves every LTE digest).
 
 ## 3. Deferred and dropped
 

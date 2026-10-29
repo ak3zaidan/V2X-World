@@ -63,6 +63,10 @@ runs:
   lte:
     base: M0
     scenario: scenarios/real-world/matrix/lte.yaml
+  lte-aligned:
+    base: lte
+    scenario: scenarios/real-world/matrix/lte-aligned.yaml
+    note: WP-34, radio.sidelink.align_generation on
   nr:
     base: M0
     scenario: scenarios/real-world/matrix/nr.yaml
@@ -778,6 +782,34 @@ rows:
   verdict: open
   note: 'LTE-V2X BSM p95 112 ms (mean 68 ms) exceeds the 100 ms budget: the BSM is generated without regard
     to the SPS reservation, which J3161/1 has the application align with; DSRC p95 14.6 ms'
+- id: lte-aligned-latency-budget
+  base: lte
+  variant: lte-aligned
+  area: metrics
+  measure: m.e2e_latency.bsm.p95
+  expect: le
+  value: 100.0
+  source: 'SAE J3161/1 (second-hand, Abrar et al. 2026): the application generates the BSM just
+    before its SPS reservation, and the budget is 100 ms (WP-34)'
+  verdict: open
+  note: 'owed: the lte / lte-aligned pair needs a release-build run (lte took 1,148 s of wall on the
+    300 s base, over the tiny slot; WP-34 was built without one). Measured instead on the cv2x
+    family (e2e mean 54.0 -> 15.5 ms) and tests/sidelink_align.rs (30 vehicles: generation to air
+    50.3 -> 11.7 ms, 95.8 % within the 10 ms lead + 1 subframe)'
+- id: lte-aligned-latency-down
+  base: lte
+  variant: lte-aligned
+  area: metrics
+  measure: m.e2e_latency.bsm.mean
+  expect: down
+  min_change: 0.3
+  source: 'aligned, a BSM waits its signing bound plus a margin instead of a mean of about half the
+    100 ms reservation period (TS 36.213 V14.4.0 14.1.1.6; Molina-Masegosa and Gozalvez 2017)'
+  verdict: open
+  note: 'owed: the lte / lte-aligned pair needs a release-build run (lte took 1,148 s of wall on the
+    300 s base, over the tiny slot; WP-34 was built without one). Measured instead on the cv2x
+    family (e2e mean 54.0 -> 15.5 ms) and tests/sidelink_align.rs (30 vehicles: generation to air
+    50.3 -> 11.7 ms, 95.8 % within the 10 ms lead + 1 subframe)'
 - id: lte-backend-same
   base: M0
   variant: lte
