@@ -411,6 +411,52 @@ export function labelOf(base: string): string {
   return words.length === 0 ? base : words[0].toUpperCase() + words.slice(1);
 }
 
+/**
+ * What a metric tells a reader, in one line, for the card under its name. Written for the security
+ * and credential metrics a reader new to the SCMS meets first; every other metric falls back to the
+ * first sentence of the engine's own definition (`meaningOf`).
+ */
+const MEANINGS: Readonly<Record<string, string>> = {
+  cert_pool_valid: "Pseudonym certificates a vehicle could sign with right now; more lets it change identity often.",
+  backend_link_up: "Share of vehicles that can reach the credential system (by cellular or a roadside unit).",
+  crl_entries: "Devices on the revocation list (CRL) that receivers must refuse.",
+  crl_bytes: "Size of the revocation list each device downloads; grows with every revocation.",
+  revocation_latency_stage: "How long each step of a revocation takes, from report to receivers enforcing it.",
+  time_to_detect: "From an attack starting to the first correct report about it reaching the Misbehaviour Authority.",
+  time_to_decision: "From an attack starting to the Misbehaviour Authority deciding to revoke the attacker.",
+  false_accusations: "Honest vehicles reported (or revoked) as if they were attackers.",
+  det_recall: "Share of attackers the detectors caught.",
+  det_precision: "Share of accusations that were right.",
+  det_fpr: "Share of honest vehicles wrongly flagged.",
+  verify_rate: "Signature checks done per second, across all devices.",
+  verify_cost: "Processing time of one signature check.",
+  verify_wait: "Time a received message waits before its signature is checked.",
+  verify_queue_depth: "Messages waiting for signature checks when a new one arrives.",
+  unverified_ratio: "Messages passed to applications without their signature being checked.",
+  full_cert_share: "Messages that carry the sender's whole certificate rather than its 8-byte digest.",
+  digest_misses: "Messages whose signer the receiver did not know yet, so it could not verify them at once.",
+  p2pcd_requests: "Requests a device sends to learn a certificate it is missing (peer-to-peer distribution).",
+  envelope_overhead: "Security bytes sent for every byte of application data.",
+  security_overhead: "Security's share of the bytes on air: header, certificate or digest, and signature.",
+  cert_bytes_share: "How much of the security envelope is attached certificates.",
+  pseudonym_change_rate: "How often a vehicle switches to a new pseudonym certificate.",
+  linkability: "Share of pseudonym changes an eavesdropper could link back to the same vehicle.",
+  bytes_backend: "Traffic between devices and the credential system: certificates, reports and CRLs.",
+  pdr: "Share of messages that reached neighbours within range.",
+  cbr: "Share of time the radio channel is busy.",
+  e2e_latency: "Time from a message being created to an application receiving it.",
+};
+
+/** The card's one line: the table's words, else the definition's first sentence, kept short. */
+export function meaningOf(f: Pick<MetricFamily, "base" | "definition">): string {
+  const known = MEANINGS[f.base];
+  if (known !== undefined) return known;
+  const plain = f.definition.replace(/`([^`]*)`/g, "$1").replace(/\*\*([^*]*)\*\*/g, "$1").trim();
+  if (plain === "") return "The engine publishes no definition for this metric; its name is below the title.";
+  const first = /^(.+?[.!?])(\s|$)/.exec(plain)?.[1] ?? plain;
+  return first.length > 140 ? `${first.slice(0, 137).replace(/\s+\S*$/, "")}…` : first;
+}
+
 // ------------------------------------------------------------------------------------------------
 // Which way is worse
 // ------------------------------------------------------------------------------------------------
@@ -819,6 +865,56 @@ export function formatWithUnit(v: number | null | undefined, unit: string): stri
   const n = formatNumber(v);
   const u = unitSuffix(unit);
   return n === "—" || u === "" ? n : `${n} ${u}`;
+}
+
+/**
+ * A number as a glance reads it: three significant figures, one decimal from 10, none from 100
+ * (`0.413`, `38.5`, `252`, `1,420`). `formatNumber` keeps more, for tables and axes.
+ */
+export function glanceNumber(v: number): string {
+  const a = Math.abs(v);
+  if (a === 0) return "0";
+  if (a >= 100) return Math.round(v).toLocaleString("en-US");
+  if (a >= 10) return (Math.round(v * 10) / 10).toLocaleString("en-US");
+  if (a >= 0.001) return v.toPrecision(3).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  return v.toExponential(1);
+}
+
+/** A value and its unit as a reader wants them: a ratio as a percentage, a long time in minutes or hours. */
+export function readable(v: number | null, unit: string): { value: string; unit: string } {
+  if (v === null || !Number.isFinite(v)) return { value: "—", unit: "" };
+  const u = unit.trim();
+  if (u === "ratio" || u === "1") {
+    // One decimal of a percentage is as fine as a reader compares; a share under 1 % keeps three figures.
+    const pct = v * 100;
+    return { value: Math.abs(pct) >= 1 ? (Math.round(pct * 10) / 10).toLocaleString("en-US") : glanceNumber(pct), unit: "%" };
+  }
+  if (u === "s") return readableDuration(v);
+  if (u === "B") return readableBytes(v);
+  if (u === "B/s") {
+    const b = readableBytes(v);
+    return { value: b.value, unit: `${b.unit}/s` };
+  }
+  if (u === "1/s") return { value: glanceNumber(v), unit: "per s" };
+  if (u === "count") return { value: glanceNumber(v), unit: "" };
+  return { value: glanceNumber(v), unit: u };
+}
+
+/** Seconds as a reader counts them: `850 ms`, `42 s`, `6.5 min`, `24 h`, `2.5 days`. */
+export function readableDuration(s: number): { value: string; unit: string } {
+  const a = Math.abs(s);
+  if (a < 1) return { value: glanceNumber(s * 1000), unit: "ms" };
+  if (a < 120) return { value: glanceNumber(s), unit: "s" };
+  if (a < 7200) return { value: glanceNumber(s / 60), unit: "min" };
+  if (a < 172_800) return { value: glanceNumber(s / 3600), unit: "h" };
+  return { value: glanceNumber(s / 86_400), unit: "days" };
+}
+
+export function readableBytes(b: number): { value: string; unit: string } {
+  const a = Math.abs(b);
+  if (a < 1024) return { value: glanceNumber(b), unit: "B" };
+  if (a < 1024 * 1024) return { value: glanceNumber(b / 1024), unit: "KiB" };
+  return { value: glanceNumber(b / 1024 / 1024), unit: "MiB" };
 }
 
 /** The unit an axis names: a ratio says its scale, because 0.9 and 90 % are different numbers. */

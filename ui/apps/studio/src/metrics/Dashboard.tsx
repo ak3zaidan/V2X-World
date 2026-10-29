@@ -24,6 +24,8 @@ import { classify, judgedSeries, LEVEL_LABEL, type HealthLevel } from "./health.
 import { HealthDot } from "./HealthBadge.js";
 import { useCatalogue, useOverview } from "./hooks.js";
 import { openRunSummary } from "./summaryStore.js";
+import { ScmsOverview } from "./ScmsOverview.js";
+import { CREDENTIAL_METRICS, OVERVIEW_SERIES } from "./scmsModel.js";
 import { SignatureCompare } from "./SignatureCompare.js";
 import {
   cardSeries,
@@ -117,6 +119,8 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
       const j = judgedSeries(f.base, f.health);
       if (!out.includes(j) && seriesOf(f).includes(j)) out.push(j);
     }
+    // The credential overview's numbers and trends (a p95, a ratio) where no card asks for them.
+    for (const n of OVERVIEW_SERIES) if (!out.includes(n) && asked.some((f) => seriesOf(f).includes(n))) out.push(n);
     return out;
   }, [asked]);
   const barNames = useMemo(() => asked.flatMap((f) => (f.headline === null ? cardSeries(f) : [])), [asked]);
@@ -228,7 +232,8 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
     return worst;
   };
 
-  const scrollToGroup = (id: GroupId | "pinned"): void => {
+  const credentials = families.some((f) => CREDENTIAL_METRICS.includes(f.base));
+  const scrollToGroup = (id: GroupId | "pinned" | "scms"): void => {
     if (expanded !== null) back();
     setRoute({ group: id });
     requestAnimationFrame(() => document.getElementById(`metrics-group-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
@@ -267,6 +272,11 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
       </div>
       <div className="metrics-layout">
         <nav className="metrics-nav" aria-label="Metric groups">
+          {credentials && query === "" ? (
+            <button type="button" className="linklike nav-item nav-scms" onClick={() => scrollToGroup("scms")} title="The credential system at a glance: five questions, answered" data-testid="metrics-nav-scms">
+              <span>Credentials at a glance</span>
+            </button>
+          ) : null}
           {pinned.length > 0 ? (
             <button type="button" className="linklike nav-item" onClick={() => scrollToGroup("pinned")}>
               <span>Pinned</span>
@@ -353,6 +363,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
                   </div>
                 </section>
               ) : null}
+              {query === "" ? <ScmsOverview families={asked} overview={overview} active={active && expanded === null} onOpen={open} /> : null}
               {pinned.length > 0 ? (
                 <section id="metrics-group-pinned" className="mgroup" data-testid="metrics-group-pinned">
                   <h3>Pinned</h3>
