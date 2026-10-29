@@ -262,3 +262,22 @@ export function localUsVerdict(
   for (const c of providerCards(doc)) if (!isUsProvider(c.values)) reasons.push(`${c.values.name}'s servers`);
   return { isUs: reasons.length === 0, reasons };
 }
+
+/** A providers list in a line: "provider-b: aca 3, la1 0; provider-a: share 70 %". */
+export function describeProviders(list: unknown): string {
+  if (!Array.isArray(list) || list.length === 0) return "preset";
+  return list
+    .map((e) => {
+      if (e === null || typeof e !== "object") return String(e);
+      const o = e as Record<string, unknown>;
+      const parts: string[] = [];
+      const comps = o.components !== null && typeof o.components === "object" ? (o.components as Record<string, unknown>) : {};
+      for (const [r, n] of Object.entries(comps)) parts.push(`${r} ${String(n)}`);
+      for (const [k, v] of Object.entries(o)) {
+        if (k === "name" || k === "components") continue;
+        parts.push(k === "fleet_share" && typeof v === "number" ? `share ${Math.round(v * 1000) / 10} %` : `${k.replace(/_/g, " ")} ${String(v)}`);
+      }
+      return `${String(o.name)}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
+    })
+    .join("; ");
+}

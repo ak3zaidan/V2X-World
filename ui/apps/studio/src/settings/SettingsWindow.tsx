@@ -34,7 +34,7 @@ import {
 } from "../state/settings.js";
 import { RestartNow } from "../components/RestartNow.js";
 import { useRevealSetting } from "../lib/links.js";
-import { changedPointers, getPointer } from "../lib/schema.js";
+import { changedLeaves, getPointer } from "../lib/schema.js";
 import {
   buildResearchTree,
   irrelevantReason,
@@ -62,7 +62,7 @@ import "../styles/quick.css";
 import "../styles/settings.css";
 import { SettingsDocContext } from "./docContext.js";
 import { SettingRow } from "./SettingRow.js";
-import { localUsVerdict } from "./scmsDeployment.js";
+import { PROVIDERS_POINTER, describeProviders, localUsVerdict } from "./scmsDeployment.js";
 import { SUBGROUP_BLURBS } from "./scmsOverlay.js";
 import { inheritedValue, movableKeys, moveIntoFields } from "./legacyParams.js";
 
@@ -205,7 +205,7 @@ export function SettingsWindow({
   }, []);
 
   const { fields, source } = useMemo(() => settingsFields(extras.fields, schema, scenario), [extras.fields, schema, scenario]);
-  const edits = useMemo(() => (draft === null ? [] : changedPointers(scenario, draft)), [scenario, draft]);
+  const edits = useMemo(() => (draft === null ? [] : changedLeaves(scenario, draft)), [scenario, draft]);
   const dirty = edits.length > 0;
   const anyLevels = useMemo(() => fields.some((f) => f.level !== undefined), [fields]);
   const unsupportedCount = useMemo(() => fields.filter((f) => isUnsupported(f) && !isComingSoon(f)).length, [fields]);
@@ -638,9 +638,9 @@ export function SettingsWindow({
                     {c.section ? <span className="faint">{c.section} › </span> : null}
                     {c.field?.label ?? c.pointer}
                   </button>
-                  <code className="change-from">{describeValue(c.from)}</code>
+                  <code className="change-from">{c.pointer === PROVIDERS_POINTER ? describeProviders(c.from) : describeValue(c.from)}</code>
                   <span className="faint">→</span>
-                  <code className="change-to">{describeValue(c.to)}</code>
+                  <code className="change-to">{c.pointer === PROVIDERS_POINTER ? describeProviders(c.to) : describeValue(c.to)}</code>
                   <button type="button" className="icon-button tiny" onClick={() => undoEdit(c.pointer)} title="Undo this change" aria-label="Undo this change">
                     ↶
                   </button>

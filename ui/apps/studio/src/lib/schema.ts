@@ -743,3 +743,20 @@ export function changedPointers(a: unknown, b: unknown, at = ""): string[] {
   }
   return JSON.stringify(a) === JSON.stringify(b) ? [] : [at === "" ? "/" : at];
 }
+
+/**
+ * Like {@link changedPointers}, but a block the one side lacks entirely is still split into its
+ * leaves, so a first edit under `security.scms` is "providers changed", not "security.scms changed"
+ * (which no field owns, so no row showed it as edited).
+ */
+export function changedLeaves(a: unknown, b: unknown): string[] {
+  const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  const expand = (p: string): string[] => {
+    const x = getPointer(a, p);
+    const y = getPointer(b, p);
+    if (!((x === undefined && isObject(y)) || (y === undefined && isObject(x)))) return [p];
+    const inner = changedPointers(isObject(x) ? x : {}, isObject(y) ? y : {}, p).filter((q) => q !== p);
+    return inner.length === 0 ? [p] : inner.flatMap(expand);
+  };
+  return changedPointers(a, b).flatMap(expand);
+}
