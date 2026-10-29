@@ -20,17 +20,18 @@ import { CloseIcon } from "../shell/Icons.js";
 import { useStudio } from "../state/store.js";
 import { MetricCard } from "./Card.js";
 import { Expanded } from "./Expanded.js";
-import { classify, judgedSeries, LEVEL_LABEL, type HealthLevel } from "./health.js";
+import { classify, judgedSeries, LEVEL_LABEL, withExpectations, type HealthLevel } from "./health.js";
 import { HealthDot } from "./HealthBadge.js";
 import { useCatalogue, useOverview } from "./hooks.js";
 import { openRunSummary } from "./summaryStore.js";
-import { ScmsOverview } from "./ScmsOverview.js";
-import { CREDENTIAL_METRICS, OVERVIEW_SERIES } from "./scmsModel.js";
+import { PendingMark, ScmsOverview, SCMS_TITLE, type ScmsReport } from "./ScmsOverview.js";
+import { CREDENTIAL_METRICS, OVERVIEW_SERIES, worst as worstLevel } from "./scmsModel.js";
+import { RAT_NAMES } from "./summaryModel.js";
 import { SignatureCompare } from "./SignatureCompare.js";
 import {
   cardSeries,
+  clockText,
   familiesOf,
-  formatNumber,
   matchesSearch,
   metricsHash,
   observedCount,
@@ -107,7 +108,11 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
 
   const catalogue = useCatalogue(active);
   useEffect(() => noteUnits(catalogue.defs), [catalogue.defs]);
-  const families = useMemo(() => familiesOf(catalogue.defs), [catalogue.defs]);
+  // Each band as this run should be judged against it: a scenario that leaves vehicles without a
+  // cellular modem on purpose expects that many out of the backend's reach (`health.ts` `expectedBand`).
+  const scenario = useStudio((s) => s.scenario);
+  const families = useMemo(() => withExpectations(familiesOf(catalogue.defs), scenario), [catalogue.defs, scenario]);
+  const [scms, setScms] = useState<ScmsReport>({ verdicts: [], covered: [] });
   // A node-profile session is refused every ground-truth metric; not asking saves a refusal each.
   const asked = useMemo(() => families.filter((f) => !(profileNode && f.groundTruth)), [families, profileNode]);
   // The headline lines, plus each health band's judged series where it is not the headline (a
@@ -210,8 +215,12 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
   const byGroup = GROUPS.map((g) => {
     const list = filtered.filter((f) => f.group === g.id);
     const shown = ready ? list.filter((f) => measured(f, overview.series, overview.latest)) : list;
-    const missing = ready ? list.filter((f) => !measured(f, overview.series, overview.latest)) : [];
-    return { g, shown, missing };
+    const unmeasured = ready ? list.filter((f) => !measured(f, overview.series, overview.latest)) : [];
+    // A metric with no per-window value that the credential overview shows pooled over the run is
+    // not "no data": its card points there.
+    const pooledAbove = query === "" ? unmeasured.filter((f) => scms.covered.includes(f.base)) : [];
+    const missing = unmeasured.filter((f) => !pooledAbove.includes(f));
+    return { g, shown, missing, pooledAbove };
   }).filter((x) => x.shown.length + x.missing.length > 0);
   const measuredCount = ready ? families.filter((f) => measured(f, overview.series, overview.latest)).length : null;
 
@@ -239,7 +248,9 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
     requestAnimationFrame(() => document.getElementById(`metrics-group-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
   };
 
-  const runLine = `${hello?.scenarioName ?? "run"} · ${formatNumber(run.tNs / 1e9)} s${run.tEndNs > 0 ? ` of ${formatNumber(run.tEndNs / 1e9)} s` : ""} · ${run.state}${rat ? ` · ${rat}` : ""}`;
+  const runLine = `${hello?.scenarioName ?? "run"} · ${clockText(run.tNs / 1e9)}${run.tEndNs > 0 ? ` of ${clockText(run.tEndNs / 1e9)}` : ""} simulated · ${run.state}${rat ? ` · Radio: ${RAT_NAMES[rat] ?? rat}` : ""}`;
+  const scmsLevel = worstLevel(scms.verdicts.map((v) => v.level));
+  const scmsPending = scms.verdicts.some((v) => v.pending);
 
   return (
     <div className="fullpanel-inner metrics-panel" data-testid="metrics-panel">
@@ -273,8 +284,18 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
       <div className="metrics-layout">
         <nav className="metrics-nav" aria-label="Metric groups">
           {credentials && query === "" ? (
-            <button type="button" className="linklike nav-item nav-scms" onClick={() => scrollToGroup("scms")} title="The credential system at a glance: five questions, answered" data-testid="metrics-nav-scms">
-              <span>Credentials at a glance</span>
+            <button
+              type="button"
+              className="linklike nav-item nav-scms"
+              onClick={() => scrollToGroup("scms")}
+              title={scms.verdicts.length > 0 ? scms.verdicts.map((v) => `${v.question} ${v.answer}`).join("\n") : "The credential system at a glance: its questions, answered"}
+              data-testid="metrics-nav-scms"
+              data-level={scmsLevel ?? (scmsPending ? "pending" : "none")}
+            >
+              <span>
+                {scmsLevel !== null && scmsLevel !== "healthy" ? <HealthDot level={scmsLevel} /> : scmsLevel === null && scmsPending ? <PendingMark compact /> : null}
+                {SCMS_TITLE}
+              </span>
             </button>
           ) : null}
           {pinned.length > 0 ? (
@@ -283,7 +304,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
               <span className="dim">{pinned.length}</span>
             </button>
           ) : null}
-          {byGroup.map(({ g, shown, missing }) => (
+          {byGroup.map(({ g, shown, missing, pooledAbove }) => (
             <button
               key={g.id}
               type="button"
@@ -299,7 +320,9 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
                 })()}
                 {g.label}
               </span>
-              <span className="dim">{ready ? `${shown.length}/${shown.length + missing.length}` : shown.length}</span>
+              <span className="dim" title={ready ? `${shown.length + pooledAbove.length} of ${shown.length + missing.length + pooledAbove.length} measured${pooledAbove.length > 0 ? `, ${pooledAbove.length} as run totals in ${SCMS_TITLE}` : ""}` : undefined}>
+                {ready ? `${shown.length + pooledAbove.length}/${shown.length + missing.length + pooledAbove.length}` : shown.length}
+              </span>
             </button>
           ))}
         </nav>
@@ -363,7 +386,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
                   </div>
                 </section>
               ) : null}
-              {query === "" ? <ScmsOverview families={asked} overview={overview} active={active && expanded === null} onOpen={open} /> : null}
+              {query === "" ? <ScmsOverview families={asked} overview={overview} active={active && expanded === null} onOpen={open} onReport={setScms} /> : null}
               {pinned.length > 0 ? (
                 <section id="metrics-group-pinned" className="mgroup" data-testid="metrics-group-pinned">
                   <h3>Pinned</h3>
@@ -374,7 +397,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
                   </div>
                 </section>
               ) : null}
-              {byGroup.map(({ g, shown, missing }) => (
+              {byGroup.map(({ g, shown, missing, pooledAbove }) => (
                 <section key={g.id} id={`metrics-group-${g.id}`} className="mgroup" data-testid={`metrics-group-${g.id}`}>
                   <h3>{g.label}</h3>
                   <p className="dim mgroup-q">{g.question}</p>
@@ -384,6 +407,24 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
                         <MetricCard key={f.base} f={f} overview={overview} runState={run.state} profileNode={profileNode} onOpen={open} />
                       ))}
                     </div>
+                  ) : null}
+                  {pooledAbove.length > 0 ? (
+                    <p className="mgroup-missing dim" data-testid={`metrics-pooled-${g.id}`}>
+                      Measured over the whole run rather than per window, so shown as run totals in{" "}
+                      <button type="button" className="linklike" onClick={() => scrollToGroup("scms")}>
+                        {SCMS_TITLE}
+                      </button>
+                      :{" "}
+                      {pooledAbove.map((f, i) => (
+                        <span key={f.base}>
+                          {i > 0 ? ", " : ""}
+                          <button type="button" className="linklike" onClick={() => open(f)} title={f.definition}>
+                            {f.label}
+                          </button>
+                        </span>
+                      ))}
+                      .
+                    </p>
                   ) : null}
                   {missing.length > 0 ? (
                     <p className="mgroup-missing dim" data-testid={`metrics-missing-${g.id}`}>

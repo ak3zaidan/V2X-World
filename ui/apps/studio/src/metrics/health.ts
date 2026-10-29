@@ -11,7 +11,7 @@
 
 import type { MetricHealthBand } from "@vwp/protocol";
 
-import { formatNumber, formatWithUnit, labelOf, type Series } from "./model.js";
+import { clockText, formatWithUnit, labelOf, readable, type Series } from "./model.js";
 
 export type HealthBand = MetricHealthBand;
 export type HealthLevel = "healthy" | "caution" | "unhealthy";
@@ -91,13 +91,64 @@ export function verdictLine(band: HealthBand, v: number, unit: string): string {
   return `${formatWithUnit(v, unit)} — ${noteOf(band, level)}`;
 }
 
-/** The thresholds in words, for a tooltip: "healthy ≤ 0.5 · caution ≤ 0.68 · unhealthy above". */
+/** A threshold or a judged value as a reader compares it: a share as a percentage ("68 %"), "600 ms". */
+export function bandValue(v: number, unit: string): string {
+  const s = readable(v, unit === "-" ? "" : unit);
+  return s.unit === "" ? s.value : `${s.value} ${s.unit}`;
+}
+
+/** The thresholds in words, for a tooltip: "healthy ≤ 50 % · caution ≤ 68 % · unhealthy above". */
 export function thresholdsText(band: HealthBand, unit: string): string {
-  const u = unit === "ratio" || unit === "1" || unit === "-" ? "" : ` ${unit}`;
+  const t = (v: number): string => bandValue(v, unit);
   if (band.better === "lower") {
-    return `healthy ≤ ${formatNumber(band.caution)}${u} · caution ≤ ${formatNumber(band.unhealthy)}${u} · unhealthy above`;
+    return `healthy ≤ ${t(band.caution)} · caution ≤ ${t(band.unhealthy)} · unhealthy above`;
   }
-  return `healthy ≥ ${formatNumber(band.caution)}${u} · caution ≥ ${formatNumber(band.unhealthy)}${u} · unhealthy below`;
+  return `healthy ≥ ${t(band.caution)} · caution ≥ ${t(band.unhealthy)} · unhealthy below`;
+}
+
+// ------------------------------------------------------------------------------------------------
+// The run's own expectation
+// ------------------------------------------------------------------------------------------------
+
+/**
+ * The share of vehicles the scenario gives a cellular modem (`net.uu.params.penetration`), when it
+ * is below 1; otherwise `null`. A run that leaves vehicles without a modem on purpose (to exercise
+ * the roadside relay) expects that many to be out of the backend's reach at times.
+ */
+export function cellularPenetration(scenario: unknown): number | null {
+  const p = (scenario as { net?: { uu?: { params?: { penetration?: unknown } } } } | null)?.net?.uu?.params?.penetration;
+  return typeof p === "number" && Number.isFinite(p) && p >= 0 && p < 1 ? p : null;
+}
+
+/**
+ * A band as this run should be judged against it. The engine's bands assume every vehicle is
+ * equipped; where the scenario sets something below that on purpose, the band is scaled to the
+ * scenario's own expectation and says so, so a deliberate choice is not reported as a fault.
+ *
+ * Today one band: `backend_link_up` (the share of vehicles that can reach the credential backend)
+ * scaled by the scenario's cellular penetration. A vehicle without a modem can still reach the
+ * backend through a relaying roadside unit, so the run should do at least as well as its penetration.
+ */
+export function expectedBand(base: string, band: HealthBand, scenario: unknown): HealthBand {
+  if (base !== "backend_link_up") return band;
+  const p = cellularPenetration(scenario);
+  if (p === null || band.better !== "higher") return band;
+  const pct = `${Math.round(p * 100)} %`;
+  return {
+    ...band,
+    caution: band.caution * p,
+    unhealthy: band.unhealthy * p,
+    healthy_note: `at least the ${pct} of vehicles the scenario gives a cellular modem can reach the backend`,
+    caution_note: `slightly fewer vehicles reach the backend than the ${pct} with a cellular modem`,
+    unhealthy_note: `well under the ${pct} of vehicles with a cellular modem can reach the backend`,
+    source: `${band.source}; scaled to this scenario's cellular penetration of ${pct} (net.uu penetration ${p}), since the run leaves the rest without a modem on purpose`,
+  };
+}
+
+/** Every family's band as this run should be judged against it (`expectedBand`). */
+export function withExpectations<T extends { readonly base: string; readonly health: HealthBand | null }>(families: readonly T[], scenario: unknown): T[] {
+  if (cellularPenetration(scenario) === null) return [...families];
+  return families.map((f) => (f.health === null ? f : { ...f, health: expectedBand(f.base, f.health, scenario) }));
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -125,6 +176,9 @@ export interface Judgement {
   readonly windows: number;
   readonly cautionShare: number;
   readonly unhealthyShare: number;
+  /** The first and last window that reported, in simulated seconds. */
+  readonly firstS: number;
+  readonly lastS: number;
   /** The first and last window outside the healthy band, in simulated seconds, or null. */
   readonly outFromS: number | null;
   readonly outToS: number | null;
@@ -156,10 +210,14 @@ export function judge(base: string, unit: string, band: HealthBand, series: Seri
   let worstAt = 0;
   let outFrom: number | null = null;
   let outTo: number | null = null;
+  let firstS = 0;
+  let lastS = 0;
   const worse = (a: number, b: number): boolean => (band.better === "lower" ? a > b : a < b);
   for (let i = 0; i < series.v.length; i++) {
     const v = series.v[i];
     if (!Number.isFinite(v)) continue;
+    if (n === 0) firstS = series.t[i];
+    lastS = series.t[i];
     n++;
     sum += v;
     const lv = classify(band, v);
@@ -192,6 +250,8 @@ export function judge(base: string, unit: string, band: HealthBand, series: Seri
     worst,
     worstAtS: worstAt,
     worstLevel,
+    firstS,
+    lastS,
     windows: n,
     cautionShare,
     unhealthyShare,
@@ -208,14 +268,24 @@ export function outOfBand(all: readonly Judgement[]): Judgement[] {
     .sort((a, b) => b.severity - a.severity || a.base.localeCompare(b.base));
 }
 
-/** "unhealthy 34 % of the run, worst 0.81 at 42 s" — when and how bad, in one line. */
-export function whenText(j: Judgement): string {
+/**
+ * "unhealthy 34 % of the windows, worst 81 % at 42 s" — when and how bad, in one line. With the
+ * run's length, a metric that reported in only part of the run says so: a fast-forwarded run has
+ * radio windows only while the radio ran, and "from 296 s to 592 s" on a two-day run needs that.
+ */
+export function whenText(j: Judgement, runS?: number): string {
   const parts: string[] = [];
-  if (j.unhealthyShare > 0) parts.push(`unhealthy ${pct(j.unhealthyShare)} of the run`);
+  if (j.unhealthyShare > 0) parts.push(`unhealthy ${pct(j.unhealthyShare)} of the windows`);
   if (j.cautionShare > 0) parts.push(`caution ${pct(j.cautionShare)}`);
-  parts.push(`worst ${formatWithUnit(j.worst, j.unit)} at ${formatNumber(j.worstAtS)} s`);
+  parts.push(`worst ${bandValue(j.worst, j.unit)} at ${clockText(j.worstAtS)}`);
   if (j.outFromS !== null && j.outToS !== null && j.outToS > j.outFromS) {
-    parts.push(`out of band from ${formatNumber(j.outFromS)} s to ${formatNumber(j.outToS)} s`);
+    parts.push(`out of band from ${clockText(j.outFromS)} to ${clockText(j.outToS)}`);
+  }
+  const span = j.lastS - j.firstS;
+  if (runS !== undefined && runS > 0 && span < runS * 0.5) {
+    parts.push(
+      `(its ${j.windows.toLocaleString("en-US")} ${j.windows === 1 ? "window" : "windows"} all fall between ${clockText(j.firstS)} and ${clockText(j.lastS)} of a ${clockText(runS)} run: the rest reported no value)`,
+    );
   }
   return parts.join(", ");
 }
@@ -230,11 +300,11 @@ export function whenText(j: Judgement): string {
  * exactly on it counts as the better level, as `classify` does.
  */
 export function limitText(band: HealthBand, level: HealthLevel, unit: string): string {
-  const u = unit === "ratio" || unit === "1" || unit === "-" || unit === "" ? "" : ` ${unit}`;
+  const t = (v: number): string => bandValue(v, unit);
   const lower = band.better === "lower";
-  if (level === "healthy") return `${lower ? "Below" : "Above"} ${formatNumber(band.caution)}${u} target`;
-  if (level === "caution") return `${lower ? "Above" : "Below"} ${formatNumber(band.caution)}${u} target`;
-  return `${lower ? "Above" : "Below"} ${formatNumber(band.unhealthy)}${u} limit`;
+  if (level === "healthy") return `${lower ? "Below" : "Above"} ${t(band.caution)} target`;
+  if (level === "caution") return `${lower ? "Above" : "Below"} ${t(band.caution)} target`;
+  return `${lower ? "Above" : "Below"} ${t(band.unhealthy)} limit`;
 }
 
 /**
@@ -248,7 +318,7 @@ export function verdictParts(band: HealthBand, level: HealthLevel, unit: string,
   if (j.unhealthyShare > 0) parts.push(`unhealthy ${pct(j.unhealthyShare)} of run`);
   if (j.cautionShare > 0) parts.push(`caution ${pct(j.cautionShare)}`);
   if (j.unhealthyShare === 0 && j.cautionShare === 0) parts.push(`healthy in all ${j.windows.toLocaleString("en-US")} windows`);
-  parts.push(`worst ${formatWithUnit(j.worst, unit)} at ${formatNumber(j.worstAtS)} s`);
+  parts.push(`worst ${bandValue(j.worst, unit)} at ${clockText(j.worstAtS)}`);
   return parts;
 }
 

@@ -71,7 +71,8 @@ describe("judge", () => {
     expect(j.cautionShare).toBeCloseTo(0.2);
     expect(j.outFromS).toBe(2);
     expect(j.outToS).toBe(3);
-    expect(whenText(j)).toContain("worst 0.75 at 3 s");
+    // A share reads as a percentage, the same as the cards and the overview.
+    expect(whenText(j)).toContain("worst 75 % at 3 s");
     const bad = judge("e2e", "ms", { ...CBR, caution: 50, unhealthy: 100 }, series([120, 130]))!;
     const fine = judge("x", "ratio", CBR, series([0.1, 0.2]))!;
     expect(outOfBand([fine, j, bad]).map((x) => x.base)).toEqual(["e2e", "cbr"]);
@@ -84,9 +85,9 @@ describe("judge", () => {
 
 describe("the expanded view's verdict line", () => {
   it("names the threshold that decides the level, then the run's shares and worst window", () => {
-    expect(limitText(CBR, "unhealthy", "ratio")).toBe("Above 0.68 limit");
-    expect(limitText(CBR, "caution", "ratio")).toBe("Above 0.5 target");
-    expect(limitText(PDR, "unhealthy", "ratio")).toBe("Below 0.9 limit");
+    expect(limitText(CBR, "unhealthy", "ratio")).toBe("Above 68 % limit");
+    expect(limitText(CBR, "caution", "ratio")).toBe("Above 50 % target");
+    expect(limitText(PDR, "unhealthy", "ratio")).toBe("Below 90 % limit");
     const lat: HealthBand = { ...CBR, caution: 500, unhealthy: 600 };
     expect(limitText(lat, "healthy", "ms")).toBe("Below 500 ms target");
     const j = judge("lat", "ms", lat, series([100, 700, 834, 650, 550]));

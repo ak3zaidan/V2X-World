@@ -11,7 +11,7 @@ import { formatNumber, glanceNumber, readable, type GroupRow, type Series } from
 // The scenario in one line
 // ------------------------------------------------------------------------------------------------
 
-const RAT_NAMES: Readonly<Record<string, string>> = {
+export const RAT_NAMES: Readonly<Record<string, string>> = {
   "dsrc-80211p": "DSRC (IEEE 802.11p)",
   "its-g5": "ITS-G5 (802.11p)",
   "lte-v2x": "LTE-V2X sidelink",
@@ -147,6 +147,7 @@ export const HEADLINES: readonly HeadlineGroup[] = [
     id: "security",
     title: "Security overhead",
     items: [
+      { series: "security_overhead", label: "Security's share of the bytes on air", reduce: "mean" },
       { series: "envelope_overhead", label: "Security bytes per payload byte", reduce: "mean" },
       { series: "verify_wait.p95", label: "Worst window's p95 verification wait", reduce: "max" },
       { series: "unverified_ratio", label: "Delivered without verification", reduce: "mean" },
@@ -156,7 +157,7 @@ export const HEADLINES: readonly HeadlineGroup[] = [
     id: "credentials",
     title: "Credentials and revocation",
     items: [
-      { series: "cert_pool_valid", label: "Lowest window's mean valid certificates", reduce: "min" },
+      { series: "cert_pool_valid", label: "Valid certificates per vehicle, lowest window's mean", reduce: "min" },
       { series: "crl_entries", label: "Revoked (CRL entries) at the end", reduce: "last" },
       { series: "det_recall", label: "Attackers detected", reduce: "last" },
       { series: "false_accusations", label: "False accusations", reduce: "sum" },
@@ -301,7 +302,14 @@ export interface BriefInput {
   readonly judged: { readonly unhealthy: number; readonly caution: number; readonly atTimes: number; readonly healthy: number; readonly worstLabel: string | null } | null;
   readonly delivery: { readonly pdr: number | null; readonly latencyMs: number | null } | null;
   readonly credentials: { readonly enrolled: number | null; readonly devices: number | null; readonly pool: number | null; readonly starved: number | null } | null;
-  readonly misbehaviour: { readonly filed: number | null; readonly revoked: number | null; readonly honestRevoked: number | null; readonly slowestStageS: number | null } | null;
+  readonly misbehaviour: {
+    readonly filed: number | null;
+    readonly revoked: number | null;
+    readonly honestRevoked: number | null;
+    readonly slowestStageS: number | null;
+    /** Reports held in the RA's shuffle while nobody is revoked yet: detection is not judged (`scmsModel.ts`, the same rule). */
+    readonly pendingInShuffle?: number | null;
+  } | null;
   readonly bottleneck: { readonly stage: string | null; readonly stageShare: number | null; readonly entity: string | null; readonly utilisation: number | null } | null;
 }
 
@@ -328,6 +336,35 @@ function cap(s: string): string {
  * messages got through, whether devices had certificates, what misbehaviour and revocation did, and
  * the one bottleneck that stands out. A part the run did not measure is left out, never guessed.
  */
+/** One row of the run summary's credential tile, from the authorities' own counts. */
+export interface CredentialRow {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+}
+
+/**
+ * The credential tile's rows the catalogue cannot give (a count, not a per-window series): devices
+ * revoked, revocation lists signed, reports filed, and detection, which reads "pending" under the
+ * overview's rule while reports wait in the RA's shuffle and nobody is revoked yet.
+ */
+export function credentialRows(c: {
+  readonly revoked: number | null;
+  readonly crlVersions: number | null;
+  readonly filed: number | null;
+  readonly inShuffle: number | null;
+  readonly recall: number | null;
+}): CredentialRow[] {
+  const out: CredentialRow[] = [];
+  if (c.revoked !== null) out.push({ id: "revoked", label: "Devices revoked (by the MA)", value: formatNumber(c.revoked) });
+  if (c.crlVersions !== null) out.push({ id: "crl-versions", label: "Revocation lists signed (CRL versions)", value: formatNumber(c.crlVersions) });
+  if (c.filed !== null) out.push({ id: "filed", label: "Misbehaviour reports filed", value: formatNumber(c.filed) });
+  const pending = (c.revoked ?? 0) === 0 && (c.inShuffle ?? 0) > 0;
+  if (pending) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: `pending: ${formatNumber(c.inShuffle!)} in the RA's shuffle` });
+  else if (c.recall !== null) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: w(c.recall, "ratio") });
+  return out;
+}
+
 export function briefSentences(b: BriefInput): string[] {
   const out: string[] = [];
   const j = b.judged;
@@ -353,7 +390,7 @@ export function briefSentences(b: BriefInput): string[] {
     const parts: string[] = [];
     if (c.enrolled !== null && c.devices !== null)
       parts.push(c.enrolled >= c.devices ? `all ${formatNumber(c.devices)} devices were enrolled` : `${formatNumber(c.enrolled)} of ${formatNumber(c.devices)} devices were enrolled`);
-    if (c.pool !== null) parts.push(`vehicles held ${glanceNumber(c.pool)} valid pseudonym certificates on average at the lowest point`);
+    if (c.pool !== null) parts.push(`the vehicles' mean pool never fell below ${glanceNumber(c.pool)} valid pseudonym certificates`);
     if (parts.length > 0) {
       const tail = c.starved === null ? "" : c.starved === 0 ? "; none ran out" : `; ${formatNumber(c.starved)} ran out of certificates`;
       out.push(`${cap(parts.join(" and "))}${tail}.`);
@@ -369,6 +406,8 @@ export function briefSentences(b: BriefInput): string[] {
       if (m.revoked > 0 && m.honestRevoked !== null) s += m.honestRevoked === 0 ? ", none of them honest" : `, ${formatNumber(m.honestRevoked)} of them honest`;
     }
     if (m.slowestStageS !== null) s += `; the slowest revocation step took ${w(m.slowestStageS, "s")} (p95)`;
+    if ((m.revoked ?? 0) === 0 && (m.pendingInShuffle ?? 0) > 0)
+      s += `; ${formatNumber(m.pendingInShuffle!)} ${m.pendingInShuffle === 1 ? "report waits" : "reports wait"} in the RA's shuffle, so detection is not judged yet`;
     out.push(`${s}.`);
   }
 

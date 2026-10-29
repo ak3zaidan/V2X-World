@@ -9,9 +9,27 @@ import { describe, expect, it } from "vitest";
 
 import { snapshotOf } from "../src/lib/backend.js";
 import type { HealthBand } from "../src/metrics/health.js";
-import { familiesOf, type GroupRow, type SeriesDef } from "../src/metrics/model.js";
-import { briefSentences } from "../src/metrics/summaryModel.js";
-import { countOf, cueText, duration, firstProvider, hasCredentials, meanOf, providerOf, roleOf, scmsOverview, shown, stageLabel, stageRank, type MetricReader } from "../src/metrics/scmsModel.js";
+import { expectedBand, whenText, withExpectations, type Judgement } from "../src/metrics/health.js";
+import { clockText, dataView, display, familiesOf, type GroupRow, type SeriesDef } from "../src/metrics/model.js";
+import { briefSentences, credentialRows } from "../src/metrics/summaryModel.js";
+import {
+  countOf,
+  coveredMetrics,
+  cueText,
+  duration,
+  firstProvider,
+  hasCredentials,
+  meanOf,
+  providerOf,
+  roleOf,
+  scmsOverview,
+  sharePct,
+  shown,
+  stageLabel,
+  stageRank,
+  topupOutcome,
+  type MetricReader,
+} from "../src/metrics/scmsModel.js";
 
 const snap = snapshotOf(JSON.parse(readFileSync(new URL("./fixtures/metrics/scms-backend.json", import.meta.url), "utf8")))!;
 
@@ -75,7 +93,10 @@ describe("reading the Backend snapshot", () => {
 describe("numbers as a reader wants them", () => {
   it("shows a ratio as a percentage and a long time in a long unit", () => {
     expect(shown(0.974, "ratio")).toEqual({ value: "97.4", unit: "%" });
-    expect(shown(0.0123, "ms")).toEqual({ value: "0.0123", unit: "ms" });
+    // Under a millisecond reads in µs (and under a microsecond in ns), never as "0.0123 ms" or "5.30e-5 ms".
+    expect(shown(0.0123, "ms")).toEqual({ value: "12.3", unit: "µs" });
+    expect(shown(5.3e-5, "ms")).toEqual({ value: "53", unit: "ns" });
+    expect(shown(0.43, "ms")).toEqual({ value: "430", unit: "µs" });
     expect(duration(0.25)).toEqual({ value: "250", unit: "ms" });
     expect(duration(86_400)).toEqual({ value: "24", unit: "h" });
     expect(duration(604_800)).toEqual({ value: "7", unit: "days" });
@@ -134,6 +155,7 @@ describe("the five questions", () => {
     expect(o.system).toContain("US SCMS");
     expect(o.providers).toEqual(["provider-a", "provider-b"]);
     expect(o.facts).toBe("2 providers: provider-a, provider-b · ECDSA P-256 signatures");
+    // No privacy metric in this reader, so no privacy question: a question appears only with its data.
     expect(o.sections.map((s) => s.id)).toEqual(["certs", "revocation", "misbehaviour", "cost", "backend"]);
   });
 
@@ -169,6 +191,35 @@ describe("the five questions", () => {
       ["revoked", 0],
     ]);
     expect(f[1]!.hint).toContain("74 over cellular, 76 relayed by roadside units; 2 waiting for coverage");
+    // The reports between two steps are accounted for on the arrow, not left for the reader to subtract.
+    expect(f[1]!.drop).toBe("45 still on the vehicles (2 wait for coverage)");
+    expect(f[3]!.drop).toBe("150 wait in the shuffle");
+    expect(f[0]!.drop).toBeUndefined();
+  });
+
+  it("calls a low recall pending, not a problem, while the reports wait in the RA's shuffle", () => {
+    const recallBand: HealthBand = { ...poolBand, caution: 0.9, unhealthy: 0.5, healthy_note: "most attackers revoked", caution_note: "some missed", unhealthy_note: "fewer than half the attackers are detected" };
+    const r = reader({}, { "det_recall/level": [{ key: "vehicle", value: 0 } as GroupRow] }, [def("det_recall", "ratio", recallBand, ["t", "level"])]);
+    const mb = scmsOverview(snap, r, { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "misbehaviour")!;
+    const t = mb.tiles.find((x) => x.id === "recall")!;
+    expect(t.level).toBeNull();
+    expect(t.cue).toBeUndefined();
+    expect(t.pending).toBe("150 reports wait in the RA's shuffle, released every 2 days; detection is judged once they reach the MA.");
+    expect(t.title).toBe("Attackers revoked (detection recall)");
+    expect(mb.level).toBeNull();
+    expect(mb.pending).toBe(true);
+    expect(mb.answer).toContain("150 reports wait in the RA's shuffle");
+    // Once the MA has revoked someone, the same recall is judged.
+    const later = { ...snap, entities: snap.entities.map((e) => (e.id === "ma" ? { ...e, state: { ...e.state, revocations: 1 } } : e)) };
+    const judged = scmsOverview(later, r, { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "misbehaviour")!;
+    expect(judged.tiles.find((x) => x.id === "recall")!.level).toBe("unhealthy");
+    expect(judged.pending).toBeUndefined();
+  });
+
+  it("names recall by what it counts: revoked per vehicle, reported per report", () => {
+    const r = reader({}, { "det_recall/level": [{ key: "report", value: 0.9 } as GroupRow] }, defs);
+    const t = scmsOverview(snap, r, { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "misbehaviour")!.tiles.find((x) => x.id === "recall")!;
+    expect(t.title).toBe("Attackers reported (detection recall, per report)");
   });
 
   it("reads detection quality pooled over the run, and judges an honest device revoked", () => {
@@ -178,7 +229,7 @@ describe("the five questions", () => {
     expect(recall.source).toContain("level = vehicle");
     expect(tile("misbehaviour", "honest-revoked")!.level).toBe("healthy");
     expect(tile("misbehaviour", "fpr")!.level).toBe("caution");
-    expect(section("misbehaviour").answer).toBe("Vehicles have filed 195 misbehaviour reports, 50 % of attackers caught, no honest vehicle revoked.");
+    expect(section("misbehaviour").answer).toBe("Vehicles have filed 195 misbehaviour reports; 50 % of attackers revoked; no honest vehicle revoked.");
     const bad = scmsOverview(snap, reader({}, { "false_accusations/level": [{ key: "vehicle", value: 2 } as GroupRow] }, defs), { tNs: snap.t, scenario: null });
     expect(bad.sections.find((x) => x.id === "misbehaviour")!.level).toBe("unhealthy");
   });
@@ -192,8 +243,13 @@ describe("the five questions", () => {
   it("lists only the security checks that rejected messages, largest first", () => {
     const b = section("cost").bars!;
     expect(b.rows.map((r) => r.key)).toEqual(["unknown-signer", "signature-invalid"]);
-    expect(b.rows[0]!.display).toBe("1 %");
-    expect(section("cost").answer).toBe("Security takes 42 % of the bytes on air; 95 % of messages wait under 0.8 ms to be verified; 1.2 % of receptions are rejected by a security check.");
+    // One decimal for every reason, so "1.0 %" and "0.2 %" compare at a glance.
+    expect(b.rows.map((r) => r.display)).toEqual(["1.0 %", "0.2 %"]);
+    expect(section("cost").answer).toBe(
+      "Security takes 42 % of the bytes on air; 95 % of messages wait under 800 µs to be verified; 1.2 % of receptions are rejected by a security check, a rate no standard judges.",
+    );
+    expect(tile("cost", "verify-wait")!.value).toBe("800");
+    expect(tile("cost", "verify-wait")!.unit).toBe("µs");
   });
 
   it("reads a bursty rate as its mean over the windows that reported, not its idle newest window", () => {
@@ -210,6 +266,43 @@ describe("the five questions", () => {
     expect(b.tiles[0]!.id).toBe("backend-busiest");
     expect(b.level).toBe("healthy");
     expect(b.bars!.limit!.at).toBe(0.8);
+  });
+
+  it("says in one sentence that every authority is idle, and names each one's provider", () => {
+    const b = section("backend").bars!;
+    expect(b.idle).toMatch(/^Every authority is idle more than 99(\.9)? % of the time/);
+    for (const r of b.rows) expect(r.label).toMatch(/\((provider-a|provider-b)\)$/);
+  });
+
+  it("asks whether vehicles reach the backend under the backend question, and names it when it fails", () => {
+    const reachBand: HealthBand = { ...poolBand, caution: 0.95, unhealthy: 0.8, unhealthy_note: "many vehicles cannot reach the backend" };
+    const r = reader({ backend_link_up: 0.723, cert_pool_valid: 38.5 }, {}, [...defs, def("backend_link_up", "ratio", reachBand)]);
+    const o2 = scmsOverview(snap, r, { tNs: snap.t, scenario: null });
+    const certs = o2.sections.find((x) => x.id === "certs")!;
+    const backend = o2.sections.find((x) => x.id === "backend")!;
+    expect(certs.tiles.some((t) => t.id === "backend_link_up")).toBe(false);
+    expect(certs.answer.startsWith("Yes:")).toBe(true);
+    expect(backend.tiles[0]!.id).toBe("backend_link_up");
+    expect(backend.level).toBe("unhealthy");
+    expect(backend.answer.startsWith("27.7 % of vehicles cannot reach the backend right now")).toBe(true);
+  });
+
+  it("names the flagged tile when a certificate answer is not a plain yes", () => {
+    const starved = { ...snap, entities: snap.entities.map((e) => (e.id === "ee" ? { ...e, state: { ...e.state, vehicles_starved: 3 } } : e)) };
+    const c = scmsOverview(starved, reader({ cert_pool_valid: 38.5 }, {}, defs), { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "certs")!;
+    expect(c.answer).toBe("Not all: 3 vehicles ran out of valid certificates. Otherwise all 23 devices are enrolled, vehicles hold 38.5 valid certificates each on average.");
+  });
+
+  it("says what the RA's files are, and why a provider sent none", () => {
+    const t = tile("certs", "downloads")!;
+    expect(t.title).toBe("Policy and chain files served (by the RA)");
+    expect(t.meaning).toContain("provider-a's devices already held the current versions");
+  });
+
+  it("explains a vehicle CRL count of zero instead of leaving a bare 0", () => {
+    const t = tile("revocation", "crl-installs")!;
+    expect(t.value).toBe("0");
+    expect(t.meaning).toBe("No vehicle holds a revoked device's entry yet: the lists published so far are empty (nothing is revoked), so there is nothing to install. Roadside units have installed 2 lists.");
   });
 
   it("keeps every authority's raw counts", () => {
@@ -237,7 +330,7 @@ describe("the run in brief", () => {
     expect(s.length).toBeLessThanOrEqual(5);
     expect(s[0]).toBe("Of 11 metrics with a published healthy range, 9 stayed healthy, 1 was out of range at times and 1 was unhealthy on average; the worst is verification wait.");
     expect(s[1]).toBe("Messages within 100 m were delivered 94 % of the time, in 3.2 ms end to end on average.");
-    expect(s[2]).toBe("All 23 devices were enrolled and vehicles held 38.5 valid pseudonym certificates on average at the lowest point; none ran out.");
+    expect(s[2]).toBe("All 23 devices were enrolled and the vehicles' mean pool never fell below 38.5 valid pseudonym certificates; none ran out.");
     expect(s[3]).toBe("Vehicles filed 195 misbehaviour reports and 2 devices were revoked, none of them honest; the slowest revocation step took 24 h (p95).");
     expect(s[4]).toBe("Verification takes the largest share of latency (41 %).");
   });
@@ -245,5 +338,109 @@ describe("the run in brief", () => {
   it("leaves out what the run did not measure, and still says something", () => {
     const s = briefSentences({ judged: null, delivery: null, credentials: null, misbehaviour: null, bottleneck: null });
     expect(s).toEqual(["No metric with a published healthy range has been measured yet."]);
+  });
+});
+
+describe("the polish pass: one rule, one number format, the run's own expectation", () => {
+  const linkBand: HealthBand = {
+    ...poolBand,
+    better: "lower",
+    caution: 0.2,
+    unhealthy: 0.5,
+    healthy_note: "an observer links few pseudonym changes",
+    caution_note: "an observer links more than 1 in 5 pseudonym changes",
+    unhealthy_note: "an observer links most pseudonym changes: pseudonyms are not protecting vehicles",
+  };
+  const privacyDefs = [...defs, def("linkability", "ratio", linkBand), def("pseudonym_change_rate", "1/(veh·h)")];
+
+  it("asks whether a vehicle can be tracked, and answers from linkability", () => {
+    const o = scmsOverview(snap, reader({ cert_pool_valid: 38.5, linkability: 0.87, pseudonym_change_rate: 12.4 }, {}, privacyDefs), { tNs: snap.t, scenario: null });
+    expect(o.sections.map((s) => s.id)).toEqual(["certs", "revocation", "misbehaviour", "privacy", "cost", "backend"]);
+    const p = o.sections.find((s) => s.id === "privacy")!;
+    expect(p.question).toBe("Can a vehicle be tracked across pseudonym changes?");
+    expect(p.level).toBe("unhealthy");
+    expect(p.answer).toBe(
+      "Yes, mostly: an eavesdropper links 87 % of pseudonym changes back to the same vehicle, so pseudonyms are not protecting vehicles here; vehicles change pseudonym 12.4 times per vehicle-hour.",
+    );
+    expect(p.tiles.find((t) => t.id === "pseudonym_change_rate")!.unit).toBe("per vehicle-hour");
+    const fine = scmsOverview(snap, reader({ linkability: 0.05 }, {}, privacyDefs), { tNs: snap.t, scenario: null }).sections.find((s) => s.id === "privacy")!;
+    expect(fine.level).toBe("healthy");
+    expect(fine.answer.startsWith("Rarely: an eavesdropper links only 5 %")).toBe(true);
+  });
+
+  it("judges backend reach against the scenario's cellular penetration, and says so", () => {
+    const band: HealthBand = { ...poolBand, caution: 0.99, unhealthy: 0.9, source: "engineering choice" };
+    const scenario = { net: { uu: { params: { penetration: 0.6 } } } };
+    const b = expectedBand("backend_link_up", band, scenario);
+    expect(b.caution).toBeCloseTo(0.594);
+    expect(b.unhealthy).toBeCloseTo(0.54);
+    expect(b.source).toContain("cellular penetration of 60 %");
+    // Every other band, and a fully equipped scenario, stay as published.
+    expect(expectedBand("cert_pool_valid", band, scenario)).toBe(band);
+    expect(expectedBand("backend_link_up", band, { net: { uu: { params: { penetration: 1 } } } })).toBe(band);
+    const fams = withExpectations(familiesOf([def("backend_link_up", "ratio", band)]), scenario);
+    const r: MetricReader = { family: (x) => fams.find((f) => f.base === x), latest: (s) => (s === "backend_link_up" ? 0.723 : null), series: () => undefined, pooled: () => undefined };
+    const backend = scmsOverview(snap, r, { tNs: snap.t, scenario }).sections.find((s) => s.id === "backend")!;
+    expect(backend.tiles.find((t) => t.id === "backend_link_up")!.level).toBe("healthy");
+  });
+
+  it("writes a top-up count as requests and their outcome", () => {
+    expect(topupOutcome(9, 9, 0, 0)).toBe("All completed.");
+    expect(topupOutcome(9, 7, 2, 0)).toBe("7 completed, 2 in flight.");
+    expect(topupOutcome(0, 0, 0, 0)).toBe("None needed yet.");
+  });
+
+  it("writes small shares with one decimal, never an exponent", () => {
+    expect(sharePct(0.011)).toBe("1.1 %");
+    expect(sharePct(0.00498)).toBe("0.5 %");
+    expect(sharePct(0.0004)).toBe("< 0.1 %");
+    expect(sharePct(0.42)).toBe("42 %");
+  });
+
+  it("reads a ratio that can pass 1 as a multiple, and simulated time as a clock", () => {
+    expect(display("envelope_overhead", 1.26, "ratio")).toEqual({ value: "1.26", unit: "× payload" });
+    expect(display("unverified_ratio", 0.00499, "ratio")).toEqual({ value: "0.499", unit: "%" });
+    expect(clockText(8754)).toBe("2 h 26 min");
+    expect(clockText(433_200)).toBe("5 days");
+    expect(clockText(48)).toBe("48 s");
+  });
+
+  it("says when a judged metric reported in only part of a long run", () => {
+    const j = { unhealthyShare: 1, cautionShare: 0, worst: 0.6, worstAtS: 400, unit: "ratio", outFromS: 296, outToS: 592, firstS: 296, lastS: 592, windows: 10 } as unknown as Judgement;
+    expect(whenText(j, 52_014)).toContain("all fall between 4 min 56 s and 9 min 52 s of a 14 h 27 min run");
+    expect(whenText(j, 560)).not.toContain("fall between");
+  });
+
+  it("opens a small chart on the windows that reported when they are a sliver of the run", () => {
+    const s = { t: new Float64Array([300, 400, 500, 600]), v: new Float64Array([1, 2, 3, 4]) };
+    const v = dataView(s, 433_200);
+    expect(v.zoomed).toBe(true);
+    expect(v.from).toBeLessThan(300);
+    expect(v.to).toBeGreaterThan(600);
+    expect(v.to).toBeLessThan(700);
+    expect(dataView(s, 800)).toEqual({ from: 0, to: 800, zoomed: false });
+  });
+
+  it("names the metrics the overview shows, so their cards below do not say \"no data\"", () => {
+    const o = scmsOverview(snap, reader({ cert_pool_valid: 38.5 }, { "det_recall/level": [{ key: "vehicle", value: 0.5 } as GroupRow] }, defs), { tNs: snap.t, scenario: null });
+    const c = coveredMetrics(o);
+    expect(c).toContain("det_recall");
+    expect(c).toContain("cert_pool_valid");
+    expect(c).not.toContain("loss_rate");
+  });
+
+  it("gives the summary's credential tile the authorities' counts, with detection pending by the overview's rule", () => {
+    const pending = credentialRows({ revoked: 0, crlVersions: 3, filed: 452, inShuffle: 320, recall: 0 });
+    expect(pending.map((r) => r.id)).toEqual(["revoked", "crl-versions", "filed", "detection"]);
+    expect(pending[3]!.value).toBe("pending: 320 in the RA's shuffle");
+    expect(credentialRows({ revoked: 2, crlVersions: null, filed: null, inShuffle: 320, recall: 0.5 }).find((r) => r.id === "detection")!.value).toBe("50 %");
+    const brief = briefSentences({
+      judged: null,
+      delivery: null,
+      credentials: null,
+      misbehaviour: { filed: 452, revoked: 0, honestRevoked: null, slowestStageS: null, pendingInShuffle: 320 },
+      bottleneck: null,
+    });
+    expect(brief[1]).toBe("Vehicles filed 452 misbehaviour reports and no device was revoked; 320 reports wait in the RA's shuffle, so detection is not judged yet.");
   });
 });

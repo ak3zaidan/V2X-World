@@ -8,8 +8,7 @@
 
 import type { MetricHealthBand } from "@vwp/protocol";
 
-import { BASIS_LABEL, LEVEL_LABEL, classify, judgedLabel, noteOf, thresholdsText, type HealthLevel } from "./health.js";
-import { formatWithUnit } from "./model.js";
+import { BASIS_LABEL, LEVEL_LABEL, bandValue, classify, judgedLabel, noteOf, thresholdsText, type HealthLevel } from "./health.js";
 
 /**
  * The level's mark: a shape as well as a colour, so it reads in grey and to a colour-blind reader —
@@ -19,19 +18,15 @@ export function HealthDot({ level }: { level: HealthLevel }): React.JSX.Element 
   return <span className={`hdot ${level}`} aria-hidden="true" />;
 }
 
-/** Short words for a level where space is tight: "OK", "Watch", "Problem". */
-const LEVEL_SHORT: Readonly<Record<HealthLevel, string>> = {
-  healthy: "OK",
-  caution: "Watch",
-  unhealthy: "Problem",
-};
-
-/** The mark and a short word ("▲ Watch"); `compact` is the mark alone, labelled for a screen reader. */
+/**
+ * The mark and its level's word ("▲ Caution"), the same three words the cards, the health strip and
+ * the run summary use; `compact` is the mark alone, labelled for a screen reader.
+ */
 export function LevelMark({ level, compact = false, title }: { level: HealthLevel; compact?: boolean; title?: string }): React.JSX.Element {
   return (
     <span className={`lmark ${level}${compact ? " compact" : ""}`} data-level={level} title={title ?? LEVEL_LABEL[level]} role={compact ? "img" : undefined} aria-label={compact ? `${LEVEL_LABEL[level]}${title ? `: ${title}` : ""}` : undefined}>
       <HealthDot level={level} />
-      {compact ? null : LEVEL_SHORT[level]}
+      {compact ? null : LEVEL_LABEL[level]}
     </span>
   );
 }
@@ -90,7 +85,7 @@ export function HealthLine({
       <span className="hline-level">{LEVEL_LABEL[level]}</span>
       <span className="hline-text">
         {stat !== "" ? <span className="dim">{stat} </span> : null}
-        <strong className="mono">{formatWithUnit(value, unit)}</strong> — {noteOf(band, level)}
+        <strong className="mono">{bandValue(value, unit)}</strong> — {noteOf(band, level)}
       </span>
     </div>
   );
@@ -98,7 +93,6 @@ export function HealthLine({
 
 /** The band written out: its three levels with their thresholds, and where the numbers come from. */
 export function BandTable({ band, unit }: { band: MetricHealthBand; unit: string }): React.JSX.Element {
-  const u = unit === "ratio" || unit === "1" || unit === "-" ? "" : ` ${unit}`;
   const op = band.better === "lower" ? ["≤", "≤", ">"] : ["≥", "≥", "<"];
   const stat = judgedLabel(band);
   return (
@@ -106,16 +100,13 @@ export function BandTable({ band, unit }: { band: MetricHealthBand; unit: string
       <h4>Health thresholds{stat !== "" ? <span className="dim"> · judged {stat.startsWith("within ") ? stat : `on the ${stat}`}</span> : null}</h4>
       <ul>
         <li className="healthy">
-          <HealthDot level="healthy" /> <strong>Healthy</strong> {op[0]} {band.caution}
-          {u} — {band.healthy_note}
+          <HealthDot level="healthy" /> <strong>Healthy</strong> {op[0]} {bandValue(band.caution, unit)} — {band.healthy_note}
         </li>
         <li className="caution">
-          <HealthDot level="caution" /> <strong>Caution</strong> {op[1]} {band.unhealthy}
-          {u} — {band.caution_note}
+          <HealthDot level="caution" /> <strong>Caution</strong> {op[1]} {bandValue(band.unhealthy, unit)} — {band.caution_note}
         </li>
         <li className="unhealthy">
-          <HealthDot level="unhealthy" /> <strong>Unhealthy</strong> {op[2]} {band.unhealthy}
-          {u} — {band.unhealthy_note}
+          <HealthDot level="unhealthy" /> <strong>Unhealthy</strong> {op[2]} {bandValue(band.unhealthy, unit)} — {band.unhealthy_note}
         </li>
       </ul>
       <p className="dim hband-src">

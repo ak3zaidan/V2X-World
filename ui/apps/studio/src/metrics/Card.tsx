@@ -15,11 +15,12 @@ import { usePins } from "./pins.js";
 import {
   axisUnit,
   cardSeries,
-  formatNumber,
-  formatWithUnit,
+  clockText,
+  dataView,
+  display,
+  displayText,
   meaningOf,
   observedCount,
-  unitSuffix,
   type MetricFamily,
   type Series,
 } from "./model.js";
@@ -44,6 +45,14 @@ function emptyReason(f: MetricFamily, o: Overview, runState: string, profileNode
   return "No window has had enough samples yet. It appears once one has.";
 }
 
+/** "0.5–0.9 %", "12–48 ms": a line's range, its unit said once when both ends share it. */
+function rangeText(base: string, lo: number, hi: number, unit: string): string {
+  const a = display(base, lo, unit);
+  const b = display(base, hi, unit);
+  if (a.unit === b.unit) return `${a.value}–${b.value}${b.unit === "" ? "" : ` ${b.unit}`}`;
+  return `${displayText(base, lo, unit)} – ${displayText(base, hi, unit)}`;
+}
+
 /** A sparkline of one series with a hover readout. `from`/`to` are the x extent in seconds. */
 export function Sparkline({
   series,
@@ -52,12 +61,18 @@ export function Sparkline({
   unit,
   label,
   band = null,
+  base = "",
+  zoomed = false,
 }: {
   series: Series;
   from: number;
   to: number;
   unit: string;
   label: string;
+  /** The metric, so a value reads as the cards and the summary read it (`model.ts` `display`). */
+  base?: string;
+  /** The x extent is the reporting windows' span, not the whole run (a fast-forwarded run). */
+  zoomed?: boolean;
   /** The health band, drawn as threshold lines where they fall inside the line's range. */
   band?: MetricHealthBand | null;
 }): React.JSX.Element {
@@ -123,7 +138,7 @@ export function Sparkline({
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
         role="img"
-        aria-label={`${label} over simulated time, ${formatNumber(geom.dataLo)} to ${formatNumber(geom.dataHi)} ${axisUnit(unit)}`}
+        aria-label={`${label} over simulated time, ${displayText(base, geom.dataLo, unit)} to ${displayText(base, geom.dataHi, unit)}`}
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
@@ -148,18 +163,18 @@ export function Sparkline({
       <div className="mcard-axis">
         {hover !== null ? (
           <span className="mcard-readout">
-            <strong>{formatWithUnit(series.v[hover], unit)}</strong> at {formatNumber(series.t[hover])} s
+            <strong>{displayText(base, series.v[hover], unit)}</strong> at {clockText(series.t[hover])}
           </span>
         ) : (
           <>
-            <span>{formatNumber(from)} s</span>
+            <span title={zoomed ? "The line spans only the windows that reported a value, not the whole run" : undefined}>{clockText(from)}</span>
             <span className="grow" />
-            <span title="The range of the line">
-              {geom.flat ? `constant ${formatNumber(geom.dataLo)}` : `${formatNumber(geom.dataLo)}–${formatNumber(geom.dataHi)}`}
-              {unitSuffix(unit) === "" ? "" : ` ${unitSuffix(unit)}`}
+            <span title="The range of the line">{geom.flat ? `constant ${displayText(base, geom.dataLo, unit)}` : rangeText(base, geom.dataLo, geom.dataHi, unit)}</span>
+            <span className="grow" />
+            <span title={zoomed ? "The line spans only the windows that reported a value, not the whole run" : undefined}>
+              {clockText(to)}
+              {zoomed ? " · windows with data" : ""}
             </span>
-            <span className="grow" />
-            <span>{formatNumber(to)} s</span>
           </>
         )}
       </div>
@@ -183,7 +198,7 @@ function MiniBars({ f, latest }: { f: MetricFamily; latest: ReadonlyMap<string, 
           <span className="mbar-track">
             <span className="mbar" style={{ width: `${Math.max(1, (Math.abs(r.value) / max) * 100)}%` }} />
           </span>
-          <span className="mbar-val mono">{formatWithUnit(r.value, f.unit)}</span>
+          <span className="mbar-val mono">{displayText(f.base, r.value, f.unit)}</span>
         </div>
       ))}
       {rows.length > shown.length ? <div className="dim mbar-more">and {rows.length - shown.length} more</div> : null}
@@ -218,6 +233,8 @@ export function MetricCard({
   const judged = band ? judgedSeries(f.base, band) : null;
   const judgedValue = judged !== null && overview.latest.has(judged) ? (overview.latest.get(judged) ?? null) : null;
   const level = band && !empty ? classify(band, judgedValue) : null;
+  const shown = display(f.base, latest, f.unit);
+  const view = hasLine && series ? dataView(series, Math.max(overview.toS, series.t.length > 0 ? series.t[series.t.length - 1] : 0)) : null;
   return (
     <article
       className={`mcard${empty ? " empty" : ""}${level ? ` h-${level}` : ""}`}
@@ -261,9 +278,9 @@ export function MetricCard({
           {headline !== null ? (
             <div className="mcard-value" title="The newest window's value">
               <span className="mcard-num" data-testid={`metric-value-${f.base}`}>
-                {formatNumber(latest)}
+                {shown.value}
               </span>
-              <span className="mcard-unit">{unitSuffix(f.unit) === "" ? axisUnit(f.unit) : f.unit}</span>
+              <span className="mcard-unit">{shown.unit === "" ? axisUnit(f.unit) : shown.unit}</span>
               {band && level ? <HealthChip band={band} level={level} unit={f.unit} testId={`metric-health-${f.base}`} /> : null}
             </div>
           ) : headline === null && band && level ? (
@@ -273,14 +290,23 @@ export function MetricCard({
             <div className={`mcard-verdict ${level}`} title={noteOf(band, level)}>
               {judgedLabel(band) !== "" ? (
                 <span>
-                  {judgedLabel(band)} <strong className="mono">{formatWithUnit(judgedValue, f.unit)}</strong> ·{" "}
+                  {judgedLabel(band)} <strong className="mono">{displayText(f.base, judgedValue, f.unit)}</strong> ·{" "}
                 </span>
               ) : null}
               {limitText(band, level, f.unit)}
             </div>
           ) : null}
           {hasLine && series ? (
-            <Sparkline series={series} from={0} to={Math.max(overview.toS, series.t.length > 0 ? series.t[series.t.length - 1] : 0)} unit={f.unit} label={f.label} band={band && band.judged === "" ? band : null} />
+            <Sparkline
+              series={series}
+              from={view?.from ?? 0}
+              to={view?.to ?? 0}
+              zoomed={view?.zoomed ?? false}
+              unit={f.unit}
+              base={f.base}
+              label={f.label}
+              band={band && band.judged === "" ? band : null}
+            />
           ) : (
             <MiniBars f={f} latest={overview.latest} />
           )}
