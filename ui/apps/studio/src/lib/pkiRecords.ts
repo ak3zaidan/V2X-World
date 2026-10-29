@@ -558,7 +558,7 @@ export function viewChoices(providers: readonly string[]): string[] {
 export type PkiMapMode = "off" | "provider" | "credential" | "case";
 
 export const MAP_MODE_LABEL: Readonly<Record<PkiMapMode, string>> = {
-  off: "nothing (off)",
+  off: "Off",
   provider: "Provider",
   credential: "Credential state",
   case: "Case parties",

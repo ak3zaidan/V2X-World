@@ -52,8 +52,8 @@ function crlCadenceOf(state: TrustAnswer["state"]): Record<string, number> {
 
 /** A view choice in words: everything (ground truth), or what one authority knows. */
 function viewLabel(id: string, locked: boolean): string {
-  if (id === GROUND_TRUTH) return locked ? "everything (ground truth, locked)" : "everything (ground truth)";
-  return `what ${componentName(id, true)} knows`;
+  if (id === GROUND_TRUTH) return locked ? "Everything (ground truth, locked)" : "Everything (ground truth)";
+  return componentName(id, true);
 }
 
 
