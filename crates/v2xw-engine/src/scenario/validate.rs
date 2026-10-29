@@ -2718,6 +2718,17 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                states' left-lane truck restrictions).",
     },
     KeyStatus {
+        path: "actors.vehicles.drivers.distraction",
+        status: Status::Wired,
+        note: "Each driver alternates glances on and off the road: on-path dwells inverse \
+               Gaussian (mean 3.56 s, shape 1.50 s), off-path glances lognormal (mean \
+               0.92 s, 3.5 % over 2 s), the naturalistic fits of Morando, Victor & Dozza \
+               2019 (804 glances an hour, 20.5 % of the time eyes off the road). While the \
+               eyes are off, the vehicle ahead is seen as it was last seen; an FCW or EEBL \
+               warning the vehicle's own unit issues brings them back at once. Read by the \
+               native mobility engine. docs/design/research/driver-distraction.md.",
+    },
+    KeyStatus {
         path: "actors.vehicles.drivers.motorcycle_filtering",
         status: Status::Wired,
         note: "Overrides the jurisdiction's rule: true lets motorcycles and mopeds ride \

@@ -117,6 +117,11 @@ const BASIC: &[Basic] = &[
         recommended: "0.6 to 1.2 s; leave unset to use the realism preset's.",
     },
     Basic {
+        path: "actors.vehicles.drivers.distraction",
+        explain: "Whether drivers look away from the road now and then, as real drivers do about 800 times an hour (mirrors, instruments, a phone). While they look away they do not see the car ahead brake; a forward-collision or brake-light warning from their own V2X unit makes them look back.",
+        recommended: "Off (today); on for safety-benefit studies of FCW and EEBL, with realism human.",
+    },
+    Basic {
         path: "actors.vru.pedestrians",
         explain: "People walking on the sidewalks and crossings. Those with a phone or wearable can broadcast their own safety messages (PSM).",
         recommended: "0 to 400 at once.",
@@ -862,7 +867,7 @@ const ADVANCED: &[Basic] = &[
     },
     Basic {
         path: "traffic.vehicle_dynamics.power_limit",
-        explain: "Whether an engine's power limits how fast a vehicle can speed up, so a loaded tractor-trailer crawls up a long climb at about 46 km/h on a 5% grade while a car keeps the limit. Applies to cars and tractor-trailers; rigid trucks, buses, vans and motorcycles have no sourced figures yet.",
+        explain: "Whether an engine's power limits how fast a vehicle can speed up, so a loaded tractor-trailer crawls up a long climb at about 46 km/h on a 5% grade while a car keeps the limit. Applies to cars, tractor-trailers, rigid trucks, buses, coaches and vans, from cited figures (FTA bus tests, EPA road loads, NCHRP 505); motorcycles have none yet.",
         recommended: "Off (today); on with grade for hilly maps and freight corridors.",
     },
     Basic {

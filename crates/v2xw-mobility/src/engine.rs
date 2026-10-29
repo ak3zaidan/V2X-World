@@ -3300,6 +3300,18 @@ impl NativeMobility {
                         }
                     }
                 }
+                MobilityCommand::DriverAlerted { actor } => {
+                    let p = self.params.human.attention;
+                    if p.enabled
+                        && let Some(a) = self.actors.get_mut(&actor)
+                    {
+                        // The same key and step index as the human-driver pass.
+                        let key = a.traits.noise_key
+                            ^ crate::drivers::splitmix64(u64::from(actor.index()));
+                        let k = now / self.params.step.as_nanos().max(1);
+                        a.human.attention.interrupt(&p, key, k);
+                    }
+                }
                 MobilityCommand::Spawn(trip) => {
                     let traits = self.traits_for(ctx, &trip);
                     if let Some(id) = self.insert_trip_with(world, &trip, now, traits) {
@@ -6404,7 +6416,7 @@ struct Decision {
     lateral: Option<crate::lateral::LateralDecision>,
     /// The driver's next perception errors and this step's car-following decision, when
     /// the drivers are imperfect ([`crate::drivers`]).
-    human: Option<(f64, f64, f64)>,
+    human: Option<(f64, f64, f64, crate::drivers::AttentionState)>,
 }
 
 impl v2xw_core::model::Model for NativeMobility {
@@ -7348,6 +7360,22 @@ impl Mobility for NativeMobility {
                 let key = actor.traits.noise_key
                     ^ crate::drivers::splitmix64(u64::from(actor.id.index()));
                 let mut seen = leader;
+                // Glances off the road (`drivers` §6): while the eyes are off the path the
+                // vehicle ahead is the one last seen, at the gap and speed it had then.
+                let mut attention = actor.human.attention;
+                if hp.attention.enabled {
+                    attention.advance(&hp.attention, key, k, dt_s);
+                    let in_view = seen
+                        .as_ref()
+                        .filter(|l| l.is_vehicle())
+                        .map(|l| (l.gap_m, l.speed_mps));
+                    if let (Some(l), Some((gap, speed))) = (seen.as_mut(), attention.look(in_view))
+                        && l.is_vehicle()
+                    {
+                        l.gap_m = gap;
+                        l.speed_mps = speed;
+                    }
+                }
                 let (mut wg, mut wr) = (actor.human.w_gap, actor.human.w_rate);
                 if let Some(l) = seen.as_mut()
                     && l.is_vehicle()
@@ -7371,7 +7399,7 @@ impl Mobility for NativeMobility {
                 let now = self
                     .cf
                     .accel(&ego_capped, seen.as_ref(), &lane_view, &self.weather);
-                human_next = Some((wg, wr, now));
+                human_next = Some((wg, wr, now, attention));
                 crate::drivers::delayed(
                     &actor.human,
                     hp.reaction_time_s,
@@ -7995,7 +8023,8 @@ impl Mobility for NativeMobility {
             actor.amber_seen = decision.amber_seen;
             actor.ev_red_go = decision.ev_red_go;
             actor.release_at = decision.release_at;
-            if let Some((wg, wr, decided)) = decision.human {
+            if let Some((wg, wr, decided, attention)) = decision.human {
+                actor.human.attention = attention;
                 actor.human.w_gap = wg;
                 actor.human.w_rate = wr;
                 crate::drivers::remember(

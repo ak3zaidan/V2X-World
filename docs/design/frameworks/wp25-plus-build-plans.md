@@ -201,6 +201,44 @@ expect: down, source: "<NCHRP 505 table> on a 5 % draped climb with 30 % rigid t
 - **P25.2** (3 h): the rows, the two tests, the trafficval case, the expectation row and the
   faults.
 
+**Sources (2026-10-28, P25.1, done).** All four rows have read sources, with pages, in
+`docs/design/research/grade-dynamics.md` § "Sources for the rigid truck, bus, coach and van":
+- **Rigid truck:** NCHRP 505 Table 30 (p. 55, Gillespie 1985): 26 straight trucks, pooled
+  82.9 lb/hp. App. D has no single-unit split. Air and rolling come from eqs. 20 and 23
+  (pp. 54-55).
+- **Bus and coach:** Altoona 1211-P (New Flyer XD40, ISL9 280, SLW 33,320 lb) and 1209
+  (Prevost X3-45, D13H435, SLW 47,110 lb), with their interval times. At η 0.9 the transit
+  bus is twice as fast as measured, so η is fitted on each run's last interval
+  (0.54, 0.84) and checked on the whole run from rest (+2 %, −9 %).
+- **Van:** EPA Test Car List MY2020, Ford Transit RWD Wagon Med Roof (275 hp, ETW
+  6,500 lb, A/B/C). No full-size cargo van is listed in MY2023 or MY2025.
+- **PHEMlight HDV files:** not open, so dropped.
+- **Crawl band:** App. E's TWOPAS equations, checked against the report's own example,
+  give the design truck 12.04 m/s on 5 %. The balance gives 12.90 m/s (+7 %), so the band
+  stays the balance, with TWOPAS reported beside it.
+- **Rigid-truck crawl case:** its power crawl on 5 % is 22.95 m/s (TWOPAS 22.58 m/s),
+  which is close to a 25 m/s road's desired speed. Whether a held row can go red with the
+  power term off is settled in P25.2.
+
+**P25.2 (2026-10-28, done; `power_limit` stays off by default, no golden moved).**
+- **Rows:** `VehicleClass::dynamics` gains Truck, Bus, Coach and Delivery, plus a
+  `c_rr_per_mps` speed term (eq. 20, the EPA B). It is zero on the old rows, so their bound
+  is bit-identical.
+- **Tests:**
+  - `classes::tests::heavy_rows_reproduce_their_sources`: the Altoona runs from rest, bus
+    +3 % and coach −9 % against a ±12 % band; Table 30's 82.94 lb/hp; the EPA road load at
+    50 mph.
+  - `v2xw-mobility/tests/vehicle_dynamics.rs::a_rigid_truck_outclimbs_the_design_trailer`:
+    22.96 against 12.94 m/s, 2 km into the 5 % climb.
+  - `calib::tests::twopas_reproduces_the_reports_own_example`: 41.9 mph.
+- **The check:** `calibration/truck-grade-crawl` now holds the rigid truck to its TWOPAS
+  crawl ±2 % (22.96 in [22.13, 23.03]). With the power term off it stays at 23.60, which
+  is red, so a held row can fail. It also reports TWOPAS for the trailer, at 12.04 m/s.
+- **Expectation row: not built.** A setting's rows run on the first family that accepts it
+  (`catalogue.yaml` routes), and `power_limit` is already judged on `grade-truck`, which has
+  no rigid trucks or buses. A second family needs a per-row family route, which the sweep
+  does not have.
+
 ---
 
 ## WP-26 A measured DEM and a real hill
@@ -856,6 +894,52 @@ every LTE digest (owner).
 - **P39.2** (3 h): the pure process and its tests.
 - **P39.3** (3 h): the engine wiring, the warning hook, the rows and the faults.
 
+**Sources (2026-10-28, P39.1, done; `docs/design/research/driver-distraction.md`).**
+- **The fit:** Morando, Victor & Dozza 2019 (IEEE T-ITS 20(8), Fig. 6), from naturalistic
+  manual-driving eye tracking that matches the 100-Car and SHRP 2 baselines. On-path
+  dwells follow an inverse Gaussian (μ 3.56 s, λ 1.50 s); off-path glances follow a
+  lognormal (μ −0.21, σ 0.50; mean 0.92 s; 3.5 % of glances over 2 s).
+- **What it implies:** 804 glance onsets per hour and 20.5 % of time eyes off road. Klauer
+  2006's baseline is about 15 % and 1.1 glances per 6 s (Figs. 6.1-6.2).
+- **Risk and prevalence,** for validation: Klauer 2006 Table 6.2 (> 2 s eyes off road,
+  OR 2.19); Dingus 2016 (51.93 % prevalence, OR 2.0); the NHTSA guidelines (2 s and 12 s;
+  pp. 24821, 24888).
+- **Settings:** the plan's `distraction_rate_per_h` and `glance_dist` become the two dwell
+  distributions, under `actors.vehicles.drivers.distraction`. The onset rate follows from
+  them.
+- **The warning:** no gaze-return latency could be read (Lee et al. 2002 is paywalled;
+  NHTSA refuses scripted access). So a verified FCW/EEBL ends the glance at receipt, and
+  the driver's existing reaction time and alarm rule do the rest. No new constant.
+
+**P39.2 (2026-10-28, done).** The pure process is in `drivers.rs` (`AttentionParams`,
+`AttentionState`, module §6), with these tests:
+- `glances_follow_the_cited_distribution`: KS at 1 % against both CDFs.
+- `a_driver_looks_away_804_times_an_hour_for_a_fifth_of_the_time`: the process at 10 ms,
+  plus determinism.
+- `eyes_off_the_road_see_the_leader_as_last_seen_until_a_warning`.
+
+**P39.3 (2026-10-28, done; off by default, no golden moved).** The wiring is described in
+`driver-distraction.md` §"The wiring".
+- **The key:** `actors.vehicles.drivers.distraction`, in the six settings files (publish
+  reflects it from the schema).
+- **The engine pass:** the human-driver pass freezes the vehicle ahead while the eyes are
+  off. The new `MobilityCommand::DriverAlerted` ends a glance.
+- **The hook:** `run.rs` turns each FCW or EEBL `issue` or `update` from a vehicle's own
+  unit into that command.
+- **Tests:**
+  - `v2xw-mobility/tests/distraction.rs::a_distracted_follower_brakes_later`: 40 lead
+    brakes, each run plain and with a standing warning. 11 of 40 respond later, by 0.18 s
+    on the mean, and none earlier. The plan's 20 % guess was low, because a glance that
+    starts while the IDM's braking builds up also delays the response.
+  - `v2xw-engine/tests/distraction_warning.rs`: the expectation row, and FCW/EEBL on
+    against off with distraction on and human drivers on the `traffic` grid. Mean DRAC is
+    0.1775 off and 0.1747 on; the lowest TTC is 86.0 s off and 95.5 s on; 37 FCW/EEBL
+    warnings were issued.
+- **Rows:** `expectations/traffic-distraction.yaml`, `distraction: true` gives
+  `metric.drac` up (0.1700 -> 0.1725, +1.5 %, calibrated drivers). The plan's metric, TTC < 1.5 s conflicts, is 0 on that grid whether
+  distraction is on or off, so it cannot move. The plan's second row (`apps.fcw` under
+  distraction) needs a list-valued sweep (WP-32), so it is a test.
+
 ---
 
 ## WP-40 Doppler-aware 802.11p PER (O-P12), gated on its source
@@ -1326,10 +1410,10 @@ scratch.
 
 | For | Source | Access | Cached? |
 |---|---|---|---|
-| WP-25 | NCHRP Report 505 (Harwood et al. 2003) | public (TRB) | no (P25.1) |
-| WP-25 | FTA Altoona bus test reports (40 ft transit, 45 ft coach) | public | no |
-| WP-25 | EPA Test Car List data files | public | no |
-| WP-25 | PHEMlight HDV/LCV `.veh` files (SUMO `data/emissions/PHEMlight`) | EPL-2.0 | PC files only |
+| WP-25 | NCHRP Report 505 (Harwood et al. 2003) | public (TRB) | **read** 2026-10-28 (P25.1): Tables 29-30, eqs. 20-23, App. D, App. E (`grade-dynamics.md`) |
+| WP-25 | FTA Altoona bus test reports (40 ft transit, 45 ft coach) | public | **read** 2026-10-28: 1211-P (New Flyer XD40), 1209 (Prevost X3-45) |
+| WP-25 | EPA Test Car List data files | public | **read** 2026-10-28: MY2020 Ford Transit RWD Wagon Med Roof |
+| WP-25 | PHEMlight HDV/LCV `.veh` files (SUMO `data/emissions/PHEMlight`) | EPL-2.0 | PC files only; none open (checked 2026-10-28), dropped |
 | WP-26 | AWS Terrain Tiles (SRTM-format `skadi`); USGS 3DEP | public / public domain | no (P26.1) |
 | WP-28 | FHWA Signal Timing Manual 2e (NCHRP 812), offset transition and lane-use sections | public | read 2026-10-27 (P17.1); sections to pin |
 | WP-28 | MUTCD 2009 §4D | public | [repo] |
@@ -1340,9 +1424,10 @@ scratch.
 | WP-35 | IEEE 1609.2.1 ASN.1 | cached | **cached** (`third_party/asn1/etsi/ieee1609.2.1/`) |
 | WP-35 | IEEE 1609.2.1 body text §6.3.5 | paywalled | no |
 | WP-37 | Natural Earth admin-0 polygons | public domain | no |
-| WP-39 | Klauer et al. 2006, DOT HS 810 594 | public (NHTSA) | no |
-| WP-39 | Dingus et al. 2016, PNAS 113(10) | open access | no |
-| WP-39 | NHTSA visual-manual guidelines, 78 FR 24818 | public | no |
+| WP-39 | Klauer et al. 2006, DOT HS 810 594 | public (NHTSA) | **read** 2026-10-28 (VTechWorks copy): Table 6.2, Figs. 6.1-6.3 (`driver-distraction.md`) |
+| WP-39 | Dingus et al. 2016, PNAS 113(10) | open access | **read** 2026-10-28 (PMC4790996) |
+| WP-39 | NHTSA visual-manual guidelines, 78 FR 24818 | public | **read** 2026-10-28 (govinfo): pp. 24821, 24888 |
+| WP-39 | Morando, Victor & Dozza 2019, IEEE T-ITS 20(8) (glance-duration fits) | author copy (Chalmers) | **read** 2026-10-28: Fig. 6 |
 | WP-39 | 100-Car Phase II, DOT HS 810 593 | public | read ([repo] honest-density.md) |
 | WP-40 | Anwar, Franchi, Fettweis, VTC2019-Fall | author preprint (vodafone-chair.org) | read 2026-10-28 (P40.1 note): one profile, no speed axis |
 | WP-40 | IEEE 802.11 TGbd link-level submissions | public, but mentor.ieee.org rejected the fetch (HTTP 418) | not read (P40.1 note); WP-40 dropped |

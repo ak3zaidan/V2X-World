@@ -357,7 +357,10 @@ pub fn checks() -> Vec<Check> {
                 held to the steady crawl speed of the power balance \
                 η·P = m·g·(sin θ + c_rr)·v + ½·ρ·C_dA·v³. ASSUMPTION: the Green Book's \
                 120 kg/kW speed-distance curve is paywalled and not read, so the band is \
-                the balance (docs/design/research/grade-dynamics.md), not the figure.",
+                the balance (docs/design/research/grade-dynamics.md), not the figure. \
+                The TWOPAS truck equations of NCHRP 505 App. E give that truck 12.04 m/s \
+                (reported). A rigid truck (WP-25: Table 30's straight trucks, 82.9 lb/hp) \
+                does the same climb and is held to its TWOPAS crawl ±2 %.",
             faults: &["the power term off (grade only)"],
             run: truck_grade_crawl,
         },
@@ -386,8 +389,37 @@ fn crawl_speed_mps(grade: f64) -> f64 {
     lo
 }
 
-/// The trailer's speed after `at_m` of the 5 % climb, m/s.
+/// The steady crawl speed of the TWOPAS truck equations, m/s: NCHRP Report 505 App. E
+/// (pp. E-2, E-6), sea level, `a_c + a_p = 0` with
+/// `a_c = −0.2445 − 0.0004·V − 0.021·V²/(W/A) − 222.6/((W/NHP)·V) − 32.2·G` and
+/// `a_p = 15868/((W/NHP)·V) / (1 + 14080/((W/NHP)·V²))` (ft/s, ft/s²). The printed
+/// eqs. read 0.004 and 15368; the report's own example (Fig. E-2) reproduces only with
+/// 0.0004 and 15868 (docs/design/research/grade-dynamics.md).
+fn twopas_crawl_mps(lb_per_hp: f64, lb_per_ft2: f64, grade: f64, c_de: f64) -> f64 {
+    let net = |v: f64| {
+        let a_c = -0.2445
+            - 0.0004 * v
+            - 0.021 * c_de * v * v / lb_per_ft2
+            - 222.6 / (lb_per_hp * v)
+            - 32.2 * grade;
+        let a_p = 15868.0 / (lb_per_hp * v) / (1.0 + 14080.0 / (lb_per_hp * v * v));
+        a_c + a_p
+    };
+    let (mut lo, mut hi) = (10.0f64, 200.0f64);
+    for _ in 0..200 {
+        let v = 0.5 * (lo + hi);
+        if net(v) > 0.0 {
+            lo = v;
+        } else {
+            hi = v;
+        }
+    }
+    lo * 0.3048
+}
+
+/// The speed of one `class` vehicle after `at_m` of the 5 % climb, entered at 23.6 m/s.
 fn climb_speed_mps(
+    class: VehicleClass,
     dynamics: v2xw_mobility::VehicleDynamicsParams,
     at_m: f64,
 ) -> Result<f64, String> {
@@ -412,7 +444,6 @@ fn climb_speed_mps(
             .map_err(|e| e.to_string())?;
     }
     let route = cycle.iter().cycle().take(4).copied().collect();
-    let class = VehicleClass::Trailer;
     let driver = IdmPreset::Kesting2010.profile(class);
     let id = engine
         .spawn_with_route(&world, 0, class, driver, route, 0.0)
@@ -429,7 +460,7 @@ fn climb_speed_mps(
         }
         t += params.step.as_nanos();
     }
-    Err(format!("the trailer did not drive {at_m} m"))
+    Err(format!("the {class} did not drive {at_m} m"))
 }
 
 fn truck_grade_crawl(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
@@ -438,8 +469,17 @@ fn truck_grade_crawl(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String
         power_limit: !variant.is_fault(),
     };
     let crawl = crawl_speed_mps(0.05);
-    let v = climb_speed_mps(on, 2000.0)?;
-    let v_off = climb_speed_mps(v2xw_mobility::VehicleDynamicsParams::default(), 2000.0)?;
+    let v = climb_speed_mps(VehicleClass::Trailer, on, 2000.0)?;
+    let v_off = climb_speed_mps(
+        VehicleClass::Trailer,
+        v2xw_mobility::VehicleDynamicsParams::default(),
+        2000.0,
+    )?;
+    // WP-25: the rigid truck, NCHRP 505 Table 30's straight trucks (82.9 lb/hp; W/A their
+    // 20,116 lb over eq. 23's 102 ft² van body), held to the TWOPAS crawl ±2 %. The band
+    // must exclude the 23.6 m/s it enters at (+4.5 %), where it stays with the power off.
+    let v_rigid = climb_speed_mps(VehicleClass::Truck, on, 2000.0)?;
+    let rigid_twopas = twopas_crawl_mps(82.94, 20_115.8 / 102.0, 0.05, 1.0);
     Ok(Outcome {
         rows: vec![
             Row::held(
@@ -458,6 +498,24 @@ fn truck_grade_crawl(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String
                 "trailer speed 2 km in with vehicle_dynamics off, m/s",
                 v_off,
                 "reported",
+            ),
+            // 120 kg/kW is 197.3 lb/hp; W/A 685 lb/ft² is the frontal area that gives the
+            // row's C_dA 5.95 m² at TWOPAS's C_D-equivalent 0.549 (0.021/32.2 over ½ρ).
+            Row::reported(
+                "TWOPAS steady crawl speed of the design truck on 5 %, m/s",
+                twopas_crawl_mps(
+                    120.0 / 0.453_592_37 * 0.745_699_872,
+                    80_000.0 / (5.95 / (0.3048 * 0.3048) / (0.021 / 32.2 / (0.5 * 0.002_376_9))),
+                    0.05,
+                    1.0,
+                ),
+                "NCHRP 505 App. E eqs. 1-2 (TWOPAS), sea level; the balance above is 7 % faster",
+            ),
+            Row::held(
+                "rigid truck speed 2 km into a 5 % climb, m/s",
+                v_rigid,
+                (rigid_twopas * 0.98, rigid_twopas * 1.02),
+                "TWOPAS steady crawl (NCHRP 505 App. E) of Table 30's straight trucks, ±2 %",
             ),
         ],
         notes: vec![],
@@ -739,4 +797,21 @@ fn motorcycles(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         ],
         notes: vec![],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::twopas_crawl_mps;
+
+    #[test]
+    fn twopas_reproduces_the_reports_own_example() {
+        // NCHRP 505 Fig. E-2: 100 lb/hp, W/A 221 lb/ft², 1,000 ft (C_de 0.9710), minimum
+        // 41.9 mph on the 5.7 % segment of route 3.
+        let c_de = (1.0f64 - 0.000_006_887 * 1000.0).powf(4.255);
+        let mph = twopas_crawl_mps(100.0, 221.0, 0.057, c_de) / 0.447_04;
+        assert!((mph - 41.9).abs() < 0.1, "{mph} mph");
+        // The design truck on 5 % at sea level (the check's reported row).
+        let v = twopas_crawl_mps(197.27, 685.0, 0.05, 1.0);
+        assert!((v - 12.04).abs() < 0.02, "{v} m/s");
+    }
 }

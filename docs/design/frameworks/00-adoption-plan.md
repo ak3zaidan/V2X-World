@@ -970,6 +970,61 @@ trustworthy or comparable; later waves add behaviours and radio features.
 | 7 | WP-19, WP-20, WP-21 | M, M, M |
 | 8 | WP-22, WP-23, WP-24 | M, S, M |
 
+### After wave 8: the WP-25+ build plans (`wp25-plus-build-plans.md`)
+
+**WP-25 Power rows for the rigid truck, bus, coach and van** (S-M). Leftover of WP-22.
+- P25.1 (2026-10-28): done, no code. The sources are read, with pages, in
+  `docs/design/research/grade-dynamics.md`:
+  - rigid truck: NCHRP 505 Table 30 straight trucks, 82.9 lb/hp, plus eqs. 20 and 23;
+  - bus and coach: Altoona 1211-P (XD40) and 1209 (X3-45);
+  - van: EPA Test Car List MY2020 Transit wagon.
+
+  PHEMlight HDV files are not open. The transit bus measures about half the acceleration
+  that its rated power at η 0.9 gives, so the bus η values are fitted on the Altoona runs.
+  The TWOPAS equations (App. E) give the design truck a 5 % crawl 7 % below the balance.
+- P25.2 (2026-10-28): done. `power_limit` is still off by default and no golden moved.
+  - **Rows:** `VehicleClass::dynamics` has rows for the truck (82.9 lb/hp), the bus
+    (XD40, η 0.54), the coach (X3-45, η 0.84) and the van (Transit, EPA road load). A
+    rolling speed term is zero on the old rows, so their bound is unchanged.
+  - **Checks:** the Altoona runs from rest are reproduced within ±12 % (bus +3 %, coach
+    −9 %). The rigid truck outclimbs the design trailer (22.96 against 12.94 m/s). It is
+    held in `calibration/truck-grade-crawl` to its TWOPAS crawl ±2 %, which goes red with
+    the power off.
+  - **Open:** an expectation row on a rigid-truck or bus family, which needs per-row family
+    routes in the sweep. Emergency vehicles and two-wheelers have no rows.
+
+**WP-39 Driver distraction episodes (S-P15)** (M). From the deferred list (§3).
+- P39.1 (2026-10-28): done, no code. `docs/design/research/driver-distraction.md`.
+  - **The process:** an on-path/off-path glance renewal process, from the naturalistic
+    fits of Morando, Victor & Dozza 2019: inverse Gaussian 3.56/1.50 s on path, lognormal
+    −0.21/0.50 off path. That is 804 glances per hour, 20.5 % of time eyes off road, and
+    3.5 % of glances over 2 s.
+  - **Validation targets:** Klauer 2006 (> 2 s, OR 2.19), Dingus 2016 (51.93 %, OR 2.0)
+    and the NHTSA 2 s/12 s guideline.
+  - **The warning:** a verified FCW/EEBL ends a glance at receipt. No gaze-return latency
+    was readable, so no constant is added.
+- P39.2 (2026-10-28): done; off by default and not wired yet.
+  - **The process:** `drivers.rs` has `AttentionParams` and `AttentionState`
+    (`advance`, `look`, `interrupt`). The inverse Gaussian is drawn by Michael, Schucany
+    & Haas (1976), and the lognormal is keyed on `std_normal` slots 2 and 3.
+  - **Tests:** the draws pass a KS test against both cited CDFs at the 1 % level, with
+    3.5 % of glances over 2 s. The renewal process gives 804 ± 4 % glances per hour and a
+    20.5 % eyes-off share. A frozen leader is released by a warning.
+- P39.3 (2026-10-28): done. `actors.vehicles.drivers.distraction` is off by default and
+  no golden moved.
+  - **Wiring:** the human-driver pass sees the vehicle ahead as it was last seen while the
+    eyes are off. `run.rs` turns the vehicle's own FCW/EEBL warnings into
+    `MobilityCommand::DriverAlerted`, which ends the glance.
+  - **Measured:** 11 of 40 lead brakes get a later response, 0.18 s on the mean. A
+    standing warning removes the delay.
+  - **Row:** distraction gives `metric.drac` up (0.1700 -> 0.1725). TTC < 1.5 s conflicts are 0 on the grid,
+    so they cannot move.
+  - **The FCW benefit:** pinned by a test, because a list sweep is not supported. With
+    warnings on, DRAC goes from 0.1775 to 0.1747 and the lowest TTC from 86.0 s to
+    95.5 s.
+  - **Proposal for the owner:** `distraction: true` with `realism: human` on US presets.
+    It moves G-TV.
+
 ## 3. Deferred and dropped
 
 **Deferred** (useful, but lower value per effort, or waiting on an input):

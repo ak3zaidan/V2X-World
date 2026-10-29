@@ -346,8 +346,8 @@ pub struct VehicleDynamicsSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade: Option<bool>,
     /// The power term: no more acceleration than the engine's power gives after rolling
-    /// and air resistance, for the classes with a sourced road-load row (passenger car
-    /// and tractor-trailer). Unset is off.
+    /// and air resistance, for the classes with a sourced road-load row (passenger car,
+    /// tractor-trailer, rigid truck, bus, coach and van). Unset is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power_limit: Option<bool>,
 }
@@ -1835,6 +1835,13 @@ pub struct Drivers {
     /// true turns on the sub-lane model if the scenario has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motorcycle_filtering: Option<bool>,
+    /// Drivers look away from the road: on-path dwells and off-path glances drawn from the
+    /// naturalistic fits of Morando, Victor & Dozza 2019, the vehicle ahead seen as last
+    /// seen while the eyes are off, and an FCW or EEBL warning from the vehicle's own unit
+    /// bringing them back (`v2xw_mobility::drivers` §6;
+    /// docs/design/research/driver-distraction.md). Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distraction: Option<bool>,
     /// The passenger car's comfortable maximum acceleration `a` (Treiber, Hennecke and
     /// Helbing 2000), m/s². Replaces the model's calibration for cars; every driver still
     /// gets their own style and spread around it. Unset is the model's (1.4 m/s² for the
@@ -2041,6 +2048,9 @@ impl Drivers {
         }
         if let Some(x) = self.truck_lane_restriction {
             p.truck_lane_restriction = x;
+        }
+        if let Some(x) = self.distraction {
+            p.attention.enabled = x;
         }
         p
     }

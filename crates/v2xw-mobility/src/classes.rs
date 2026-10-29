@@ -401,6 +401,41 @@ pub const ROAD_LOAD_GRAVITY: f64 = 9.81;
 /// vehicle weight limit on the Interstate (23 U.S.C. 127(a)), 80,000 × 0.45359237.
 pub const DESIGN_TRAILER_MASS_KG: f64 = 80_000.0 * 0.453_592_37;
 
+/// One pound, kg.
+const LB_KG: f64 = 0.453_592_37;
+/// One mechanical horsepower, kW.
+const HP_KW: f64 = 0.745_699_872;
+/// One mile per hour, m/s.
+const MPH_MPS: f64 = 0.447_04;
+/// One pound-force, N.
+const LBF_N: f64 = 4.448_221_615_260_5;
+/// One inch, m.
+const IN_M: f64 = 0.0254;
+
+/// The rigid truck's weight, lb: the 26 straight trucks of NCHRP Report 505 Table 30
+/// (p. 55, from Gillespie 1985) pooled, the sum of their weights over their number
+/// (Interstate-East 14 at 15,233 lb, Interstate-West 6 at 35,050 lb, Primary-East 6 at
+/// 16,575 lb).
+const STRAIGHT_TRUCK_LB: f64 = (14.0 * 15_233.0 + 6.0 * 35_050.0 + 6.0 * 16_575.0) / 26.0;
+/// The same 26 trucks' mean rated power, hp (219, 267 and 273 hp): 82.9 lb/hp.
+const STRAIGHT_TRUCK_HP: f64 = (14.0 * 219.0 + 6.0 * 267.0 + 6.0 * 273.0) / 26.0;
+
+/// The drag coefficient of a heavy vehicle without aerodynamic aids: NCHRP Report 505
+/// eq. 23 (p. 55; 0.6 with aids).
+const HEAVY_CD: f64 = 0.7;
+
+/// Radial-tyre rolling resistance, the speed-independent part: NCHRP Report 505 eq. 20
+/// (p. 54), `F_r/W = 0.001·(4.1 + 0.041·V)`, V in mph.
+const RADIAL_C_RR: f64 = 0.0041;
+/// Radial-tyre rolling resistance, the speed term, per m/s: eq. 20's 0.000041 per mph.
+const RADIAL_C_RR_PER_MPS: f64 = 0.000_041 / MPH_MPS;
+
+/// The EPA target road load of the van row, Test Car List MY2020, Ford Transit RWD Wagon
+/// Med Roof (test vehicle LKA00033): A lbf, B lbf/mph, C lbf/mph², and its equivalent test
+/// weight, lb.
+const VAN_ROAD_LOAD: (f64, f64, f64) = (43.59, 0.3185, 0.045_22);
+const VAN_ETW_LB: f64 = 6_500.0;
+
 /// One class's road-load and power figures, `mobility/classes/road-load`
 /// (docs/design/research/grade-dynamics.md). The engine's power-limited acceleration bound
 /// ([`crate::engine::VehicleDynamicsParams`]) reads it:
@@ -418,7 +453,11 @@ pub struct ClassDynamics {
     pub cd_a_m2: f64,
     /// Rolling-resistance coefficient (PHEMlight's speed-independent `f0`), 1.
     pub c_rr: f64,
-    /// Drivetrain efficiency, engine to wheel, 1.
+    /// The rolling resistance's speed term, per m/s: `F_r/(m·g) = c_rr + c_rr_per_mps·v`.
+    /// Zero where the source gives none (the passenger and trailer rows).
+    pub c_rr_per_mps: f64,
+    /// Drivetrain efficiency, engine to wheel, 1. For the bus and coach it is the fraction
+    /// of the rated power that reached the wheels on the source's own full-throttle run.
     pub eta: f64,
     /// Where each figure comes from.
     pub source: &'static str,
@@ -426,13 +465,14 @@ pub struct ClassDynamics {
 
 impl ClassDynamics {
     /// The largest acceleration the power train gives at `v_mps` on the flat, m/s²:
-    /// `η·P/(m·v) − c_rr·g − ½·ρ·C_dA·v²/m`, with `v` floored at 1 m/s (the power law's
-    /// singularity at rest; at 1 m/s every row's bound is far above its class's
-    /// comfortable acceleration, so the floor never binds).
+    /// `η·P/(m·v) − (c_rr + c_rr_per_mps·v)·g − ½·ρ·C_dA·v²/m`, with `v` floored at 1 m/s
+    /// (the power law's singularity at rest; at 1 m/s every row's bound is far above its
+    /// class's comfortable acceleration, so the floor never binds). With no speed term,
+    /// `c_rr + 0·v` is `c_rr` exactly.
     pub fn flat_accel_bound_mps2(&self, v_mps: f64) -> f64 {
         let v = v_mps.max(1.0);
         self.eta * self.power_kw * 1000.0 / (self.mass_kg * v)
-            - self.c_rr * ROAD_LOAD_GRAVITY
+            - (self.c_rr + self.c_rr_per_mps * v) * ROAD_LOAD_GRAVITY
             - 0.5 * ROAD_LOAD_AIR_DENSITY * self.cd_a_m2 * v * v / self.mass_kg
     }
 }
@@ -452,10 +492,31 @@ impl VehicleClass {
     ///   EPA/NHTSA Phase 1 average tractor-trailer (NRC, *Review of the 21st Century Truck
     ///   Partnership, Second Report*, 2012, ch. 18); drivetrain 0.9, PHEMlight's
     ///   `DRIVE_TRAIN_EFFICIENCY_All`. The ratio, not the mass, sets the crawl speed.
-    /// * **No row** for the rigid `truck`, the bus, coach, vans and two-wheelers: no
-    ///   weight-to-power figure for them has been read. The design ratio is a
-    ///   tractor-semitrailer's; on SUMO's 4.5 t rigid truck it would give 37.5 kW and cap
-    ///   it near 70 km/h on the flat, which no real truck of that mass does.
+    /// * **Truck** (rigid): NCHRP Report 505 Table 30 (p. 55), its 26 straight trucks
+    ///   pooled: 20,116 lb (9,124 kg) and 242.5 hp (180.9 kW), 82.9 lb/hp; C_dA 0.7 × 102 ft²
+    ///   (eq. 23, a van body without aerodynamic aids, 6.63 m²); radial-tyre rolling
+    ///   resistance (eq. 20); drivetrain 0.9. The design ratio is a tractor-semitrailer's
+    ///   and is not used: on SUMO's 4.5 t truck it would cap it near 70 km/h on the flat.
+    /// * **Bus**: FTA Altoona test 1211-P, a New Flyer XD40 at its seated load weight
+    ///   33,320 lb (15,114 kg), Cummins ISL9 280 (280 hp, 208.8 kW); C_dA 0.7 × its
+    ///   101.75 × 125.25 in front (5.76 m²); radial rolling; η 0.54, the share of the rated
+    ///   power that reached the wheels over its last measured interval (40-45.1 mph,
+    ///   8.93 s). A transit bus feeds its fan, alternator and compressor and manages its
+    ///   acceleration for standees: at η 0.9 it would run 30-40 mph twice as fast as the
+    ///   XD40 did.
+    /// * **Coach**: Altoona test 1209, a Prevost X3-45 at 47,110 lb (21,369 kg), Volvo
+    ///   D13H435 (435 hp, 324.4 kW); C_dA 0.7 × 102.0 × 133.0 in (6.13 m²); radial rolling;
+    ///   η 0.84 from its 40-50 mph interval (8.86 s).
+    /// * **Delivery** (van): EPA Test Car List MY2020, Ford Transit RWD Wagon Med Roof:
+    ///   ETW 6,500 lb (2,948 kg), 275 hp (205.1 kW); the target road load A 43.59 lbf,
+    ///   B 0.3185 lbf/mph, C 0.04522 lbf/mph² as c_rr = A/W, c_rr_per_mps = B/W per m/s and
+    ///   C_dA = 2C/ρ (1.70 m², an upper estimate: a coast-down's C carries some driveline
+    ///   loss); drivetrain 0.9.
+    /// * **No row** for the emergency vehicle and two-wheelers: no weight-to-power figure
+    ///   for them has been read.
+    ///
+    /// A row's mass is its source's, not the SUMO class mass (docs/design/research/
+    /// grade-dynamics.md, "Sources for the rigid truck, bus, coach and van").
     pub fn dynamics(self) -> Option<ClassDynamics> {
         match self {
             VehicleClass::Passenger => Some(ClassDynamics {
@@ -463,6 +524,7 @@ impl VehicleClass {
                 power_kw: 93.0,
                 cd_a_m2: 0.3113 * 2.16,
                 c_rr: 0.009,
+                c_rr_per_mps: 0.0,
                 eta: 0.9,
                 source: "PHEMlight PC_D_EU4 (SUMO PC_D_EU4.PHEMLight.veh): mass, rated \
                          power, cd x area, f0, DRIVE_TRAIN_EFFICIENCY_All",
@@ -472,6 +534,7 @@ impl VehicleClass {
                 power_kw: DESIGN_TRAILER_MASS_KG / DESIGN_TRUCK_KG_PER_KW,
                 cd_a_m2: 5.95,
                 c_rr: 0.0077,
+                c_rr_per_mps: 0.0,
                 eta: 0.9,
                 source: "mass: 80,000 lb (23 U.S.C. 127(a)); power: AASHTO Green Book 2001 \
                          design truck 120 kg/kW (NCHRP 505 App. D); CdA: 40 CFR 1037.520 \
@@ -479,6 +542,53 @@ impl VehicleClass {
                          Partnership review (2012) ch. 18, Phase 1 average tractor-trailer; \
                          eta: PHEMlight",
             }),
+            VehicleClass::Truck => Some(ClassDynamics {
+                mass_kg: STRAIGHT_TRUCK_LB * LB_KG,
+                power_kw: STRAIGHT_TRUCK_HP * HP_KW,
+                cd_a_m2: HEAVY_CD * 102.0 * 0.3048 * 0.3048,
+                c_rr: RADIAL_C_RR,
+                c_rr_per_mps: RADIAL_C_RR_PER_MPS,
+                eta: 0.9,
+                source: "mass and power: NCHRP 505 Table 30 p. 55 (Gillespie 1985), 26 \
+                         straight trucks pooled, 82.9 lb/hp; CdA: eq. 23 p. 55, C_D 0.7 x \
+                         102 ft2 van body; rolling: eq. 20 p. 54, radial; eta: PHEMlight",
+            }),
+            VehicleClass::Bus => Some(ClassDynamics {
+                mass_kg: 33_320.0 * LB_KG,
+                power_kw: 280.0 * HP_KW,
+                cd_a_m2: HEAVY_CD * 101.75 * 125.25 * IN_M * IN_M,
+                c_rr: RADIAL_C_RR,
+                c_rr_per_mps: RADIAL_C_RR_PER_MPS,
+                eta: 0.54,
+                source: "FTA Altoona test 1211-P (New Flyer XD40, Cummins ISL9 280): seated \
+                         load weight, size, and eta fitted on its 40-45.1 mph interval; \
+                         CdA C_D and rolling: NCHRP 505 eqs. 23 and 20",
+            }),
+            VehicleClass::Coach => Some(ClassDynamics {
+                mass_kg: 47_110.0 * LB_KG,
+                power_kw: 435.0 * HP_KW,
+                cd_a_m2: HEAVY_CD * 102.0 * 133.0 * IN_M * IN_M,
+                c_rr: RADIAL_C_RR,
+                c_rr_per_mps: RADIAL_C_RR_PER_MPS,
+                eta: 0.84,
+                source: "FTA Altoona test 1209 (Prevost X3-45, Volvo D13H435): seated load \
+                         weight, size, and eta fitted on its 40-50 mph interval; CdA C_D and \
+                         rolling: NCHRP 505 eqs. 23 and 20",
+            }),
+            VehicleClass::Delivery => {
+                let (a, b, c) = VAN_ROAD_LOAD;
+                Some(ClassDynamics {
+                    mass_kg: VAN_ETW_LB * LB_KG,
+                    power_kw: 275.0 * HP_KW,
+                    cd_a_m2: 2.0 * c * LBF_N / (MPH_MPS * MPH_MPS) / ROAD_LOAD_AIR_DENSITY,
+                    c_rr: a / VAN_ETW_LB,
+                    c_rr_per_mps: b / VAN_ETW_LB / MPH_MPS,
+                    eta: 0.9,
+                    source: "EPA Test Car List MY2020, Ford Transit RWD Wagon Med Roof \
+                             (LKA00033): rated hp, equivalent test weight, target road load \
+                             A/B/C; eta: PHEMlight",
+                })
+            }
             _ => None,
         }
     }
@@ -839,7 +949,15 @@ mod tests {
         assert!((d.power_kw - 302.39).abs() < 0.01, "{}", d.power_kw);
         assert_eq!((d.cd_a_m2, d.c_rr), (5.95, 0.0077));
         for c in VehicleClass::ALL {
-            if !matches!(c, VehicleClass::Passenger | VehicleClass::Trailer) {
+            if !matches!(
+                c,
+                VehicleClass::Passenger
+                    | VehicleClass::Trailer
+                    | VehicleClass::Truck
+                    | VehicleClass::Bus
+                    | VehicleClass::Coach
+                    | VehicleClass::Delivery
+            ) {
                 assert!(c.dynamics().is_none(), "{c} has no sourced row");
             }
         }
@@ -849,6 +967,70 @@ mod tests {
         assert!(p.flat_accel_bound_mps2(13.0) > 2.6);
         let a = d.flat_accel_bound_mps2(25.0);
         assert!(a > 0.14 && a < 0.19, "{a}");
+    }
+
+    /// Seconds from `v0` to `v1` (m/s) at full throttle on the flat, the row's power
+    /// bound capped at the class's comfortable acceleration (what the engine applies with
+    /// `power_limit` on), by 1 ms Euler steps.
+    fn full_throttle_s(d: &ClassDynamics, cap: f64, v0: f64, v1: f64) -> f64 {
+        let (mut v, mut t) = (v0, 0.0);
+        while v < v1 {
+            let a = d.flat_accel_bound_mps2(v).min(cap);
+            assert!(a > 0.0, "the row cannot reach {v1} m/s");
+            v += a * 1e-3;
+            t += 1e-3;
+        }
+        t
+    }
+
+    #[test]
+    fn heavy_rows_reproduce_their_sources() {
+        const MPH: f64 = 0.447_04;
+        // Bus and coach: the whole Altoona run from rest at seated load weight, a figure
+        // the η fit (each run's last interval) did not use. Mean of six runs: the XD40
+        // took 36.03 s to 45.1 mph (1211-P p. 18), the X3-45 26.45 s to 50 mph (1209
+        // p. 40). Each at the SUMO class's own comfortable acceleration. ±12 %: the
+        // bound has no gear shifts or torque converter, which cost most at low speed.
+        for (class, top_mph, measured_s) in [
+            (VehicleClass::Bus, 45.1, 36.03),
+            (VehicleClass::Coach, 50.0, 26.45),
+        ] {
+            let d = class.dynamics().expect("a row");
+            let t = full_throttle_s(&d, class.spec().accel_mps2, 0.0, top_mph * MPH);
+            assert!(
+                (t / measured_s - 1.0).abs() < 0.12,
+                "{class}: {t:.2} s to {top_mph} mph, measured {measured_s} s"
+            );
+        }
+        // The rigid truck: Table 30's straight trucks, 82.9 lb/hp (NCHRP 505 p. 55).
+        let t = VehicleClass::Truck.dynamics().expect("a truck row");
+        let lb_per_hp = (t.mass_kg / LB_KG) / (t.power_kw / HP_KW);
+        assert!((lb_per_hp - 82.94).abs() < 0.01, "{lb_per_hp} lb/hp");
+        assert!((t.mass_kg - 9_124.4).abs() < 0.1, "{}", t.mass_kg);
+        // The van: its road load at 50 mph is EPA's target A + B·v + C·v², in lbf, and
+        // its power is 275 hp at the equivalent test weight.
+        let v = VehicleClass::Delivery.dynamics().expect("a van row");
+        let s = 50.0 * MPH;
+        let force_n = v.mass_kg * ROAD_LOAD_GRAVITY * (v.c_rr + v.c_rr_per_mps * s)
+            + 0.5 * ROAD_LOAD_AIR_DENSITY * v.cd_a_m2 * s * s;
+        let (a, b, c) = VAN_ROAD_LOAD;
+        let target_lbf = a + b * 50.0 + c * 2500.0;
+        // The EPA's lbf is weight on the scale: W·c_rr is in pounds-force when g is the
+        // standard 9.80665; the bound uses PHEMlight's 9.81, 0.03 % off.
+        assert!(
+            (force_n / LBF_N / target_lbf - 1.0).abs() < 1e-3,
+            "{} lbf against {target_lbf}",
+            force_n / LBF_N
+        );
+        assert!((v.power_kw - 205.07).abs() < 0.01, "{}", v.power_kw);
+        // The rigid truck and the coach are slower than the car and faster than the
+        // design trailer at 20 m/s on the flat: weight-to-power orders them. (The loaded
+        // transit bus is not: the XD40 measured below the design trailer there.)
+        let at = |c: VehicleClass| c.dynamics().expect("row").flat_accel_bound_mps2(20.0);
+        for c in [VehicleClass::Truck, VehicleClass::Coach] {
+            assert!(at(c) > at(VehicleClass::Trailer), "{c}");
+            assert!(at(c) < at(VehicleClass::Passenger), "{c}");
+        }
     }
 
     #[test]

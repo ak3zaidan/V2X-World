@@ -1612,6 +1612,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.drivers.perception_error" => "Misjudgement of gaps",
         "actors.vehicles.drivers.truck_lane_restriction" => "Trucks out of the left lane",
         "actors.vehicles.drivers.motorcycle_filtering" => "Motorcycles filter between cars",
+        "actors.vehicles.drivers.distraction" => "Drivers glance away from the road",
         "radio.rat" => "Radio technology",
         "radio.region" => "Regulatory region",
         "radio.channel" => "Channel",
