@@ -26,7 +26,7 @@ const NEWER = "provider-a/provisioning/999";
  * Answer the PKI queries from a bundle. After `grow()`, every `inspect.flows` answer carries one
  * flow newer than the rest, as a live run's list does.
  */
-async function serve(page: Page, b: Bundle): Promise<{ grow: () => void }> {
+async function serve(page: Page, b: Bundle, certs: Record<string, unknown> = {}): Promise<{ grow: () => void }> {
   let growing = false;
   await page.routeWebSocket(/.*/, (ws) => {
     const server = ws.connectToServer();
@@ -51,7 +51,7 @@ async function serve(page: Page, b: Bundle): Promise<{ grow: () => void }> {
           } else if (req.method === "inspect.pdu" || req.method === "inspect.knowledge") {
             const h = table?.[String(p.id ?? p.entity)] as Record<string, unknown> | undefined;
             hit = h?.[String(p.view ?? "ground-truth")];
-          } else if (req.method === "inspect.cert") hit = undefined;
+          } else if (req.method === "inspect.cert") hit = certs[String(p.hashedid8)];
           if (req.method && ["inspect.trust", "inspect.flows", "inspect.flow", "inspect.pdu", "inspect.knowledge", "inspect.cert"].includes(req.method)) {
             ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, ...(hit === undefined ? { error: { code: -32006, message: "unknown certificate" } } : { result: hit }) }));
             return;
@@ -103,6 +103,34 @@ test("Vehicles: problems first, chips that filter, constant columns said once, a
   await expect(panel.getByTestId("pki-vehicle-card")).toBeVisible();
   const fit = await panel.locator(".pkir-table-wrap").first().evaluate((el) => el.scrollWidth - el.clientWidth);
   expect(fit).toBeLessThanOrEqual(1);
+});
+
+test("A vehicle whose enrolment certificate fails is never 'healthy': its row and its card say the same", async ({ page }) => {
+  const tabs = JSON.parse(readFileSync(join(here, "../test/fixtures/pki/pki-tabs.json"), "utf8")) as { vehicles: { vehicles: { node: number; enrolment: string }[] } };
+  const v = tabs.vehicles.vehicles.find((x) => x.node === 19)!;
+  // As `v2xw-server` answers for credential-lifecycle's enrolment certificates: a lifetime of zero hours, so the time check fails.
+  const NOW = 731232071;
+  const rules = ["well-formed", "chain-to-root", "root-on-ctl", "signatures", "issuer-permissions", "chain-length", "validity", "region", "crl"];
+  const ec = {
+    id8: v.enrolment,
+    chain: [v.enrolment],
+    valid: false,
+    time32: NOW,
+    t_ns: 66e9,
+    tolerated: [],
+    trace: rules.map((rule) => ({ rule, status: rule === "validity" ? "fail" : "pass", detail: rule === "validity" ? ["cert 0: not valid at the policy time"] : [] })),
+    tree: { issuer: { self: "sha256" }, toBeSigned: { id: { name: "ee" }, validityPeriod: { duration: { hours: 0 }, start: NOW - 240 } }, type: "explicit", version: 3 },
+  };
+  await serve(page, studio.run, { [v.enrolment]: ec });
+  await open(page, "vehicles");
+  const panel = page.getByTestId("pki-panel");
+  const row = panel.locator(`[data-testid="pki-vehicle-row"][data-node="19"]`);
+  await expect(row).toHaveAttribute("data-state", "healthy");
+  await row.click();
+  await expect(panel.getByTestId("pki-vehicle-card-state")).toHaveAttribute("data-state", "ec-bad");
+  await expect(row).toHaveAttribute("data-state", "ec-bad");
+  await expect(panel.getByTestId("pki-glance-ec-says")).toContainText("lifetime of zero");
+  await expect(panel.getByTestId("pki-vehicle-card")).not.toContainText("healthy");
 });
 
 test("Header and Overview: one header row, the view picker in words, the legend above the diagram, activity in a neutral tone", async ({ page }) => {

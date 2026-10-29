@@ -90,6 +90,9 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
     }),
     [list?.t_ns, crls, gt],
   );
+  // The chosen vehicle's enrolment certificate, checked as a receiver would: its row and its card
+  // say the same thing about it (the list itself carries no EC validity).
+  const ec = useCertStatus((list?.vehicles ?? []).find((r) => r.node === node)?.enrolment ?? null);
   if (view === null) return <Locked />;
   const all = list?.vehicles ?? [];
   const labels = all.map((r) => r.provider);
@@ -160,7 +163,8 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
           </thead>
           <tbody>
             {rows.map((r) => {
-              const st = stateOf.get(r.device) ?? "healthy";
+              const st0 = stateOf.get(r.device) ?? "healthy";
+              const st = r.node === node ? withEc(st0, ec, r.enrolled) : st0;
               const gone = st === "left";
               const cls = [r.node === node ? "sel" : "", gone ? "left" : ""].filter(Boolean).join(" ");
               return (
@@ -219,10 +223,16 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
         </p>
       </div>
       {chosen ? (
-        <VehicleCard device={chosen.device} view={gt ? GROUND_TRUTH : chosen.device} state={stateOf.get(chosen.device) ?? "healthy"} row={chosen} nowNs={list?.t_ns ?? 0} />
+        <VehicleCard device={chosen.device} view={gt ? GROUND_TRUTH : chosen.device} state={stateOf.get(chosen.device) ?? "healthy"} row={chosen} nowNs={list?.t_ns ?? 0} ec={ec} />
       ) : null}
     </div>
   );
+}
+
+/** A vehicle whose enrolment certificate fails is never "healthy", whatever its pool says. */
+function withEc(state: CredentialState, ec: { readonly status: string }, enrolled: boolean): CredentialState | "ec-bad" {
+  const bad = enrolled && !(ec.status === "valid" || ec.status === "expiring" || ec.status === "unknown");
+  return bad && (state === "healthy" || state === "between" || state === "topup-due") ? "ec-bad" : state;
 }
 
 function nextTopup(r: VehicleRow, now: number): string {
@@ -359,22 +369,21 @@ function VehicleCard({
   state,
   row,
   nowNs,
+  ec,
 }: {
   readonly device: string;
   readonly view: string;
   readonly state: CredentialState;
   readonly row: VehicleRow;
   readonly nowNs: number;
+  /** Its enrolment certificate's state, from the same answer its card reads, so the row, the header and the card agree. */
+  readonly ec: ReturnType<typeof useCertStatus>;
 }): React.JSX.Element {
   const d = asVehicle(usePki({ topic: "vehicle", device, view }, 3000).data);
   const panelNow = usePkiView((s) => s.nowNs);
-  // The EC's own state, from the same answer its card reads, so the tile, the header and the card agree.
-  const ec = useCertStatus(d?.enrolment ?? null);
   if (!d) return <div className="pkir-card dim">Loading the certificates of {deviceName(device)}…</div>;
   const left = state === "left";
-  const ecBad = d.enrolled && !(ec.status === "valid" || ec.status === "expiring" || ec.status === "unknown");
-  // A vehicle whose enrolment certificate fails is never "healthy", whatever its pool says.
-  const shown: CredentialState | "ec-bad" = ecBad && (state === "healthy" || state === "between" || state === "topup-due") ? "ec-bad" : state;
+  const shown = withEc(state, ec, d.enrolled);
   return (
     <div className="pkir-card" data-testid="pki-vehicle-card">
       <h3 className="pki-vehicle-head">
