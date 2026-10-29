@@ -304,17 +304,18 @@ test.describe("the credential system at a glance", () => {
   test("a level reads without colour: each level's mark has its own shape", async ({ page }) => {
     await openScms(page);
     const shapes = await page.evaluate(() =>
-      ["healthy", "caution", "unhealthy"].map((l) => {
+      // Pending (not judged yet) is a fourth mark: a hollow ring.
+      ["healthy", "caution", "unhealthy", "pending"].map((l) => {
         const el = document.createElement("span");
         el.className = `hdot ${l}`;
         document.body.appendChild(el);
         const s = getComputedStyle(el);
-        const shape = `${s.clipPath}|${s.borderRadius}`;
+        const shape = `${s.clipPath}|${s.borderRadius}|${s.borderTopWidth}`;
         el.remove();
         return shape;
       }),
     );
-    expect(new Set(shapes).size).toBe(3);
+    expect(new Set(shapes).size).toBe(4);
   });
 
   test("the run summary opens with the run in a few sentences", async ({ page }) => {

@@ -18,7 +18,7 @@ import uPlot from "uplot";
 import { useStudio } from "../state/store.js";
 import { statLabel } from "./health.js";
 import { slotColour } from "./tokens.js";
-import { axisUnit, decimate, formatNumber, formatWithUnit, type Series } from "./model.js";
+import { axisUnit, clockText, decimate, formatNumber, formatWithUnit, type Series } from "./model.js";
 import { axisTime, axisTimeSplits } from "../lib/format.js";
 
 /** One line on the chart. `slot` is the categorical colour (1–8), fixed per series. */
@@ -143,7 +143,8 @@ export function MainChart({
         },
       ],
       series: [
-        { label: "t (s)", value: (_u, v) => (v === null || v === undefined ? "—" : `${formatNumber(v)} s`) },
+        // The legend's time reads as a clock ("2 h 26 min"), and says what to do before a hover.
+        { label: "Simulated time", value: (_u, v) => (v === null || v === undefined ? "hover the chart to read" : v < 60 ? `${formatNumber(v)} s` : clockText(v)) },
         ...lines.map((l) => ({
           label: l.label,
           stroke: slotColour(l.slot),
