@@ -6,6 +6,8 @@
 //!   foliage term costs receptions across the wood.
 //! - The density σ reaches the run: it changes what is received on the Midtown grid.
 //! - WP-27: the R-tree of footprint centroids gives the scan's density, bit for bit.
+//! - WP-29: single-bounce wall reflection off is byte-identical, and on it lifts PRR on
+//!   downtown Portland's real footprints.
 
 use std::path::{Path, PathBuf};
 
@@ -210,4 +212,89 @@ fn density_index_equals_the_scan() {
         "only {built} links saw a building: the check would not bite"
     );
     assert_eq!(differ, 0, "{differ} links differ from the scan");
+}
+
+/// The Midtown grid with its block buildings on (the medium tier's log-distance law with
+/// the Sommer term), `secs` long at `rate` vehicles an hour.
+fn built_grid(rate: f64, secs: f64, reflection: Option<bool>) -> Scenario {
+    let mut s = grid(rate, secs);
+    s.world.buildings.enabled = true;
+    s.radio.channel_model.reflection = reflection;
+    s
+}
+
+#[test]
+fn reflection_off_is_byte_identical() {
+    // WP-29: `radio.channel_model.reflection: false` gives the run the unset key gives,
+    // record for record, on a grid whose buildings block links.
+    let (unset, report) = run(built_grid(3000.0, 20.0, None));
+    assert!(report.receptions_ok > 100, "{}", report.receptions_ok);
+    let (off, _) = run(built_grid(3000.0, 20.0, Some(false)));
+    assert_eq!(unset, off, "reflection set to false moved the run");
+}
+
+/// Downtown Portland (OSM footprints, which are building by building, not block by
+/// block) at the medium tier, whose log-distance law leaves building-blocked links to the
+/// Sommer term, `secs` long.
+fn canyon(secs: f64, reflection: Option<bool>) -> Scenario {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let mut s = Scenario::load(scenarios().join("portland-downtown.yaml")).expect("loads");
+    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source {
+        *path = root.join(path.as_str()).to_string_lossy().into_owned();
+    }
+    s.time.duration_s = secs;
+    s.actors.vehicles.demand.rate_veh_per_h = Some(1500.0);
+    s.radio.tiers.propagation = v2xw_core::card::Tier::Medium;
+    s.radio.channel_model.reflection = reflection;
+    s
+}
+
+#[test]
+fn reflections_carry_links_round_the_blocks() {
+    // WP-29: with single-bounce reflections a building-blocked link also receives the
+    // strongest wall ray, power-summed with its shadowed path, so its loss can only fall
+    // and more frames arrive. On a procedural grid of kerb-to-kerb blocks no single
+    // bounce turns a corner (the leg out of the junction always cuts the next block), so
+    // the run is a real map's.
+    let (off, a) = run(canyon(30.0, None));
+    let (on, b) = run(canyon(30.0, Some(true)));
+    assert_ne!(off, on, "the reflection reached nothing");
+    assert!(
+        b.receptions_ok > a.receptions_ok,
+        "receptions {} with reflections, {} without",
+        b.receptions_ok,
+        a.receptions_ok
+    );
+}
+
+#[test]
+fn the_reflection_rows_hold() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    std::env::set_current_dir(&root).expect("to the workspace root");
+    use v2xw_engine::sensitivity::{expect, sweep};
+    let path = root.join("scenarios/sensitivity/catalogue.yaml");
+    let fam = sweep::Families::load(&path).expect("families file loads");
+    let mut exp = sweep::load_expectations(&[root.join("crates/v2xw-engine/tests/expectations")])
+        .expect("rows parse");
+    exp.retain(|e| e.setting == "radio.channel_model.reflection");
+    assert_eq!(exp.len(), 2, "the PRR and the below-sensitivity rows");
+    let (settings, unplanned) = expect::expect_plan(&fam, &exp);
+    assert!(unplanned.is_empty(), "{unplanned:?}");
+    let bases = fam.bases(&path).expect("bases load");
+    let result =
+        sweep::run_cached(settings, vec![], &bases, &exp, 2, None, |_, _, _| {}).expect("runs");
+    for v in &result.verdicts {
+        eprintln!(
+            "reflection: {} {}: {:?} -> {:?} pass {} ({})",
+            v.expectation.setting, v.expectation.metric, v.base, v.value, v.pass, v.note
+        );
+    }
+    let failed: Vec<&str> = result
+        .verdicts
+        .iter()
+        .filter(|v| !v.pass)
+        .map(|v| v.expectation.metric.as_str())
+        .collect();
+    assert_eq!(result.verdicts.len(), 2);
+    assert!(failed.is_empty(), "{failed:?}");
 }

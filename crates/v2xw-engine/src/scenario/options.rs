@@ -1606,6 +1606,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "radio.channel_model.vehicle_blockage" => "Vehicles block the signal",
         "radio.channel_model.foliage" => "Trees weaken the signal",
         "radio.channel_model.density_sigma" => "Signal variation grows with traffic and buildings",
+        "radio.channel_model.reflection" => "Signals reflect off building walls",
         "world.vegetation" => "Import trees and woods",
         "world.terrain.drape" => "Lay the roads on the terrain",
         "radio.sidelink.candidate_percent" => "Candidate resources kept",

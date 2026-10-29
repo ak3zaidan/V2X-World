@@ -2519,6 +2519,9 @@ pub struct ObstacleStack {
     pub foliage: Option<v2xw_radio::FoliageLoss>,
     /// GEMV²'s density-dependent shadowing σ (`radio.channel_model.density_sigma`).
     pub density: Option<DensityTerm>,
+    /// GEMV²'s single-bounce wall reflection (`radio.channel_model.reflection`), added by
+    /// power to a building-blocked path's shadowed one.
+    pub reflection: Option<v2xw_radio::obstacle::reflection::ReflectionTracer>,
     /// Whether the building model's *loss* is charged under the run's main law. Kept for
     /// callers that compose one law; the engine decides per link.
     pub building_loss: bool,
@@ -2730,6 +2733,21 @@ impl ObstacleStack {
         if let Some(terrain) = self.terrain.as_mut() {
             terms[2] = v2xw_radio::ObstacleModel::obstacle_loss_db(terrain, ctx, tx, rx, los, f_hz);
         }
+        // GEMV² §IV-B.3: a building-blocked link also receives the strongest single bounce
+        // off a wall; its power adds to the shadowed path's (`reflection`).
+        if terms[0] > 0.0
+            && los.class.has_building()
+            && let Some(tracer) = self.reflection.as_ref()
+            && let Some(ray) = tracer.best(
+                <crate::ctx::EngineCtx<'_> as v2xw_core::ctx::Ctx>::world(ctx),
+                tx.pos,
+                rx.pos,
+                f_hz,
+            )
+        {
+            terms[0] =
+                v2xw_radio::obstacle::reflection::power_sum_excess_db(terms[0], ray.excess_db);
+        }
         let total = v2xw_core::math::sum_ordered(terms);
         // Added on its own, so a run without foliage sums exactly the three terms it did.
         match self.foliage.as_ref() {
@@ -2756,6 +2774,9 @@ impl ObstacleStack {
         }
         if let Some(f) = &self.foliage {
             cards.push(f.card().clone());
+        }
+        if let Some(r) = &self.reflection {
+            cards.push(r.card().clone());
         }
         for card in cards {
             if !registry.contains(&card.id) {
@@ -2860,7 +2881,17 @@ pub fn build_obstacles(scenario: &Scenario, world: &World) -> ObstacleStack {
             .then(|| v2xw_radio::TerrainDiffraction::new(stack_tier)),
         foliage: (tuning.foliage == Some(true) && !world.vegetation.is_empty())
             .then(|| v2xw_radio::FoliageLoss::new(world, stack_tier)),
-        density: (tuning.density_sigma == Some(true)).then(|| DensityTerm::new(world)),
+        density: (tuning.density_sigma == Some(true)).then(|| {
+            let term = DensityTerm::new(world);
+            // GEMV² Table V: NLOSb σ_min is 0 dB when reflections are computed.
+            if tuning.reflection == Some(true) && buildings_on {
+                term.with_reflections()
+            } else {
+                term
+            }
+        }),
+        reflection: (tuning.reflection == Some(true) && buildings_on)
+            .then(|| v2xw_radio::obstacle::reflection::ReflectionTracer::build(world)),
     }
 }
 
@@ -2908,6 +2939,14 @@ impl DensityTerm {
             ),
             statics,
         }
+    }
+
+    /// The term with reflections computed: GEMV² Table V's NLOSb σ_min is then 0 dB
+    /// (Mangel et al.'s 4.1 dB is for paths priced without reflections).
+    #[must_use]
+    pub fn with_reflections(mut self) -> Self {
+        self.sigma.nlosb_db.0 = 0.0;
+        self
     }
 
     /// The link's σ, dB: the vehicles of `snapshot` (not pedestrians or riders) and the

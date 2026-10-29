@@ -46,6 +46,12 @@ families:
   - name: osm
     base: ../portland-downtown.yaml
     set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1500.0}
+  # The same Portland at the medium tier, whose log-distance law leaves a building-blocked
+  # link to the Sommer term: where radio.channel_model.reflection adds a wall bounce.
+  - name: canyon
+    base: ../portland-downtown.yaml
+    set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1500.0,
+          radio.tiers.propagation: medium, metrics: [all]}
   # The same grid with pedestrians and crossings.
   - name: pedestrians
     base: ../vru-grid.yaml
@@ -153,6 +159,10 @@ routes:
   - {prefix: radio.channel_model.vehicle_blockage, families: [traffic, dsrc]}
   - {prefix: radio.channel_model.foliage, families: [forest]}
   - {prefix: radio.channel_model.density_sigma, families: [traffic]}
+  # A wall reflection needs building-blocked links whose bounce is clear: real footprints
+  # (on the procedural grid's kerb-to-kerb blocks no single bounce turns a corner) under
+  # a law that leaves buildings to the Sommer term (WP-29).
+  - {prefix: radio.channel_model.reflection, families: [canyon]}
   - {prefix: radio.channel_model.building_loss_db_per_m, families: [traffic]}
   - {prefix: traffic.right_turn_on_red, families: [osm, traffic]}
   - {prefix: actors.vehicles.drivers.bicycle, families: [pedestrians]}
