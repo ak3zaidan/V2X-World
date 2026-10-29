@@ -161,13 +161,10 @@ export function TrustChain({ state, onSelect, selected }: { readonly state: PkiS
     <section className="pki-trustchain" data-testid="pki-trustchain" aria-label="How trust flows" data-open={open ? "1" : "0"}>
       <div className="pki-tc-summary">
         <button type="button" className="linklike pki-tc-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="pki-trustchain-toggle">
-          {open ? "▾" : "▸"} How trust flows: who certifies whom
+          {open ? "▾" : "▸"} Who certifies whom
         </button>
-        <span className="dim" data-testid="pki-trustchain-summary">
-          {trusted === state.providers.length
-            ? `Each provider's root is on the trust list: all ${state.providers.length} root${state.providers.length === 1 ? "" : "s"} trusted`
-            : `${trusted} of ${state.providers.length} providers' roots are on the trust list`}{" "}
-          · trust list (CTL) version {ctl.sequence}, endorsed by {ctl.signers.length} of {ctl.electors} electors ({ctl.quorum} needed)
+        <span className="dim" data-testid="pki-trustchain-summary" title={`Trust list (CTL) version ${ctl.sequence}`}>
+          {trusted === state.providers.length ? `all ${state.providers.length} root${state.providers.length === 1 ? "" : "s"} trusted` : `${trusted} of ${state.providers.length} roots trusted`}
         </span>
       </div>
       {open ? <TrustChainBody state={state} issuers={issuers} onSelect={onSelect} selected={selected} /> : null}

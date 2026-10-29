@@ -65,18 +65,10 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
         tab="vehicles"
         label="certificates valid now"
         value={certificates === null ? dash : certificates.toLocaleString()}
-        sub={
-          certificates === null
-            ? "seen in ground truth only"
-            : starving > 0
-              ? `${starving} vehicle${starving === 1 ? " has" : "s have"} none left to sign with`
-              : perVehicle !== null
-                ? `pseudonym certificates, about ${perVehicle.toFixed(0)} per vehicle${withAhead !== null && withAhead > certificates ? ` · ${withAhead.toLocaleString()} incl. weeks ahead` : ""}`
-                : "no vehicle in the run has reported yet"
-        }
+        sub={certificates === null ? null : starving > 0 ? `${starving} vehicle${starving === 1 ? "" : "s"} with none` : perVehicle !== null ? `≈ ${perVehicle.toFixed(0)} per vehicle` : null}
         tip={
           onlyGt ??
-          `Pseudonym certificates (PCs) the ${inRun?.length ?? 0} vehicles still in the run can sign with now: what is left of this week's batch${jmax !== null ? ` (${jmax} a week)` : ""}. The same count as Metrics' “valid pseudonym certificates held” (there as a per-vehicle mean). “Incl. weeks ahead” adds the batches already downloaded for later weeks. Vehicles that left the run are not counted.`
+          `Pseudonym certificates the ${inRun?.length ?? 0} vehicles in the run can sign with now${jmax !== null ? ` (${jmax} a week)` : ""}${withAhead !== null && certificates !== null && withAhead > certificates ? `; ${withAhead.toLocaleString()} counting the weeks already downloaded` : ""}. Same count as Metrics' “valid pseudonym certificates held”.`
         }
         tone={certificates === null ? "idle" : starving > 0 ? "warn" : "ok"}
         testId="pki-health-certs"
@@ -85,32 +77,26 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
         tab="flows"
         label={h.pending === 1 ? "request waiting" : "requests waiting"}
         value={h.pending.toLocaleString()}
-        sub={queueGrowing ? "growing: the authorities fall behind" : h.pending > 0 ? "routine: being served now" : "every authority keeps up"}
-        tip="Requests queued at the authorities, plus certificate top-ups in flight at the vehicles. It warns only when the count has grown three snapshots running."
+        sub={queueGrowing ? "growing" : null}
+        tip="Requests queued at the authorities, plus top-ups in flight. Warns when it grows three snapshots running."
         tone={queueGrowing ? "warn" : h.pending > 0 ? "info" : "ok"}
         testId="pki-health-pending"
       />
       <Stat
         tab="cases"
-        label={h.openCases === 1 ? "open misbehaviour case" : "open misbehaviour cases"}
+        label={h.openCases === 1 ? "open case" : "open cases"}
         value={h.openCases === null ? dash : String(h.openCases)}
-        sub={h.openCases === null ? "seen in ground truth only" : h.openCases > 0 ? "being investigated, normal" : "no case under investigation"}
-        tip={onlyGt ?? "Misbehaviour cases the Misbehaviour Authority (MA) opened and has not yet enforced or refused. An open case is the system working, not a fault."}
+        sub={null}
+        tip={onlyGt ?? "Misbehaviour cases the MA opened and has not yet enforced or refused."}
         tone={h.openCases === null ? "idle" : h.openCases > 0 ? "info" : "ok"}
         testId="pki-health-cases"
       />
       <Stat
         tab="crls"
-        label={h.crlAgeS === null ? "revocation list" : "newest list"}
+        label={h.crlAgeS === null ? "revocation list" : "newest revocation list"}
         value={h.crlAgeS === null ? "none yet" : `${ageText(h.crlAgeS)} ago`}
-        sub={
-          h.crlDueS === null
-            ? "no revocation list published yet"
-            : h.crlDueS < 0
-              ? `revocation list overdue by ${ageText(-h.crlDueS)}`
-              : `revocation list ${h.crlNewest ? `${h.crlNewest.provider} v${h.crlNewest.version}` : ""} · ${every !== null ? `a revocation is listed within ${ageText(every)}` : `next due within ${ageText(h.crlDueS)}`}`
-        }
-        tip={`How long ago the newest certificate revocation list (CRL) of any provider was issued.${every !== null ? ` This scenario's CRL Generators gather new revocations and publish them every ${ageText(every)}; with nothing new, no list is published.` : ""} Every list also prints a deadline by which it must be replaced (its nextCrl): the soonest is ${h.crlDueS === null ? "not set yet" : h.crlDueS < 0 ? `overdue by ${ageText(-h.crlDueS)}` : `in ${ageText(h.crlDueS)}`}.`}
+        sub={h.crlDueS !== null && h.crlDueS < 0 ? `overdue by ${ageText(-h.crlDueS)}` : h.crlNewest ? `${h.crlNewest.provider} v${h.crlNewest.version}` : null}
+        tip={`The newest revocation list (CRL) of any provider.${every !== null ? ` New revocations are published every ${ageText(every)}.` : ""} Next one due ${h.crlDueS === null ? "—" : h.crlDueS < 0 ? `overdue by ${ageText(-h.crlDueS)}` : `within ${ageText(h.crlDueS)}`}.`}
         tone={h.crlOverdue ? "bad" : h.crlAgeS === null ? "idle" : "ok"}
         testId="pki-health-crl"
       />
@@ -118,11 +104,11 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
         tab="vehicles"
         label="devices revoked"
         value={gt ? `${h.revoked} of ${h.devices}` : dash}
-        sub={!gt ? "seen in ground truth only" : h.revoked > 0 ? "named on a published revocation list" : "no device on a published list"}
+        sub={null}
         tip={
           gt
-            ? `Devices a published revocation list names (installed by the others or not), of the ${h.devices} devices the providers have enrolled: vehicles and roadside units, so one more than the vehicles listed if the run has a roadside unit. Every view uses this one definition. Revoking a misbehaving device is the system working; the engine does not publish which devices were honest, so this cannot tell a wrongful revocation apart.`
-            : "Which devices a published list names is ground truth: no single authority sees it (the RA, for one, does not see revocations; it only blocks the enrolment certificate the MA points it to)."
+            ? `Devices named on a published revocation list, of the ${h.devices} enrolled (vehicles and roadside units).`
+            : "Ground truth only: no single authority sees which devices a list names."
         }
         tone={!gt ? "idle" : h.revoked > 0 ? "info" : "ok"}
         testId="pki-health-revoked"
@@ -143,7 +129,7 @@ function Stat({
   readonly tab: PkiTab;
   readonly label: string;
   readonly value: string;
-  readonly sub: string;
+  readonly sub: string | null;
   readonly tip: string;
   readonly tone: Tone;
   readonly testId: string;
@@ -155,10 +141,10 @@ function Stat({
       </span>
       <span className="pki-stat-text">
         <span className="pki-stat-main">
-          <b className="mono">{value}</b>
+          <b>{value}</b>
           <span>{label}</span>
         </span>
-        <span className="pki-stat-sub">{sub}</span>
+        {sub !== null ? <span className="pki-stat-sub">{sub}</span> : null}
       </span>
     </button>
   );

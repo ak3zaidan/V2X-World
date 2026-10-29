@@ -311,7 +311,7 @@
 .pki-topo-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; margin: 6px 0 0; }
 .pki-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .pki-swatch.ghost { border: 1px dashed var(--text-faint); background: transparent; border-radius: 2px; }
-.pki-ctl-strip { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 8px 10px; font-size: 12px; }
+.pki-ctl-strip { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 6px 12px; font-size: 12px; }
 .pki-does { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text); }
 .pki-recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; }
 .pki-recent li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -390,8 +390,8 @@
 
 /* The health strip: a status shape, the number with its unit, and one line of what it means. */
 .pki-health { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; padding: 8px 16px; }
-.pki-health .pki-stat { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; text-align: left; min-width: 0; }
-.pki-stat-mark { padding-top: 3px; color: var(--text-faint); flex: none; }
+.pki-health .pki-stat { display: flex; align-items: center; gap: 8px; padding: 7px 10px; text-align: left; min-width: 0; }
+.pki-stat-mark { padding-top: 0; color: var(--text-faint); flex: none; }
 .pki-stat.tone-ok .pki-stat-mark { color: var(--ok); }
 .pki-stat.tone-info .pki-stat-mark { color: var(--accent); }
 .pki-stat.tone-warn .pki-stat-mark { color: var(--warn); }
@@ -554,7 +554,7 @@
 .pki-close { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: none; color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer; flex: none; }
 .pki-close:hover { color: var(--text); border-color: var(--border-strong); }
 .pki-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.pki-context { margin: -4px 0 8px; font-size: 12px; }
+.pki-context { display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 12px; }
 .pki-context b { font-weight: 500; color: var(--text); }
 /* The health strip in one compact row: number and label on one line, the meaning under it on one more. */
 .pki-health { padding: 6px 16px; gap: 6px; }
@@ -659,3 +659,10 @@ h3 .pki-vname-sub { font-size: 11px; font-weight: 400; }
 .pki-leaf-fold { font-family: var(--sans); font-size: 11px; }
 .pki-leaf-bytes { display: block; word-break: break-all; }
 .pki-learned-fold > summary { cursor: pointer; font-size: 11px; margin-top: 2px; }
+.pki-trustchain[data-open="0"] { border: none; background: none; padding: 0 2px; }
+/* "More" sections of a card: closed by default, one line each. */
+.pki-more { font-size: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
+.pki-more > summary { cursor: pointer; font-weight: 600; color: var(--text); }
+.pki-more[open] > summary { margin-bottom: 6px; }
+.pki-knowledge.bare { border: none; padding: 0; }
+.pki-drawer-head .pill { font-size: 11px; }

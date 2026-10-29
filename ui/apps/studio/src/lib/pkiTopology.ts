@@ -886,6 +886,18 @@ export function crlScheduleText(o: { readonly cadenceS: number | null; readonly 
   return parts.join(" ");
 }
 
+/** The same schedule in a few words ("every 30 s · next due within 6 d 23 h"); the full sentence is `crlScheduleText`. */
+export function crlScheduleShort(o: { readonly cadenceS: number | null; readonly publication: string | null; readonly dueS: number | null }): string {
+  const parts: string[] = [];
+  if (o.cadenceS !== null && o.cadenceS > 0) parts.push(`every ${ageText(o.cadenceS)}`);
+  else {
+    const rule = publicationRule(o.publication);
+    if (rule) parts.push(rule);
+  }
+  if (o.dueS !== null) parts.push(o.dueS < 0 ? `overdue by ${ageText(-o.dueS)}` : `next due within ${ageText(o.dueS)}`);
+  return parts.join(" · ");
+}
+
 /** `ieee-1609.2-2022` → `IEEE 1609.2-2022`. */
 export function editionText(edition: string): string {
   return edition.replace(/^ieee-/i, "IEEE ");
