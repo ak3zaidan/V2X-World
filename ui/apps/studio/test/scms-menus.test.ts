@@ -131,7 +131,7 @@ describe("SCMS menus", () => {
     const all = fields();
     const radius = all.find((f) => f.pointer.endsWith("mix_zone_radius_m")) as Field;
     expect(irrelevantReason(radius, { security: { pseudonym_change: { strategy: "time" } } }, all)).toBe(
-      "Applies only when strategy is In a mix zone.",
+      "Only used with “In a mix zone”.",
     );
     expect(irrelevantReason(radius, { security: { pseudonym_change: { strategy: "mix-zone" } } }, all)).toBeUndefined();
   });

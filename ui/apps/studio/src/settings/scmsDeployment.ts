@@ -225,3 +225,31 @@ export function providerProblems(cards: readonly ProviderCard[], preset: string)
 export function isUsProvider(v: ProviderValues): boolean {
   return US_ROLES.every((r) => (v.components[r] ?? 0) >= 1) && EXTRA_ROLES.every((r) => (v.components[r] ?? 0) === 0);
 }
+
+/**
+ * Whether the document, as it stands, is the deployed US system, and if not why, in the window's
+ * words: every menu value the engine marks "not US", a provider missing a US server or running a
+ * CAMP-only one, and an elector count or quorum other than 5 and 3. The engine's verdict (Check)
+ * replaces it when there is one.
+ */
+export function localUsVerdict(
+  doc: unknown,
+  fields: readonly { pointer: string; label: string; choices?: readonly { value: string | number; label: string; us?: boolean }[]; hasDefault?: boolean; defaultValue?: unknown }[],
+): { isUs: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  for (const f of fields) {
+    if (!f.choices || !f.pointer.startsWith("/security")) continue;
+    const raw = getPointer(doc, f.pointer);
+    const v = raw === undefined && f.hasDefault ? f.defaultValue : raw;
+    if (v === undefined || v === null) continue;
+    const c = f.choices.find((x) => String(x.value) === String(v));
+    if (c?.us === false) reasons.push(`${f.label}: ${c.label}`);
+  }
+  const electors = getPointer(doc, "/security/scms/deployment/electors");
+  const quorum = getPointer(doc, "/security/scms/deployment/quorum");
+  if (typeof electors === "number" && electors !== 5) reasons.push(`${electors} electors`);
+  if (typeof quorum === "number" && quorum !== 3) reasons.push(`quorum ${quorum}`);
+  if (getPointer(doc, "/security/scms/deployment/options/lop") === true) reasons.push("LOP on");
+  for (const c of providerCards(doc)) if (!isUsProvider(c.values)) reasons.push(`${c.values.name}'s servers`);
+  return { isUs: reasons.length === 0, reasons };
+}

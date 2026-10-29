@@ -23,6 +23,8 @@ export interface Overlay {
   readonly pair?: boolean;
   readonly min?: number;
   readonly max?: number;
+  /** What an empty box means ("never"). */
+  readonly emptyText?: string;
 }
 
 const strategy = "security.pseudonym_change.strategy";
@@ -80,11 +82,11 @@ export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
   "/security/scms/report_records": { label: "Record every report's fate", help: "Logs what happens to each misbehaviour report. Off keeps recordings small.", defaultValue: false },
 
   // Certificate lifecycle.
-  "/security/pseudonym_change/period_s": { relevantWhen: { path: strategy, in: ["time", null] } },
+  "/security/pseudonym_change/period_s": { relevantWhen: { path: strategy, in: ["time", "j2945-1", "nyc-pilot", null] } },
   "/security/pseudonym_change/distance_m": {
     label: "Change pseudonym every (distance)",
     help: "How far a vehicle drives on one pseudonym.",
-    relevantWhen: { path: strategy, in: ["distance"] },
+    relevantWhen: { path: strategy, in: ["distance", "j2945-1", "nyc-pilot"] },
   },
   "/security/pseudonym_change/mix_zone_radius_m": {
     label: "Mix-zone radius",
@@ -112,7 +114,11 @@ export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
     help: "Also attach it when a vehicle not heard before comes into range (the European rule).",
     defaultValue: false,
   },
+  "/security/scms/lifecycle/root_rollover_at_s": { emptyText: "never" },
+  "/security/scms/lifecycle/peer_root_removal_at_s": { emptyText: "never" },
+  "/security/scms/lifecycle/crl_cadence_s": { emptyText: "each provider's rule" },
   "/security/scms/lifecycle/root_removal_at_s": {
+    emptyText: "never",
     relevantWhen: { path: "security.scms.lifecycle.root_rollover_at_s", in: [], notIn: [null] },
   },
   "/security/scms/lifecycle/clock_skew_share": {
@@ -122,6 +128,14 @@ export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
   // Receiver checks.
   "/security/on_demand_threshold": { defaultValue: 0.5, relevantWhen: { path: policy, in: ["on-demand"] } },
   "/security/prioritized_horizon_m": { defaultValue: 300, relevantWhen: { path: policy, in: ["prioritized"] } },
+
+  // Security & Crypto: the hardware that signs and checks.
+  "/nodes/per_class": { label: "On-board unit per vehicle class", help: "A different unit for one class of vehicle; the rest use the one above." },
+  "/nodes/verify_queue_depth": { help: "Messages waiting for a signature check; more are dropped.", defaultValue: 64 },
+  "/nodes/peer_cert_cache": { help: "Other stations' certificates each unit keeps.", defaultValue: 128 },
+  "/nodes/hsm_sign_lower_us": { help: "For a profile that publishes only a worst case; each signature takes between the two.", emptyText: "the bound only" },
+  "/nodes/compute_tier": { help: "How carefully a unit's own processing time is modelled." },
+  "/nodes/backend_tier": { help: "How carefully the SCMS servers' processing time is modelled." },
 
   // Misbehaviour authority.
   "/detection/ma/params": { label: "MA parameters", help: "Overrides for the authority's thresholds, by name." },

@@ -170,6 +170,8 @@ export interface FormField {
   readonly subgroup?: Subgroup;
   /** When the field matters; outside that it is drawn greyed with the reason, never hidden. */
   readonly relevantWhen?: RelevantWhen;
+  /** What an empty box means, when unset is a choice of its own ("never"). */
+  readonly emptyText?: string;
 }
 
 /** The `x-subgroup` of a published node, or `undefined`. */
@@ -677,6 +679,9 @@ export function fieldsFromPublished(
       out[i] = { ...f, kind: "map", keyChoices: asMap.keyChoices, keyOpen: asMap.keyOpen, valueFields: asMap.valueFields };
       continue;
     }
+    // A map whose keys come from the document (`nodes.per_class`, by vehicle class) keeps its
+    // value's fields, so the window can offer the keys it finds.
+    if (mapValues) out[i] = { ...f, valueFields: mapValues };
     // A `[from, to]` pair (`x-pair`): two number boxes with the element's unit and range.
     const pairNode = index.get(f.pointer);
     if (pairNode?.["x-pair"] === true) {

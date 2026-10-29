@@ -12,13 +12,14 @@
  *    *Reset* puts the default in (as an edit, applied like any other).
  */
 
-import { memo, useEffect, useState } from "react";
+import { memo, useContext, useEffect, useState } from "react";
 import type { ValidationError } from "@vwp/protocol";
 
 import { EventsEditor } from "../components/EventsEditor.js";
 import { STATUS_BADGE, breadcrumbOf, controlKind, describeValue, fieldPath, isUnsupported, oneLine, type Field } from "./model.js";
-import { durationWords } from "../lib/duration.js";
 import { ScmsProviders } from "./ScmsProviders.js";
+import { SettingsDocContext } from "./docContext.js";
+import { getPointer, type Choice, type ItemField } from "../lib/schema.js";
 import { PROVIDERS_POINTER } from "./scmsDeployment.js";
 import { ChoiceSelect, ListEditor, MapRows, MultiCheck, NumberWithPresets, RangePair } from "./widgets.js";
 
@@ -50,6 +51,9 @@ function Widget({
     // An unset key shows what the engine does with it, and nothing is written until it is clicked.
     const on = typeof value === "boolean" ? value : field.defaultValue === true;
     return <input {...common} type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />;
+  }
+  if (field.pointer === "/nodes/per_class" && field.valueFields && field.valueFields.length === 1) {
+    return <ClassMap idBase={id} valueFields={field.valueFields} value={value} onChange={onChange} />;
   }
   if (field.kind === "map" && field.keyChoices) {
     return (
@@ -126,6 +130,7 @@ function Widget({
         unit={field.unit}
         onChange={onChange}
         {...(field.hasDefault ? { defaultValue: field.defaultValue } : {})}
+        {...(field.emptyText ? { emptyText: field.emptyText } : {})}
       />
     );
   }
@@ -133,6 +138,26 @@ function Widget({
   return (
     <input {...common} type="text" value={value === undefined || value === null ? "" : String(value)} onChange={(e) => onChange(e.target.value)} />
   );
+}
+
+/** The vehicle classes the document defines, for a map keyed by class (`nodes.per_class`). */
+function ClassMap({
+  idBase,
+  valueFields,
+  value,
+  onChange,
+}: {
+  idBase: string;
+  valueFields: readonly ItemField[];
+  value: unknown;
+  onChange: (v: unknown) => void;
+}): React.JSX.Element {
+  const doc = useContext(SettingsDocContext);
+  const classes = getPointer(doc, "/actors/vehicles/classes");
+  const names = classes !== null && typeof classes === "object" && !Array.isArray(classes) ? Object.keys(classes as Record<string, unknown>) : [];
+  const keys = names.length > 0 ? names : ["car", "truck", "bus", "motorcycle"];
+  const keyChoices: Choice[] = keys.map((k) => ({ value: k, label: k, available: true }));
+  return <MapRows idBase={idBase} keyChoices={keyChoices} keyOpen={false} valueFields={valueFields} value={value} onChange={onChange} />;
 }
 
 /**
@@ -271,7 +296,12 @@ function SettingRowImpl({
   const defaultWords = f.hasDefault ? (f.choices?.find((c) => String(c.value) === String(f.defaultValue))?.label ?? describeValue(f.defaultValue)) : "";
   const rec = f.recommended ? shortRec(f.recommended) : undefined;
   const flat = (t: string): string => t.toLowerCase().replace(/[,\s]/g, "");
-  const recSame = rec !== undefined && f.hasDefault === true && (flat(rec).startsWith(flat(defaultWords)) || flat(defaultWords).startsWith(flat(rec)) || /^unset$/i.test(rec));
+  const defaultSpellings = f.hasDefault
+    ? [defaultWords, describeValue(f.defaultValue), f.defaultValue === true ? "on" : f.defaultValue === false ? "off" : ""].filter((t) => t !== "").map(flat)
+    : [];
+  const recFlat = rec === undefined ? "" : flat(rec).replace(/\.$/, "");
+  const recSame =
+    rec !== undefined && (/^unset$/i.test(recFlat) || defaultSpellings.some((d) => recFlat.startsWith(d) || d.startsWith(recFlat)));
   if (f.pointer === PROVIDERS_POINTER && f.itemFields) {
     // The provider cards carry their own words; the sub-heading above them names them.
     return (
@@ -361,11 +391,7 @@ function SettingRowImpl({
             />
           )}
           {f.kind === "boolean" ? <span className="dim">{(typeof value === "boolean" ? value : f.defaultValue === true) ? "on" : "off"}</span> : null}
-          {f.unit === "s" && typeof value === "number" && durationWords(value) !== "" ? (
-            <span className="dim duration-words" data-testid="duration-words">
-              = {durationWords(value)}
-            </span>
-          ) : null}
+
           {edited ? (
             <button type="button" className="icon-button tiny" data-testid="setting-undo" onClick={() => onUndo(f.pointer)} title="Undo this edit" aria-label="Undo this edit">
               ↶

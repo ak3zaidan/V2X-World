@@ -61,6 +61,7 @@ export function withOverlay(f: Field): Field {
     ...(o.pair && (f.kind === "json" || f.kind === "list") ? { kind: "pair" as const } : {}),
     ...(o.min !== undefined && f.min === undefined ? { min: o.min } : {}),
     ...(o.max !== undefined && f.max === undefined ? { max: o.max } : {}),
+    ...(o.emptyText ? { emptyText: o.emptyText } : {}),
   };
 }
 
@@ -350,12 +351,11 @@ export const RESEARCH_SECTIONS: readonly ResearchSection[] = [
   { id: "dcc", name: "Congestion Control", blurb: "How radios back off when the channel is busy." },
   { id: "messages", name: "Messages", blurb: "Which messages are sent, how often, and the applications using them.", home: "messages" },
   { id: "net", name: "Networking", blurb: "WSMP or GeoNetworking/BTP, forwarding and fragmentation.", home: "net" },
-  { id: "security", name: "Security & Crypto", blurb: "Signature schemes, verification policy, crypto hardware and certificate caches.", home: "security" },
+  { id: "security", name: "Security & Crypto", blurb: "How messages are signed, and which ones a receiver checks.", home: "security" },
   {
     id: "scms",
     name: "Certificates & SCMS",
-    blurb:
-      "The certificate system: providers and authorities, pseudonym certificates per week and when they change, the RA shuffle, downloads, enrolment, revocation lists and the Misbehaviour Authority.",
+    blurb: "Who issues certificates, how vehicles get and change them, and how misbehaving ones are revoked.",
   },
   { id: "backend", name: "Backend & Cellular", blurb: "The SCMS backend and the cellular and IP links that reach it." },
   { id: "attackers", name: "Attackers", blurb: "Attackers, jammers, eavesdroppers and misbehaviour detection.", home: "threats" },
@@ -536,13 +536,14 @@ export function irrelevantReason(f: Field, doc: unknown, fields: readonly Field[
   const is = (x: unknown): boolean => x === value || ((value === undefined || value === null) && x === null);
   const of = fields.find((x) => x.pointer === target);
   const name = of?.label ?? w.path;
-  if (w.notIn) return w.notIn.some(is) ? `Applies only when ${name} is set.` : undefined;
+  if (w.notIn) return w.notIn.some(is) ? `Only used when ${name} is set.` : undefined;
   const holds = w.in.some(is);
   if (holds) return undefined;
   const words = w.in
-    .map((x) => of?.choices?.find((c) => c.value === x)?.label ?? (x === null ? "unset" : String(x)))
+    .filter((x) => x !== null)
+    .map((x) => `“${of?.choices?.find((c) => c.value === x)?.label ?? String(x)}”`)
     .join(" or ");
-  return `Applies only when ${name} is ${words}.`;
+  return `Only used with ${words}.`;
 }
 
 /**

@@ -91,3 +91,14 @@ input.num::placeholder { color: var(--text-faint); }
 .setting-move { display: flex; align-items: center; gap: 10px; font-size: 12px; margin: -2px 0 8px 15px; }
 .settings-window .setting.bare { grid-template-columns: 3px minmax(0, 1fr); }
 .settings-window .setting.bare .setting-right { grid-column: 2; }
+.num-box { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.num-box input.num { width: 130px; max-width: 130px; }
+.num-box .duration-words { margin-left: 0; white-space: nowrap; }
+/* One line of help under each label; the rest is behind "more". */
+.settings-window .setting-desc { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.settings-window .setting-desc > [data-testid="setting-explain"] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.settings-window .setting-desc > .setting-irrelevant { white-space: nowrap; flex: none; }
+.settings-window .setting-desc .more { flex: none; margin-left: 0; }
+.choice-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.settings-window .settings-sub-blurb { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.us-banner.ok { border-left-color: var(--ok, #3fb950); }

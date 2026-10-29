@@ -59,6 +59,7 @@ import "../styles/quick.css";
 import "../styles/settings.css";
 import { SettingsDocContext } from "./docContext.js";
 import { SettingRow } from "./SettingRow.js";
+import { localUsVerdict } from "./scmsDeployment.js";
 import { PARAMS_POINTER, inheritedValue, movableKeys, moveIntoFields } from "./legacyParams.js";
 
 const SECTION_KEY = "v2xw.settings.section";
@@ -107,34 +108,33 @@ function sectionIdOf(f: Field, tree: readonly ResearchGroup[]): string | undefin
  * engine's own verdict on the last Check (`scenario.validate` `us_system`).
  */
 function UsBanner({
-  checked,
   verdict,
-  onCheck,
+  local,
+  protocol,
 }: {
-  checked: boolean;
   verdict: { readonly isUs: boolean; readonly reasons: readonly string[] } | undefined;
-  onCheck: () => void;
+  local: { readonly isUs: boolean; readonly reasons: readonly string[] };
+  protocol: unknown;
 }): React.JSX.Element {
-  if (checked && !verdict) {
+  if (typeof protocol === "string" && !protocol.includes("scms")) {
     return (
       <div className="note us-banner" data-testid="us-banner" data-us="none">
-        This run uses no US SCMS credential system, so these settings do not apply to it.
+        This run uses the European credential system; the US SCMS settings below do not apply.
       </div>
     );
   }
-  if (!verdict) {
-    return (
-      <div className="note us-banner" data-testid="us-banner" data-us="unknown">
-        Check the settings to see whether this run is the US system.{" "}
-        <button type="button" className="linkbutton" onClick={onCheck}>
-          Check
-        </button>
-      </div>
-    );
-  }
+  const v = verdict ?? local;
   return (
-    <div className={`note us-banner${verdict.isUs ? " ok" : ""}`} data-testid="us-banner" data-us={verdict.isUs ? "true" : "false"}>
-      {verdict.isUs ? "This run is the US system." : `Not the US system: ${verdict.reasons.join(", ") || "a setting the US does not use"}.`}
+    <div className={`note us-banner${v.isUs ? " ok" : ""}`} data-testid="us-banner" data-us={v.isUs ? "true" : "false"}>
+      {v.isUs ? (
+        <>
+          <b>US system.</b> <span className="dim">Everything here matches the deployed US SCMS.</span>
+        </>
+      ) : (
+        <>
+          <b>Not the US system:</b> {v.reasons.join(", ") || "a setting the US does not use"}.
+        </>
+      )}
     </div>
   );
 }
@@ -287,10 +287,18 @@ export function SettingsWindow({
     </SettingsDocContext.Provider>
   );
 
+  /**
+   * A setting that does not apply while the document leaves it unset is left out (the pseudonym
+   * distance under a time-based change); one the document sets stays, greyed, so no value is
+   * hidden. A search shows everything.
+   */
+  const hiddenNow = (f: Field): boolean =>
+    !filtering && getPointer(draft, f.pointer) === undefined && !isEdited(f, edits) && irrelevantReason(f, draft, fields) !== undefined;
+
   /** One section's sub-headings with the fields `keep` allows. */
   const subsOf = (g: ResearchGroup, keep: (f: Field) => boolean): React.JSX.Element[] =>
     g.subs
-      .map((s) => ({ s, shown: s.fields.filter(keep) }))
+      .map((s) => ({ s, shown: s.fields.filter((f) => keep(f) && !hiddenNow(f)) }))
       .filter(({ shown }) => shown.length > 0)
       .map(({ s, shown }) => (
         <div key={s.key} className="settings-sub">
@@ -313,7 +321,7 @@ export function SettingsWindow({
         </div>
         {g.id === "group-run" ? runExtras : null}
         {g.id === "group-scms" ? (
-          <UsBanner checked={validation !== null} verdict={validation?.usSystem} onCheck={() => void runSettingsAction("Check", checkDraft)} />
+          <UsBanner verdict={validation?.usSystem} local={localUsVerdict(draft, fields)} protocol={getPointer(draft, "/security/protocol/id")} />
         ) : null}
         {subsOf(g, basic)}
         {advCount > 0 && basicCount > 0 ? (

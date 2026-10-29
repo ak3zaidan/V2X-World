@@ -13,6 +13,7 @@ import { useContext, useEffect, useState } from "react";
 import type { Choice, ItemField, NumberPreset } from "../lib/schema.js";
 import { getPointer, joinComposed, presetIn, providersIn, setPointer, splitComposed } from "../lib/schema.js";
 import { SettingsDocContext } from "./docContext.js";
+import { durationWords } from "../lib/duration.js";
 
 import "../styles/settings-widgets.css";
 
@@ -321,6 +322,7 @@ export function NumberWithPresets({
   unit,
   onChange,
   defaultValue,
+  emptyText,
 }: {
   common: Common;
   value: unknown;
@@ -333,13 +335,15 @@ export function NumberWithPresets({
   onChange: (v: unknown) => void;
   /** Shown greyed in the empty box: what the engine uses while the key is unset. */
   defaultValue?: unknown;
+  /** What an empty box means when there is no number to show ("never"). */
+  emptyText?: string;
 }): React.JSX.Element {
   const input = (
     <input
       {...common}
       type="number"
       className="num"
-      placeholder={typeof defaultValue === "number" ? String(defaultValue) : undefined}
+      placeholder={typeof defaultValue === "number" ? String(defaultValue) : emptyText}
       value={typeof value === "number" ? value : ""}
       min={min}
       max={max}
@@ -347,12 +351,23 @@ export function NumberWithPresets({
       onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
     />
   );
-  if (!presets || presets.length === 0) return input;
   const effective = typeof value === "number" ? value : defaultValue;
+  const words = unit === "s" && typeof effective === "number" ? durationWords(effective) : "";
+  const head = (
+    <span className="num-box">
+      {input}
+      {words !== "" ? (
+        <span className={typeof value === "number" ? "dim duration-words" : "faint duration-words"} data-testid="duration-words">
+          {words}
+        </span>
+      ) : null}
+    </span>
+  );
+  if (!presets || presets.length === 0) return <span className="number-presets">{head}</span>;
   const active = presets.find((p) => p.value === effective);
   return (
     <span className="number-presets">
-      {input}
+      {head}
       <span className="preset-chips" role="group" aria-label="Common values">
         {presets.map((p) => (
           <button
