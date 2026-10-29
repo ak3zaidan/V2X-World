@@ -670,3 +670,12 @@ h3 .pki-vname-sub { font-size: 11px; font-weight: 400; }
 .pki-vtoolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .pki-vtoolbar .pki-vfind { margin: 0; }
 .pki-vtoolbar .pki-vfind input { width: 230px; }
+/* Messages: a flow in two short lines; the full list behind a disclosure. */
+.pki-flow-row-top { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.pki-flow-row-top b { font-weight: 600; color: var(--text); }
+.pki-flow-stage { font-size: 11px; white-space: nowrap; }
+.pki-flow-all > summary { cursor: pointer; margin-top: 10px; }
+.pki-flow-all[open] > summary { margin-bottom: 4px; }
+.pki-flow-filters select, .pki-flow-filters input { flex: 1 1 100%; width: auto; }
+.pki-flow-row > .faint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pki-stages { max-width: 760px; }

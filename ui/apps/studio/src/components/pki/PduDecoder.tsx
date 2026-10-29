@@ -81,7 +81,7 @@ function Layer({ layer, index, raw }: { readonly layer: PduLayer; readonly index
   return (
     <section className="pki-layer" data-testid={`pdu-layer-${index}`} data-type={layer.type}>
       <h4>
-        <span>{t.what.replace(/^./, (c) => c.toUpperCase())}</span>
+        <span title={t.what}>{t.what.split(":")[0].replace(/^./, (c) => c.toUpperCase())}</span>
         <span className="dim mono">{layer.type}</span>
         {layer.content ? (
           <span className="pill" title="Which kind of content this envelope carries">
@@ -187,13 +187,8 @@ export function PduDecoder({ id, view, onClose }: { readonly id: string; readonl
             <dt>Message id</dt>
             <dd className="mono faint">{pdu.id}</dd>
           </dl>
-          <p className="faint pki-pdu-how">
-            Below, each layer of the message from the outside in: every field with what it means beside it (hover a field for more). Encodings are{" "}
-            <Term k="jer">JER</Term>; the raw bytes are one switch away.
-          </p>
-          <label className="pki-raw-toggle">
-            <input type="checkbox" checked={raw} disabled={pdu.hex === null} onChange={(e) => setRaw(e.target.checked)} data-testid="pdu-raw-toggle" /> show the raw bytes (hex)
-            above each layer's fields
+          <label className="pki-raw-toggle" title="Each layer below, outside in, with every field explained (JER encoding). Hover a field for more.">
+            <input type="checkbox" checked={raw} disabled={pdu.hex === null} onChange={(e) => setRaw(e.target.checked)} data-testid="pdu-raw-toggle" /> raw bytes (hex)
           </label>
           {pdu.hex === null ? <p className="faint">The run kept this message's length only, not its bytes, so there is no hex to show.</p> : null}
           {pdu.layers.map((l, i) => (

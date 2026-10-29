@@ -267,17 +267,23 @@ function FlowItem({
 }): React.JSX.Element {
   return (
     <li>
-      <button type="button" className={on ? "pki-flow-row on" : "pki-flow-row"} onClick={() => pick(i.instance)} data-testid={example ? `pki-flow-example-${i.flow}` : `pki-flow-${i.instance}`}>
-        <span title={i.instance}>
-          <i className="pki-swatch" style={{ background: flowInfo(i.flow).color }} /> {flowInfo(i.flow).name} <span className="faint mono">#{i.instance.split("/").pop()}</span>
-          <span className="faint"> · {i.provider}</span>
-          {example && count !== null ? <span className="faint"> · {count.toLocaleString()} in all</span> : null}
+      <button
+        type="button"
+        className={on ? "pki-flow-row on" : "pki-flow-row"}
+        onClick={() => pick(i.instance)}
+        title={`${i.instance} · ${formatBytes(i.bytes)}`}
+        data-testid={example ? `pki-flow-example-${i.flow}` : `pki-flow-${i.instance}`}
+      >
+        <span className="pki-flow-row-top">
+          <i className="pki-swatch" style={{ background: flowInfo(i.flow).color }} /> <b>{flowInfo(i.flow).name}</b>
+          {example && count !== null ? <span className="faint"> ({count.toLocaleString()})</span> : null}
+          <span className="grow" />
+          {i.last_stage ? <span className="faint pki-flow-stage">{wordsOf(i.last_stage)}</span> : null}
         </span>
-        <span className="dim">
-          {formatSimT(i.first_t)} · {i.messages} message{i.messages === 1 ? "" : "s"} · {formatBytes(i.bytes)}
+        <span className="faint">
+          #{i.instance.split("/").pop()} · {i.provider} · {formatSimT(i.first_t)} · {i.messages} msg
           {i.device_count > 0 ? ` · ${i.device_count === 1 ? deviceName(i.devices[0] ?? "") : `${i.device_count} vehicles`}` : ""}
         </span>
-        {i.last_stage ? <span className="pill">{wordsOf(i.last_stage)}</span> : null}
       </button>
     </li>
   );
@@ -415,11 +421,7 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
             </p>
           ) : null}
           {error ? <p className="faint">The engine said: {error}</p> : null}
-          <p className="dim">
-            {list
-              ? `${list.total.toLocaleString()} flow${list.total === 1 ? "" : "s"} so far${list.total > list.instances.length ? `; the newest ${list.instances.length} are listed` : ""}`
-              : "Waiting for the engine's list of flows…"}
-          </p>
+          {list ? null : <p className="dim">Waiting for the engine's list of flows…</p>}
           {newer > 0 ? (
             <button
               type="button"
@@ -436,25 +438,29 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
           ) : null}
           {examples.length > 0 ? (
             <>
-              <h4 className="pki-flow-group">One of each kind, newest</h4>
+              <h4 className="pki-flow-group">Latest of each kind</h4>
               <ul data-testid="pki-flow-examples">
                 {examples.map((i) => (
                   <FlowItem key={i.instance} i={i} on={i.instance === chosen} pick={pickRow} example count={list?.flows[i.flow] ?? null} />
                 ))}
               </ul>
-              <h4 className="pki-flow-group">Every flow, newest first</h4>
             </>
           ) : null}
-          {!flow && folded > 0 ? (
-            <button type="button" className="linklike pki-flow-folded" onClick={() => setFlow("report")} data-testid="pki-flow-reports-folded">
-              {folded.toLocaleString()} misbehaviour report{folded === 1 ? "" : "s"} (one message each) folded away · show only them
-            </button>
-          ) : null}
-          <ul data-testid="pki-flow-instances">
-            {shown.map((i) => (
-              <FlowItem key={i.instance} i={i} on={i.instance === chosen} pick={pickRow} />
-            ))}
-          </ul>
+          <details className="pki-flow-all" open={examples.length === 0 || undefined}>
+            <summary className="pki-flow-group" title={list && list.total > list.instances.length ? `The newest ${list.instances.length} of ${list.total.toLocaleString()} are listed` : undefined}>
+              All flows, newest first ({(list?.total ?? 0).toLocaleString()})
+            </summary>
+            {!flow && folded > 0 ? (
+              <button type="button" className="linklike pki-flow-folded" onClick={() => setFlow("report")} data-testid="pki-flow-reports-folded">
+                {folded.toLocaleString()} misbehaviour reports hidden · show them
+              </button>
+            ) : null}
+            <ul data-testid="pki-flow-instances">
+              {shown.map((i) => (
+                <FlowItem key={i.instance} i={i} on={i.instance === chosen} pick={pickRow} />
+              ))}
+            </ul>
+          </details>
         </div>
         <div className="pki-flow-main">
           {detail ? (
@@ -468,7 +474,7 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
                   {detail.dropped > 0 ? ` · ${detail.dropped} records not kept` : ""}
                 </span>
               </h3>
-              <p className="faint pki-flow-hint">Each arrow is one message; click one to see what it carried and open it in the decoder.</p>
+              <p className="faint pki-flow-hint">Click an arrow to open its message.</p>
               <div className="pki-seq-wrap">
                 <Sequence detail={detail} view={view} selected={message?.id ?? null} onPick={pick} />
               </div>
