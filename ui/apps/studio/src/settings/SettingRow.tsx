@@ -21,6 +21,7 @@ import { ScmsProviders } from "./ScmsProviders.js";
 import { SettingsDocContext } from "./docContext.js";
 import { getPointer, type Choice, type ItemField } from "../lib/schema.js";
 import { PROVIDERS_POINTER } from "./scmsDeployment.js";
+import { PARAMS_POINTER } from "./legacyParams.js";
 import { ChoiceSelect, ListEditor, MapRows, MultiCheck, NumberWithPresets, RangePair } from "./widgets.js";
 
 /** What one element of a list is called, from the list's title: "Attackers" → "Attacker". */
@@ -133,6 +134,15 @@ function Widget({
         {...(field.hasDefault ? { defaultValue: field.defaultValue } : {})}
         {...(field.emptyText ? { emptyText: field.emptyText } : {})}
       />
+    );
+  }
+  if (field.pointer === PARAMS_POINTER && value !== null && typeof value === "object") {
+    // The older block's keys all have fields of their own; its JSON is there for the rare key that has not.
+    return (
+      <details className="json-collapsed">
+        <summary className="dim">{Object.keys(value).length} values in JSON</summary>
+        <JsonWidget {...common} value={value} onChange={onChange} />
+      </details>
     );
   }
   if (field.kind === "json" || field.kind === "multi" || field.kind === "list" || field.kind === "map") return <JsonWidget {...common} value={value} onChange={onChange} />;

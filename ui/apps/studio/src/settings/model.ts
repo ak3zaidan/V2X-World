@@ -304,6 +304,20 @@ export function buildTree(fields: readonly Field[], metas: readonly GroupMeta[])
   return out;
 }
 
+/**
+ * The engine reports a deployment problem against the whole block, naming the key in its message
+ * ("security.scms.deployment: quorum: 3 of 2 electors; …"). Such an error is moved to the key's own
+ * field, and the message keeps only the plain words.
+ */
+export function refineError(e: ValidationError): ValidationError {
+  const p = errorPointer(e.path);
+  if (p !== "/security/scms/deployment") return e;
+  const m = /^(?:security\.scms\.deployment:\s*)?(providers|quorum|electors|preset|latency|options\.\w+|fibre_fraction|per_link_ms)(?:\.[\w-]+)*:\s*(.*)$/s.exec(e.message.trim());
+  if (!m) return e;
+  const key = m[1].replace(/\./g, "/");
+  return { ...e, path: `/security/scms/deployment/${key}`, message: m[2].charAt(0).toUpperCase() + m[2].slice(1) };
+}
+
 /** A validation error's path as a pointer: the engine sends pointers, older builds dotted paths. */
 export function errorPointer(path: string): string {
   if (path.startsWith("/")) return path;
@@ -322,7 +336,8 @@ export function errorsByField(
 ): { readonly byPointer: ReadonlyMap<string, ValidationError[]>; readonly unplaced: readonly ValidationError[] } {
   const byPointer = new Map<string, ValidationError[]>();
   const unplaced: ValidationError[] = [];
-  for (const e of errors) {
+  for (const raw of errors) {
+    const e = refineError(raw);
     const p = errorPointer(e.path);
     let best: Field | null = null;
     for (const f of fields) {

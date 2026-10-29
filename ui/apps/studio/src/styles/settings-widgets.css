@@ -104,3 +104,5 @@ input.num::placeholder { color: var(--text-faint); }
 .us-banner.ok { border-left-color: var(--ok, #3fb950); }
 .settings-window .coming-soon { font-size: 12px; margin: 14px 0 4px; }
 .list-editor:has(> .empty-note), .map-rows:has(> .empty-note) { flex-direction: row; align-items: center; gap: 10px; }
+.json-collapsed summary { cursor: pointer; font-size: 12px; }
+.json-collapsed[open] summary { margin-bottom: 4px; }

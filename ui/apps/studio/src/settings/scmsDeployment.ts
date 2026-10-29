@@ -234,13 +234,21 @@ export function isUsProvider(v: ProviderValues): boolean {
  */
 export function localUsVerdict(
   doc: unknown,
-  fields: readonly { pointer: string; label: string; choices?: readonly { value: string | number; label: string; us?: boolean }[]; hasDefault?: boolean; defaultValue?: unknown }[],
+  fields: readonly {
+    pointer: string;
+    label: string;
+    choices?: readonly { value: string | number; label: string; us?: boolean }[];
+    hasDefault?: boolean;
+    defaultValue?: unknown;
+    relevantWhen?: unknown;
+  }[],
 ): { isUs: boolean; reasons: string[] } {
   const reasons: string[] = [];
   for (const f of fields) {
     if (!f.choices || !f.pointer.startsWith("/security")) continue;
     const raw = getPointer(doc, f.pointer);
-    const v = raw === undefined && f.hasDefault ? f.defaultValue : raw;
+    // A default counts only for a setting that always applies (not a committee's inner protocol).
+    const v = raw === undefined && f.hasDefault && !f.relevantWhen ? f.defaultValue : raw;
     if (v === undefined || v === null) continue;
     const c = f.choices.find((x) => String(x.value) === String(v));
     if (c?.us === false) reasons.push(`${f.label}: ${c.label}`);

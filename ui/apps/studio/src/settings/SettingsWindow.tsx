@@ -41,6 +41,7 @@ import {
   describeValue,
   errorPointer,
   errorsByField,
+  refineError,
   fieldPath,
   isEdited,
   isModified,
@@ -83,15 +84,24 @@ function save(key: string, value: unknown): void {
   }
 }
 
-function ProblemList({ items, onJump }: { items: readonly ValidationError[]; onJump: (pointer: string) => void }): React.JSX.Element | null {
+function ProblemList({
+  items,
+  onJump,
+  nameOf,
+}: {
+  items: readonly ValidationError[];
+  onJump: (pointer: string) => void;
+  nameOf: (pointer: string) => string | undefined;
+}): React.JSX.Element | null {
   if (items.length === 0) return null;
   return (
     <div className="note err" data-testid="validation-err">
-      {items.map((e, i) => (
+      {items.map(refineError).map((e, i) => (
         <div key={`${e.path}-${i}`}>
-          <button type="button" className="linklike" onClick={() => onJump(errorPointer(e.path))}>
-            <code>{e.path}</code>
-          </button>{" "}
+          <button type="button" className="linklike" onClick={() => onJump(errorPointer(e.path))} title={e.path}>
+            {nameOf(errorPointer(e.path)) ?? <code>{e.path}</code>}
+          </button>
+          {": "}
           {e.message}
           {e.hint ? <span className="faint"> ({e.hint})</span> : null}
         </div>
@@ -582,7 +592,11 @@ export function SettingsWindow({
               <span className={`pill ${validation.valid ? "ok" : "err"}`} data-testid="validation-state">
                 {validation.valid ? "ready to run" : "needs fixing"}
               </span>
-              <ProblemList items={validation.errors} onJump={jumpToField} />
+              <ProblemList
+                items={validation.errors}
+                onJump={jumpToField}
+                nameOf={(p) => fields.filter((f) => p === f.pointer || p.startsWith(`${f.pointer}/`)).sort((a, b) => b.pointer.length - a.pointer.length)[0]?.label}
+              />
               {validation.warnings.length > 0 ? (
                 <div className="note" data-testid="validation-warn">
                   {validation.warnings.map((w, i) => (
