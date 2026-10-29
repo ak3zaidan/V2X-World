@@ -170,7 +170,9 @@ export function CertificateCard({
       {!cert && !error ? <p className="faint">Checking the certificate as a receiver would…</p> : null}
       {cert && facts ? (
         <>
-          <p className="pki-certcard-about dim">{facts.kind.about}</p>
+          <p className="pki-certcard-about dim" title={facts.kind.about}>
+            {facts.kind.about.split(/(?<=\.) (?=[A-Z])/)[0]}
+          </p>
           {why ? (
             <p className="pki-certcard-why" style={{ color: CERT_STATUS[status].color }} data-testid="pki-cert-why" title={engineWhy ?? undefined}>
               <StatusGlyph shape={CERT_STATUS[status].shape} /> {why}
@@ -182,7 +184,8 @@ export function CertificateCard({
               <div>
                 <ValidityBar start={facts.validity.start} end={facts.validity.end} now={cert.time32} status={status} />
                 <span className="dim">
-                  {words ? `${words} · ` : ""}lifetime {facts.validity.stated}
+                  {words ? `${words} · ` : ""}
+                  <span title={`Encoded as ${facts.validity.stated.replace(/ \(.*\)$/, "")}`}>lifetime {/\((.*)\)$/.exec(facts.validity.stated)?.[1] ?? facts.validity.stated}</span>
                 </span>
 
               </div>

@@ -255,25 +255,25 @@ function TopoLegend(): React.JSX.Element {
       ))}
       <span className="faint pki-key-sep">Boxes:</span>
       <span className="pki-key busy" title="The dot in a box's corner lights green while it sends or receives">
-        <i className="pki-dot" /> busy in the last 2 s
+        <i className="pki-dot" /> busy
       </span>
       <span className="pki-key" title="A grey corner dot: online, nothing in the last 2 s">
         <i className="pki-dot idle" /> idle
       </span>
       <span className="pki-key">
-        <LockIcon /> offline by design
+        <LockIcon /> offline
       </span>
       <span className="pki-key">
         <i className="pki-swatch ghost" /> not deployed
       </span>
       <span className="pki-key" title="A solid line is a path the US SCMS architecture defines; it turns blue and thick while messages travel it">
-        <i className="pki-link-key solid" /> link, <i className="pki-link-key busy" /> busy
+        <i className="pki-link-key busy" /> link in use
       </span>
       <span
         className="pki-key"
         title="Messages this run sent along a path the base architecture does not draw: for example two providers' Misbehaviour Authorities sharing reports, which this scenario turns on"
       >
-        <i className="pki-link-key" /> extra link this scenario adds
+        <i className="pki-link-key" /> extra link
       </span>
       <span className="pki-key faulted" title="A component with an injected outage: red border, red corner dot">
         <i className="pki-swatch outage" /> outage
@@ -356,9 +356,9 @@ function DevicesNode({
       <span className="r">{info.name}</span>
       {d ? (
         <span className="dim pki-devices-line">
-          <b>{d.devices}</b> devices · {d.enrolled} enrolled · {d.provisioned} with pseudonym certificates
+          <b>{d.devices}</b> devices · {d.enrolled} enrolled · {d.provisioned} with pseudonyms
           {d.blocklisted > 0 ? (
-            <span title="Refused by the RA after a revocation: their enrolment certificate is on its blocklist. How many devices are revoked is in the strip above."> · {d.blocklisted} blocked from new certificates</span>
+            <span title="Refused by the RA after a revocation: their enrolment certificate is on its blocklist. How many devices are revoked is in the strip above."> · {d.blocklisted} blocked</span>
           ) : (
             ""
           )}

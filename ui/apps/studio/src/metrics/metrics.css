@@ -532,8 +532,8 @@
 .scms-answer { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 10px; font-size: 13.5px; line-height: 1.45; color: var(--text); max-width: 120ch; }
 .scms-answer .lmark { flex: none; position: relative; top: -1px; }
 
-/* At most five tiles a row, none narrower than 200 px: a number and its unit always fit on one line. */
-.scms-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(200px, calc((100% - 32px) / 5)), 1fr)); gap: 8px; }
+/* As many tiles a row as fit at 168 px: a number and its unit always fit on one line. */
+.scms-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; }
 .scms-tile {
   display: flex;
   flex-direction: column;
@@ -553,7 +553,8 @@
 .scms-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .scms-tile.caution { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
 .scms-tile.unhealthy { border-color: color-mix(in srgb, var(--err) 65%, var(--border)); }
-.scms-tile-title { font-size: 11.5px; font-weight: 600; color: var(--text-dim); line-height: 1.3; min-width: 0; }
+.scms-tile-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--text-dim); line-height: 1.3; min-width: 0; }
+.scms-tile-title .lmark { flex: none; margin-top: 1px; }
 .scms-tile-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; margin-top: 2px; min-width: 0; }
 .scms-tile-value .lmark { margin-left: auto; align-self: center; flex: none; }
 .scms-num, .scms-unit { white-space: nowrap; }
@@ -563,7 +564,7 @@
 .scms-tile-cue { font-size: 11.5px; line-height: 1.35; font-weight: 600; }
 .scms-tile-cue.caution { color: color-mix(in srgb, var(--warn) 65%, var(--text)); }
 .scms-tile-cue.unhealthy { color: color-mix(in srgb, var(--err) 75%, var(--text)); }
-.scms-tile-split { font-size: 10.5px; color: var(--text-faint); display: flex; flex-wrap: wrap; column-gap: 4px; }
+.scms-tile-split { font-size: 10.5px; color: var(--text-faint); display: flex; flex-wrap: wrap; column-gap: 10px; }
 .scms-split-part { white-space: nowrap; }
 .scms-actions { display: inline-flex; flex-wrap: nowrap; gap: 8px; }
 
@@ -634,7 +635,7 @@
   background: repeating-linear-gradient(135deg, var(--viz-seq) 0 3px, color-mix(in srgb, var(--viz-seq) 22%, transparent) 3px 6px);
 }
 .scms-hatch-key { display: inline-block; width: 18px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
-.scms-caveat { font-size: 12px; line-height: 1.45; margin: 0 0 8px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: 6px; color: var(--text); max-width: 110ch; }
+.scms-caveat { font-size: 11.5px; line-height: 1.4; margin: 0 0 6px; color: var(--text-dim); cursor: help; }
 .scms-total { font-size: 12px; margin: 6px 0 0; color: var(--text); font-weight: 600; }
 .scms-bar-axis { margin-top: -1px; }
 .scms-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-faint); border-top: 1px solid var(--baseline); padding-top: 1px; font-variant-numeric: tabular-nums; }
@@ -658,3 +659,4 @@
 
 /* The run in brief: the summary's first read, in sentences. */
 .rsum-brief p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--text); max-width: 95ch; }
+.scms-more { font-size: 12px; margin-left: 2px; color: var(--accent); }

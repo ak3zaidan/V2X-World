@@ -210,7 +210,7 @@ function MessageCard({
             {piggyback(record)}
           </p>
         ) : null}
-        {pdus.length === 0 ? <p className="faint">It carried no SPDU of its own: a backend control message whose bytes the engine counts but does not encode.</p> : null}
+        {pdus.length === 0 ? <p className="faint" title="A backend control message whose bytes the engine counts but does not encode">No secured message inside.</p> : null}
         <ul className="pki-pdus">
           {pdus.map((p) => {
             const t = pduText(p.type);
@@ -220,7 +220,7 @@ function MessageCard({
                 <button type="button" className="linklike" disabled={!can} onClick={() => onPdu(p.id)} data-testid={`pki-pdu-${p.id}`} title={can ? "Open it in the decoder" : "This view never saw its bytes"}>
                   <span className="mono">{p.type}</span>
                 </button>
-                <span className="dim"> · {t.what}</span>
+                <span className="dim" title={t.what}> · {t.what.split(":")[0]}</span>
                 <span className="faint mono">
                   {" "}
                   · {formatBytes(p.len)}
@@ -230,7 +230,6 @@ function MessageCard({
             );
           })}
         </ul>
-        {pdus.some((p) => canInspect(p, record, view)) ? <p className="faint">Open one to see its fields explained, and its raw bytes behind a toggle.</p> : null}
         <p className="faint mono" title="The engine's names for this message">
           {record.from} → {record.to} · {record.id}
         </p>
@@ -267,17 +266,23 @@ function FlowItem({
 }): React.JSX.Element {
   return (
     <li>
-      <button type="button" className={on ? "pki-flow-row on" : "pki-flow-row"} onClick={() => pick(i.instance)} data-testid={example ? `pki-flow-example-${i.flow}` : `pki-flow-${i.instance}`}>
-        <span title={i.instance}>
-          <i className="pki-swatch" style={{ background: flowInfo(i.flow).color }} /> {flowInfo(i.flow).name} <span className="faint mono">#{i.instance.split("/").pop()}</span>
-          <span className="faint"> · {i.provider}</span>
-          {example && count !== null ? <span className="faint"> · {count.toLocaleString()} in all</span> : null}
+      <button
+        type="button"
+        className={on ? "pki-flow-row on" : "pki-flow-row"}
+        onClick={() => pick(i.instance)}
+        title={`${i.instance} · ${formatBytes(i.bytes)}`}
+        data-testid={example ? `pki-flow-example-${i.flow}` : `pki-flow-${i.instance}`}
+      >
+        <span className="pki-flow-row-top">
+          <i className="pki-swatch" style={{ background: flowInfo(i.flow).color }} /> <b>{flowInfo(i.flow).name}</b>
+          {example && count !== null ? <span className="faint"> ({count.toLocaleString()})</span> : null}
+          <span className="grow" />
+          {i.last_stage ? <span className="faint pki-flow-stage">{wordsOf(i.last_stage)}</span> : null}
         </span>
-        <span className="dim">
-          {formatSimT(i.first_t)} · {i.messages} message{i.messages === 1 ? "" : "s"} · {formatBytes(i.bytes)}
+        <span className="faint">
+          #{i.instance.split("/").pop()} · {i.provider} · {formatSimT(i.first_t)} · {i.messages} msg
           {i.device_count > 0 ? ` · ${i.device_count === 1 ? deviceName(i.devices[0] ?? "") : `${i.device_count} vehicles`}` : ""}
         </span>
-        {i.last_stage ? <span className="pill">{wordsOf(i.last_stage)}</span> : null}
       </button>
     </li>
   );
@@ -393,7 +398,7 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
         <div className="pki-flow-list">
           <div className="pki-flow-filters">
             <select value={flow} onChange={(e) => setFlow(e.target.value)} data-testid="pki-flow-type" aria-label="Flow type">
-              <option value="">every flow</option>
+              <option value="">All kinds</option>
               {flowNames.map((f) => (
                 <option key={f} value={f}>
                   {flowInfo(f).name} ({list?.flows[f] ?? 0})
@@ -415,11 +420,7 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
             </p>
           ) : null}
           {error ? <p className="faint">The engine said: {error}</p> : null}
-          <p className="dim">
-            {list
-              ? `${list.total.toLocaleString()} flow${list.total === 1 ? "" : "s"} so far${list.total > list.instances.length ? `; the newest ${list.instances.length} are listed` : ""}`
-              : "Waiting for the engine's list of flows…"}
-          </p>
+          {list ? null : <p className="dim">Waiting for the engine's list of flows…</p>}
           {newer > 0 ? (
             <button
               type="button"
@@ -436,25 +437,29 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
           ) : null}
           {examples.length > 0 ? (
             <>
-              <h4 className="pki-flow-group">One of each kind, newest</h4>
+              <h4 className="pki-flow-group">Latest of each kind</h4>
               <ul data-testid="pki-flow-examples">
                 {examples.map((i) => (
                   <FlowItem key={i.instance} i={i} on={i.instance === chosen} pick={pickRow} example count={list?.flows[i.flow] ?? null} />
                 ))}
               </ul>
-              <h4 className="pki-flow-group">Every flow, newest first</h4>
             </>
           ) : null}
-          {!flow && folded > 0 ? (
-            <button type="button" className="linklike pki-flow-folded" onClick={() => setFlow("report")} data-testid="pki-flow-reports-folded">
-              {folded.toLocaleString()} misbehaviour report{folded === 1 ? "" : "s"} (one message each) folded away · show only them
-            </button>
-          ) : null}
-          <ul data-testid="pki-flow-instances">
-            {shown.map((i) => (
-              <FlowItem key={i.instance} i={i} on={i.instance === chosen} pick={pickRow} />
-            ))}
-          </ul>
+          <details className="pki-flow-all" open={examples.length === 0 || undefined}>
+            <summary className="pki-flow-group" title={list && list.total > list.instances.length ? `The newest ${list.instances.length} of ${list.total.toLocaleString()} are listed` : undefined}>
+              All flows, newest first ({(list?.total ?? 0).toLocaleString()})
+            </summary>
+            {!flow && folded > 0 ? (
+              <button type="button" className="linklike pki-flow-folded" onClick={() => setFlow("report")} data-testid="pki-flow-reports-folded">
+                {folded.toLocaleString()} misbehaviour reports hidden · show them
+              </button>
+            ) : null}
+            <ul data-testid="pki-flow-instances">
+              {shown.map((i) => (
+                <FlowItem key={i.instance} i={i} on={i.instance === chosen} pick={pickRow} />
+              ))}
+            </ul>
+          </details>
         </div>
         <div className="pki-flow-main">
           {detail ? (
@@ -468,7 +473,7 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
                   {detail.dropped > 0 ? ` · ${detail.dropped} records not kept` : ""}
                 </span>
               </h3>
-              <p className="faint pki-flow-hint">Each arrow is one message; click one to see what it carried and open it in the decoder.</p>
+              <p className="faint pki-flow-hint">Click an arrow to open its message.</p>
               <div className="pki-seq-wrap">
                 <Sequence detail={detail} view={view} selected={message?.id ?? null} onPick={pick} />
               </div>
@@ -479,8 +484,8 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
                       <th>Stage</th>
                       <th>Reached by</th>
                       <th>At</th>
-                      <th>Since the start</th>
-                      <th>Since the stage before</th>
+                      <th title="Since the flow started">Elapsed</th>
+                      <th title="Since the stage before">Step</th>
                     </tr>
                   </thead>
                   <tbody>

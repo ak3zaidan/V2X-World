@@ -45,19 +45,18 @@ export function CasesTab({ view }: { readonly view: string | null }): React.JSX.
     return col !== "enforced" && col !== "refused";
   }).length;
   return (
-    <div className="pkir-split pkir-cases" data-testid="pki-cases">
+    <div className={cases.length === 0 ? "pkir-split pkir-cases single" : "pkir-split pkir-cases"} data-testid="pki-cases">
       <div className="pkir-table-wrap">
         {view !== GROUND_TRUTH ? (
           <p className="faint pkir-pad" data-testid="pki-cases-as">
             As {entityLabel(view)}: the steps it took part in{view.includes("/ma/") ? " and its own case table" : ""}; no reporter or accused is named.
           </p>
         ) : null}
-        <p className="pkir-pad pki-lead">
-          A <b>case</b> follows one misbehaving sender from the first report to the moment other vehicles refuse its messages: reported, decided, traced
-          without naming it, put on the revocation list, enforced.
-        </p>
-        <p className="pkir-pad dim">
-          {cases.length} case{cases.length === 1 ? "" : "s"} · {open} open
+        <p
+          className="pkir-pad dim"
+          title="A case follows one misbehaving sender from the first report to the moment other vehicles refuse its messages: reported, decided, traced without naming it, put on the revocation list, enforced."
+        >
+          {cases.length === 0 ? null : `${cases.length} case${cases.length === 1 ? "" : "s"} · ${open} open`}
         </p>
         <ol className="pkir-caselist" data-testid="pki-board">
           {[...cases].reverse().map((c) => (
@@ -66,7 +65,7 @@ export function CasesTab({ view }: { readonly view: string | null }): React.JSX.
         </ol>
         {cases.length === 0 ? <p className="dim pkir-pad">No misbehaviour case has been opened{view === GROUND_TRUTH ? "" : " that this entity took part in"}.</p> : null}
       </div>
-      {chosen ? <CaseDetail c={chosen} gt={view === GROUND_TRUTH} /> : <div className="pkir-card dim">Choose a case.</div>}
+      {chosen ? <CaseDetail c={chosen} gt={view === GROUND_TRUTH} /> : cases.length > 0 ? <div className="pkir-card dim">Choose a case.</div> : null}
     </div>
   );
 }
@@ -160,11 +159,11 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
   return (
     <div className="pkir-card" data-testid="pki-case-detail">
       <h3>
-        {caseName(c)} <span className="dim">· decided by the Misbehaviour Authority (MA) of {c.provider}</span>
+        {caseName(c)} <span className="dim" title={`Decided by the Misbehaviour Authority (MA) of ${c.provider}`}>· {c.provider} MA</span>
       </h3>
       {first !== undefined && last !== undefined && last - first >= 5e7 ? (
         <p className="dim" data-testid="pki-case-took">
-          From the first report to “{beatNow(c)}” took <b className="mono">{secondsText(last - first)}</b> of simulated time.
+          <b className="mono">{secondsText(last - first)}</b> from the first report to “{beatNow(c)}”
         </p>
       ) : null}
       <Story c={c} />
@@ -186,12 +185,7 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
             ))}
           </span>
           <span className="faint" title={c.truth.reporters.map((r) => `${deviceName(r.device, r.node)}, device ${r.device}${r.provider ? ` (${r.provider})` : ""}: ${r.reports} report${r.reports === 1 ? "" : "s"}`).join(", ")}>
-            reported by {c.truth.reporters.length} vehicle{c.truth.reporters.length === 1 ? "" : "s"}:{" "}
-            {c.truth.reporters
-              .slice(0, 6)
-              .map((r) => `${deviceName(r.device, r.node)} (${r.reports} report${r.reports === 1 ? "" : "s"})`)
-              .join(", ")}
-            {c.truth.reporters.length > 6 ? ` +${c.truth.reporters.length - 6}` : ""}
+            reported by {c.truth.reporters.length} vehicle{c.truth.reporters.length === 1 ? "" : "s"}
           </span>
         </div>
       ) : null}
@@ -201,10 +195,7 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
             <div className="pkir-step-marker" aria-hidden="true" />
             <div className="pkir-step-body">
               <div className="pkir-step-head">
-                <b title={STAGE_HELP[s.stage]?.term}>{STAGE_STORY[s.stage]?.title ?? s.label}</b>
-                <span className="faint pki-stage-term" title={STAGE_HELP[s.stage]?.term}>
-                  {s.label}
-                </span>
+                <b title={[STAGE_STORY[s.stage]?.says, STAGE_HELP[s.stage]?.term].filter(Boolean).join("\n\n")}>{STAGE_STORY[s.stage]?.title ?? s.label}</b>
                 {s.reached && s.t !== null ? (
                   s.waitNs === null ? (
                     <span className="mono faint">at {secondsText(s.t)}</span>
@@ -217,12 +208,11 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
                   <span className="faint">not reached</span>
                 )}
               </div>
-              {STAGE_STORY[s.stage] ? <div className="pki-stage-says">{STAGE_STORY[s.stage].says}</div> : null}
               {s.detail ? <div className="faint pkir-step-detail">{s.detail}</div> : null}
               {s.learned.length > 0 ? (
                 <details className="pki-learned-fold">
                   <summary className="faint" data-testid="pki-case-learned-toggle">
-                    Privacy: who learns what ({s.learned.length} fact{s.learned.length === 1 ? "" : "s"})
+                    Who learns what ({s.learned.length})
                   </summary>
                   <ul className="pkir-learned" data-testid="pki-case-learned">
                     {s.learned.map((l, k) => (
@@ -319,7 +309,7 @@ function Story({ c }: { readonly c: CaseView }): React.JSX.Element {
               {at === null ? "not yet" : `at ${secondsText(at)}`}
             </span>
             <span className="faint mono" data-testid="pki-story-step">
-              {at === null ? "" : step === null ? "the first report" : step < 5e7 ? "at once" : `+${secondsText(step)} after the step before`}
+              {at === null || step === null ? "" : step < 5e7 ? "at once" : `+${secondsText(step)}`}
             </span>
             {b.note ? <span className="faint">{b.note}</span> : null}
           </li>

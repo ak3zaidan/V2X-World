@@ -12,7 +12,6 @@
 import { useEffect, useMemo } from "react";
 
 import { VEHICLE_STATE } from "../../lib/pkiCert.js";
-import { StatusGlyph } from "../pki/CertStatus.js";
 import {
   CREDENTIAL_COLORS,
   CREDENTIAL_EMPHASIS,
@@ -78,9 +77,6 @@ export function PkiMapOverlay(): React.JSX.Element | null {
         ? CREDENTIAL_ORDER.map((s: CredentialState) => (
             <span key={s} title={VEHICLE_STATE[s].meaning} data-testid="pki-map-legend-state" data-state={s}>
               <i className={CREDENTIAL_EMPHASIS.has(s) ? "double" : undefined} style={{ borderColor: hex(CREDENTIAL_COLORS[s]) }} />
-              <span style={{ color: VEHICLE_STATE[s].color }} aria-hidden="true">
-                <StatusGlyph shape={VEHICLE_STATE[s].shape} size={11} />
-              </span>
               {CREDENTIAL_LABEL[s]}
             </span>
           ))

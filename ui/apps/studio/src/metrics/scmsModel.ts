@@ -1230,7 +1230,7 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
     : rShort !== null
       ? `${words(rShort, "ratio")} of attackers ${recallVehicle !== null ? "revoked" : "reported"}${honestRevoked !== null && honestRevoked > 0 ? `, ${formatNumber(honestRevoked)} honest` : ""}`
       : filed !== null
-        ? `${formatNumber(filed.total)} reports`
+        ? `${formatNumber(filed.total)} report${filed.total === 1 ? "" : "s"}`
         : "no data yet";
   return {
     id: "misbehaviour",
