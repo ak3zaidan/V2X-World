@@ -4036,6 +4036,54 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-29: UI polish integration (uimetrics, uicert: the reviewer's fix lists)
+
+The polish pass after the certificate/PKI and SCMS metrics redesign (`978e08ea`, `9b303a62`). It started from the saved half-finished patches (`polish-1.patch`, `polish-2.patch`) and worked through the reviewer's ranked lists, 15 items per area; none was rejected except one out of scope (below). Both agents committed their work and left clean worktrees, so no wip snapshot was needed. Merged `--no-ff` in order uimetrics (`de8b1db1`, 7 commits), uicert (`e5b83be9`, 5 commits). The two branches touch no file in common; no `src/settings/**` file was touched.
+
+**uimetrics (src/metrics/**, e2e/metrics.spec.ts, metrics unit tests).**
+- One "pending" rule (`detectionPending`) shared by the overview tile, the question's verdict, the summary row and the brief: reports in the RA shuffle or undecided at the MA. A finished run is always judged.
+- Backend reach moved to the backend question; its band is scaled to the scenario's `net.uu` penetration, and the tile says so. A sixth question on privacy: linkability (judged on its last value, it is cumulative), change rate, changes so far.
+- At most 5 tiles a row; a number never splits from its unit. One number format (%, µs, "× payload", "2 h 26 min") and one verdict set (Healthy / Caution / Unhealthy / Pending). The nav entry shows the worst verdict.
+- Sparse runs: the expanded chart opens on the biggest cluster of data windows; card lines space data windows evenly.
+- Changed wording: "ratio (0–1)" became % or "× payload"; "Top-ups completed 9 of 9" became "9 requested · All completed"; "t (s)" became "Simulated time"; the scenario line reads "4 days 3 h of 5 days". The run summary's `crl_entries` row is now the CRL Generators' total across providers (the metric tracked only the last list published). "N still on the vehicles" shows only when the RA and MA counts allow it.
+- Faults: 17 named faults (7 e2e, 10 unit) each turned red and were reverted. One check could not fail at first (the tile-row test ran before the tiles loaded); fixed, it now goes red.
+
+**uicert (components/pki*, the PKI specs).**
+- Vehicles: a status column, problems sorted first, filter chips. A column that is the same for every vehicle becomes one "Every vehicle: …" line above the table (Revocation list, Trust list, Enrolled). New "left the run" state (security record more than 5 s old), so departed vehicles no longer show as starving or between pseudonyms. A failing enrolment certificate is never shown as "healthy": the row and the card agree.
+- Certificates: the failure reason is a sentence; one glossary `Term` component explains every acronym; ids in groups of four.
+- Overview: header on one row, "Seen as" picker in words, a one-row health strip with activity in a neutral tone, the legend above the diagram, dots only along the links drawn now, provider links routed around the boxes; component cards read purpose, certificate, knowledge, activity, then raw counters behind "engine counters (raw)".
+- Revocation: one schedule sentence per provider, dates with the year, the table fits at 1280; the CTL block (a repeat of the Overview) is one line with a link.
+- Misbehaviour: four labelled steps per case card, with time to the list and how many vehicles refuse it (replaces the unlabelled 7-segment bar).
+- Messages: the message card in words; the open flow is held while the list grows ("N newer flows"); repeated identical lines fold into one row with a count.
+- Faults: 15 named faults each turned red and were reverted (listed in `be575fe6`, `47055ef8`, `e5b83be9`).
+- Rejected: the top-bar clock ("Thu 08:03") belongs to the shell.
+
+**Checks on merged main:** typecheck clean; eslint 1 error, 15 warnings (the error, in `e2e-engine/settings.spec.ts:40`, is on main already); vitest 35 files, 395 of 395 pass; Playwright `e2e/` (mock engine, ports 8824/5324) 53 of 53 pass. Engine-backed specs (`playwright.engine.config.ts`, a copy of the release `v2xw-server` built 2026-10-28 21:54, on 8824/5324) for the touched areas: `backend.spec` failed first on the polish wording ("ieee-1609.2-2022" became "Certificate standard: IEEE 1609.2-2022"); the spec now checks the words and the raw edition in the tooltip (`17f9bd0f`). It then fails at "lop is drawn" (no `provider-a/lop/0` box), the same failure as on the pre-polish tree `9b303a62`. `compare-runs.spec` passes with `V2XW_RUN_DIGESTS_DIR=off`; it fails in the main checkout only because `runs/digests/` holds a digest from an earlier run ("nothing to compare with yet" is then false). Failing on `9b303a62` too, so not caused by this merge: `inspector.spec` transport bar (3 controls where 2 are expected) and Backend panel (`backend-glance` not found), and `metrics.spec` (the run summary's backdrop covers the metrics button after a run ends). `live-studio.spec` needs `VWP_LIVE_SCENARIO` and did not run.
+
+**Engine requests (owed by the engine; the UI guesses or reads around them today).**
+1. Enrolment certificate with `enrolment_lifetime_s` under 3600 is written as `Duration::hours(0)` (a lifetime of zero). Use minutes or seconds.
+2. `inspect.pki` vehicles: add `in_run` or `left_at_ns`; the UI guesses "left the run" from how old `security.t` is.
+3. `inspect.pki` vehicles: add the EC's `valid_until`, so every row (not only the chosen one) can show a failing EC.
+4. `security`: add `next_change_ns` ("next in X s"), and `cert_i`/`cert_j`.
+5. Keep authority certificates out of the 1000-record certificate ring; elector certificates cannot be opened today.
+6. CRL Generator: a `pending` count beside `entries` (today `entries` mixes published and waiting entries).
+7. Devices (ee) snapshot: publish `reports_evicted`, `reports_expired`, `reports_not_filed`, `reports_refused_mtu`. Today "filed − uploaded" cannot be explained, and the vehicles' upload counters show fewer than the RA and MA hold.
+8. RA: `next_shuffle_release_ns`, so "pending" can say when reports arrive (only `shuffle_window_s` is published).
+9. MA: `received_direct` vs `received_shared`, splitting `reports_received` by the report-shared path.
+10. A `detection_pending` flag, or MA decision outcomes and their times.
+11. `crl_entries` and `crl_bytes` per provider.
+12. A cumulative/aggregate marker on catalogue rows (such as linkability); the UI reads the definition text.
+13. Full-resolution card series for sparse runs: the binned overview of a fast-forwarded run has 1–3 bins.
+14. The engine under `runtiny` (450 MB) was killed at ~530–630 MB near the end of `scms-audit-mbpipe`, even with `--retain 300 --retain-mb 32`.
+
+**Still open.**
+- The untrusted-certificate colour (`--pki-untrusted`) is unchecked visually: no scenario produces an untrusted certificate.
+- Two lines from Registration to the Linkage boxes still run diagonally close to the Pseudonym CA box (accepted, not rerouted).
+- e2e does not cover the privacy question or the sparse-chart behaviour (unit tests only): `test/fixtures/metrics/scms-run.json` has no linkability data and coarse bins; re-capturing it would let e2e cover both.
+- A metrics card's range text (min–max over the binned overview) can differ from its headline value, which comes from a different query (predates this work).
+- Playwright does not fit the tiny heavy slot's 1700 MB cap; it ran through the main heavy lock.
+- No 1600 light screenshots were taken of the PKI views.
+
 ## 2026-10-28: adoption waves 7-8 integration (side, ev, nema, air: WP-19, 20, 23, 24)
 
 One integrator in the main checkout, one heavy command at a time. All four agents had committed their work and their worktrees were clean, so no wip snapshot was needed.
