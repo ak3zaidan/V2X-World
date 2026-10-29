@@ -167,13 +167,9 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
   return (
     <div className={chosen ? "pkir-split" : "pkir-split single"} data-testid="pki-vehicles">
       <div className="pkir-table-wrap">
-        <p className="pkir-pad pki-lead">
-          Each vehicle enrols once (an <b>enrolment certificate</b>, its long-term credential), then signs its safety messages with short-lived{" "}
-          <b>pseudonym certificates</b> it downloads a week at a time. Choose a vehicle to see the certificates it holds now, its certificate life on the
-          run's clock, its pool week by week and the checks a receiver runs on its certificate.
-        </p>
         {all.length > 0 ? (
-          <div className="pkir-pad pki-vsummary" data-testid="pki-vehicles-summary" role="group" aria-label="Show only the vehicles in one state">
+          <div className="pkir-pad pki-vtoolbar">
+          <div className="pki-vsummary" data-testid="pki-vehicles-summary" role="group" aria-label="Show only the vehicles in one state">
             <button
               type="button"
               className={only === null ? "pki-chip on" : "pki-chip"}
@@ -199,25 +195,24 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
               </button>
             ))}
           </div>
-        ) : null}
-        {same.length > 0 ? (
-          <p className="pkir-pad faint" data-testid="pki-vehicles-same">
-            Every vehicle{(counts.get("left") ?? 0) > 0 ? " still in the run" : ""}: {same.join(" · ")}.
-          </p>
-        ) : null}
-        {all.length > 0 ? (
-          <label className="pkir-pad pki-vfind">
-            <span className="dim">Find a vehicle</span>
+          <span className="grow" />
+          <label className="pki-vfind">
             <input
               type="search"
               value={find}
               onChange={(e) => setFind(e.target.value)}
-              placeholder="66, or its device id"
+              placeholder="Find a vehicle: 66 or device id"
               aria-label="Find a vehicle by its number on the map or its device id"
               title="The number the map and the HUD show (Vehicle 66), or the SCMS device id the certificate records use (1000066)"
               data-testid="pki-vehicle-find"
             />
           </label>
+          </div>
+        ) : null}
+        {same.length > 0 ? (
+          <p className="pkir-pad faint" data-testid="pki-vehicles-same">
+            All{(counts.get("left") ?? 0) > 0 ? " still in the run" : ""}: {same.join(" · ")}
+          </p>
         ) : null}
         <table className="pkir-table pki-vtable" data-testid="pki-vehicles-table">
           <thead>
@@ -289,9 +284,7 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
         ) : rows.length === 0 ? (
           <p className="dim pkir-pad">{find.trim() ? `No vehicle${only ? " in that state" : ""} matches “${find.trim()}”.` : "No vehicle is in that state now."}</p>
         ) : null}
-        <p className="faint pkir-pad">
-          {gt ? "Ground truth: “revoked” includes vehicles a published CRL revokes that have not installed it yet." : `As ${deviceName(view)}: only what that vehicle holds.`}
-        </p>
+        {gt ? null : <p className="faint pkir-pad">As {deviceName(view)}: only what that vehicle holds.</p>}
       </div>
       {chosen ? (
         <VehicleCard
@@ -383,7 +376,7 @@ function AtAGlance({
     <div className="pki-glance" data-testid="pki-vehicle-glance">
       <div className={ecLimit ? "pki-tile limit" : ecOk ? "pki-tile" : "pki-tile attn"} data-testid="pki-glance-ec-tile" data-limit={ecLimit ? "1" : undefined}>
         <span className="k" title="Enrolment certificate (EC): issued once by the provider's Enrolment CA (ECA); proves the vehicle may ask for pseudonym certificates">
-          Enrolment certificate (EC)
+          Enrolment certificate
         </span>
         {d.enrolment ? (
           <span className="pki-tile-cert">
@@ -403,14 +396,14 @@ function AtAGlance({
           {!d.enrolled
             ? "not enrolled"
             : ecLimit
-              ? "lifetime not modelled in this scenario (open it for why)"
+              ? "lifetime not modelled here"
               : ecOk
-                ? "enrolled with its provider"
+                ? "enrolled"
                 : `a receiver reads it as ${CERT_STATUS[ec.status].label.toLowerCase()} (open it)`}
         </span>
       </div>
       <div className="pki-tile">
-        <span className="k" title="The pseudonym certificate (PC) it signs its safety messages with now">Signing with (PC)</span>
+        <span className="k" title="The pseudonym certificate (PC) it signs its safety messages with now">Signing with</span>
         {d.active && !left ? (
           <CertLink id8={d.active} holder={d.device} label={grouped(d.active)} testId="pki-glance-pc" />
         ) : left ? (
@@ -451,14 +444,13 @@ function AtAGlance({
         {revoked || gtRevoked ? (
           <>
             <b className="mono dim">{pool.withAhead} held · refused</b>
-            <span className="sub">a published revocation list names this vehicle, so receivers refuse every one of them</span>
+            <span className="sub">receivers refuse them</span>
           </>
         ) : (
           <>
             <b className="mono">{validNow} valid now</b>
             <span className="sub">
-              {thisWeek} of this week's {d.jmax} left
-              {pool.ahead > 0 ? ` · ${pool.withAhead} including the ${aheadText(pool.ahead)}` : " · none downloaded for the weeks ahead yet"}
+              {pool.ahead > 0 ? `${pool.withAhead} incl. the ${aheadText(pool.ahead)}` : `${thisWeek} of this week's ${d.jmax} left`}
             </span>
           </>
         )}
@@ -500,7 +492,7 @@ function AtAGlance({
           </b>
         )}
         <span className="sub" data-testid="pki-glance-own-list" title="As a receiver: the list it checks other vehicles' messages against">
-          {own ? `Its own copy of the list: ${installedListText(own)} (${own.entries} entr${own.entries === 1 ? "y" : "ies"})` : "It has not installed a revocation list yet"}
+          {own ? `holds list ${installedListText(own)}` : "no list installed yet"}
         </span>
       </div>
     </div>
@@ -550,19 +542,21 @@ function VehicleCard({
     <div className="pkir-card" data-testid="pki-vehicle-card">
       <h3 className="pki-vehicle-head">
         <VehicleName device={d.device} node={d.node} testId="pki-vehicle-card-name" /> <span className="dim">· {d.provider}</span>
-        <VehicleStateBadge st={shown} testId="pki-vehicle-card-state" />
+        <span title={VEHICLE_STATE[shown].meaning}>
+          <VehicleStateBadge st={shown} testId="pki-vehicle-card-state" />
+        </span>
       </h3>
-      <p className="faint pki-vstate-meaning">{VEHICLE_STATE[shown].meaning}</p>
       <AtAGlance d={d} row={row} nowNs={nowNs} ec={ec} left={left} heads={heads} />
       <VehicleTimeline d={d} nowNs={Math.max(panelNow, nowNs)} />
       <h4>
         Certificates by week{" "}
         <span className="faint" title="The current i-period: one week from the 2015-01-06 04:00 ET epoch (compressed in a compressed calendar)">
-          (this is <Term k="ij">week {d.current_i}</Term>; {d.jmax} certificates a week)
+          · now <Term k="ij">week {d.current_i}</Term> · {d.jmax} a week
         </span>
       </h4>
       <CredentialGrid d={d} />
-      <h4>Pseudonym history</h4>
+      <details className="pki-more">
+      <summary>Pseudonym history ({d.pseudonyms.length})</summary>
       <ol className="pkir-history pki-history" data-testid="pki-pseudonyms">
         {d.pseudonyms.map((p, k) => (
           <li key={`${p.id8}/${p.since}`}>
@@ -575,11 +569,12 @@ function VehicleCard({
           </li>
         ))}
       </ol>
+      </details>
       {d.active ? (
-        <>
-          <h4>The certificate it signs with now</h4>
+        <details className="pki-more">
+          <summary>The certificate it signs with now</summary>
           <CertificateCard id8={d.active} holder={d.device} testId="pki-vehicle-cert" />
-        </>
+        </details>
       ) : null}
     </div>
   );
@@ -663,7 +658,7 @@ export function CredentialGrid({ d }: { readonly d: Pick<VehicleDetail, "grid" |
       <div className="faint mono pkir-hover">
         {hover
           ? `week ${hover.i} · certificate ${hover.j + 1} of ${g.jmax} · ${CELL_LABEL[hover.state as CellState] ?? hover.state}${hover.id8 ? ` · ${grouped(hover.id8)}` : ""}${hover.used ? " · has signed messages" : ""}`
-          : `weeks ${g.iMin}–${g.iMax} across, the week's ${g.jmax} certificates down${hidden > 0 ? ` · ${hidden} later weeks, not yet available, not drawn` : ""} · click a certificate for its card`}
+          : `weeks across, certificates down${hidden > 0 ? ` · ${hidden} later weeks not drawn` : ""} · click one to open it`}
       </div>
     </div>
   );

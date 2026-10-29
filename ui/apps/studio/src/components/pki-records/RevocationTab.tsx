@@ -21,12 +21,11 @@ import {
   slaText,
   time32Text,
   type CrlHead,
-  type CtlView,
   type ProviderView,
 } from "../../lib/pkiRecords.js";
 import { formatBytes } from "../../lib/pki.js";
 import { deviceName, grouped } from "../../lib/pkiCert.js";
-import { crlScheduleText, maModeText } from "../../lib/pkiTopology.js";
+import { crlScheduleShort, crlScheduleText, maModeText } from "../../lib/pkiTopology.js";
 import { CloseIcon } from "../../shell/Icons.js";
 import { Term } from "../pki/Term.js";
 import { chooseTab, usePki, usePkiView } from "./state.js";
@@ -45,11 +44,6 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
   return (
     <div className={chosen ? "pkir-split pkir-crls" : "pkir-split pkir-crls single"} data-testid="pki-crls">
       <div className="pkir-table-wrap">
-        <p className="pkir-pad pki-lead">
-          A <b>certificate revocation list (CRL)</b> is how a revocation reaches the vehicles: each provider's CRL Generator signs a new list, and every
-          list must be replaced before the deadline it prints. Times are the run's simulated calendar, in UTC. Click a row for its versions, and a version
-          for what it revokes.
-        </p>
         <table className="pkir-table pki-crltable" data-testid="pki-crl-table">
           <thead>
             <tr>
@@ -180,7 +174,6 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
         </table>
         {rows.length === 0 ? <p className="dim pkir-pad">No revocation list (CRL) has been published yet. The first appears when a provider's CRL Generator signs one.</p> : null}
         {crls ? <Providers providers={crls.providers} heads={crls.crls} nowRows={rows} cadence={cadence} /> : null}
-        {crls?.ctl ? <Ctl ctl={crls.ctl} /> : null}
       </div>
       {chosen ? <CrlCard id8={chosen} view={view} head={crls?.crls.find((c) => c.id8 === chosen) ?? null} /> : null}
     </div>
@@ -397,66 +390,43 @@ function Providers({
   readonly nowRows: readonly { readonly provider: string; readonly newest: CrlHead }[];
   readonly cadence: Readonly<Record<string, number>>;
 }): React.JSX.Element {
-  const sentence = (label: string, publication: string): string => {
+  const dueOf = (label: string): number | null => {
     const mine = nowRows.filter((r) => r.provider === label);
-    const due = mine.length > 0 ? Math.min(...mine.map((r) => r.newest.sla_now_s)) : null;
-    return crlScheduleText({ cadenceS: cadence[label] ?? null, publication, dueS: due });
+    return mine.length > 0 ? Math.min(...mine.map((r) => r.newest.sla_now_s)) : null;
   };
-  // Providers that publish the same way are said once ("Both providers: …"); the deadline is
-  // compared to the hour, so two lists a few seconds apart still read as one schedule.
-  const shape = (p: ProviderView): string =>
-    JSON.stringify([p.on_ctl, p.ma_mode, p.ma_review_s ?? null, p.crl_publication, cadence[p.label] ?? null, Math.round(Math.min(...nowRows.filter((r) => r.provider === p.label).map((r) => r.newest.sla_now_s)) / 3600)]);
-  if (providers.length > 1 && new Set(providers.map(shape)).size === 1) {
-    const p = providers[0];
+  const line = (p: ProviderView): React.JSX.Element => {
+    const o = { cadenceS: cadence[p.label] ?? null, publication: p.crl_publication, dueS: dueOf(p.label) };
     return (
       <>
-        <h4 className="pkir-pad">How the providers publish</h4>
-        <p className="pkir-pad pki-provider-rules-one" data-testid="pki-crl-providers" data-same="1">
-          <b>{providers.length === 2 ? "Both providers" : `All ${providers.length} providers`}</b>{" "}
-          <span className="dim">
-            ({providers.map((x) => `${x.label}${x.home ? ", home" : ""}`).join("; ")}) · {p.on_ctl ? "roots on the trust list" : "roots NOT on the trust list"} · {maModeText(p.ma_mode)}
-          </span>
-          <br />
-          <span data-testid="pki-crl-schedule">{sentence(p.label, p.crl_publication)}</span>
-        </p>
+        <span data-testid="pki-crl-schedule" title={crlScheduleText(o)}>
+          Publishes {crlScheduleShort(o)}
+        </span>
+        <span className="dim">
+          {" "}
+          · {maModeText(p.ma_mode)}
+          {p.ma_review_s ? ` (review ${slaText(p.ma_review_s)})` : ""}
+        </span>
+        {!p.on_ctl ? <span className="bad"> · root NOT on the trust list</span> : null}
       </>
+    );
+  };
+  // Providers that publish the same way are said once; the deadline is compared to the hour.
+  const shape = (p: ProviderView): string =>
+    JSON.stringify([p.on_ctl, p.ma_mode, p.ma_review_s ?? null, p.crl_publication, cadence[p.label] ?? null, Math.round((dueOf(p.label) ?? 0) / 3600)]);
+  if (providers.length > 1 && new Set(providers.map(shape)).size === 1) {
+    return (
+      <p className="pkir-pad pki-provider-rules-one" data-testid="pki-crl-providers" data-same="1">
+        <b>{providers.length === 2 ? "Both providers" : `All ${providers.length} providers`}</b> {line(providers[0])}
+      </p>
     );
   }
   return (
-    <>
-      <h4 className="pkir-pad">How each provider publishes</h4>
-      <ul className="pkir-pad pki-provider-rules" data-testid="pki-crl-providers">
-        {providers.map((p) => {
-          const mine = nowRows.filter((r) => r.provider === p.label);
-          const due = mine.length > 0 ? Math.min(...mine.map((r) => r.newest.sla_now_s)) : null;
-          return (
-            <li key={p.label} data-provider={p.label}>
-              <b>{p.label}</b>
-              {p.home ? " (home)" : ""}{" "}
-              <span className={p.on_ctl ? "dim" : "bad"}>{p.on_ctl ? "· its root is on the trust list" : "· its root is NOT on the trust list"}</span>{" "}
-              <span className="dim">
-                · {maModeText(p.ma_mode)}
-                {p.ma_review_s ? ` (review takes ${slaText(p.ma_review_s)})` : ""}
-              </span>
-              <br />
-              <span data-testid="pki-crl-schedule">{crlScheduleText({ cadenceS: cadence[p.label] ?? null, publication: p.crl_publication, dueS: due })}</span>
-            </li>
-          );
-        })}
-      </ul>
-    </>
-  );
-}
-
-function Ctl({ ctl }: { readonly ctl: CtlView }): React.JSX.Element {
-  return (
-    <p className="pkir-pad faint" data-testid="pki-ctl">
-      The certificate trust list (CTL), version {ctl.sequence}, names {ctl.roots.length} root{ctl.roots.length === 1 ? "" : "s"}; it is endorsed by {ctl.signers.length}{" "}
-      of {ctl.electors} electors.{" "}
-      <button type="button" className="linklike" onClick={() => chooseTab("trust")} data-testid="pki-ctl-overview">
-        Its history and roots are on the Overview
-      </button>
-      .
-    </p>
+    <ul className="pkir-pad pki-provider-rules" data-testid="pki-crl-providers">
+      {providers.map((p) => (
+        <li key={p.label} data-provider={p.label}>
+          <b>{p.label}</b> {line(p)}
+        </li>
+      ))}
+    </ul>
   );
 }

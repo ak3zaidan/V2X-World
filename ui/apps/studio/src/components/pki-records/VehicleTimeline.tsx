@@ -67,12 +67,14 @@ export function VehicleTimeline({ d, nowNs }: { readonly d: VehicleDetail; reado
   const asOfX = x(d.t);
   return (
     <section className="pkir-life" data-testid="pki-lifecycle">
-      <h4>Certificate life on the run's clock</h4>
-      {life.beforeRun.length > 0 ? (
-        <p className="faint" data-testid="pki-life-preload" title="Enrolment and the first batches happen at the factory and dealer, before the run starts (not on the run's clock)">
-          Before the run: enrolled and given its first batches at the factory and dealer ({life.beforeRun.length} step{life.beforeRun.length === 1 ? "" : "s"}).
-        </p>
-      ) : null}
+      <h4>
+        Timeline{" "}
+        {life.beforeRun.length > 0 ? (
+          <span className="faint" data-testid="pki-life-preload" title="Enrolment and the first batches happen at the factory and dealer, before the run starts (not on the run's clock)">
+            · enrolled before the run
+          </span>
+        ) : null}
+      </h4>
       <svg viewBox={`0 0 ${W} ${h}`} width="100%" role="img" aria-label={`Certificate lifecycle of ${deviceName(d.device)}`} data-testid="pki-life-svg">
         <text x={nowX} y={10} textAnchor={nowX < W / 2 ? "start" : "end"} className="axis now-label" data-testid="pki-life-now">
           now {secondsText(now)}
@@ -134,9 +136,12 @@ export function VehicleTimeline({ d, nowNs }: { readonly d: VehicleDetail; reado
         </g>
       </svg>
       {stale ? (
-        <p className="faint" data-testid="pki-life-asof">
-          Its certificate record is as of {secondsText(d.t)} (dashed line): a vehicle publishes it when its certificates change, so the pool and the pseudonym bar
-          stop there; messages and flows run to now.
+        <p
+          className="faint"
+          data-testid="pki-life-asof"
+          title="A vehicle publishes its certificate record when its certificates change, so the pool and the pseudonym bar stop there; messages and flows run to now."
+        >
+          Certificate record as of {secondsText(d.t)} (dashed line).
         </p>
       ) : null}
       {err ? <p className="faint">The engine could not list this vehicle's flows: {err}</p> : null}
@@ -145,20 +150,17 @@ export function VehicleTimeline({ d, nowNs }: { readonly d: VehicleDetail; reado
           <i className="k enrolment" /> enrolment
         </span>
         <span>
-          <i className="k download" /> certificate download (first batch or top-up)
+          <i className="k download" /> download
+        </span>
+        <span title="Signing with one pseudonym certificate; a new bar is a change. Click one for its certificate.">
+          <i className="k pseudo" /> pseudonym in use
         </span>
         <span>
-          <i className="k pseudo" /> signing with one pseudonym (a new bar is a change; click it)
-        </span>
-        <span>
-          <i className="k report" /> misbehaviour report sent
+          <i className="k report" /> report sent
         </span>
         <span>
           <i className="k revocation" /> revoked
         </span>
-      </p>
-      <p className="faint" data-testid="pki-life-batches" title={`Certificates it holds for each week (i-period): ${d.jmax} a week in this run, 20 in the US profile`}>
-        Certificates it holds, by week: {life.batches.map((b) => `week ${b.i}: ${b.certs}`).join(" · ") || "none"}
       </p>
     </section>
   );
