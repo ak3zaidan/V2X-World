@@ -133,8 +133,8 @@ pub use safety::{
 pub use secure::{CryptoMode, NodeCrypto, NodeSecurity, SecCtx, SignedFrame, SpduVerdict};
 pub use server::{OpClass, OpDescriptor, ProfileServiceModel, ServerBank, ServiceModel};
 pub use stores::{
-    CertStore, CredState, CredentialHandle, CrlGate, CrlVerdict, HeardTable, Neighbor, NeighborTable,
-    PeerCertCache, ReportOutbox, RotationPolicy, Stores, VerificationState,
+    CertStore, CredState, CredentialHandle, CrlGate, CrlVerdict, HeardTable, Neighbor,
+    NeighborTable, PeerCertCache, ReportOutbox, RotationPolicy, Stores, VerificationState,
 };
 pub use telemetry::{NodeState, TelemetryInputs, TelemetryWindow};
 pub use vru::{
