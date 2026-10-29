@@ -53,6 +53,7 @@ import { CloseIcon } from "../../shell/Icons.js";
 import { openPanel } from "../../shell/route.js";
 import { chooseTab, usePkiView } from "../pki-records/state.js";
 import { certErrorText, certFacts, certStatus, grouped, windowWords } from "../../lib/pkiCert.js";
+import { CertLink } from "./CertificateCard.js";
 import { CertBadge } from "./CertStatus.js";
 import { GlossText } from "./GlossText.js";
 import { useCert } from "./useCert.js";
@@ -371,7 +372,7 @@ function ComponentCard({
         </p>
         <dl className="pki-pairs">
           <dt>Certificate</dt>
-          <dd data-testid="pki-card-cert-line">{certId ? <CertLine id8={certId} /> : <span className="dim">{noCertText(c.role)}</span>}</dd>
+          <dd data-testid="pki-card-cert-line">{certId ? <CertLine id8={certId} holder={c.id} /> : <span className="dim">{noCertText(c.role)}</span>}</dd>
           {signedCtl !== null ? (
             <>
               <dt>Trust list</dt>
@@ -520,7 +521,7 @@ function noCertText(role: string): string {
 }
 
 /** A certificate's state in one line: the shared badge, its id, and how long it has left. */
-function CertLine({ id8 }: { readonly id8: string }): React.JSX.Element {
+function CertLine({ id8, holder }: { readonly id8: string; readonly holder: string }): React.JSX.Element {
   const { cert, error } = useCert(id8);
   const facts = useMemo(() => (cert ? certFacts(cert.tree, null) : null), [cert]);
   const status = cert ? certStatus(cert, facts?.validity ?? null) : "unknown";
@@ -528,7 +529,7 @@ function CertLine({ id8 }: { readonly id8: string }): React.JSX.Element {
   return (
     <span className="pki-certline">
       {cert ? <CertBadge status={status} compact /> : null}
-      <span className="mono">{grouped(id8)}</span>
+      <CertLink id8={id8} holder={holder} label={grouped(id8)} testId="pki-card-cert-open" />
       {error ? <span className="faint"> · {certErrorText(error)}</span> : words ? <span className="dim"> · {words}</span> : !cert ? <span className="faint"> · checking…</span> : null}
     </span>
   );
