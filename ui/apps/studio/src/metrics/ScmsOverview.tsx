@@ -312,10 +312,10 @@ function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => vo
         ) : null}
       </h5>
       {b.rows.length === 0 ? (
-        <p className="dim scms-note">{b.empty}</p>
+        <p className="dim scms-note"><Answer text={b.empty} /></p>
       ) : b.idle !== undefined ? (
         <p className="scms-idle" data-testid={`${testId}-idle`}>
-          {b.idle}
+          <Answer text={b.idle} />
         </p>
       ) : (
         <>
@@ -561,8 +561,8 @@ export function ScmsOverview({
       {open ? (
         <div id="scms-body">
           {src.status === "loading" ? <p className="dim scms-intro">Reading the authorities' counts…</p> : null}
-          <AnswerStrip sections={o.sections} />
-          <div className="scms-grid">
+          {src.status === "loading" ? null : <AnswerStrip sections={o.sections} />}
+          <div className="scms-grid" style={src.status === "loading" ? { display: "none" } : undefined}>
             {o.sections.map((s) => (
               <Panel key={s.id} s={s} overview={overview} onOpen={openBase} />
             ))}

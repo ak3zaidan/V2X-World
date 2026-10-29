@@ -398,7 +398,7 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
         <div className="pki-flow-list">
           <div className="pki-flow-filters">
             <select value={flow} onChange={(e) => setFlow(e.target.value)} data-testid="pki-flow-type" aria-label="Flow type">
-              <option value="">every flow</option>
+              <option value="">All kinds</option>
               {flowNames.map((f) => (
                 <option key={f} value={f}>
                   {flowInfo(f).name} ({list?.flows[f] ?? 0})
@@ -484,8 +484,8 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
                       <th>Stage</th>
                       <th>Reached by</th>
                       <th>At</th>
-                      <th>Since the start</th>
-                      <th>Since the stage before</th>
+                      <th title="Since the flow started">Elapsed</th>
+                      <th title="Since the stage before">Step</th>
                     </tr>
                   </thead>
                   <tbody>
