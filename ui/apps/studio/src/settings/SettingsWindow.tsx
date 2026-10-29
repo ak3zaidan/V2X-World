@@ -608,13 +608,31 @@ export function SettingsWindow({
                 nameOf={(p) => fields.filter((f) => p === f.pointer || p.startsWith(`${f.pointer}/`)).sort((a, b) => b.pointer.length - a.pointer.length)[0]?.label}
               />
               {validation.warnings.length > 0 ? (
-                <div className="note" data-testid="validation-warn">
-                  {validation.warnings.map((w, i) => (
-                    <div key={i}>
-                      <code>{w.path}</code> {w.message}
-                    </div>
-                  ))}
-                </div>
+                <details className="settings-notes" data-testid="validation-warn">
+                  <summary>
+                    {validation.warnings.length === 1 ? "1 note" : `${validation.warnings.length} notes`} from the engine
+                  </summary>
+                  {validation.warnings.map((w, i) => {
+                    const name = fields.filter((f) => w.path === f.pointer || w.path.startsWith(`${f.pointer}/`)).sort((a, b) => b.pointer.length - a.pointer.length)[0]?.label;
+                    const text = w.message.replace(/^[a-z0-9_.[\]-]+: /i, "");
+                    const sentence = text.split(/(?<=\.)\s/)[0] ?? text;
+                    const first = sentence.length <= 140 ? sentence : `${sentence.slice(0, sentence.lastIndexOf(" ", 120))}…`;
+                    return (
+                      <div key={i} className="settings-note">
+                        <button type="button" className="linkbutton" onClick={() => jumpToField(w.path)}>
+                          {name ?? "Setting"}
+                        </button>{" "}
+                        {first}
+                        {first.length < text.length ? (
+                          <details className="settings-note-more">
+                            <summary>more</summary>
+                            {first.endsWith("…") ? text : text.slice(first.length).trim()}
+                          </details>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </details>
               ) : null}
             </div>
           ) : validation ? (
