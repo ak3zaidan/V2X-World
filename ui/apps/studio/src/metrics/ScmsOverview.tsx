@@ -178,6 +178,8 @@ function SectionMark({ s, compact = false }: { s: ScmsSection; compact?: boolean
 function rangeText(lo: number, hi: number, base: string | undefined, unit: string | undefined): string {
   const a = display(base ?? "", lo, unit ?? "");
   const b = display(base ?? "", hi, unit ?? "");
+  // Zero needs no unit of its own: "0–57 µs", not "0 ms–57 µs".
+  if (lo === 0) return `0–${b.value}${b.unit ? ` ${b.unit}` : ""}`;
   return a.unit === b.unit ? `${a.value}–${b.value}${b.unit ? ` ${b.unit}` : ""}` : `${displayText(base ?? "", lo, unit ?? "")}–${displayText(base ?? "", hi, unit ?? "")}`;
 }
 
