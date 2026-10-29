@@ -932,10 +932,13 @@ every LTE digest (owner).
     on the mean, and none earlier. The plan's 20 % guess was low, because a glance that
     starts while the IDM's braking builds up also delays the response.
   - `v2xw-engine/tests/distraction_warning.rs`: the expectation row, and FCW/EEBL on
-    against off with distraction on.
+    against off with distraction on and human drivers on the `traffic` grid. Mean DRAC is
+    0.1775 off and 0.1747 on; the lowest TTC is 86.0 s off and 95.5 s on; 37 FCW/EEBL
+    warnings were issued.
 - **Rows:** `expectations/traffic-distraction.yaml`, `distraction: true` gives
-  `metric.ttc_conflicts` up. The plan's second row (`apps.fcw` under distraction) needs a
-  list-valued sweep (WP-32), so it is a test.
+  `metric.drac` up (0.1700 -> 0.1725, +1.5 %, calibrated drivers). The plan's metric, TTC < 1.5 s conflicts, is 0 on that grid whether
+  distraction is on or off, so it cannot move. The plan's second row (`apps.fcw` under
+  distraction) needs a list-valued sweep (WP-32), so it is a test.
 
 ---
 

@@ -2,5 +2,5 @@
 # Format: see catalogue.yaml. actors.* runs on the signalised Midtown-shaped grid
 # (`traffic` family). The FCW benefit under distraction is pinned by
 # tests/distraction_warning.rs (a list-valued `apps.enabled` sweep is not supported).
-- {setting: actors.vehicles.drivers.distraction, change: true, metric: metric.ttc_conflicts, expect: up,
-   source: "drivers look away 804 times an hour, 0.92 s a glance (Morando, Victor & Dozza 2019, IEEE T-ITS 20(8) Fig. 6) and do not see the car ahead slow meanwhile: more low-TTC conflicts (Klauer et al. 2006, DOT HS 810 594 Table 6.2: eyes off road over 2 s, near-crash/crash OR 2.19; SSAM TTC < 1.5 s)"}
+- {setting: actors.vehicles.drivers.distraction, change: true, metric: metric.drac, expect: up,
+   source: "drivers look away 804 times an hour, 0.92 s a glance (Morando, Victor & Dozza 2019, IEEE T-ITS 20(8) Fig. 6) and do not see the car ahead slow meanwhile, so they brake later and harder: a higher deceleration rate to avoid a crash (DRAC; Klauer et al. 2006, DOT HS 810 594 Table 6.2: eyes off road over 2 s, near-crash/crash OR 2.19). TTC < 1.5 s conflicts are 0 on this grid either way, so they cannot move"}

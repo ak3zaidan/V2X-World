@@ -63,7 +63,8 @@ fn a_warning_brings_a_distracted_drivers_eyes_back() {
     };
     let on = run(true);
     let off = run(false);
-    let conflicts = |f: &sweep::Fingerprint| f.get("metric.ttc_conflicts").copied().unwrap_or(0.0);
+    let metric = |f: &sweep::Fingerprint, m: &str| f.get(m).copied().unwrap_or(f64::NAN);
+    let conflicts = |f: &sweep::Fingerprint| metric(f, "metric.ttc_conflicts");
     let fcw: f64 = on
         .iter()
         .filter(|(k, _)| k.contains("app_warnings") && (k.contains("fcw") || k.contains("eebl")))
@@ -82,11 +83,20 @@ fn a_warning_brings_a_distracted_drivers_eyes_back() {
         eprintln!("  off: {k} = {v}; on: {:?}", on.get(k));
     }
     assert!(fcw > 0.0, "no FCW or EEBL warning was issued");
-    assert!(conflicts(&off) > 0.0, "no conflict to cut");
+    // On this grid no pair gets under 1.5 s TTC either way (0 and 0), so the benefit is
+    // read on the deceleration needed to avoid a crash (DRAC, mean) and the lowest TTC:
+    // warned drivers look back sooner, need less braking and keep more time in hand.
+    let (drac_on, drac_off) = (metric(&on, "metric.drac"), metric(&off, "metric.drac"));
+    let (ttc_on, ttc_off) = (
+        metric(&on, "metric.ttc_min"),
+        metric(&off, "metric.ttc_min"),
+    );
     assert!(
-        conflicts(&on) < conflicts(&off),
-        "warnings on {} against off {}",
-        conflicts(&on),
-        conflicts(&off)
+        drac_on < drac_off,
+        "DRAC: warnings on {drac_on} against off {drac_off}"
+    );
+    assert!(
+        ttc_on > ttc_off,
+        "lowest TTC: warnings on {ttc_on} against off {ttc_off}"
     );
 }

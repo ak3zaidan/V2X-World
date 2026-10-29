@@ -918,8 +918,11 @@ trustworthy or comparable; later waves add behaviours and radio features.
     `MobilityCommand::DriverAlerted`, which ends the glance.
   - **Measured:** 11 of 40 lead brakes get a later response, 0.18 s on the mean. A
     standing warning removes the delay.
-  - **Row:** distraction gives `metric.ttc_conflicts` up. The FCW benefit is pinned by a
-    test, because a list sweep is not supported.
+  - **Row:** distraction gives `metric.drac` up (0.1700 -> 0.1725). TTC < 1.5 s conflicts are 0 on the grid,
+    so they cannot move.
+  - **The FCW benefit:** pinned by a test, because a list sweep is not supported. With
+    warnings on, DRAC goes from 0.1775 to 0.1747 and the lowest TTC from 86.0 s to
+    95.5 s.
   - **Proposal for the owner:** `distraction: true` with `realism: human` on US presets.
     It moves G-TV.
 

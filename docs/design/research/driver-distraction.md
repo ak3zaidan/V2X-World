@@ -23,6 +23,16 @@ Status: 2026-10-28. P39.1 read the sources and chose the fit. P39.2 built the pr
   lasts. This is belief only: the warning is the unit's, from what it heard.
 - **Off is byte-identical.** The flag is not serialised when off. The pass and the hook
   run only when it is on, and the carried state is copied unchanged.
+- **Measured.**
+  - **Lead brakes:** of 40 at 6 m/s², 11 get a later response. The delay is 0.18 s on the
+    mean, never negative, and a standing warning removes it
+    (`v2xw-mobility/tests/distraction.rs`). The delay hits more than the 20 % of brakes
+    where the eyes are already away, because a glance that starts while the IDM's
+    braking builds up also delays it.
+  - **The Midtown grid:** with human drivers who glance away, FCW and EEBL on against off
+    give 37 warnings. Mean DRAC falls from 0.1775 to 0.1747, and the lowest TTC rises
+    from 86.0 s to 95.5 s. TTC < 1.5 s conflicts are 0 both ways
+    (`v2xw-engine/tests/distraction_warning.rs`).
 
 ## The process
 
