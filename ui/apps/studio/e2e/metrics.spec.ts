@@ -255,7 +255,7 @@ test.describe("the credential system at a glance", () => {
   test("answers five questions with the run's numbers, adding up both providers", async ({ page }) => {
     await openScms(page);
     const o = page.getByTestId("metrics-scms");
-    for (const id of ["certs", "revocation", "misbehaviour", "cost", "backend"]) await expect(o.getByTestId(`scms-section-${id}`)).toBeVisible();
+    for (const id of ["certs", "misbehaviour", "revocation", "cost", "backend"]) await expect(o.getByTestId(`scms-section-${id}`)).toBeVisible();
     await expect(o.getByTestId("scms-facts")).toContainText("2 providers");
     // Enrolment adds both providers' devices; the split names each.
     const enrolled = fixtureTotal("ee", "enrolled");
@@ -290,7 +290,8 @@ test.describe("the credential system at a glance", () => {
     await expect(page.getByTestId("metric-expanded")).toHaveAttribute("data-metric", "cert_pool_valid");
     await page.getByTestId("metric-back").click();
     await page.getByTestId("scms-raw-toggle").click();
-    await expect(page.getByTestId("scms-raw")).toContainText("decision_rule");
+    // The MA's decision rule is a counter with no plain name: its engine key stays readable.
+    await expect(page.getByTestId("scms-raw")).toContainText("decision rule");
     // Folded, it stays folded on the next visit.
     await page.getByTestId("scms-toggle").click();
     await expect(page.getByTestId("scms-section-certs")).toHaveCount(0);
@@ -304,8 +305,8 @@ test.describe("the credential system at a glance", () => {
   test("a level reads without colour: each level's mark has its own shape", async ({ page }) => {
     await openScms(page);
     const shapes = await page.evaluate(() =>
-      // Pending (not judged yet) is a fourth mark: a hollow ring.
-      ["healthy", "caution", "unhealthy", "pending"].map((l) => {
+      // Pending (not judged yet) is a fourth mark, a hollow ring; not judged on purpose a fifth, a flat dash.
+      ["healthy", "caution", "unhealthy", "pending", "none"].map((l) => {
         const el = document.createElement("span");
         el.className = `hdot ${l}`;
         document.body.appendChild(el);
@@ -315,7 +316,7 @@ test.describe("the credential system at a glance", () => {
         return shape;
       }),
     );
-    expect(new Set(shapes).size).toBe(4);
+    expect(new Set(shapes).size).toBe(5);
   });
 
   test("the run summary opens with the run in a few sentences", async ({ page }) => {
@@ -394,5 +395,90 @@ test.describe("the credential system at a glance", () => {
     await expect(page.getByTestId("run-summary-cred-crl-entries")).toContainText(String(fixtureTotal("crlg", "entries")));
     await expect(page.getByTestId("run-summary-cred-filed")).toContainText(fixtureTotal("ee", "reports_filed").toLocaleString("en-US"));
     await expect(page.getByTestId("run-summary-cred-detection")).toBeVisible();
+  });
+
+  test("the six answers fit one row at 1280 before the detail, and each opens its question", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await openScms(page);
+    const strip = page.getByTestId("scms-strip");
+    await expect(strip.getByTestId("scms-strip-misbehaviour")).toBeVisible({ timeout: 30_000 });
+    const items = strip.locator(".scms-strip-item");
+    const n = await items.count();
+    expect(n).toBe(await page.locator("[data-testid^='scms-section-']").count());
+    // One row: every item starts at the same height, and each carries a mark (a level, pending or not judged).
+    const tops = await items.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+    expect(new Set(tops).size).toBe(1);
+    expect(await strip.locator(".lmark").count()).toBe(n);
+    // Misbehaviour comes before revocation: the report, then the decision, then the list.
+    const order = await page.locator("[data-testid^='scms-section-']").evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+    expect(order.indexOf("scms-section-misbehaviour")).toBeLessThan(order.indexOf("scms-section-revocation"));
+    await strip.getByTestId("scms-strip-revocation").click();
+    await expect(page.getByTestId("scms-section-revocation")).toBeInViewport();
+  });
+
+  test("revocation always carries a verdict chip, even when no standard judges it", async ({ page }) => {
+    await openScms(page);
+    const answer = page.getByTestId("scms-answer-revocation");
+    await expect(answer.locator(".lmark")).toHaveCount(1, { timeout: 30_000 });
+    const level = await answer.locator(".lmark").getAttribute("data-level");
+    if (level === "none") expect(await answer.locator(".lmark").getAttribute("title")).toContain("No standard sets how fast a revocation must be");
+  });
+
+  test("the report funnel only shrinks, says the RA's shuffle once, and fits one row at 1280", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await openScms(page);
+    const funnel = page.getByTestId("scms-funnel");
+    await expect(funnel.getByTestId("scms-step-ma")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("scms-step-shuffle")).toHaveCount(0);
+    const inShuffle = fixtureTotal("ra", "reports_in_shuffle").toLocaleString("en-US");
+    await expect(page.getByTestId("scms-drop-ma")).toContainText(`${inShuffle} in the RA's shuffle now`);
+    expect(((await funnel.innerText()).match(new RegExp(inShuffle, "g")) ?? []).length).toBe(1);
+    const tops = await funnel.locator(".scms-step").evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+    expect(new Set(tops).size).toBe(1);
+  });
+
+  test("rejection bars are drawn on a stated axis, so a 1 % share never fills its track", async ({ page }) => {
+    await openScms(page);
+    const axis = page.getByTestId("scms-bars-cost-axis");
+    await expect(axis).toContainText("0 %", { timeout: 30_000 });
+    const widths = await page.locator("[data-testid='scms-bars-cost'] .scms-bar-row[data-width]").evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-width"))));
+    expect(widths.length).toBeGreaterThan(1);
+    expect(Math.max(...widths)).toBeLessThanOrEqual(80);
+  });
+
+  test("a tile's sparkline writes its range, and the engine counters read in words", async ({ page }) => {
+    await openScms(page);
+    await expect(page.getByTestId("scms-tile-crl_bytes").locator(".scms-spark-range")).toBeVisible({ timeout: 30_000 });
+    expect((await page.locator(".scms-spark-range").first().innerText()).trim().length).toBeGreaterThan(2);
+    await page.getByTestId("scms-raw-toggle").click();
+    const raw = page.getByTestId("scms-raw");
+    await expect(raw.locator("h4")).toHaveText("Engine counters (for debugging)");
+    // A counter the PKI view names reads in its words; the engine's key is the tooltip.
+    const held = raw.getByTestId("scms-raw-ra-batches_held");
+    await expect(held).toContainText("Pseudonym batches ready for download");
+    await expect(held).toHaveAttribute("title", /batches_held/);
+  });
+
+  test("the navigation says what its marks and numbers mean; the health strip says it is the newest window", async ({ page }) => {
+    await openScms(page);
+    await expect(page.getByTestId("metrics-nav-key")).toContainText("unhealthy");
+    await expect(page.getByTestId("metrics-nav-key")).toContainText("n/m measured");
+    await expect(page.getByTestId("metrics-health-strip")).toContainText("newest window");
+  });
+
+  test("the run summary leads with one verdict and its weakest metric, one mark a row", async ({ page }) => {
+    await openScms(page);
+    await page.getByTestId("metrics-open-summary").click();
+    const verdict = page.getByTestId("run-summary-verdict");
+    await expect(verdict).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("run-summary-verdict-counts")).toContainText("Over the whole run");
+    const rows = page.locator("[data-testid^='run-summary-out-']");
+    if ((await rows.count()) > 0) {
+      await expect(page.getByTestId("run-summary-verdict-head")).toContainText("Weakest:");
+      const marks = await rows.evaluateAll((els) => els.map((e) => e.querySelectorAll(".hdot").length));
+      expect(Math.max(...marks)).toBe(1);
+    }
+    // The brief does not repeat the verdict's counts.
+    await expect(page.getByTestId("run-summary-brief")).not.toContainText("metrics with a published healthy range,");
   });
 });
