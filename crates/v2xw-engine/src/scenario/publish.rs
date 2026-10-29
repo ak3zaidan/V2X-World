@@ -2349,6 +2349,56 @@ mod tests {
         }
     }
 
+    /// Every SCMS setting explains itself and sits under one of the eight SCMS sub-headings,
+    /// each with its help (08 §3, piece A5): the window's one line under a control is the
+    /// guide's real-world sentence, never a blank or the Rust doc comment alone.
+    #[test]
+    fn every_scms_setting_explains_itself_under_its_heading() {
+        fn scms(path: &str) -> bool {
+            [
+                "security.",
+                "actors.backend.",
+                "detection.ma",
+                "net.rsu_ip.",
+            ]
+            .iter()
+            .any(|p| path.starts_with(p))
+        }
+        let mut missing = Vec::new();
+        let mut headless = Vec::new();
+        let mut headings = std::collections::BTreeSet::new();
+        for f in fields() {
+            let path = f["x-path"].as_str().unwrap_or("").to_string();
+            if !scms(&path) {
+                continue;
+            }
+            if f.get("x-explain")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                missing.push(path.clone());
+            }
+            match f["x-subgroup"]["id"].as_str() {
+                Some(id) => {
+                    headings.insert(id.to_string());
+                }
+                // `net.rsu_ip` is the relay's (WP-19) and stays in its own section.
+                None if path.starts_with("net.rsu_ip") => {}
+                None => headless.push(path.clone()),
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "{} SCMS settings have no guide row: {missing:#?}",
+            missing.len()
+        );
+        assert!(headless.is_empty(), "no SCMS sub-heading: {headless:#?}");
+        assert_eq!(headings.len(), 8, "the eight §3 sub-headings: {headings:?}");
+        for g in options::SCMS_SUBGROUPS {
+            assert!(g.blurb.len() > 80, "{} has no help worth the name", g.id);
+        }
+    }
+
     /// The dependent sets (08 §4.1 item 6, piece A4): a failure's server composes a provider
     /// of the deployment with a role, and a provider's name is offered from its preset; both
     /// carry each preset's providers, home provider first, as the deployment builds them.

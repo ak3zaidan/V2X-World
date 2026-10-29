@@ -1317,6 +1317,298 @@ const ADVANCED: &[Basic] = &[
         explain: "The longest a certificate request may wait in the Registration Authority's mix before it is passed on, full batch or not. A longer wait hides each request among more others and delays a vehicle's certificates.",
         recommended: "172,800 s (two days, CAMP release 1.2.2); 3,600 to 172,800 s. Like the batch size, it acts on a device's first request, which a run makes before the vehicle joins.",
     },
+    // The SCMS settings' help, final pass (08-settings-ux-and-gaps §2, piece A5).
+    // Deployment.
+    Basic {
+        path: "security.scms.deployment.preset",
+        explain: "Which certificate system runs: the US system of 2025 (two providers on one trust list), the 17 July 2025 test trust list, the CAMP reference design, or providers you list.",
+        recommended: "us-production-2025 (the deployed US system).",
+    },
+    Basic {
+        path: "security.scms.deployment.electors",
+        explain: "The electors who sign the certificate trust list (CTL); a change to the list needs a quorum of them.",
+        recommended: "5 (US).",
+    },
+    Basic {
+        path: "security.scms.deployment.quorum",
+        explain: "How many electors must sign a new trust list.",
+        recommended: "3 of 5 (US).",
+    },
+    Basic {
+        path: "security.scms.deployment.options.lop",
+        explain: "A Location Obscurer Proxy between devices and the RA, hiding a device's network address with one more hop. Neither IEEE 1609.2.1 nor the US profile has one.",
+        recommended: "Off (US); on only in the CAMP reference design.",
+    },
+    Basic {
+        path: "security.scms.deployment.options.butterfly",
+        explain: "How pseudonym keys are expanded: the device sends caterpillar keys, the RA expands them into cocoon keys and the ACA encrypts each certificate to the device.",
+        recommended: "original (the only one the US profile uses; the unified variants are refused).",
+    },
+    Basic {
+        path: "security.scms.chain_file",
+        explain: "Which CA certificates a device holds: every trusted provider's (the US global chain file), or only its own, learning the others over the air by P2PCD.",
+        recommended: "all-providers (US).",
+    },
+    Basic {
+        path: "security.scms.deployment.latency",
+        explain: "How long a message takes between backend servers: by the distance between their sites at fibre speed, or one fixed latency for every link.",
+        recommended: "region (distance-based, an assumption about where servers sit).",
+    },
+    Basic {
+        path: "security.scms.deployment.fibre_fraction",
+        explain: "How fast the signal travels in the backbone fibre, as a fraction of the speed of light.",
+        recommended: "0.667 (2/3 c, glass fibre).",
+    },
+    Basic {
+        path: "security.scms.deployment.per_link_ms",
+        explain: "A fixed delay every backend link adds for routers and server stacks, on top of the distance.",
+        recommended: "1 ms (ASSUMPTION); 0 to 10 ms.",
+    },
+    Basic {
+        path: "security.scms.deployment.ma_report_sharing",
+        explain: "Whether a misbehaviour report about another provider's certificate is forwarded to that provider's MA, which alone can revoke it.",
+        recommended: "On for a multi-provider deployment.",
+    },
+    Basic {
+        path: "security.scms.pki_view",
+        explain: "Publish the PKI view (certificate issuance, flows and revocations) for the PKI pages; off keeps long recordings small.",
+        recommended: "On.",
+    },
+    Basic {
+        path: "security.scms.report_records",
+        explain: "Record every misbehaviour report's fate, for v2xw ma-replay and MA policy sweeps.",
+        recommended: "Off unless you replay the MA.",
+    },
+    Basic {
+        path: "security.protocol.params",
+        explain: "The credential protocol's parameters in their legacy spelling; a typed field above wins over the same key here.",
+        recommended: "Empty: use the typed fields.",
+    },
+    Basic {
+        path: "actors.backend.protocol",
+        explain: "The credential system the backend runs; it must match the one the vehicles use.",
+        recommended: "The same as Credential system (protocol/scms/camp for the US).",
+    },
+    // Providers.
+    Basic {
+        path: "security.scms.deployment.providers[].name",
+        explain: "Which provider this row changes: one the preset names, or any name under Custom providers.",
+        recommended: "A neutral label (provider-a, provider-b).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].components.*",
+        explain: "How many instances of one server role the provider runs; every provider needs one root, one ICA, an RA and an ACA.",
+        recommended: "The preset's (one of each).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].region",
+        explain: "Where the provider's servers are assumed to sit; no provider publishes its hosting.",
+        recommended: "us-east (an assumption).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].fleet_share",
+        explain: "The share of vehicles enrolled with this provider; the shares add up to 1.",
+        recommended: "Equal shares (ASSUMPTION: no market share is published).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].on_ctl",
+        explain: "Whether the provider's root is on the trust list; off models an untrusted or rogue root, whose certificates nothing verifies.",
+        recommended: "On.",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].ma_mode",
+        explain: "Whether the provider's MA has an operator review each case before revoking, or acts at once.",
+        recommended: "manual-review (the CV pilots).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].ma_review_s",
+        explain: "The provider's MA operator review time, under manual review.",
+        recommended: "8 h, one working shift (ASSUMPTION).",
+    },
+    Basic {
+        path: "security.scms.deployment.providers[].crl_publication",
+        explain: "When the provider publishes a revocation: within one business day (the SCMS Manager SLA), on a fixed cadence, or at once.",
+        recommended: "sla-1-business-day (US).",
+    },
+    // Certificate lifecycle and pseudonyms.
+    Basic {
+        path: "security.signer_id_policy.full_cert_every_ms",
+        explain: "How often a message carries the full certificate rather than an 8-byte digest; receivers need the certificate once to verify the digests.",
+        recommended: "1,000 ms (the J2945/1 reading); 450 ms (the NYC pilot).",
+    },
+    Basic {
+        path: "security.signer_id_policy.digest_otherwise",
+        explain: "Send an 8-byte certificate digest between full certificates, which saves about 140 bytes a message.",
+        recommended: "On.",
+    },
+    Basic {
+        path: "security.pseudonym_change.distance_m",
+        explain: "Under the distance strategy, how far a vehicle drives on one pseudonym before changing it.",
+        recommended: "2,000 m (the NYC pilot).",
+    },
+    Basic {
+        path: "security.pseudonym_change.silent_period_s[]",
+        explain: "A random silence after each pseudonym change, between from and to seconds, so a listener loses the vehicle; its safety messages stop too.",
+        recommended: "None; 3 to 13 s (PRESERVE) for a privacy study.",
+    },
+    Basic {
+        path: "security.pseudonym_change.mix_zone_radius_m",
+        explain: "Under the mix-zone strategy, the radius of the zone at a signalised junction where vehicles change pseudonym together.",
+        recommended: "30 m (one junction, Freudiger et al. 2007).",
+    },
+    Basic {
+        path: "security.pseudonym_change.mix_zone_min_age_s",
+        explain: "The youngest pseudonym a mix zone changes, so a vehicle does not burn certificates at every junction.",
+        recommended: "60 s.",
+    },
+    // Cryptography.
+    Basic {
+        path: "security.envelope",
+        explain: "The secured-message format: IEEE 1609.2 (the US) or ETSI TS 103 097 (Europe).",
+        recommended: "ieee1609.2 (US).",
+    },
+    Basic {
+        path: "security.kem",
+        explain: "How a certificate response is encrypted to its device: ECIES on P-256 (IEEE 1609.2), or a post-quantum or hybrid scheme for study.",
+        recommended: "ecies-p256 (US).",
+    },
+    Basic {
+        path: "security.crypto_mode",
+        explain: "Whether signing and verification are charged their measured time with the outcome modelled, or the mathematics is done on real bytes (P-256 only).",
+        recommended: "modeled for speed; real to check a result.",
+    },
+    Basic {
+        path: "security.threshold.protocol",
+        explain: "The protocol a committee of servers uses to hold one authority's key together (not the US system).",
+        recommended: "frost-p256.",
+    },
+    Basic {
+        path: "security.threshold.members",
+        explain: "How many servers form a committee.",
+        recommended: "5.",
+    },
+    Basic {
+        path: "security.threshold.quorum",
+        explain: "How many committee members must take part to sign.",
+        recommended: "3 of 5.",
+    },
+    Basic {
+        path: "security.threshold.roles[]",
+        explain: "Which authorities run as committees: the pseudonym CA, the CRL Generator, the linkage authorities.",
+        recommended: "All three for a committee study.",
+    },
+    Basic {
+        path: "security.threshold.linkage_members",
+        explain: "The linkage committee's size, when it differs from the others.",
+        recommended: "Unset (the same as members).",
+    },
+    Basic {
+        path: "security.threshold.linkage_quorum",
+        explain: "The linkage committee's quorum, when it differs from the others.",
+        recommended: "Unset (the same as quorum).",
+    },
+    Basic {
+        path: "security.threshold.umbrella_leaves",
+        explain: "Under the umbrella protocol, how many pseudonyms one umbrella certificate covers.",
+        recommended: "20 (one US week's certificates).",
+    },
+    Basic {
+        path: "security.threshold.umbrella_inner",
+        explain: "Under the umbrella protocol, the signing protocol that signs the umbrella certificates.",
+        recommended: "frost-p256.",
+    },
+    Basic {
+        path: "security.threshold.preprocessed",
+        explain: "Do the committee's offline round ahead of time, so a signing needs one online round.",
+        recommended: "Off.",
+    },
+    Basic {
+        path: "security.threshold.round_timeout_ms",
+        explain: "How long the coordinator waits for a member in each round before giving up on it.",
+        recommended: "500 ms.",
+    },
+    Basic {
+        path: "security.threshold.retry_after_s",
+        explain: "How long a failed committee signing waits before it is retried.",
+        recommended: "30 s.",
+    },
+    Basic {
+        path: "security.threshold.ask_all",
+        explain: "Ask every live member and keep the first quorum to answer, rather than asking exactly a quorum.",
+        recommended: "On.",
+    },
+    Basic {
+        path: "security.threshold.member_latency_ms",
+        explain: "The one-way latency between committee members.",
+        recommended: "20 ms (ASSUMPTION: a WAN between organisations).",
+    },
+    // Misbehaviour authority.
+    Basic {
+        path: "detection.ma.params",
+        explain: "The Misbehaviour Authority's parameters, each shown as its own field above; this block is their JSON spelling.",
+        recommended: "Use the fields.",
+    },
+    // Failures and servers.
+    Basic {
+        path: "actors.backend.entities.*.profile",
+        explain: "The hardware one backend server runs on, which prices its cryptography.",
+        recommended: "The backend's default profile.",
+    },
+    Basic {
+        path: "actors.backend.entities.*.service_model",
+        explain: "One backend server's queue: its workers in parallel, or one at a time.",
+        recommended: "service/mmc.",
+    },
+    Basic {
+        path: "actors.backend.entities.*.net",
+        explain: "Not read: every backend server sits on the backend network.",
+        recommended: "Leave unset.",
+    },
+    Basic {
+        path: "actors.backend.links[].from",
+        explain: "One end of a backend link whose latency or capacity you override.",
+        recommended: "A server role.",
+    },
+    Basic {
+        path: "actors.backend.links[].to",
+        explain: "The other end of the link.",
+        recommended: "A server role.",
+    },
+    Basic {
+        path: "actors.backend.links[].latency_ms",
+        explain: "The link's one-way latency.",
+        recommended: "10 ms (the engine's default backend link).",
+    },
+    Basic {
+        path: "actors.backend.links[].capacity_mbps",
+        explain: "The link's capacity.",
+        recommended: "1,000 Mbit/s (the engine's default backend link).",
+    },
+    Basic {
+        path: "actors.backend.failures[].node",
+        explain: "The server that fails: a role of the home provider, another provider's (provider-b/crlg), or a committee member.",
+        recommended: "Pick the provider, then the server.",
+    },
+    Basic {
+        path: "actors.backend.failures[].mode",
+        explain: "How it fails: down (messages dropped), slow (extra time per message) or lying (invalid committee shares).",
+        recommended: "offline for an outage study.",
+    },
+    Basic {
+        path: "actors.backend.failures[].from_s",
+        explain: "When the failure starts, in seconds into the run.",
+        recommended: "Inside the run.",
+    },
+    Basic {
+        path: "actors.backend.failures[].to_s",
+        explain: "When the server recovers; unset means it stays failed to the end.",
+        recommended: "Unset, or after from_s.",
+    },
+    Basic {
+        path: "actors.backend.failures[].extra_ms",
+        explain: "Under slow, the extra service time each message takes.",
+        recommended: "10 to 1,000 ms.",
+    },
     // The keys of 08-settings-ux-and-gaps §5-§8 (refused with "not built yet" until pieces
     // B and C build them; the row says what each will do).
     Basic {

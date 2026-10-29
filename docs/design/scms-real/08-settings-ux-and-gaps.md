@@ -972,6 +972,16 @@ compose insertion dropped), vitest `test/scms-compose.test.ts` (the home provide
 written qualified; the verdict not carried to the store). `v2xw-server --test rpc` passes
 with the new field in the OpenRPC document. No golden moved.
 
+**Status, A5 (2026-10-29): built.** The final pass over the SCMS help. 57 SCMS settings had no
+guide row (deployment, providers, the committee block, the pseudonym and signer-identifier
+numbers, the backend entities, links and failures); each now has a real-world sentence and a
+recommended value with its source, so the one line under every SCMS control is the guide's.
+`publish::tests::every_scms_setting_explains_itself_under_its_heading` keeps it so: every SCMS
+leaf has `x-explain`, every one but the relay's `net.rsu_ip` sits under one of the eight §3
+sub-headings, and each heading has its help. Faults, each in its own build because the first
+masks the second: the `security.kem` guide row removed, and `security.kem` filed under no
+sub-heading. No golden moved.
+
 After A0, B and C edit only their own files. They make a key live by flipping their own
 module's `KEY_STATUS` and refusal, never by editing `validate.rs`.
 
