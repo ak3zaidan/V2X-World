@@ -11,8 +11,29 @@ import type { MetricHealthBand } from "@vwp/protocol";
 import { BASIS_LABEL, LEVEL_LABEL, classify, judgedLabel, noteOf, thresholdsText, type HealthLevel } from "./health.js";
 import { formatWithUnit } from "./model.js";
 
+/**
+ * The level's mark: a shape as well as a colour, so it reads in grey and to a colour-blind reader —
+ * a circle for healthy, a triangle for caution, a diamond for unhealthy (`metrics.css` `.hdot`).
+ */
 export function HealthDot({ level }: { level: HealthLevel }): React.JSX.Element {
   return <span className={`hdot ${level}`} aria-hidden="true" />;
+}
+
+/** Short words for a level where space is tight: "OK", "Watch", "Problem". */
+const LEVEL_SHORT: Readonly<Record<HealthLevel, string>> = {
+  healthy: "OK",
+  caution: "Watch",
+  unhealthy: "Problem",
+};
+
+/** The mark and a short word ("▲ Watch"); `compact` is the mark alone, labelled for a screen reader. */
+export function LevelMark({ level, compact = false, title }: { level: HealthLevel; compact?: boolean; title?: string }): React.JSX.Element {
+  return (
+    <span className={`lmark ${level}${compact ? " compact" : ""}`} data-level={level} title={title ?? LEVEL_LABEL[level]} role={compact ? "img" : undefined} aria-label={compact ? `${LEVEL_LABEL[level]}${title ? `: ${title}` : ""}` : undefined}>
+      <HealthDot level={level} />
+      {compact ? null : LEVEL_SHORT[level]}
+    </span>
+  );
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   cardSeries,
   formatNumber,
   formatWithUnit,
+  meaningOf,
   observedCount,
   unitSuffix,
   type MetricFamily,
@@ -247,6 +248,9 @@ export function MetricCard({
         </button>
       </header>
       <div className="mcard-name mono dim">{f.base}</div>
+      <p className="mcard-meaning" title={f.definition} data-testid={`metric-meaning-${f.base}`}>
+        {meaningOf(f)}
+      </p>
       {empty ? (
         <p className="mcard-empty dim" data-testid={`metric-empty-${f.base}`}>
           {emptyReason(f, overview, runState, profileNode)}

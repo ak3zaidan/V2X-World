@@ -5,7 +5,7 @@
  */
 
 import type { BackendSnapshot } from "../lib/backend.js";
-import type { GroupRow, Series } from "./model.js";
+import { formatNumber, glanceNumber, readable, type GroupRow, type Series } from "./model.js";
 
 // ------------------------------------------------------------------------------------------------
 // The scenario in one line
@@ -289,4 +289,95 @@ const CAUSE_NAMES: Readonly<Record<string, string>> = {
 
 export function causeName(key: string): string {
   return CAUSE_NAMES[key] ?? key.replace(/[_-]/g, " ");
+}
+
+// ------------------------------------------------------------------------------------------------
+// The run in brief
+// ------------------------------------------------------------------------------------------------
+
+/** What the brief reads; each part `null` when the run did not measure it. */
+export interface BriefInput {
+  /** Banded metrics: unhealthy on average, to watch, out of range at times, healthy throughout. */
+  readonly judged: { readonly unhealthy: number; readonly caution: number; readonly atTimes: number; readonly healthy: number; readonly worstLabel: string | null } | null;
+  readonly delivery: { readonly pdr: number | null; readonly latencyMs: number | null } | null;
+  readonly credentials: { readonly enrolled: number | null; readonly devices: number | null; readonly pool: number | null; readonly starved: number | null } | null;
+  readonly misbehaviour: { readonly filed: number | null; readonly revoked: number | null; readonly honestRevoked: number | null; readonly slowestStageS: number | null } | null;
+  readonly bottleneck: { readonly stage: string | null; readonly stageShare: number | null; readonly entity: string | null; readonly utilisation: number | null } | null;
+}
+
+function w(v: number, unit: string): string {
+  const s = readable(v, unit);
+  return s.unit === "" ? s.value : s.unit === "%" ? `${s.value} %` : `${s.value} ${s.unit}`;
+}
+
+function was(n: number): string {
+  return `${formatNumber(n)} ${n === 1 ? "was" : "were"}`;
+}
+
+/** "Verification wait" mid-sentence is "verification wait"; "CRL size" stays as it is. */
+function lower(s: string): string {
+  return s.length > 1 && s[1] === s[1]!.toLowerCase() ? s[0]!.toLowerCase() + s.slice(1) : s;
+}
+
+function cap(s: string): string {
+  return s.length === 0 ? s : s[0]!.toUpperCase() + s.slice(1);
+}
+
+/**
+ * The run in three to five plain sentences: how many judged metrics stayed healthy, whether
+ * messages got through, whether devices had certificates, what misbehaviour and revocation did, and
+ * the one bottleneck that stands out. A part the run did not measure is left out, never guessed.
+ */
+export function briefSentences(b: BriefInput): string[] {
+  const out: string[] = [];
+  const j = b.judged;
+  const n = j === null ? 0 : j.unhealthy + j.caution + j.atTimes + j.healthy;
+  if (j === null || n === 0) out.push("No metric with a published healthy range has been measured yet.");
+  else if (j.healthy === n) out.push(`All ${formatNumber(n)} metrics with a published healthy range stayed healthy throughout.`);
+  else {
+    const parts = [`${formatNumber(j.healthy)} stayed healthy`];
+    if (j.caution > 0) parts.push(`${formatNumber(j.caution)} needed watching`);
+    if (j.atTimes > 0) parts.push(`${was(j.atTimes)} out of range at times`);
+    if (j.unhealthy > 0) parts.push(`${was(j.unhealthy)} unhealthy on average`);
+    const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+    out.push(`Of ${formatNumber(n)} metrics with a published healthy range, ${list}${j.worstLabel ? `; the worst is ${lower(j.worstLabel)}` : ""}.`);
+  }
+
+  const d = b.delivery;
+  if (d !== null && d.pdr !== null) {
+    out.push(`Messages within 100 m were delivered ${w(d.pdr, "ratio")} of the time${d.latencyMs !== null ? `, in ${w(d.latencyMs, "ms")} end to end on average` : ""}.`);
+  } else if (d !== null && d.latencyMs !== null) out.push(`Messages took ${w(d.latencyMs, "ms")} end to end on average.`);
+
+  const c = b.credentials;
+  if (c !== null) {
+    const parts: string[] = [];
+    if (c.enrolled !== null && c.devices !== null)
+      parts.push(c.enrolled >= c.devices ? `all ${formatNumber(c.devices)} devices were enrolled` : `${formatNumber(c.enrolled)} of ${formatNumber(c.devices)} devices were enrolled`);
+    if (c.pool !== null) parts.push(`vehicles held ${glanceNumber(c.pool)} valid pseudonym certificates on average at the lowest point`);
+    if (parts.length > 0) {
+      const tail = c.starved === null ? "" : c.starved === 0 ? "; none ran out" : `; ${formatNumber(c.starved)} ran out of certificates`;
+      out.push(`${cap(parts.join(" and "))}${tail}.`);
+    }
+  }
+
+  const m = b.misbehaviour;
+  if (m !== null && (m.filed !== null || m.revoked !== null)) {
+    let s = m.filed !== null ? `Vehicles filed ${formatNumber(m.filed)} misbehaviour ${m.filed === 1 ? "report" : "reports"}` : "";
+    if (m.revoked !== null) {
+      const rv = m.revoked === 0 ? "no device was revoked" : `${formatNumber(m.revoked)} ${m.revoked === 1 ? "device was" : "devices were"} revoked`;
+      s = s === "" ? cap(rv) : `${s} and ${rv}`;
+      if (m.revoked > 0 && m.honestRevoked !== null) s += m.honestRevoked === 0 ? ", none of them honest" : `, ${formatNumber(m.honestRevoked)} of them honest`;
+    }
+    if (m.slowestStageS !== null) s += `; the slowest revocation step took ${w(m.slowestStageS, "s")} (p95)`;
+    out.push(`${s}.`);
+  }
+
+  const k = b.bottleneck;
+  if (k !== null) {
+    const busy = k.entity !== null && k.utilisation !== null && k.utilisation >= ENTITY_UTILISATION_LIMIT * 0.75;
+    const entity = busy ? `the busiest backend authority, ${k.entity}, was busy ${Math.round(k.utilisation! * 100)} % of the time` : "";
+    if (k.stage !== null && k.stageShare !== null) out.push(`${cap(k.stage)} takes the largest share of latency (${Math.round(k.stageShare * 100)} %)${busy ? `; ${entity}` : ""}.`);
+    else if (busy) out.push(`${cap(entity)}.`);
+  }
+  return out.slice(0, 5);
 }

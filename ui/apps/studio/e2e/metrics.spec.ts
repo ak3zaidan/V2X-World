@@ -162,3 +162,175 @@ test("open, find, expand, brush, export and close the metrics dashboard", async 
   const ignorable = (t: string): boolean => (t.includes("WebGL") && t.includes("deprecat")) || t.includes("GPU stall");
   expect(errors.filter((t) => !ignorable(t))).toEqual([]);
 });
+
+// ------------------------------------------------------------------------------------------------
+// The credential system at a glance, on a real SCMS run's answers
+// ------------------------------------------------------------------------------------------------
+
+/**
+ * The real engine's answers at the end of `scenarios/scms-audit-mbpipe.yaml` (two providers, five
+ * days of the real calendar): its SCMS catalogue rows, those series, the run-wide groupings and the
+ * Backend snapshot (`test/fixtures/metrics/scms-run.json`). The mock engine has no credential
+ * system, so the page's socket is routed: the catalogue answer gains the SCMS rows, the backend
+ * snapshot and any query of SCMS series alone are answered from the file, and the rest passes on.
+ */
+type Row = (string | number | null)[];
+const scms = JSON.parse(readFileSync(new URL("../test/fixtures/metrics/scms-run.json", import.meta.url), "utf8")) as {
+  catalogue: { name: string }[];
+  series: Record<string, [number, number | null][]>;
+  groups: Record<string, Row[]>;
+  backend: { state: { entities: { id: string; state: Record<string, unknown> }[] } };
+};
+const scmsNames = new Set(scms.catalogue.map((c) => c.name));
+
+/** A count summed over every provider's entity of a role, as the fixture has it. */
+function fixtureTotal(role: string, key: string): number {
+  return scms.backend.state.entities
+    .filter((e) => e.id.split("/").pop() === role)
+    .reduce((a, e) => a + (typeof e.state[key] === "number" ? (e.state[key] as number) : 0), 0);
+}
+
+function scmsAnswer(p: { metrics: string[]; group_by?: string[] }): unknown {
+  const dim = (p.group_by ?? []).find((d) => d !== "t");
+  if (dim !== undefined) return { columns: [], rows: scms.groups[`${p.metrics[0]}/${dim}`] ?? [], group_by: p.group_by };
+  const grid = [...new Set(p.metrics.flatMap((n) => (scms.series[n] ?? []).map((r) => r[0])))].sort((a, b) => a - b);
+  const rows = grid.map((t) => [t, ...p.metrics.map((n) => scms.series[n]?.find((r) => r[0] === t)?.[1] ?? null)]);
+  return { columns: [{ name: "t_ns" }, ...p.metrics.map((n) => ({ name: n }))], rows, truncated: false };
+}
+
+async function serveScms(page: Page): Promise<void> {
+  await page.routeWebSocket(/.*/, (ws) => {
+    const server = ws.connectToServer();
+    const catalogueIds = new Set<unknown>();
+    ws.onMessage((m) => {
+      if (typeof m === "string") {
+        try {
+          const req = JSON.parse(m) as { id?: unknown; method?: string; params?: { entity?: string; metrics?: string[]; group_by?: string[] } };
+          if (req.method === "inspect.entity" && req.params?.entity === "backend") {
+            ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: scms.backend }));
+            return;
+          }
+          if (req.method === "metrics.query") {
+            const metrics = req.params?.metrics;
+            if (!Array.isArray(metrics)) catalogueIds.add(req.id);
+            else if (metrics.length > 0 && metrics.every((n) => scmsNames.has(n))) {
+              ws.send(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: scmsAnswer({ metrics, group_by: req.params?.group_by }) }));
+              return;
+            }
+          }
+        } catch {
+          // Not JSON: pass it on.
+        }
+      }
+      server.send(m);
+    });
+    server.onMessage((m) => {
+      if (typeof m === "string" && catalogueIds.size > 0) {
+        try {
+          const res = JSON.parse(m) as { id?: unknown; result?: { catalogue?: unknown[] } };
+          if (catalogueIds.has(res.id) && res.result) {
+            catalogueIds.delete(res.id);
+            res.result.catalogue = [...(res.result.catalogue ?? []), ...scms.catalogue];
+            ws.send(JSON.stringify(res));
+            return;
+          }
+        } catch {
+          // Not JSON: pass it on.
+        }
+      }
+      ws.send(m);
+    });
+  });
+}
+
+async function openScms(page: Page): Promise<void> {
+  await serveScms(page);
+  await page.goto("/");
+  await streamingFor(page, 3);
+  await page.getByTestId("metrics-button").click();
+  await expect(page.getByTestId("metrics-scms")).toBeVisible({ timeout: 30_000 });
+}
+
+test.describe("the credential system at a glance", () => {
+  test("answers five questions with the run's numbers, adding up both providers", async ({ page }) => {
+    await openScms(page);
+    const o = page.getByTestId("metrics-scms");
+    for (const id of ["certs", "revocation", "misbehaviour", "cost", "backend"]) await expect(o.getByTestId(`scms-section-${id}`)).toBeVisible();
+    await expect(o.getByTestId("scms-facts")).toContainText("2 providers");
+    // Enrolment adds both providers' devices; the split names each.
+    const enrolled = fixtureTotal("ee", "enrolled");
+    await expect(o.getByTestId("scms-value-enrolled")).toHaveText(`${enrolled} of ${fixtureTotal("ee", "devices")}`);
+    await expect(o.getByTestId("scms-tile-enrolled")).toContainText("provider-b");
+    await expect(o.getByTestId("scms-answer-certs")).toContainText(`all ${enrolled} devices are enrolled`);
+    // The report funnel starts with what vehicles filed and ends with the MAs' revocations.
+    await expect(o.getByTestId("scms-step-filed")).toContainText(fixtureTotal("ee", "reports_filed").toLocaleString("en-US"));
+    await expect(o.getByTestId("scms-step-revoked")).toContainText(String(fixtureTotal("ma", "revocations")));
+    // Every number says what it means.
+    const meanings = await o.locator(".scms-tile-meaning").evaluateAll((els) => els.map((e) => (e.textContent ?? "").trim().length));
+    expect(meanings.length).toBeGreaterThan(10);
+    expect(Math.min(...meanings)).toBeGreaterThan(15);
+  });
+
+  test("judges detection against its published band, pooled over the run", async ({ page }) => {
+    await openScms(page);
+    const vehicle = scms.groups["det_recall/level"]!.find((r) => r[0] === "vehicle")![1] as number;
+    const recall = page.getByTestId("scms-tile-recall");
+    await expect(page.getByTestId("scms-value-recall")).toHaveText(String(Math.round(vehicle * 1000) / 10));
+    // Below the 90 % band, above 50 %: caution, with the threshold and source in its tooltip.
+    await expect(recall).toHaveAttribute("data-level", "caution");
+    expect(await recall.getAttribute("title")).toContain("no standard sets a detection rate");
+    // A security check's rejections appear by reason.
+    await expect(page.getByTestId("scms-bar-psid-not-registered")).toBeVisible();
+  });
+
+  test("a number with a chart opens it, by keyboard too; the raw counts are one click away", async ({ page }) => {
+    await openScms(page);
+    await page.getByTestId("scms-tile-cert_pool_valid").focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("metric-expanded")).toHaveAttribute("data-metric", "cert_pool_valid");
+    await page.getByTestId("metric-back").click();
+    await page.getByTestId("scms-raw-toggle").click();
+    await expect(page.getByTestId("scms-raw")).toContainText("decision_rule");
+    // Folded, it stays folded on the next visit.
+    await page.getByTestId("scms-toggle").click();
+    await expect(page.getByTestId("scms-section-certs")).toHaveCount(0);
+    await page.reload();
+    await streamingFor(page, 1);
+    await expect(page.getByTestId("scms-toggle")).toHaveAttribute("aria-expanded", "false", { timeout: 30_000 });
+    await page.getByTestId("scms-toggle").click();
+    await expect(page.getByTestId("scms-section-certs")).toBeVisible();
+  });
+
+  test("a level reads without colour: each level's mark has its own shape", async ({ page }) => {
+    await openScms(page);
+    const shapes = await page.evaluate(() =>
+      ["healthy", "caution", "unhealthy"].map((l) => {
+        const el = document.createElement("span");
+        el.className = `hdot ${l}`;
+        document.body.appendChild(el);
+        const s = getComputedStyle(el);
+        const shape = `${s.clipPath}|${s.borderRadius}`;
+        el.remove();
+        return shape;
+      }),
+    );
+    expect(new Set(shapes).size).toBe(3);
+  });
+
+  test("the run summary opens with the run in a few sentences", async ({ page }) => {
+    await openScms(page);
+    await page.getByTestId("metrics-open-summary").click();
+    const brief = page.getByTestId("run-summary-brief");
+    await expect(brief).toContainText(`All ${fixtureTotal("ee", "devices")} devices were enrolled`, { timeout: 30_000 });
+    const sentences = ((await brief.locator("p").innerText()).match(/[.!?](\s|$)/g) ?? []).length;
+    expect(sentences).toBeGreaterThanOrEqual(3);
+    expect(sentences).toBeLessThanOrEqual(5);
+  });
+
+  test("every card says in a line what its metric means", async ({ page }) => {
+    await openScms(page);
+    await expect(page.getByTestId("metric-meaning-cert_pool_valid")).toContainText("could sign with right now");
+    const short = await page.locator(".mcard .mcard-meaning").evaluateAll((els) => els.filter((e) => (e.textContent ?? "").trim().length < 10).length);
+    expect(short).toBe(0);
+  });
+});

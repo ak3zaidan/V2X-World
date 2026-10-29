@@ -106,6 +106,7 @@
 .mcard .pin { min-width: 24px; height: 24px; padding: 0 4px; font-size: 14px; }
 .mcard .pin.on { color: var(--warn); }
 .mcard-name { font-size: 11px; }
+.mcard-meaning { margin: 2px 0 0; font-size: 11.5px; line-height: 1.35; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mcard-body { cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
 .mcard-value { display: flex; align-items: baseline; gap: 6px; margin-top: 4px; }
 .mcard-num { font-size: 22px; font-weight: 600; color: var(--text); }
@@ -330,11 +331,21 @@
  * only signal: every dot has its level written beside it.
  */
 
-.hdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; margin-right: 5px; vertical-align: baseline; }
+/* The mark's shape carries the level as well as its colour: circle, triangle, diamond. */
+.hdot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; margin-right: 5px; vertical-align: baseline; }
 .hdot.healthy { background: var(--ok); }
-.hdot.caution { background: var(--warn); }
+.hdot.caution { background: var(--warn); border-radius: 0; clip-path: polygon(50% 4%, 100% 96%, 0 96%); width: 11px; height: 11px; }
 .hdot.info { background: var(--text-faint); }
-.hdot.unhealthy { background: var(--err); box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 30%, transparent); }
+.hdot.unhealthy { background: var(--err); border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); width: 11px; height: 11px; }
+
+.lmark { display: inline-flex; align-items: center; gap: 0; font-size: 11px; font-weight: 600; line-height: 16px; padding: 0 6px 0 4px; border-radius: 9px; border: 1px solid var(--border); white-space: nowrap; }
+.lmark .hdot { margin-right: 4px; width: 8px; height: 8px; }
+.lmark.caution .hdot, .lmark.unhealthy .hdot { width: 9px; height: 9px; }
+.lmark.healthy { color: color-mix(in srgb, var(--ok) 70%, var(--text)); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+.lmark.caution { color: color-mix(in srgb, var(--warn) 65%, var(--text)); border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
+.lmark.unhealthy { color: color-mix(in srgb, var(--err) 75%, var(--text)); border-color: color-mix(in srgb, var(--err) 60%, var(--border)); background: color-mix(in srgb, var(--err) 10%, transparent); }
+.lmark.compact { border: none; padding: 0; background: none; }
+.lmark.compact .hdot { margin-right: 3px; }
 
 .hline { display: flex; align-items: baseline; gap: 4px; font-size: 12px; line-height: 1.4; margin-top: 4px; }
 .hline-level { font-weight: 600; white-space: nowrap; }
@@ -476,3 +487,107 @@
 .rcmp-chart { width: 100%; min-height: 200px; }
 .rcmp-history td { vertical-align: middle; }
 @media (max-width: 640px) { .rcmp-sides { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------------------------ credentials at a glance */
+/*
+ * The SCMS overview: five question panels of tiles. A tile is a number first (large, with its
+ * unit), then one line of meaning; a cue is the level mark, never colour alone, and a panel's worst
+ * cue is its left stripe.
+ */
+
+.scms { margin: 0 0 28px; scroll-margin-top: 8px; }
+.scms-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.scms-head h3 { font-size: 15px; font-weight: 650; margin: 0; color: var(--text); }
+.scms-toggle { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.scms-toggle:hover { text-decoration: none; }
+.scms-caret { display: inline-block; color: var(--text-dim); transition: transform 0.12s ease; font-size: 12px; }
+.scms-caret.open { transform: rotate(90deg); }
+.scms-facts { font-size: 12px; }
+.scms-mini { display: inline-flex; gap: 2px; }
+.scms-intro { font-size: 12px; margin: 0 0 12px; max-width: 110ch; }
+.scms-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 14px; align-items: start; }
+
+.scms-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 12px 14px 12px;
+  min-width: 0;
+  scroll-margin-top: 8px;
+}
+.scms-panel.healthy { border-left-color: var(--ok); }
+.scms-panel.caution { border-left-color: var(--warn); }
+.scms-panel.unhealthy { border-left-color: var(--err); }
+.scms-panel-head h4 { margin: 0; font-size: 14px; font-weight: 650; color: var(--text); }
+.scms-answer { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 10px; font-size: 13px; line-height: 1.45; color: var(--text); }
+.scms-answer .lmark { flex: none; position: relative; top: -1px; }
+
+.scms-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.scms-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px 7px;
+  min-width: 0;
+}
+.scms-tile.opens { cursor: pointer; }
+.scms-tile.opens:hover { border-color: var(--accent-dim); }
+.scms-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.scms-tile.caution { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
+.scms-tile.unhealthy { border-color: color-mix(in srgb, var(--err) 65%, var(--border)); }
+.scms-tile-title { font-size: 11.5px; font-weight: 600; color: var(--text-dim); line-height: 1.3; }
+.scms-tile-value { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; margin-top: 1px; }
+.scms-num { font-size: 20px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.2; }
+.scms-unit { font-size: 12px; color: var(--text-dim); }
+.scms-tile-value .lmark { margin-left: auto; align-self: center; }
+.scms-tile-meaning { font-size: 11.5px; color: var(--text-dim); line-height: 1.35; }
+.scms-tile-cue { font-size: 11.5px; line-height: 1.35; font-weight: 600; }
+.scms-tile-cue.caution { color: color-mix(in srgb, var(--warn) 65%, var(--text)); }
+.scms-tile-cue.unhealthy { color: color-mix(in srgb, var(--err) 75%, var(--text)); }
+.scms-tile-split { font-size: 10.5px; color: var(--text-faint); }
+.scms-spark { display: block; width: 100%; height: 22px; margin-top: 3px; }
+.scms-spark path { fill: none; stroke: var(--viz-1); stroke-width: 1.6; stroke-linejoin: round; }
+
+.scms-block { margin-top: 12px; }
+.scms-block h5 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 6px; font-size: 12px; font-weight: 650; color: var(--text); }
+.scms-chart-link { font-size: 11.5px; font-weight: 400; margin-left: auto; }
+.scms-note { font-size: 11.5px; margin: 6px 0 0; }
+
+.scms-funnel { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 6px 14px; }
+.scms-step { position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 0; border-radius: 4px; }
+.scms-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.scms-step-num { font-size: 17px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+.scms-step-label { font-size: 11px; color: var(--text-dim); line-height: 1.25; min-height: 2.5em; }
+.scms-step-bar { display: block; height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
+.scms-step-bar span { display: block; height: 100%; background: var(--viz-1); border-radius: 3px; }
+.scms-step-arrow { position: absolute; right: -12px; top: 3px; color: var(--text-faint); font-size: 12px; }
+
+.scms-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.scms-bar-row { display: grid; grid-template-columns: minmax(120px, 38%) minmax(0, 1fr) 64px; gap: 8px; align-items: center; font-size: 11.5px; }
+.scms-bar-label { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scms-bar-track { position: relative; height: 10px; background: var(--grid); border-radius: 3px; }
+.scms-bar { display: block; height: 100%; background: var(--viz-seq); border-radius: 3px; }
+.scms-bar.healthy { background: var(--ok); }
+.scms-bar.caution { background: var(--warn); }
+.scms-bar.unhealthy { background: var(--err); }
+.scms-bar-limit { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 2px dashed var(--text-dim); }
+.scms-bar-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+
+.scms-raw { margin-top: 14px; }
+.scms-raw h4 { font-size: 13px; margin: 0 0 8px; }
+.scms-raw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+.scms-raw-entity { margin: 0; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11.5px; }
+.scms-raw-name { font-weight: 600; margin-bottom: 4px; color: var(--text); }
+.scms-raw-entity dd { margin: 0; display: flex; justify-content: space-between; gap: 8px; }
+.scms-raw-entity dd .mono:last-child { overflow-wrap: anywhere; text-align: right; }
+
+/* The run in brief: the summary's first read, in sentences. */
+.rsum-brief p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--text); max-width: 95ch; }

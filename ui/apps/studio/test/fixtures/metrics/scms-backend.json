@@ -1,0 +1,1096 @@
+{
+ "entity": "backend",
+ "state": {
+  "edges": [
+   {
+    "bytes": 116980,
+    "from": "ee",
+    "last_step": "report",
+    "last_t": 545071816140,
+    "messages": 110,
+    "steps": {
+     "report": 110
+    },
+    "to": "ra",
+    "transport": "cellular-uu"
+   },
+   {
+    "bytes": 0,
+    "from": "ee",
+    "last_step": "report-relay",
+    "last_t": 546000000000,
+    "messages": 76,
+    "steps": {
+     "report-relay": 76
+    },
+    "to": "rsu",
+    "transport": "v2x-air"
+   },
+   {
+    "bytes": 42956,
+    "from": "provider-b/ee",
+    "last_step": "report",
+    "last_t": 545071816463,
+    "messages": 40,
+    "steps": {
+     "report": 40
+    },
+    "to": "provider-b/ra",
+    "transport": "cellular-uu"
+   }
+  ],
+  "entities": [
+   {
+    "id": "manager",
+    "name": "SCMS Manager",
+    "node": 20,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 1,
+     "waited_ns": 0
+    },
+    "role": "Sets policy for the whole system; its decisions reach devices as newer policy fi",
+    "state": {
+     "gpf_version": 1,
+     "policy_decisions": 1
+    },
+    "system": "scms",
+    "tier": "governance",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "pg",
+    "name": "Policy Generator",
+    "node": 21,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 1,
+     "waited_ns": 0
+    },
+    "role": "Signs the Global Policy File and the Global Certificate Chain File.",
+    "state": {
+     "certificate": "c257dd1014a9db31",
+     "certs_per_period": 20,
+     "files_signed": 2,
+     "gccf_version": 1,
+     "gpf_version": 1,
+     "i_period_s": 604800
+    },
+    "system": "scms",
+    "tier": "governance",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "electors",
+    "name": "Electors",
+    "node": null,
+    "online": false,
+    "ops": {},
+    "queue": null,
+    "role": "Endorse the certificate trust list; a device accepts it only with a quorum.",
+    "state": {
+     "ctl_sequence": 0,
+     "electors": 5,
+     "endorsements": 5,
+     "quorum": 3
+    },
+    "system": "scms",
+    "tier": "governance",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "root",
+    "name": "Root CA",
+    "node": null,
+    "online": false,
+    "ops": {},
+    "queue": null,
+    "role": "Offline trust anchor; certifies the ICA, PG, MA and CRL Generator.",
+    "state": {
+     "certificate": "f35adad9424a1086",
+     "certs_issued": 10
+    },
+    "system": "scms",
+    "tier": "ca",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "ica",
+    "name": "Intermediate CA",
+    "node": null,
+    "online": false,
+    "ops": {},
+    "queue": null,
+    "role": "Certifies the online authorities: ECA, PCA, RA, LAs, LOP, DCM, CRL Store.",
+    "state": {
+     "certificate": "c34b54e2c2dba60d",
+     "certs_issued": 16
+    },
+    "system": "scms",
+    "tier": "ca",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "dcm",
+    "name": "Device Configuration Manager",
+    "node": 11,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Bootstraps devices: forwards enrolment to the ECA and installs the trust bundle.",
+    "state": {
+     "devices_bootstrapped": 16,
+     "trust_bundles": 16
+    },
+    "system": "scms",
+    "tier": "ca",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "eca",
+    "name": "Enrolment CA",
+    "node": 10,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Issues enrolment certificates, and successors before they expire.",
+    "state": {
+     "blocklisted": 0,
+     "certificate": "8752da7805072938",
+     "enrolment_certs_issued": 16,
+     "successors_issued": 0,
+     "successors_refused": 0
+    },
+    "system": "scms",
+    "tier": "ca",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "ra",
+    "name": "Registration Authority",
+    "node": 1,
+    "online": true,
+    "ops": {
+     "ec scalar-mult": 110,
+     "ecdsa-p256-sha256 verify": 110
+    },
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 113521100,
+     "depth": 0,
+     "inbound": 1,
+     "served": 110,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Checks enrolment, expands butterfly keys, shuffles requests, serves batches and ",
+    "state": {
+     "batches_held": 32,
+     "blocklist": 0,
+     "clipped_to_policy": 0,
+     "enrolled_devices": 16,
+     "files_served": 0,
+     "jobs_pending": 0,
+     "lpf_version": 1,
+     "refused_blocklisted": 0,
+     "refused_enrolment": 0,
+     "reports_in_shuffle": 110,
+     "requests_accepted": 16,
+     "shuffle_window_s": 172800
+    },
+    "system": "scms",
+    "tier": "ra",
+    "traffic": {
+     "bytes_in": 116980,
+     "bytes_out": 0,
+     "received": 110,
+     "sent": 0
+    }
+   },
+   {
+    "id": "la1",
+    "name": "Linkage Authority 1",
+    "node": 3,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Holds one half of every device's linkage seed chain; seals pre-linkage values fo",
+    "state": {
+     "chains": 16,
+     "plv_issued": 640,
+     "seeds_released": 0
+    },
+    "system": "scms",
+    "tier": "privacy",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "la2",
+    "name": "Linkage Authority 2",
+    "node": 4,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Holds one half of every device's linkage seed chain; seals pre-linkage values fo",
+    "state": {
+     "chains": 16,
+     "plv_issued": 640,
+     "seeds_released": 0
+    },
+    "system": "scms",
+    "tier": "privacy",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "pca",
+    "name": "Pseudonym CA",
+    "node": 2,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Certifies cocoon keys as pseudonym certificates, encrypted to the device; never ",
+    "state": {
+     "certificate": "cf3293594de9fb3e",
+     "certs_issued": 640,
+     "lookups_answered": 0
+    },
+    "system": "scms",
+    "tier": "ra",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "ma",
+    "name": "Misbehaviour Authority",
+    "node": 5,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Receives reports, decides, and resolves a certificate to its device through the ",
+    "state": {
+     "case_open": false,
+     "cases_open": 0,
+     "cases_opened": 0,
+     "cases_total": 0,
+     "decision_rule": "threat/ma/corroborated",
+     "most_corroborated_events_unrevoked": 0,
+     "reports_ingested": 0,
+     "reports_received": 0,
+     "revocation_decisions": 0,
+     "revocations": 0,
+     "subjects_under_evidence": 0
+    },
+    "system": "scms",
+    "tier": "revocation",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "crlg",
+    "name": "CRL Generator",
+    "node": 6,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 1,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Signs the linked CRL on its cadence.",
+    "state": {
+     "cadence_s": 86400,
+     "entries": 0,
+     "versions_signed": 1
+    },
+    "system": "scms",
+    "tier": "revocation",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "crl-store",
+    "name": "CRL Store",
+    "node": 8,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Serves the signed CRL to devices that download it over cellular.",
+    "state": {
+     "downloads_served": 0,
+     "entries": 0,
+     "versions": 1,
+     "versions_published": 2
+    },
+    "system": "scms",
+    "tier": "distribution",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "crl-broadcast",
+    "name": "CRL Broadcast",
+    "node": 9,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Hands the signed CRL to roadside units that repeat it on the air.",
+    "state": {
+     "entries": 0,
+     "rsu_frames": 0,
+     "versions": 1
+    },
+    "system": "scms",
+    "tier": "distribution",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "ee",
+    "name": "Devices",
+    "node": null,
+    "online": true,
+    "ops": {},
+    "queue": null,
+    "role": "Vehicles and roadside units: enrolled, holding pseudonym batches, reporting, enf",
+    "state": {
+     "access_cellular": 11,
+     "access_offline": 0,
+     "access_rsu_relay": 10,
+     "cert_unavailable_s": 0.0,
+     "certificates_topped_up": 0,
+     "crl_installs": 0,
+     "crls_rejected": 0,
+     "devices": 16,
+     "enrolled": 16,
+     "holding_pseudonyms": 16,
+     "pseudonym_certificates": 640,
+     "pseudonym_changes": 4,
+     "re_enrolments": 0,
+     "reenrolments_completed": 0,
+     "refused_now": 0,
+     "report_relay_latency_max_ms": 11,
+     "report_relay_latency_ms": 11.6,
+     "report_uu_latency_max_ms": 36,
+     "report_uu_latency_ms": 28.7,
+     "reports_filed": 195,
+     "reports_over_cellular": 74,
+     "reports_via_rsu": 76,
+     "reports_waiting_for_coverage": 2,
+     "revoked_receptions": 0,
+     "self_revoked": 0,
+     "topups_completed": 0,
+     "topups_in_flight": 0,
+     "topups_refused": 0,
+     "topups_started": 0,
+     "trust_artefacts_rejected": 0,
+     "trust_installed": 16,
+     "vehicles": 9,
+     "vehicles_starved": 0
+    },
+    "system": "scms",
+    "tier": "device",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "rsu",
+    "name": "Roadside units",
+    "node": null,
+    "online": true,
+    "ops": {},
+    "queue": null,
+    "role": "Relay reports and top-ups over their backhaul and repeat the CRL on the air; nev",
+    "state": {
+     "app_certs_preloaded": 4,
+     "app_certs_renewed": 0,
+     "backhaul_line_bytes": 91476,
+     "backhaul_messages": 78,
+     "backhaul_retransmissions": 0,
+     "compromised": 0,
+     "crl_frames": 0,
+     "crl_role": 2,
+     "crls_installed": 2,
+     "ever_starved": 0,
+     "in_cert_cycle": 2,
+     "messages_withheld": 0,
+     "reports_filed_by_units": 0,
+     "reports_relayed": 76,
+     "revoked_receptions": 0,
+     "starving": 0,
+     "units": 2,
+     "with_backhaul": 2
+    },
+    "system": "scms",
+    "tier": "distribution",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/manager",
+    "name": "SCMS Manager (provider-b)",
+    "node": 20,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 1,
+     "waited_ns": 0
+    },
+    "role": "Sets policy for the whole system; its decisions reach devices as newer policy fi",
+    "state": {
+     "gpf_version": 1,
+     "policy_decisions": 0,
+     "provider": "provider-b"
+    },
+    "system": "scms",
+    "tier": "governance",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/pg",
+    "name": "Policy Generator (provider-b)",
+    "node": 900121,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 1,
+     "waited_ns": 0
+    },
+    "role": "Signs the Global Policy File and the Global Certificate Chain File.",
+    "state": {
+     "certificate": "36d314a3fc0aede5",
+     "certs_per_period": 20,
+     "files_signed": 0,
+     "gccf_version": 1,
+     "gpf_version": 1,
+     "i_period_s": 604800,
+     "provider": "provider-b"
+    },
+    "system": "scms",
+    "tier": "governance",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/electors",
+    "name": "Electors (provider-b)",
+    "node": null,
+    "online": false,
+    "ops": {},
+    "queue": null,
+    "role": "Endorse the certificate trust list; a device accepts it only with a quorum.",
+    "state": {
+     "ctl_sequence": 0,
+     "electors": 5,
+     "endorsements": 0,
+     "provider": "provider-b",
+     "quorum": 3
+    },
+    "system": "scms",
+    "tier": "governance",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/root",
+    "name": "Root CA (provider-b)",
+    "node": null,
+    "online": false,
+    "ops": {},
+    "queue": null,
+    "role": "Offline trust anchor; certifies the ICA, PG, MA and CRL Generator.",
+    "state": {
+     "certificate": "e397ee747e4eae0b",
+     "certs_issued": 4,
+     "provider": "provider-b"
+    },
+    "system": "scms",
+    "tier": "ca",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/ica",
+    "name": "Intermediate CA (provider-b)",
+    "node": null,
+    "online": false,
+    "ops": {},
+    "queue": null,
+    "role": "Certifies the online authorities: ECA, PCA, RA, LAs, LOP, DCM, CRL Store.",
+    "state": {
+     "certificate": "c5d9e626a1b0595c",
+     "certs_issued": 7,
+     "provider": "provider-b"
+    },
+    "system": "scms",
+    "tier": "ca",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/dcm",
+    "name": "Device Configuration Manager (provider-b)",
+    "node": 900111,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Bootstraps devices: forwards enrolment to the ECA and installs the trust bundle.",
+    "state": {
+     "devices_bootstrapped": 7,
+     "provider": "provider-b",
+     "trust_bundles": 7
+    },
+    "system": "scms",
+    "tier": "ca",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/eca",
+    "name": "Enrolment CA (provider-b)",
+    "node": 900110,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Issues enrolment certificates, and successors before they expire.",
+    "state": {
+     "blocklisted": 0,
+     "certificate": "dc8afe8fe9876233",
+     "enrolment_certs_issued": 7,
+     "provider": "provider-b",
+     "successors_issued": 0,
+     "successors_refused": 0
+    },
+    "system": "scms",
+    "tier": "ca",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/ra",
+    "name": "Registration Authority (provider-b)",
+    "node": 900101,
+    "online": true,
+    "ops": {
+     "ec scalar-mult": 40,
+     "ecdsa-p256-sha256 verify": 40
+    },
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 41280400,
+     "depth": 0,
+     "inbound": 1,
+     "served": 40,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Checks enrolment, expands butterfly keys, shuffles requests, serves batches and ",
+    "state": {
+     "batches_held": 10,
+     "blocklist": 0,
+     "clipped_to_policy": 0,
+     "enrolled_devices": 5,
+     "files_served": 6,
+     "jobs_pending": 0,
+     "lpf_version": 2,
+     "provider": "provider-b",
+     "refused_blocklisted": 0,
+     "refused_enrolment": 0,
+     "reports_in_shuffle": 40,
+     "requests_accepted": 5,
+     "shuffle_window_s": 172800
+    },
+    "system": "scms",
+    "tier": "ra",
+    "traffic": {
+     "bytes_in": 42956,
+     "bytes_out": 0,
+     "received": 40,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/la1",
+    "name": "Linkage Authority 1 (provider-b)",
+    "node": 900103,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Holds one half of every device's linkage seed chain; seals pre-linkage values fo",
+    "state": {
+     "chains": 5,
+     "plv_issued": 200,
+     "provider": "provider-b",
+     "seeds_released": 0
+    },
+    "system": "scms",
+    "tier": "privacy",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/la2",
+    "name": "Linkage Authority 2 (provider-b)",
+    "node": 900104,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Holds one half of every device's linkage seed chain; seals pre-linkage values fo",
+    "state": {
+     "chains": 5,
+     "plv_issued": 200,
+     "provider": "provider-b",
+     "seeds_released": 0
+    },
+    "system": "scms",
+    "tier": "privacy",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/pca",
+    "name": "Pseudonym CA (provider-b)",
+    "node": 900102,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Certifies cocoon keys as pseudonym certificates, encrypted to the device; never ",
+    "state": {
+     "certificate": "d9f3ad204ed7b683",
+     "certs_issued": 204,
+     "lookups_answered": 0,
+     "provider": "provider-b"
+    },
+    "system": "scms",
+    "tier": "ra",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/ma",
+    "name": "Misbehaviour Authority (provider-b)",
+    "node": 900105,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Receives reports, decides, and resolves a certificate to its device through the ",
+    "state": {
+     "case_open": false,
+     "cases_open": 0,
+     "cases_total": 0,
+     "provider": "provider-b",
+     "reports_received": 0,
+     "revocations": 0
+    },
+    "system": "scms",
+    "tier": "revocation",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/crlg",
+    "name": "CRL Generator (provider-b)",
+    "node": 900106,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 1,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Signs the linked CRL on its cadence.",
+    "state": {
+     "cadence_s": 86400,
+     "entries": 0,
+     "provider": "provider-b",
+     "versions_signed": 1
+    },
+    "system": "scms",
+    "tier": "revocation",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/crl-store",
+    "name": "CRL Store (provider-b)",
+    "node": 900108,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Serves the signed CRL to devices that download it over cellular.",
+    "state": {
+     "entries": 0,
+     "provider": "provider-b",
+     "versions": 1
+    },
+    "system": "scms",
+    "tier": "distribution",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/crl-broadcast",
+    "name": "CRL Broadcast (provider-b)",
+    "node": 900109,
+    "online": true,
+    "ops": {},
+    "queue": {
+     "backlog_ns": 0,
+     "busy_ns": 0,
+     "depth": 0,
+     "inbound": 0,
+     "served": 0,
+     "servers": 4,
+     "waited_ns": 0
+    },
+    "role": "Hands the signed CRL to roadside units that repeat it on the air.",
+    "state": {
+     "entries": 0,
+     "provider": "provider-b",
+     "versions": 1
+    },
+    "system": "scms",
+    "tier": "distribution",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   },
+   {
+    "id": "provider-b/ee",
+    "name": "Devices (provider-b)",
+    "node": null,
+    "online": true,
+    "ops": {},
+    "queue": null,
+    "role": "Vehicles and roadside units: enrolled, holding pseudonym batches, reporting, enf",
+    "state": {
+     "crls_rejected": 0,
+     "devices": 7,
+     "enrolled": 7,
+     "holding_pseudonyms": 5,
+     "provider": "provider-b",
+     "pseudonym_certificates": 200,
+     "re_enrolments": 0,
+     "refused_now": 0,
+     "self_revoked": 0,
+     "trust_artefacts_rejected": 12,
+     "trust_installed": 4
+    },
+    "system": "scms",
+    "tier": "device",
+    "traffic": {
+     "bytes_in": 0,
+     "bytes_out": 0,
+     "received": 0,
+     "sent": 0
+    }
+   }
+  ],
+  "flows": {
+   "report": 150
+  },
+  "protocol": "protocol/scms/camp",
+  "recent": [
+   {
+    "bytes": 1059,
+    "flow": "report",
+    "from": "provider-b/ee",
+    "step": "report",
+    "t": 519668605881,
+    "to": "provider-b/ra",
+    "transport": "rsu-backhaul"
+   },
+   {
+    "bytes": 1059,
+    "flow": "report",
+    "from": "ee",
+    "step": "report",
+    "t": 521271102958,
+    "to": "ra",
+    "transport": "cellular-uu"
+   }
+  ],
+  "signature": "ecdsa-p256",
+  "system": "scms",
+  "t": 546000000000
+ },
+ "t_ns": 546000000000
+}

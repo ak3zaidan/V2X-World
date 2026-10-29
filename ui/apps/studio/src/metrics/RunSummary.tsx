@@ -31,8 +31,10 @@ import { classify, judge, judgedSeries, LEVEL_LABEL, noteOf, outOfBand, whenText
 import { BandTable, HealthDot, HealthLine } from "./HealthBadge.js";
 import { useRunKey } from "./hooks.js";
 import { chooseBinNs, familiesOf, formatNumber, formatWithUnit, worstFirst, type MetricFamily } from "./model.js";
+import { countOf, firstProvider } from "./scmsModel.js";
 import {
   baseOf,
+  briefSentences,
   causeName,
   dominant,
   entityLoads,
@@ -63,11 +65,13 @@ interface SummaryData {
   readonly cause: { key: string; share: number } | null;
   readonly entities: readonly EntityLoad[];
   readonly atS: number;
+  /** The run in three to five sentences (`summaryModel.ts` `briefSentences`). */
+  readonly brief: readonly string[];
 }
 
 type Load = { status: "idle" | "loading" } | { status: "error"; error: string } | { status: "ready"; data: SummaryData };
 
-async function collect(tNs: number): Promise<SummaryData> {
+async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
   const defs = await fetchCatalogue();
   const families = familiesOf(defs);
   const known = new Set(defs.map((d) => d.name));
@@ -122,12 +126,48 @@ async function collect(tNs: number): Promise<SummaryData> {
       return null;
     }
   };
-  const [stageRows, causeRows, backend] = await Promise.all([
+  const [stageRows, causeRows, backend, accusations] = await Promise.all([
     families.some((f) => f.base === "latency_stage_share") ? optional(() => fetchGroups("latency_stage_share", "stage", { fromNs: 0, toNs: tNs })) : null,
     families.some((f) => f.base === "pdr_by_cause") ? optional(() => fetchGroups("pdr_by_cause", "cause", { fromNs: 0, toNs: tNs })) : null,
     optional(() => engine.request("inspect.entity", { entity: "backend", limit: 40 }, { quiet: true, timeoutMs: 4000 })),
+    families.some((f) => f.base === "false_accusations" && f.breakdowns.includes("level")) ? optional(() => fetchGroups("false_accusations", "level", { fromNs: 0, toNs: tNs })) : null,
   ]);
   const snap = backend === null ? null : snapshotOf(backend);
+  const stage = stageRows ? dominant(stageRows.rows) : null;
+  const entities = snap ? entityLoads(snap, tNs) : [];
+
+  // The brief: the same judgements the dialog lists, the headline numbers, the authorities' counts.
+  const first = firstProvider(scenario);
+  const count = (roles: string[], keys: string[]): number | null => countOf(snap, roles, keys, first)?.total ?? null;
+  const healthyThroughout = judgements.filter((j) => j.level === "healthy" && j.worstLevel === "healthy").length;
+  const outs = outOfBand(judgements);
+  const honest = accusations?.rows.find((r) => r.key === "vehicle")?.value ?? null;
+  const brief = briefSentences({
+    judged:
+      judgements.length === 0
+        ? null
+        : {
+            unhealthy: judgements.filter((j) => j.level === "unhealthy").length,
+            caution: judgements.filter((j) => j.level === "caution").length,
+            atTimes: judgements.filter((j) => j.level === "healthy" && j.worstLevel !== "healthy").length,
+            healthy: healthyThroughout,
+            worstLabel: outs[0]?.label ?? null,
+          },
+    delivery: { pdr: headline.get("pdr[100m]") ?? null, latencyMs: headline.get("e2e_latency") ?? null },
+    credentials: {
+      enrolled: count(["ee"], ["enrolled"]),
+      devices: count(["ee"], ["devices", "stations"]),
+      pool: headline.get("cert_pool_valid") ?? null,
+      starved: count(["ee"], ["vehicles_starved"]),
+    },
+    misbehaviour: {
+      filed: count(["ee"], ["reports_filed"]),
+      revoked: count(["ma"], ["revocations"]),
+      honestRevoked: honest,
+      slowestStageS: headline.get("revocation_latency_stage.p95") ?? null,
+    },
+    bottleneck: { stage: stage ? stageName(stage.key) : null, stageShare: stage?.share ?? null, entity: entities[0]?.name ?? null, utilisation: entities[0]?.utilisation ?? null },
+  });
   return {
     families,
     judgements,
@@ -135,10 +175,11 @@ async function collect(tNs: number): Promise<SummaryData> {
     headline,
     units,
     where,
-    stage: stageRows ? dominant(stageRows.rows) : null,
+    stage,
     cause: causeRows ? dominant(causeRows.rows) : null,
-    entities: snap ? entityLoads(snap, tNs) : [],
+    entities,
     atS: tNs / 1e9,
+    brief,
   };
 }
 
@@ -192,10 +233,12 @@ function SummaryDialog(): React.JSX.Element {
   const tNs = run.tNs;
   const tRef = useRef(tNs);
   tRef.current = tNs;
+  const scenarioRef = useRef(scenario);
+  scenarioRef.current = scenario;
 
   const refresh = useCallback(() => {
     setLoad({ status: "loading" });
-    collect(tRef.current)
+    collect(tRef.current, scenarioRef.current)
       .then((data) => setLoad({ status: "ready", data }))
       .catch((e: unknown) => setLoad({ status: "error", error: e instanceof Error ? e.message : String(e) }));
   }, []);
@@ -297,6 +340,11 @@ function SummaryDialog(): React.JSX.Element {
                   </span>
                 )}
               </div>
+
+              <section className="rsum-section rsum-brief" aria-label="The run in brief" data-testid="run-summary-brief">
+                <h3>In brief</h3>
+                <p>{data.brief.join(" ")}</p>
+              </section>
 
               <section className="rsum-section" aria-label="Headline results">
                 <h3>Headline results</h3>
