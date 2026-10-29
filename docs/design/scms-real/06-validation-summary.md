@@ -786,8 +786,8 @@ could never fail on the engine's capture, and the CRL faults could not reach the
 | veh R10 | Country regions are not checked against a location; they are only counted | None for US pseudonyms, which carry no region (`region_unchecked` = 0) |
 | veh R11 | Same as crypto #38 | Counted |
 | veh C6 | "2 km since the last change" is measured as distance travelled, not straight-line distance | On a winding route a change can come slightly early |
-| veh M11 | Relayed report uploads go on safety channel 172, not on a service channel advertised by WSA | Report airtime on 172 is an upper bound (0.21 % at full fleet in the first run). The radio has no per-channel MAC queues and no channel switch (07 §7 item 4) |
-| veh U5 | No WSA encoder | The SCMS service cannot be advertised, so M11 cannot be fixed yet |
+| veh M11 | Relayed report uploads go on safety channel 172, not on a service channel advertised by WSA. **Fixed under `net.rsu_ip.air: sch` (2026-10-28, WP-19 P19.2/P19.4):** a vehicle relays only to a unit whose WSA it verified, and reports go on the `radio.channels` service channel (`foundations::relayed_reports_move_to_the_advertised_service_channel`); the default `constant` keeps 172 | Report airtime on 172 is an upper bound (0.21 % at full fleet in the first run). The radio has no per-channel MAC queues and no channel switch (07 §7 item 4) |
+| veh U5 | No WSA encoder. **Fixed 2026-10-28 (WP-19 P19.1):** `v2xw_msg::wsa` encodes and decodes the IEEE 1609.3-2016 WSA in UPER, byte-identical to asn1tools on 5 vectors (`tests/wsa_oracle.rs`); `RsuRuntime::wsa_payload` sends an 84-octet SCMS-service WSA (PSID 0x23 ASSUMPTION, IPv6 Routing, the WRA). The engine does not send WSAs yet (P19.2) | M11 still waits for P19.2-P19.4 |
 
 Fourteen of these change nothing a device trusts or does: crypto #30, #35 and proto E7, crypto
 #38 and veh R11, crypto #10 and gov K-5 (2 s), and gov G-2, G-11, C-9, C-10, C-11, C-14 and
@@ -1503,6 +1503,14 @@ The totals count each row as its own checklist records it, with the changes in �
       shipped). The test now holds MAC/PHY counts to 0.01 % (`scms-fix4-b.yaml` CACHE.mac).
       Owner decision: count J2945/1 RVs at reception (the PER window already does); this
       moves every J2945/1 run whose density passes B, and so the SCMS goldens.
+    - **2026-10-28, done (density track):** the source settles it. The FMVSS 150 NPRM
+      preamble (82 FR 3890) says the density count needs the device to "decode the message
+      enough to expose the various temporary IDs of the received BSMs", and names
+      authentication as a separate step; S5.5.1 (82 FR 4014) calls `N(k)` "the Vehicle
+      Density within 100 m". The engine now counts at the parse (`Stores::heard`, filled in
+      `ObuRuntime::receive` before the policy; `Engine::update_dcc`), the default, with no
+      setting. `scms_knobs_runs` cache test holds MAC/PHY to equality again. The G-SCMS
+      digests (`i-s1-phase2-60s`, `phase2-path`, `ttc-triggered-brake`) did not move.
     - F5-SCOPE: `security.scms.crl_overdue_scope` (`craca` default | `all`). With `all`, any
       held series-1 list past `nextCrl` + tolerance refuses every message ([CAMP122]
       Table 67: "rejecting all of them"). `rx_validation`

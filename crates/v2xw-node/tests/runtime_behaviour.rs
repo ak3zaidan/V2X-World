@@ -291,6 +291,61 @@ fn a_message_is_handed_over_when_its_verification_finishes() {
     assert!(idle.delivered.is_empty() && idle.transmissions.is_empty());
 }
 
+/// SAE J2945/1's vehicle density counts the RVs whose BSMs were *received*, from their
+/// decoded temporary IDs (FMVSS 150 NPRM preamble, 82 FR 3890: "decode the message enough
+/// to expose the various temporary IDs of the received BSMs"), not the ones whose
+/// signature checks have finished. A station is counted at its arrival, while its check
+/// is still running, and one whose signature then fails was still received; a SPaT's
+/// sender is not a station, and one beyond 100 m is not in range.
+#[test]
+fn the_j2945_density_counts_a_station_at_reception_not_at_verification() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let reg = RngRegistry::new(7);
+    let t0 = 1_000 * NS_PER_MS;
+    let mut ctx = NodeRuntimeCtx::new(t0, &reg);
+    let mut spat = frame(30, Vec3::new(10.0, 0.0, 0.0), t0, true);
+    spat.msg_type = MsgType::Spat;
+    let stamped = [
+        frame(9, Vec3::new(50.0, 0.0, 0.0), t0, true),
+        frame(10, Vec3::new(0.0, 60.0, 0.0), t0, false),
+        frame(11, Vec3::new(150.0, 0.0, 0.0), t0, true),
+        spat,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, f)| {
+        (
+            f,
+            RxStamp {
+                token: i as u64,
+                arrived_at: Some(t0),
+            },
+        )
+    })
+    .collect();
+    let step = rt.step_timed(&mut ctx, stamped, 0.0);
+    assert!(step.delivered.is_empty(), "the checks are still running");
+    assert!(rt.neighbors().is_empty());
+    let heard = &rt.stores().heard;
+    assert_eq!(
+        heard.len(),
+        3,
+        "three stations received, the SPaT's mast is none"
+    );
+    assert_eq!(
+        heard.count_within(Vec3::ZERO, 100.0, 0),
+        2,
+        "two RVs within 100 m, one of them about to fail its check"
+    );
+    // The count is the J3161/1 window's too: nothing heard after the arrival.
+    assert_eq!(heard.count_within(Vec3::ZERO, 100.0, t0 + 1), 0);
+    // It ages as the neighbour table does: forgotten T_neighbor (3 s) after.
+    let later = t0 + 3_001 * NS_PER_MS;
+    let mut ctx = NodeRuntimeCtx::new(later, &reg);
+    let _ = rt.step_timed(&mut ctx, Vec::new(), 0.0);
+    assert!(rt.stores().heard.is_empty(), "{:?}", rt.stores().heard);
+}
+
 #[test]
 fn an_invalid_signature_never_reaches_the_neighbour_table() {
     let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);

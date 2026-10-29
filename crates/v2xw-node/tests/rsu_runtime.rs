@@ -189,35 +189,52 @@ fn a_unit_with_no_roles_broadcasts_nothing() {
     assert_eq!(u.modelled_broadcasts(), 0);
 }
 
-/// A unit with the WSA role broadcasts nothing and counts every attempt, because no WSA
-/// encoder and no WSA size-model row exists.
-///
-/// A modelling gap reported rather than filled in: 04-models.md §8.1 records the IEEE
-/// 1609.3 `RepeatRate` semantics as UNVERIFIED and the size model covers BSM, SPaT, MAP,
-/// PSM, SRM and SSM — not the WSA.
+/// A unit with the WSA role broadcasts a real IEEE 1609.3 WSA on its schedule (WP-19
+/// P19.1, rule gap U5): the octets decode per the module, advertise the SCMS service
+/// (PSID 0x23) and IPv6 Routing on channel index 1, carry the WAVE Routing Advertisement,
+/// and are not counted as unsized or modelled.
 #[test]
-fn the_wsa_role_is_declared_and_unsizable() {
+fn a_wsa_is_encoded_and_decodes_per_the_1609_3_module() {
     let mut u = unit(RsuRoles::NONE.with(RsuRole::WsaBroadcast));
     let outcomes = run(&mut u, 60);
-    assert_eq!(count(&outcomes, MsgType::Wsa), 0);
-    assert!(
-        u.unsized_broadcasts() >= 2,
-        "one attempt per 5 s over 6 s: {}",
-        u.unsized_broadcasts()
+    assert!(count(&outcomes, MsgType::Wsa) >= 2, "one per 5 s over 6 s");
+    assert_eq!(u.unsized_broadcasts(), 0);
+    assert_eq!(
+        u.modelled_broadcasts(),
+        0,
+        "encoder octets are not a modelled length"
+    );
+    let wsa = v2xw_msg::wsa::decode_wsa(&u.wsa_payload()).expect("decodes");
+    let services = wsa.services.expect("services");
+    assert_eq!(
+        services
+            .iter()
+            .map(|s| (s.psid, s.channel_index))
+            .collect::<Vec<_>>(),
+        vec![
+            (v2xw_msg::wsa::PSID_SECURITY_MANAGEMENT, 1),
+            (v2xw_msg::wsa::PSID_IPV6_ROUTING, 1)
+        ]
+    );
+    let channels = wsa.channels.expect("channels");
+    assert_eq!(
+        channels.len(),
+        1,
+        "channel index 1 names the one ChannelInfo"
+    );
+    assert!(wsa.routing.is_some(), "the WAVE Routing Advertisement");
+    assert_eq!(
+        wsa.header.expect("header")[0],
+        v2xw_msg::wsa::HeaderExt::RepeatRate(1),
+        "RepeatRate is WSAs per 5 s: one per 5 s"
     );
 
-    // Give it a length and it broadcasts, which is what makes the refusal above about the
-    // missing model and not about the role.
+    // Octets a scenario supplies still win.
     let mut sized = unit(RsuRoles::NONE.with(RsuRole::WsaBroadcast));
     sized.set_payload(MsgType::Wsa, vec![0xA5; 40]);
     let outcomes = run(&mut sized, 60);
     assert!(count(&outcomes, MsgType::Wsa) >= 2);
     assert_eq!(sized.unsized_broadcasts(), 0);
-    assert_eq!(
-        sized.modelled_broadcasts(),
-        0,
-        "supplied octets are not a modelled length"
-    );
 }
 
 /// An installed revocation list goes out once, and only once, unless a scenario sets a

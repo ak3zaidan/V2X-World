@@ -926,6 +926,226 @@ fn the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
     }
 }
 
+/// Two vehicles with no modem and one relaying unit at the grid's centre, their pool one
+/// period deep so the top-up is due at once (WP-19 P19.2). `air` is `net.rsu_ip.air`;
+/// `muted` puts the unit's radio at the validator's floor (-20 dBm, -10 dBi, 20 dB cable
+/// loss), so nothing it sends is heard, while it stays within the 300 m relay radius.
+fn relay_run(air: Option<&str>, muted: bool) -> (RunReport, MemoryRecorder) {
+    let mut s = with_backend(deterministic_radio(fleet(2, 20.0)));
+    if let Some(uu) = s.net.uu.as_mut() {
+        uu.params["penetration"] = 0.0.into();
+    }
+    if let Some(p) = s.security.protocol.as_mut() {
+        p.params["pool_periods"] = 1.into();
+    }
+    s.actors.rsus = vec![
+        serde_json::from_value(serde_json::json!({
+            "position_m": [420.0, 280.0, 0.0],
+            "roles": ["crl", "provisioning-proxy", "report-forward"],
+            "profile": "rsu/commsignia-its-rs4",
+        }))
+        .expect("an RSU"),
+    ];
+    if let Some(air) = air {
+        s.net.rsu_ip =
+            Some(serde_json::from_value(serde_json::json!({"air": air})).expect("net.rsu_ip"));
+    }
+    if muted {
+        let rsu = &mut s.radio.devices.rsu;
+        rsu.tx_power_dbm = -20.0;
+        rsu.antenna_gain_dbi = -10.0;
+        rsu.cable_loss_db = 20.0;
+    }
+    let errors = v2xw_engine::scenario::validate(&s);
+    assert!(errors.is_empty(), "{errors:?}");
+    run(s)
+}
+
+/// WP-19 P19.4: a download the service channel cannot finish is cut off and tried again.
+/// Six vehicles, no modem, one relaying unit under `net.rsu_ip.air: sch`, their pool one
+/// period deep. At 0 dBm every top-up completes on its first try. At -15 dBm a 1,536-octet
+/// frame needs a nearer vehicle than the WSA does: TCP gives up on some transfers, those
+/// flows are dropped (`relayed_flows_cut_off`), and the vehicles start again while they
+/// are still in range (USDOT RSU Specification v4.1 §2.2), so more top-ups start than there
+/// are vehicles and fewer of them complete.
+#[test]
+fn a_cut_off_download_is_retried_at_the_next_contact() {
+    let run_at = |power: f64| {
+        let mut s = with_backend(deterministic_radio(fleet(6, 40.0)));
+        if let Some(uu) = s.net.uu.as_mut() {
+            uu.params["penetration"] = 0.0.into();
+        }
+        if let Some(p) = s.security.protocol.as_mut() {
+            p.params["pool_periods"] = 1.into();
+        }
+        s.actors.rsus = vec![
+            serde_json::from_value(serde_json::json!({
+                "position_m": [420.0, 280.0, 0.0],
+                "roles": ["crl", "provisioning-proxy", "report-forward"],
+                "profile": "rsu/commsignia-its-rs4",
+            }))
+            .expect("an RSU"),
+        ];
+        s.net.rsu_ip =
+            Some(serde_json::from_value(serde_json::json!({"air": "sch"})).expect("net.rsu_ip"));
+        s.radio.devices.rsu.tx_power_dbm = power;
+        run(s).0
+    };
+    let (strong, weak) = (run_at(0.0), run_at(-15.0));
+    for (name, r) in [("0 dBm", &strong), ("-15 dBm", &weak)] {
+        let p = &r.phase2;
+        let c = &p.access.carrier;
+        println!(
+            "CUT {name}: started {} completed {} cut {} | sch {} delivered {} failed {}",
+            p.topups_started,
+            p.topups_completed,
+            p.relayed_flows_cut_off,
+            c.sch_messages,
+            c.sch_delivered,
+            c.sch_failed
+        );
+    }
+    let (s, w) = (&strong.phase2, &weak.phase2);
+    assert_eq!(s.relayed_flows_cut_off, 0, "{s:?}");
+    assert_eq!(s.topups_started, s.topups_completed, "{s:?}");
+    assert!(w.access.carrier.sch_failed > 0, "{:?}", w.access.carrier);
+    assert!(w.relayed_flows_cut_off > 0, "{w:?}");
+    assert!(w.topups_started > 6, "a cut-off top-up starts again: {w:?}");
+    assert!(w.topups_completed >= 1, "{w:?}");
+    let share = |p: &v2xw_engine::phase2::Phase2Report| {
+        p.topups_completed as f64 / p.topups_started.max(1) as f64
+    };
+    assert!(share(w) < share(s), "{} vs {}", share(w), share(s));
+}
+
+/// IEEE 1609.3 service discovery gates the relay (WP-19 P19.2, `net.rsu_ip.air: sch`): a
+/// vehicle uses a roadside unit's SCMS service only after it has verified that unit's WSA
+/// (1609.3 §8.2.3, the user decides on a PSID match; 1609.3-2016 Annex H.1 signs it).
+///
+/// - `constant` (the default): any unit in range serves, heard or not, so the muted unit
+///   still tops both vehicles up and sends no WSA;
+/// - `sch`: the unit sends a WSA every 100 ms and both vehicles top up through it;
+/// - `sch`, muted: no WSA is heard, so no top-up starts, although the unit is in range.
+#[test]
+fn a_vehicle_uses_a_roadside_unit_only_after_verifying_its_wsa() {
+    let wsas = |rec: &MemoryRecorder| {
+        on::<NodeTxView>(rec)
+            .iter()
+            .filter(|t| t.msg_type.as_deref() == Some("wsa"))
+            .count()
+    };
+    let (constant, rec) = relay_run(None, false);
+    let (constant_muted, _) = relay_run(Some("constant"), true);
+    let (sch, sch_rec) = relay_run(Some("sch"), false);
+    let (sch_muted, _) = relay_run(Some("sch"), true);
+    let line = |name: &str, r: &RunReport| {
+        let p = &r.phase2;
+        println!(
+            "RELAY {name}: relay-only {} started {} completed {}",
+            p.access.relay_only_vehicles, p.topups_started, p.topups_completed
+        );
+    };
+    line("constant", &constant);
+    line("constant muted", &constant_muted);
+    line("sch", &sch);
+    line("sch muted", &sch_muted);
+    assert_eq!(constant.phase2.access.relay_only_vehicles, 2);
+    assert_eq!(wsas(&rec), 0, "no WSA without net.rsu_ip.air: sch");
+    assert!(
+        constant.phase2.topups_completed >= 1,
+        "{:?}",
+        constant.phase2
+    );
+    assert!(
+        constant_muted.phase2.topups_completed >= 1,
+        "the constant link ignores the radio"
+    );
+    // About 10 per second over 20 s.
+    let n = wsas(&sch_rec);
+    assert!((150..=210).contains(&n), "{n} WSAs in 20 s at 100 ms");
+    assert!(sch.phase2.topups_completed >= 1, "{:?}", sch.phase2);
+    assert_eq!(sch_muted.phase2.topups_started, 0, "{:?}", sch_muted.phase2);
+    // P19.4: under sch the downloads ride TCP/TLS on the service-channel session
+    // (`RsuSchPath`), not the constant air link; under constant nothing does.
+    let (c, s) = (&constant.phase2.access.carrier, &sch.phase2.access.carrier);
+    println!(
+        "SCH carrier: constant {} offered; sch {} offered {} delivered {} failed",
+        c.sch_messages, s.sch_messages, s.sch_delivered, s.sch_failed
+    );
+    assert_eq!(c.sch_messages, 0);
+    assert!(s.sch_delivered > 0, "{s:?}");
+    assert!(s.tls_handshakes > 0, "a TLS session per binding: {s:?}");
+}
+
+/// Rule gap M11 (WP-19 P19.4): under `net.rsu_ip.air: sch` a relayed misbehaviour report
+/// goes out on the service channel the unit's WSA advertises (IEEE 1609.3; [SM-MBR] §4),
+/// not on safety channel 172. Six vehicles with two radios (one on 172, one on the
+/// map's service channel 174), no modem, one attacker, one relaying unit: under
+/// `constant` every report frame is on 172; under `sch` none is, and as many reports
+/// still reach the unit.
+#[test]
+fn relayed_reports_move_to_the_advertised_service_channel() {
+    let run_with = |air: &str| {
+        let mut s = with_backend(deterministic_radio(fleet(6, 30.0)));
+        if let Some(uu) = s.net.uu.as_mut() {
+            uu.params["penetration"] = 0.0.into();
+        }
+        s.actors.rsus = vec![
+            serde_json::from_value(serde_json::json!({
+                "position_m": [420.0, 280.0, 0.0],
+                "roles": ["crl", "provisioning-proxy", "report-forward"],
+                "profile": "rsu/commsignia-its-rs4",
+            }))
+            .expect("an RSU"),
+        ];
+        let lifecycle =
+            Scenario::load(scenarios().join("credential-lifecycle.yaml")).expect("loads");
+        s.threats = lifecycle.threats.clone();
+        s.detection = lifecycle.detection.clone();
+        s.threats.attackers[0].fraction = None;
+        s.threats.attackers[0].count = Some(1);
+        s.threats.attackers[0].schedule = None;
+        s.radio.channels = serde_json::from_value(serde_json::json!([
+            {"channel": 174, "messages": ["ssm"]}
+        ]))
+        .expect("radio.channels");
+        s.radio.devices.obu.radios = Some(2);
+        s.net.rsu_ip =
+            Some(serde_json::from_value(serde_json::json!({"air": air})).expect("net.rsu_ip"));
+        let errors = v2xw_engine::scenario::validate(&s);
+        assert!(errors.is_empty(), "{errors:?}");
+        run(s)
+    };
+    let mbr_channels = |rec: &MemoryRecorder| {
+        let mut by: BTreeMap<u16, usize> = BTreeMap::new();
+        for t in on::<NodeTxView>(rec) {
+            if t.msg_type.as_deref() == Some("mbr") {
+                *by.entry(t.channel.unwrap_or(0)).or_insert(0) += 1;
+            }
+        }
+        by
+    };
+    let (constant, crec) = run_with("constant");
+    let (sch, srec) = run_with("sch");
+    let (c, s) = (mbr_channels(&crec), mbr_channels(&srec));
+    println!(
+        "M11 constant {c:?} relayed {}; sch {s:?} relayed {}",
+        constant.phase2.reports_uploaded_relay, sch.phase2.reports_uploaded_relay
+    );
+    assert!(
+        c.get(&172).copied().unwrap_or(0) > 0,
+        "constant: reports on 172 {c:?}"
+    );
+    assert_eq!(c.get(&174), None, "constant: {c:?}");
+    assert_eq!(
+        s.get(&172),
+        None,
+        "sch: no report on the safety channel {s:?}"
+    );
+    assert!(s.get(&174).copied().unwrap_or(0) > 0, "sch: {s:?}");
+    assert!(sch.phase2.reports_uploaded_relay > 0, "{:?}", sch.phase2);
+}
+
 #[test]
 fn one_attacker_among_six_is_reported_revoked_and_refused_and_the_crl_reaches_everyone() {
     let (report, rec) = backend_run(6, true);

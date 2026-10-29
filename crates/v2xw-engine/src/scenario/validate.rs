@@ -48,6 +48,8 @@ pub const DATA_RATES_MBPS: [f64; 8] = [3.0, 4.5, 6.0, 9.0, 12.0, 18.0, 24.0, 27.
 const GN_FORWARDING: [&str; 2] = ["on-air", "overlay"];
 /// How `net.access_categories` maps messages onto EDCA queues.
 const NET_ACCESS_CATEGORIES: [&str; 2] = ["single", "etsi-profiles"];
+/// `net.rsu_ip.air`: the constant air link, or IEEE 1609.3 WSA-gated service (WP-19).
+const RSU_IP_AIR: [&str; 2] = ["constant", "sch"];
 const DCC_CBR: [&str; 2] = ["local", "global"];
 /// ETSI reactive DCC's tables, TS 102 687 V1.2.1 Annex A (network audit).
 const DCC_REACTIVE_TABLES: [&str; 2] = ["a1", "a2"];
@@ -481,6 +483,15 @@ pub static BOUNDS: &[Bound] = &[
         hi: 1000.0,
         exclusive_lo: false,
         what: "the arrival rate per kilometre of driving lane",
+    },
+    // IEEE 1609.3 RepeatRate is WSAs per 5 s in 0..=255 (RSU Spec v4.1 App. D), so the
+    // shortest WSA period it can say is 5 000 / 255 ms and the longest 5 s.
+    Bound {
+        path: "net.rsu_ip.wsa_interval_ms",
+        lo: 20.0,
+        hi: 5000.0,
+        exclusive_lo: false,
+        what: "the WSA period (RepeatRate counts WSAs per 5 s, at most 255)",
     },
     // EN 302 636-4-1 Annex H: the hop limit is an 8-bit field, default 10.
     Bound {
@@ -2189,6 +2200,7 @@ pub static CHOICES: &[Choices] = &[
     choices("net.geonet.forwarding", &GN_FORWARDING),
     choices("net.access_categories", &NET_ACCESS_CATEGORIES),
     choices("net.dcc_cbr", &DCC_CBR),
+    choices("net.rsu_ip.air", &RSU_IP_AIR),
     choices(
         "actors.vehicles.bsm_timing.stamp_chain.profile",
         &v2xw_node::bsm_timing::StampChain::PROFILES,
@@ -3274,6 +3286,25 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                and the DCC acts on the maximum over two hops, so stations back off for \
                hidden-terminal congestion. The run summary's gcbr counts how often it \
                raised the input.",
+    },
+    KeyStatus {
+        path: "net.rsu_ip",
+        status: Status::Partial,
+        note: "SCMS traffic through roadside units (WP-19). air 'constant' (default): a \
+               vehicle with no modem uses any relaying unit within 300 m and the hop is a \
+               fixed latency and rate. air 'sch' (P19.2): each unit with the \
+               provisioning-proxy or report-forward role signs and sends an IEEE 1609.3 \
+               WSA every wsa_interval_ms (PSID 0x23, IPv6 Routing, the WAVE Routing \
+               Advertisement; v2xw_msg::wsa), and a vehicle binds to a unit only while it \
+               holds a verified WSA from it no older than 1 s. A relayed misbehaviour \
+               report goes on the radio.channels service channel when the run has one \
+               (rule gap M11; a one-radio unit then needs alternating access). Downloads \
+               (top-up, re-enrolment, trust fetch) ride TCP/TLS on a service-channel \
+               session (transport/80211p-sch: the vehicle's contact window, EDCA AC_BE on \
+               the unit's measured CBR, 1609.4 intervals, link-budget loss) and the unit's \
+               line; a transfer that fails cuts its flow off, and the vehicle starts it again \
+               while a verified unit is in range (relayed_flows_cut_off). Under constant the air hop is the fixed link: the service-channel path (contact window, PER, SCH load) \
+               is P19.3-P19.4.",
     },
     KeyStatus {
         path: "net.fragmenter",
@@ -7721,6 +7752,21 @@ fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
     if let Some(a) = &s.net.access_categories {
         one_of("net.access_categories", a, &NET_ACCESS_CATEGORIES, e);
+    }
+    if let Some(r) = &s.net.rsu_ip {
+        one_of("net.rsu_ip.air", &r.air, &RSU_IP_AIR, e);
+        bounded_at(
+            "net.rsu_ip.wsa_interval_ms",
+            "net.rsu_ip.wsa_interval_ms",
+            f64::from(r.wsa_interval_ms),
+            e,
+        );
+        if r.air == "sch" && s.net.layer != "wsmp" {
+            e.push(conflict(
+                "net.rsu_ip.air",
+                "a WSA is IEEE 1609.3, the US stack's; set net.layer to 'wsmp'".to_string(),
+            ));
+        }
     }
     if let Some(c) = &s.net.dcc_cbr {
         one_of("net.dcc_cbr", c, &DCC_CBR, e);

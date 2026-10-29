@@ -1,8 +1,11 @@
 # IEEE 1609.3 ASN.1 modules (WSA, WEE, WSM): provenance
 
 Fetched 2026-10-27 for rule gap U5 (`docs/design/scms-real/rule-gap-specs-2026-10-27.md` §2.1)
-and WP-19 piece P19.1 (`docs/design/frameworks/wp16-24-build-plans.md`). Nothing compiles
-these yet: `crates/v2xw-msg/build.rs` does not read this directory. Do not edit the files;
+and WP-19 piece P19.1 (`docs/design/frameworks/wp16-24-build-plans.md`). `crates/v2xw-msg/build.rs`
+does not read this directory: the hand-written UPER codec `crates/v2xw-msg/src/wsa.rs` is
+written from it (2026-10-28, WP-19 P19.1; `rasn-compiler` cannot compile the WEE
+`Extension` information-object class), and `tools/oracle/asn1/ieee1609.3/` holds the
+oracle's byte-identical copy. Do not edit the files;
 they are byte-identical to the upstream copies (CRLF line endings, ASCII, no BOM).
 
 ## Source

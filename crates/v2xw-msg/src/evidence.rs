@@ -229,8 +229,10 @@ pub const EVIDENCE: &[MessageEvidence] = &[
         ty: MsgType::Wsa,
         exactness: ByteExactness::NotEncoded,
         codec: None,
-        evidence: "IEEE 1609.3 service advertisement; no codec is planned in this crate \
-                   (04-models.md §8.1 `generator/wsa-1609-3`).",
+        evidence: "IEEE 1609.3-2016 service advertisement: real UPER from crate::wsa, \
+                   checked byte for byte against asn1tools on the cached modules \
+                   (tests/wsa_oracle.rs). No MessageCodec claims it: a roadside unit \
+                   encodes its own (v2xw-node RsuRuntime::wsa_payload).",
     },
     MessageEvidence {
         ty: MsgType::Crl,

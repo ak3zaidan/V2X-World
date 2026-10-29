@@ -204,6 +204,12 @@ const J2945_DENSITY_RADIUS_M: f64 = 100.0;
 /// SAE J3161/1's density window: the neighbours heard in the last 1000 ms.
 const J3161_DENSITY_WINDOW_NS: u64 = 1_000_000_000;
 
+/// How long a verified SCMS-service WSA keeps its router available to a vehicle, ns
+/// (WP-19 P19.2): 1 s, ten WSAs at the RSU Spec's 10 Hz. **ASSUMPTION**: IEEE 1609.3
+/// leaves the available-service list's ageing to the implementation, and its text is
+/// paywalled; the count threshold (`WsaCountThreshold`) a provider may set is not modelled.
+const WSA_SERVICE_FRESH_NS: u64 = 1_000_000_000;
+
 /// The keyed stream J2945/1's tracking-error draw comes from, one draw per node and
 /// 100 ms step.
 const J2945_TRACKING_STREAM: &str = "dcc/sae/j2945-1-rate-power/tracking";
@@ -1346,6 +1352,12 @@ pub struct Engine {
     node_wake: BTreeMap<NodeId, SimTime>,
     /// The junction each SPaT- or MAP-broadcasting roadside unit is wired to.
     infra_feeds: BTreeMap<NodeId, crate::infra::IntersectionFeed>,
+    /// Under `net.rsu_ip.air: sch` (WP-19 P19.2), each relaying unit by the /64 prefix
+    /// its WAVE Routing Advertisement gives: how a vehicle's learned router names a unit.
+    wsa_routers: BTreeMap<[u8; 8], NodeId>,
+    /// Under `net.rsu_ip.air: sch` (WP-19 P19.4), the service-channel session every relayed
+    /// download starts from: the loss curve and range of the run's link budget.
+    sch_template: Option<v2xw_radio::rsu_sch::RsuSchPath>,
     /// Which nodes are dormant this step, when `scale` declares a microscopic box
     /// ([`crate::scale::RadioGate`]).
     radio_gate: Option<crate::scale::RadioGate>,
@@ -1927,6 +1939,8 @@ impl Engine {
             prr_bins: v2xw_metrics::comms::prr_bins(),
             node_wake: BTreeMap::new(),
             infra_feeds: BTreeMap::new(),
+            wsa_routers: BTreeMap::new(),
+            sch_template: None,
             radio_gate: None,
             deferred_nodes: BTreeSet::new(),
             report: RunReport::default(),
@@ -2035,6 +2049,7 @@ impl Engine {
         );
         engine.create_rsus();
         engine.attach_intersection_feeds()?;
+        engine.attach_wsa_providers();
         engine.seed_timeline();
         Ok(engine)
     }
@@ -2610,6 +2625,167 @@ impl Engine {
             self.infra_feeds.insert(node, feed);
         }
         Ok(())
+    }
+
+    /// Under `net.rsu_ip.air: sch` (WP-19 P19.2), makes every relaying roadside unit a
+    /// WSA provider: it signs and sends an IEEE 1609.3 WSA every `wsa_interval_ms`
+    /// advertising the SCMS service (PSID 0x23, an ASSUMPTION; `v2xw_msg::wsa`) and IPv6
+    /// Routing, with a WAVE Routing Advertisement of its own /64 prefix
+    /// (`2001:db8:0:<unit index>::/64`, documentation space, RFC 3849) and its mast as
+    /// its location. Nothing happens under `constant`.
+    fn attach_wsa_providers(&mut self) {
+        if !crate::wiring::rsu_ip_sch(&self.scenario) {
+            return;
+        }
+        let Some(phase2) = self.phase2.as_ref() else {
+            return;
+        };
+        let units: Vec<(usize, NodeId, Vec3)> = phase2
+            .rsu_specs()
+            .iter()
+            .zip(phase2.rsu_nodes())
+            .enumerate()
+            .filter(|(_, (spec, _))| crate::wiring::is_relay(&spec.roles))
+            .map(|(i, (spec, node))| (i, *node, spec.position))
+            .collect();
+        let interval_ms = self
+            .scenario
+            .net
+            .rsu_ip
+            .as_ref()
+            .map_or(100, |r| r.wsa_interval_ms)
+            .max(1);
+        // The service channel the scenario's channel plan names (WP-13), else 174 (the
+        // plan's example; the encoded length does not depend on it).
+        let service_channel = self
+            .channel_plan
+            .as_ref()
+            .and_then(|p| p.service)
+            .map_or(174, |c| u8::try_from(c.0).unwrap_or(174));
+        // The service-channel hop's loss curve (WP-19 P19.4): the PER of a 1 500-octet IP
+        // packet in its 802.11 frame at the safety MCS, against the mean line-of-sight SNR
+        // of the unit's radiated power, every 5 m to 1 km; the range is the farthest point
+        // below 99 % PER.
+        let mcs = crate::wiring::safety_mcs(&self.scenario);
+        let phy = crate::wiring::build_phy(&self.scenario);
+        let eirp =
+            crate::wiring::device_for(&self.scenario, v2xw_radio::ActorClass::Rsu).max_eirp_dbm();
+        let frame = 1_500 + v2xw_radio::rsu_sch::SCH_FRAMING_BYTES;
+        let curve: Vec<(f64, f64)> = (1..=200)
+            .map(|k| {
+                let d = f64::from(k) * 5.0;
+                (
+                    d,
+                    phy.per_model()
+                        .per(frame, mcs, self.range.los_snr_db(eirp, d)),
+                )
+            })
+            .collect();
+        let range_m = curve
+            .iter()
+            .filter(|(_, p)| *p < 0.99)
+            .map(|(d, _)| *d)
+            .fold(5.0, f64::max);
+        let mut template = v2xw_radio::rsu_sch::RsuSchPath::new(
+            0,
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            range_m,
+            self.scenario.seed,
+        );
+        template.per_curve = curve;
+        template.per_ref_bytes = frame;
+        template.mcs = mcs;
+        self.sch_template = Some(template);
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        for (i, node, mast) in units {
+            let (lat, lon, alt) = origin.to_geodetic(mast);
+            let mut wsa = v2xw_msg::wsa::scms_service_wsa(
+                (5_000 / interval_ms).clamp(1, 255) as u8,
+                v2xw_msg::wsa::Location {
+                    lat: (lat * 1e7).round() as i32,
+                    lon: (lon * 1e7).round() as i32,
+                },
+                ((alt * 10.0).round() as i32).clamp(-4_096, 61_439),
+                service_channel,
+                20,
+            );
+            let index = u16::try_from(i).unwrap_or(u16::MAX).to_be_bytes();
+            let mut prefix8 = [0u8; 8];
+            if let Some(ra) = wsa.routing.as_mut() {
+                for a in [&mut ra.prefix, &mut ra.default_gateway] {
+                    a[4] = 0;
+                    a[5] = 0;
+                    a[6] = index[0];
+                    a[7] = index[1];
+                }
+                prefix8.copy_from_slice(&ra.prefix[..8]);
+            }
+            let Ok(bytes) = v2xw_msg::wsa::encode_wsa(&wsa) else {
+                continue;
+            };
+            if let Some(runtime) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) {
+                runtime.enable_wsa(Duration::from_millis(u64::from(interval_ms)), bytes);
+                self.wsa_routers.insert(prefix8, node);
+            }
+        }
+    }
+
+    /// A new service-channel session of vehicle `node` with unit `rsu` at `now` (WP-19
+    /// P19.4), under `net.rsu_ip.air: sch`: the vehicle's position and velocity now (a
+    /// physical law: the contact window is the vehicle's real motion), the unit's mast, the
+    /// busy ratio the unit measures on the service channel, and alternating access for a
+    /// one-radio unit.
+    fn sch_session(
+        &self,
+        node: NodeId,
+        rsu: NodeId,
+        now: SimTime,
+    ) -> Option<v2xw_radio::rsu_sch::RsuSchPath> {
+        let mut s = self.sch_template.clone()?;
+        let k = self.actor_of(node)?.last;
+        let mast = self.rsus.get(&rsu).copied()?;
+        let ch = self
+            .channel_plan
+            .as_ref()
+            .and_then(|p| p.service)
+            .unwrap_or(self.dsrc_channel);
+        s.start = now;
+        s.vehicle_m = [k.pos.x, k.pos.y];
+        s.velocity_mps = [k.vel.x, k.vel.y];
+        s.rsu_m = [mast.x, mast.y];
+        s.cbr = self
+            .mac
+            .as_ref()
+            .map_or(0.0, |m| Mac::<EngineCtx<'_>>::cbr(m, rsu, ch, now));
+        if self.alternates(node) {
+            s.schedule = v2xw_radio::wave_schedule::ChannelSchedule {
+                access: v2xw_radio::wave_schedule::ChannelAccess::Alternating,
+            };
+        }
+        Some(s)
+    }
+
+    /// Under `net.rsu_ip.air: sch`, the relaying units `node` may use now: those whose
+    /// SCMS-service WSA it verified within [`WSA_SERVICE_FRESH_NS`] of its own clock
+    /// (IEEE 1609.3 §8.2.3: the WSA user decides; WP-19 P19.2). `None` under `constant`,
+    /// where any unit in range serves.
+    fn wsa_units(&self, node: NodeId, now: SimTime) -> Option<Vec<NodeId>> {
+        if !crate::wiring::rsu_ip_sch(&self.scenario) {
+            return None;
+        }
+        let Some(obu) = self.nodes.get(&node).and_then(|n| n.as_obu()) else {
+            return Some(Vec::new());
+        };
+        let believed = obu.clock().believed_time(now);
+        Some(
+            obu.scms_routers()
+                .iter()
+                .filter(|(_, t)| believed.saturating_sub(**t) <= WSA_SERVICE_FRESH_NS)
+                .filter_map(|(p, _)| self.wsa_routers.get(p).copied())
+                .collect(),
+        )
     }
 
     /// How `node`'s intersection messages are framed: J2735 on the WSMP stack, ETSI on the
@@ -4918,8 +5094,15 @@ impl Engine {
             d.on_channel_quality(node, avg);
         }
         // SAE J3161/1 counts the unique neighbours heard at least once in the previous
-        // 1000 ms (Fouda 2023 §II-C); J2945/1 the RVs "in range currently", which is the
-        // neighbour table as it stands.
+        // 1000 ms (Fouda 2023 §II-C); J2945/1 the RVs "in range currently". Both count
+        // the stations *received*, from the temporary IDs of the decoded BSMs, not the
+        // ones whose signature checks have finished: the FMVSS 150 NPRM's preamble (82 FR
+        // 3890) says the density count needs the device to "decode the message enough to
+        // expose the various temporary IDs of the received BSMs", and S5.5.1 (82 FR 4014)
+        // names N(k) "the Vehicle Density within 100 m". The node's `HeardTable` is
+        // filled at the parse; the neighbour table, filled when a check finishes, let a
+        // slow or overflowing verifier thin the density (fix round 5, node 57 at 243.5 s:
+        // 30 RVs against 31).
         let heard_since = self
             .dcc
             .as_ref()
@@ -4929,13 +5112,8 @@ impl Engine {
             let own = v2xw_core::NodeView::position(runtime).pos;
             runtime
                 .stores()
-                .neighbors
-                .iter()
-                .filter(|n| {
-                    n.last_heard >= heard_since
-                        && n.claimed_pos.distance(own) <= J2945_DENSITY_RADIUS_M
-                })
-                .count() as u32
+                .heard
+                .count_within(own, J2945_DENSITY_RADIUS_M, heard_since)
         });
         let nav = self.j2945_nav.get(&node).copied();
         let state = {
@@ -9495,7 +9673,12 @@ impl Engine {
             }
         }
 
-        // 6. Top-ups for pools running low.
+        // 6. Top-ups for pools running low. Under `net.rsu_ip.air: sch` a relayed flow
+        // whose service-channel transfer gave up is dropped first, so it starts again
+        // at the vehicle's next contact (WP-19 P19.4).
+        if let Some(p) = self.phase2.as_mut() {
+            p.abort_cut_off_flows();
+        }
         let due = self
             .phase2
             .as_mut()
@@ -9508,6 +9691,17 @@ impl Engine {
             } else {
                 None
             };
+            let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
@@ -9518,10 +9712,13 @@ impl Engine {
                     }
                 }
                 crate::backend::AccessKind::RsuRelay => {
-                    let unit = p.relay_in_range(pos, "provisioning-proxy");
+                    let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
                     if let Some(u) = unit {
-                        p.access_mut().bind_relay(node, u);
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
                     }
                     p.access_mut().nominal_link(kind, backhaul)
                 }
@@ -9545,6 +9742,17 @@ impl Engine {
             } else {
                 None
             };
+            let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
@@ -9555,10 +9763,13 @@ impl Engine {
                     }
                 }
                 crate::backend::AccessKind::RsuRelay => {
-                    let unit = p.relay_in_range(pos, "provisioning-proxy");
+                    let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
                     if let Some(u) = unit {
-                        p.access_mut().bind_relay(node, u);
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
                     }
                     p.access_mut().nominal_link(kind, backhaul)
                 }
@@ -9583,6 +9794,17 @@ impl Engine {
             } else {
                 None
             };
+            let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
@@ -9593,10 +9815,13 @@ impl Engine {
                     }
                 }
                 crate::backend::AccessKind::RsuRelay => {
-                    let unit = p.relay_in_range(pos, "provisioning-proxy");
+                    let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
                     if let Some(u) = unit {
-                        p.access_mut().bind_relay(node, u);
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
                     }
                     p.access_mut().nominal_link(kind, backhaul)
                 }
@@ -9878,10 +10103,11 @@ impl Engine {
         now: SimTime,
         horizon: SimTime,
     ) -> Option<v2xw_threat::MisbehaviourReport> {
+        let among = self.wsa_units(node, now);
         let in_range = self
             .phase2
             .as_ref()
-            .and_then(|p| p.relay_in_range(pos, "report-forward"))
+            .and_then(|p| p.relay_in_range_among(pos, "report-forward", among.as_deref()))
             .is_some();
         if !in_range
             || !self
@@ -10040,6 +10266,7 @@ impl Engine {
             return;
         }
         let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
+        let among = self.wsa_units(node, now);
         let (Some(p), Some(runtime)) = (self.phase2.as_ref(), self.nodes.get(&node)) else {
             return;
         };
@@ -10049,8 +10276,10 @@ impl Engine {
                 p.uu_coverage(pos, now)
             }
             crate::backend::AccessKind::RsuRelay => {
-                p.relay_in_range(pos, "report-forward").is_some()
-                    || p.relay_in_range(pos, "provisioning-proxy").is_some()
+                p.relay_in_range_among(pos, "report-forward", among.as_deref())
+                    .is_some()
+                    || p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref())
+                        .is_some()
             }
             crate::backend::AccessKind::Offline => false,
         };

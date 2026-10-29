@@ -3173,6 +3173,35 @@ pub struct Net {
     /// hear itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dcc_cbr: Option<String>,
+    /// SCMS traffic through roadside units over the air (WP-19): how the hop between a
+    /// relayed vehicle and its unit is modelled. Unset, the constant air link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rsu_ip: Option<RsuIp>,
+}
+
+/// The IP service a roadside unit offers vehicles with no modem ([`Net::rsu_ip`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RsuIp {
+    /// `constant` (the air hop is a fixed latency and rate, and a vehicle uses any relaying
+    /// unit within range; the default) or `sch` (IEEE 1609.3: each relaying unit sends a
+    /// signed WSA advertising the SCMS service with a WAVE Routing Advertisement, and a
+    /// vehicle uses a unit only after it has verified that unit's WSA).
+    #[serde(default = "RsuIp::default_air")]
+    pub air: String,
+    /// The WSA period under `sch`, ms: 100 (USDOT RSU Specification v4.1 App. D,
+    /// `RepeatRate` 50 per 5 s).
+    #[serde(default = "RsuIp::default_wsa_interval_ms")]
+    pub wsa_interval_ms: u32,
+}
+
+impl RsuIp {
+    fn default_air() -> String {
+        "constant".to_string()
+    }
+    const fn default_wsa_interval_ms() -> u32 {
+        100
+    }
 }
 
 /// Multi-hop GeoNetworking forwarding of hazard warnings ([`Net::geonet`]), EN 302 636-4-1
@@ -3311,6 +3340,7 @@ impl Default for Net {
             channel_access: None,
             access_categories: None,
             dcc_cbr: None,
+            rsu_ip: None,
         }
     }
 }

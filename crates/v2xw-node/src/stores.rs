@@ -552,6 +552,95 @@ impl NeighborTable {
     }
 }
 
+/// The stations this node has *received* from, whether or not a check has finished: the
+/// J2945/1 vehicle-density count's input.
+///
+/// SAE J2945/1 counts the RVs within 100 m (`N(k)`, "the Vehicle Density within 100 m",
+/// FMVSS 150 NPRM S5.5.1, 82 FR 4014) from the temporary IDs of the BSMs it *receives*:
+/// the NPRM's preamble says the count needs the device to "decode the message enough to
+/// expose the various temporary IDs of the received BSMs" (82 FR 3890), and names
+/// authenticating the message as a separate step a safety application takes. The
+/// [`NeighborTable`] is filled when a check finishes (`ObuRuntime::deliver`), so a slow or
+/// overflowing verifier used to thin the density J2945/1 saw. This table is filled at the
+/// parse, before the verification policy; it ages and evicts as the neighbour table does.
+#[derive(Debug, Clone)]
+pub struct HeardTable {
+    entries: BTreeMap<[u8; 8], (v2xw_core::geom::Vec3, SimTime)>,
+    ttl: Duration,
+    capacity: usize,
+}
+
+impl Default for HeardTable {
+    fn default() -> Self {
+        HeardTable::new(256)
+    }
+}
+
+impl HeardTable {
+    /// A table with the neighbour table's ageing (`T_neighbor`) and a capacity.
+    pub fn new(capacity: usize) -> Self {
+        HeardTable {
+            entries: BTreeMap::new(),
+            ttl: DEFAULT_T_NEIGHBOR,
+            capacity,
+        }
+    }
+
+    /// How many stations are held.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// True when none is held.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Records a received frame: the position it claims and when it arrived. A full
+    /// table evicts the station heard from longest ago (ties on the digest).
+    pub fn hear(&mut self, signer: &HashedId8, claimed_pos: v2xw_core::geom::Vec3, at: SimTime) {
+        let k = key(signer);
+        if !self.entries.contains_key(&k)
+            && self.entries.len() >= self.capacity
+            && let Some(victim) = self
+                .entries
+                .iter()
+                .min_by_key(|(k, e)| (e.1, **k))
+                .map(|(k, _)| *k)
+        {
+            self.entries.remove(&victim);
+        }
+        self.entries.insert(k, (claimed_pos, at));
+    }
+
+    /// Forgets every station not heard from within `T_neighbor` of `now` (believed time).
+    pub fn age(&mut self, now: SimTime) {
+        let cutoff = now.saturating_sub(self.ttl.as_nanos());
+        self.entries.retain(|_, e| e.1 >= cutoff);
+    }
+
+    /// The stations heard at or after `since` whose last claimed position is within
+    /// `radius_m` of `own`.
+    pub fn count_within(&self, own: v2xw_core::geom::Vec3, radius_m: f64, since: SimTime) -> u32 {
+        self.entries
+            .values()
+            .filter(|(pos, at)| *at >= since && pos.distance(own) <= radius_m)
+            .count() as u32
+    }
+}
+
+/// Whether a message of this type makes its sender a neighbour: the awareness messages
+/// do. A SPaT, a MAP or a signal request says where a junction is, not where its sender
+/// is going, a DENM describes an event rather than a station, and a WSA advertises a
+/// service.
+pub fn describes_a_station(msg_type: v2xw_msg::MsgType) -> bool {
+    use v2xw_msg::MsgType;
+    !matches!(
+        msg_type,
+        MsgType::Spat | MsgType::Map | MsgType::Srm | MsgType::Ssm | MsgType::Denm | MsgType::Wsa
+    )
+}
+
 fn key(id: &HashedId8) -> [u8; 8] {
     let mut k = [0u8; 8];
     k.copy_from_slice(&id.0[..]);
@@ -1120,8 +1209,10 @@ pub struct Stores {
     pub crl: CrlGate,
     /// CA certificates and policy files.
     pub trust: v2xw_sec::TrustStore,
-    /// What this node has heard.
+    /// What this node has heard, as its checks finished.
     pub neighbors: NeighborTable,
+    /// What this node has received, at the parse: J2945/1's density input.
+    pub heard: HeardTable,
     /// Reports awaiting a path.
     pub outbox: ReportOutbox,
 }
@@ -1429,6 +1520,30 @@ mod tests {
         assert!(t.get(&pseudo_signer(NodeId::new(1), 0)).is_none());
         assert!(t.get(&pseudo_signer(NodeId::new(2), 0)).is_some());
         assert!(t.get(&pseudo_signer(NodeId::new(3), 0)).is_some());
+    }
+
+    /// The heard table ages and evicts as the neighbour table does, keeps one entry per
+    /// station at its latest claimed position, and counts within a radius and a window.
+    #[test]
+    fn the_heard_table_ages_evicts_and_counts_in_range() {
+        let s = |n: u32| pseudo_signer(NodeId::new(n), 0);
+        let mut t = HeardTable::new(2);
+        t.hear(&s(1), Vec3::new(50.0, 0.0, 0.0), 10);
+        t.hear(&s(2), Vec3::new(150.0, 0.0, 0.0), 30);
+        // Re-heard nearer: one entry, at the new position.
+        t.hear(&s(2), Vec3::new(90.0, 0.0, 0.0), 40);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.count_within(Vec3::ZERO, 100.0, 0), 2);
+        assert_eq!(t.count_within(Vec3::ZERO, 100.0, 20), 1);
+        // Full: the stalest (signer 1, heard at 10) goes.
+        t.hear(&s(3), Vec3::new(10.0, 0.0, 0.0), 20);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t.count_within(Vec3::new(50.0, 0.0, 0.0), 1.0, 0), 0);
+        // T_neighbor: kept at exactly 3 s after, gone a nanosecond later.
+        t.age(3 * NS_PER_S + 20);
+        assert_eq!(t.len(), 2);
+        t.age(3 * NS_PER_S + 21);
+        assert_eq!(t.len(), 1);
     }
 
     /// Re-hearing a peer refreshes it and counts the message rather than duplicating the

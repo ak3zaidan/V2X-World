@@ -2171,6 +2171,14 @@ impl CandidateRangePlan {
     /// property of the geometry and not of the transmit power a study varies.
     pub const REFERENCE_EIRP_DBM: f64 = 33.0;
 
+    /// The mean line-of-sight SNR, dB, of a transmission radiated at `eirp_dbm` and heard
+    /// `d_m` away with the run's best receive gain (WP-19: the service-channel loss
+    /// curve). Antennas at 1.5 m, as [`CandidateRangePlan::reach_m`] takes them.
+    pub fn los_snr_db(&self, eirp_dbm: f64, d_m: f64) -> f64 {
+        let loss = los_mean_loss_db(self.choice, self.env, d_m.max(1.0), self.f_hz, 1.5, 1.5);
+        eirp_dbm + self.rx_gain_db - loss - self.noise_floor_dbm
+    }
+
     /// The weakest arrival worth following, dBm: `N − margin`.
     pub fn floor_dbm(&self) -> f64 {
         self.noise_floor_dbm - self.margin_db
@@ -3434,7 +3442,7 @@ pub fn rsu_services(scenario: &Scenario, roles: &[String]) -> ServiceSet {
 /// broadcast application (the certificate kind's default then applies).
 pub fn rsu_app_psids(scenario: &Scenario, roles: &[String]) -> Vec<u64> {
     let s = rsu_services(scenario, roles);
-    let sends: Vec<v2xw_msg::MsgType> = [
+    let mut sends: Vec<v2xw_msg::MsgType> = [
         (s.bsm, v2xw_msg::MsgType::Bsm),
         (s.cam, v2xw_msg::MsgType::Cam),
         (s.denm, v2xw_msg::MsgType::Denm),
@@ -3447,7 +3455,25 @@ pub fn rsu_app_psids(scenario: &Scenario, roles: &[String]) -> Vec<u64> {
     .into_iter()
     .filter_map(|(on, m)| on.then_some(m))
     .collect();
+    // Under `net.rsu_ip.air: sch` a relaying unit signs its WSA (IEEE 1609.3-2016 Annex
+    // H.1), so its application certificate permits the WSA PSID (135).
+    if rsu_ip_sch(scenario) && is_relay(roles) {
+        sends.push(v2xw_msg::MsgType::Wsa);
+    }
     v2xw_msg::registry::permissions(&sends, etsi_facilities(scenario))
+}
+
+/// Whether `net.rsu_ip.air` is `sch` (WP-19): relaying units advertise the SCMS service
+/// in a WSA, and a vehicle uses only a unit whose WSA it verified.
+pub fn rsu_ip_sch(scenario: &Scenario) -> bool {
+    scenario.net.rsu_ip.as_ref().is_some_and(|r| r.air == "sch")
+}
+
+/// Whether a roadside unit with these roles relays SCMS traffic for vehicles.
+pub fn is_relay(roles: &[String]) -> bool {
+    roles
+        .iter()
+        .any(|r| r == "provisioning-proxy" || r == "report-forward")
 }
 
 /// Whether the node's facilities layer is ETSI's: the GeoNetworking/BTP stack.

@@ -1575,6 +1575,10 @@ pub struct TsCheckCount {
     pub fired: u64,
 }
 
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
+}
+
 /// Counters the run report carries for this path.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Phase2Report {
@@ -1789,6 +1793,11 @@ pub struct Phase2Report {
     pub topups_started: u64,
     /// Top-ups whose batch was installed.
     pub topups_completed: u64,
+    /// Under `net.rsu_ip.air: sch`: relayed flows (top-up, re-enrolment, trust fetch) cut
+    /// off when the vehicle's service-channel transfer gave up, and dropped so the vehicle
+    /// starts again at its next contact (WP-19 P19.4).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub relayed_flows_cut_off: u64,
     /// Certificates installed by top-ups.
     pub certs_topped_up: u64,
     /// Top-ups the RA refused: blocklisted, or the enrolment certificate had expired.
@@ -3820,6 +3829,17 @@ impl Phase2 {
     /// relay radius of `pos`, and which.
     #[must_use]
     pub fn relay_in_range(&self, pos: Vec3, role: &str) -> Option<NodeId> {
+        self.relay_in_range_among(pos, role, None)
+    }
+
+    /// [`ScmsPhase2::relay_in_range`], restricted to `among` when it is given: under
+    /// `net.rsu_ip.air: sch` the units whose WSA the vehicle verified (WP-19 P19.2).
+    pub fn relay_in_range_among(
+        &self,
+        pos: Vec3,
+        role: &str,
+        among: Option<&[NodeId]>,
+    ) -> Option<NodeId> {
         let range = self.access.relay_range_m();
         self.rsu_nodes
             .iter()
@@ -3828,6 +3848,7 @@ impl Phase2 {
             .find(|(n, s)| {
                 s.backhaul.connected
                     && self.rsu_has_role(*n, role)
+                    && among.is_none_or(|a| a.contains(n))
                     && s.position.distance(Vec3::new(pos.x, pos.y, s.position.z)) <= range
             })
             .map(|(n, _)| n)
@@ -4192,6 +4213,24 @@ impl Phase2 {
             .secured
             .as_ref()
             .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+    }
+
+    /// Drops every relayed flow whose service-channel transfer gave up (WP-19 P19.4): the
+    /// message that failed never arrives, so the flow would stay in flight for ever. A
+    /// device that loses its RSU mid-download tries again when it is next in range of one
+    /// (USDOT RSU Specification v4.1 §2.2: "request ... within range of one RSU and
+    /// receive them when in range of another"), which is the next time its top-up,
+    /// re-enrolment or trust fetch falls due with a unit it verified a WSA from.
+    pub fn abort_cut_off_flows(&mut self) {
+        for node in self.access.take_sch_failures() {
+            let Some(n) = self.nodes.get_mut(&node) else {
+                continue;
+            };
+            let cut = n.topup.take().is_some() as u64
+                + n.reenrol.take().is_some() as u64
+                + n.trust_fetch.take().is_some() as u64;
+            self.report.relayed_flows_cut_off += cut;
+        }
     }
 
     /// Forgets a vehicle that left the run at `now`.

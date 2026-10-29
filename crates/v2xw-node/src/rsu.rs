@@ -46,12 +46,12 @@
 //! | SPaT | 10 Hz (04-models.md §8.1's default, CTI 4501) | real octets from [`RsuRuntime::set_payload`], else `codec/size-model/j2735` |
 //! | MAP | 1 Hz (ibid.) | as SPaT |
 //! | CRL / CTL | on installation, and on [`RsuConfig::crl_repeat`] if a scenario sets one | the length the backend handed it |
-//! | WSA | [`RsuConfig::wsa_period`], 1 per 5 s and UNVERIFIED | **none exists** |
+//! | WSA | [`RsuConfig::wsa_period`], 1 per 5 s (a configured value; USDOT RSU Spec v4.1 App. D sends 50 per 5 s) | real UPER from [`v2xw_msg::wsa`] (IEEE 1609.3-2016, oracle-checked) |
 //!
-//! There is no WSA size model and no WSA encoder, so [`RsuConfig::wsa_payload_bytes`] is
-//! `None` by default and a unit with the WSA role transmits nothing and counts it
-//! ([`RsuRuntime::unsized_broadcasts`]). That is the shape 06-node-models.md §1 rule H1
-//! demands of a missing number, applied to a missing message.
+//! A unit with the WSA role advertises the SCMS service over IP on its service channel
+//! ([`v2xw_msg::wsa::scms_service_wsa`]: WAVE security management and IPv6 Routing, one
+//! channel, the WAVE Routing Advertisement), encoded from its own belief, power and
+//! [`RsuConfig::wsa_service_channel`]: 84 octets (WP-19 P19.1, fixes rule gap U5).
 
 use v2xw_core::belief::PositionEstimate;
 use v2xw_core::card::{
@@ -771,8 +771,10 @@ pub struct RsuConfig {
     pub content_profile: ContentProfile,
     /// The WSA interval. 5 s, and UNVERIFIED (04-models.md §8.1).
     pub wsa_period: Duration,
-    /// The WSA payload length. `None` — there is no WSA encoder and no WSA size-model row.
-    pub wsa_payload_bytes: Option<u32>,
+    /// The service channel the WSA advertises the SCMS service on. 174 is the engine's
+    /// placeholder until WP-19 P19.2 passes the scenario's WP-13 service channel; the
+    /// encoded length does not depend on it.
+    pub wsa_service_channel: u8,
     /// How often an installed revocation or trust list is re-broadcast. `None` broadcasts
     /// it once when it is installed and then only on update.
     pub crl_repeat: Option<Duration>,
@@ -806,7 +808,7 @@ impl Default for RsuConfig {
             map_lanes: None,
             content_profile: ContentProfile::Typical,
             wsa_period: Duration::from_secs(5),
-            wsa_payload_bytes: None,
+            wsa_service_channel: 174,
             crl_repeat: None,
         }
     }
@@ -1782,7 +1784,9 @@ impl RsuRuntime {
             return Some((bytes, false));
         }
         if msg_type == MsgType::Wsa {
-            return self.config.wsa_payload_bytes.map(|b| (b, true));
+            return u32::try_from(self.wsa_payload().len())
+                .ok()
+                .map(|b| (b, false));
         }
         let elements = match msg_type {
             MsgType::Spat => self.config.spat_movement_states,
@@ -1794,6 +1798,46 @@ impl RsuRuntime {
             entry.bytes(elements.unwrap_or(entry.nominal_elements)),
             true,
         ))
+    }
+
+    /// This unit's WSA, really encoded (IEEE 1609.3-2016 UPER, [`v2xw_msg::wsa`]): the SCMS
+    /// service on [`RsuConfig::wsa_service_channel`] at the unit's power, its `RepeatRate`
+    /// from [`RsuConfig::wsa_period`] (WSAs per 5 s), and its location from its belief
+    /// (the 1609.3 "unavailable" values without a fix).
+    #[must_use]
+    pub fn wsa_payload(&self) -> Vec<u8> {
+        use v2xw_msg::wsa::{Location, encode_wsa, scms_service_wsa};
+        let period_ms = (self.config.wsa_period.as_nanos() / 1_000_000).max(1);
+        let rate = (5_000 / period_ms).clamp(1, 255) as u8;
+        let (location, elevation) = if self.belief.fix.has_position() {
+            let (lat, lon, alt) = self.config.origin.to_geodetic(self.belief.pos);
+            (
+                Location {
+                    lat: (lat * 1e7).round() as i32,
+                    lon: (lon * 1e7).round() as i32,
+                },
+                ((alt * 10.0).round() as i32).clamp(-4_096, 61_439),
+            )
+        } else {
+            (
+                Location {
+                    lat: 900_000_001,
+                    lon: 1_800_000_001,
+                },
+                -4_096,
+            )
+        };
+        let power = self.config.tx_power_dbm.round().clamp(-128.0, 127.0) as i8;
+        let wsa = scms_service_wsa(
+            rate,
+            location,
+            elevation,
+            self.config.wsa_service_channel,
+            power,
+        );
+        // Every field is in range by construction, so this cannot fail; an empty payload
+        // would be the visible sign if it ever did.
+        encode_wsa(&wsa).unwrap_or_default()
     }
 
     /// The scenario-supplied length for `msg_type`, if one was set.
@@ -1813,6 +1857,9 @@ impl RsuRuntime {
     fn payload_bytes(&self, msg_type: MsgType, length: u32) -> Vec<u8> {
         if let Some((_, real)) = self.payloads.iter().find(|(t, _)| *t == msg_type) {
             return real.clone();
+        }
+        if msg_type == MsgType::Wsa {
+            return self.wsa_payload();
         }
         vec![v2xw_msg::codec::PLACEHOLDER_FILL; length as usize]
     }
@@ -2170,27 +2217,23 @@ fn card(profile: &HardwareProfile, config: &RsuConfig, backhaul: &Backhaul) -> M
             "wsa_period_ms",
             "ms",
             serde_json::json!(config.wsa_period.as_nanos() / 1_000_000),
-            "04-models.md §8.1 records the IEEE 1609.3 `RepeatRate` semantics \
-             ('transmissions per 5 s') as UNVERIFIED and the default of 1 per 5 s as \
-             UNVERIFIED with it",
-            "Read IEEE 1609.3's own definition of RepeatRate and replace both the semantics \
-             and the default. Until then a unit with the WSA role transmits nothing anyway, \
-             because there is no WSA size model: see wsa_payload_bytes.",
+            "IEEE 1609.3 `RepeatRate` counts WSAs per 5 s (USDOT RSU Spec v4.1 App. D: \
+             '32 ... repeated 50 times per 5 seconds'); the 1 per 5 s default is a \
+             configured value, not the reference one",
+            "Make 50 per 5 s (100 ms) the default once WP-19 puts WSAs on the air in the \
+             engine: it adds CCH load and so moves goldens, and lands as its own change.",
         ),
-        plan(
-            "wsa_payload_bytes",
-            "B",
-            match config.wsa_payload_bytes {
-                Some(b) => serde_json::json!(b),
-                None => serde_json::Value::Null,
-            },
-            "no WSA encoder and no WSA row in `codec/size-model/j2735` exists: the size \
-             model covers BSM, SPaT, MAP, PSM, SRM and SSM",
-            "The ASN.1 is available and VERIFIED (IEEE 1609.3 `wsa.asn`, `wee.asn`, \
-             04-models.md §8.1), so the fix is to generate the encoder or add a size-model \
-             row with an anchor. Until one exists a unit with the WSA role broadcasts \
-             nothing and RsuRuntime::unsized_broadcasts counts every attempt, rather than \
-             putting an invented length on the air.",
+        Parameter::new(
+            "wsa_service_channel",
+            "-",
+            serde_json::json!(config.wsa_service_channel),
+            Source::new(
+                SourceKind::Code,
+                "the channel the WSA's ChannelInfo names; WP-19 P19.2 passes the \
+                 scenario's WP-13 service channel. The WSA is real UPER (IEEE 1609.3-2016 \
+                 `wsa.asn`/`wee.asn`, v2xw_msg::wsa, checked against asn1tools), 84 octets \
+                 whatever the channel",
+            ),
         ),
         plan(
             "crl_repeat_ms",
@@ -2556,10 +2599,9 @@ mod tests {
     }
 
     /// The SPaT and MAP lengths come from the size model, and they differ — because they
-    /// are two different messages with two different rows. A WSA has neither a row nor an
-    /// encoder, so it has no length at all.
+    /// are two different messages with two different rows. A WSA is encoded for real.
     #[test]
-    fn spat_and_map_are_sized_by_the_size_model_and_a_wsa_is_not() {
+    fn spat_and_map_are_sized_by_the_size_model_and_a_wsa_is_encoded() {
         let mut unit = RsuRuntime::with_roles(NodeId::new(1), RsuRoles::all(), 0);
         let (spat, spat_modelled) = unit.payload_length(MsgType::Spat).expect("a SPaT row");
         let (map, map_modelled) = unit.payload_length(MsgType::Map).expect("a MAP row");
@@ -2567,8 +2609,14 @@ mod tests {
         assert_ne!(spat, map);
         assert!(spat_modelled && map_modelled, "both are modelled lengths");
 
-        assert!(unit.payload_length(MsgType::Wsa).is_none());
-        assert!(unit.config().wsa_payload_bytes.is_none());
+        // A WSA is really encoded (IEEE 1609.3-2016 UPER): its own octets, not modelled.
+        assert_eq!(unit.payload_length(MsgType::Wsa), Some((84, false)));
+        let wsa = v2xw_msg::wsa::decode_wsa(&unit.wsa_payload()).expect("decodes");
+        let services = wsa.services.expect("services");
+        assert_eq!(services[0].psid, v2xw_msg::wsa::PSID_SECURITY_MANAGEMENT);
+        assert_eq!(services[0].channel_index, 1);
+        assert_eq!(wsa.channels.expect("channels")[0].channel, 174);
+        assert!(wsa.routing.is_some(), "the WAVE Routing Advertisement");
 
         // Real octets handed in win, and they are no longer reported as modelled.
         unit.set_payload(MsgType::Spat, vec![1, 2, 3, 4, 5]);

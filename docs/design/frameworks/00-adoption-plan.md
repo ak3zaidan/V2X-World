@@ -799,6 +799,70 @@ trustworthy or comparable; later waves add behaviours and radio features.
   WSA matches USDOT RSU Spec v4.1 App. D except the power byte. SCMS PSID 0x23 is an
   assumption (no deployment document names one). Owed: the oracle copy and the
   vectors-provenance row.
+- P19.1 built (2026-10-28, branch only): `v2xw_msg::wsa` is a hand-written UPER codec of
+  `SrvAdvMsg` with every header, service-info, channel-info and routing extension the
+  object sets list (unknown ids kept as octets). `rasn-compiler` was not used: WEE's
+  `Extension` is the information-object-class idiom it cannot compile (build decision D5).
+  `tests/wsa_oracle.rs` holds it to asn1tools 0.169 byte for byte on 5 vectors, both
+  directions; the oracle copy is `tools/oracle/asn1/ieee1609.3/` and the
+  `vectors-provenance.md` row is written. `RsuRuntime::wsa_payload` sends a real 84-octet
+  SCMS-service WSA (U5 fixed in the node; `wsa_payload_bytes` removed). No golden moves:
+  the engine sends no WSA yet. Not built: a `MessageCodec` arm (no caller needs one) and
+  the 10 Hz RepeatRate default (moves CCH load; with P19.2).
+- P19.2 built (2026-10-28, branch only): `net.rsu_ip` (`air: constant` default | `sch`;
+  `wsa_interval_ms` 100, RSU Spec v4.1 App. D), full settings checklist. Under `sch` every
+  relaying unit (`provisioning-proxy` or `report-forward`) signs and sends a WSA
+  (`ObuRuntime::enable_wsa`, schedule `with_wsa`) with its own /64 in the WRA and its
+  mast as location; its application certificate permits PSID 135. A vehicle's stack reads
+  a verified WSA listing PSID 0x23 (`ObuRuntime::learn_wsa`) and keeps the router; the
+  engine maps the prefix to the unit (`Engine::wsa_units`), and every relay search
+  (top-up, re-enrolment, trust fetch, report relay, link-up view) is restricted to those
+  units (`relay_in_range_among`), fresh for 1 s (ASSUMPTION, `WSA_SERVICE_FRESH_NS`).
+  `foundations::a_vehicle_uses_a_roadside_unit_only_after_verifying_its_wsa`: a muted
+  unit tops up under `constant` and not under `sch`. WSAs ride the primary channel as a
+  single-hop safety-class frame (1609.4 puts them on the CCH; the engine has no separate
+  CCH). Default byte-identical. The air hop is still the constant link (P19.3-P19.4).
+- P19.3 built (2026-10-28, branch only): `v2xw_radio::rsu_sch::RsuSchPath`
+  (`transport/80211p-sch`, a `PacketPath`; its own module, not `ip_transport.rs`, to keep
+  that file's merge surface small). Per IP packet: constant-velocity contact window
+  against `range_m` at the frame's end; EDCA AC_BE access `AIFS + CWmin/2·slot` (802.11-2020
+  Table 9-155 OCB) plus a busy wait `ρ/(1−ρ)·T_air` (ASSUMPTION, M/D/1 mean) from the SCH
+  CBR; 1609.4 `fits` for a one-radio unit; loss from a reference PER-vs-distance curve
+  scaled `1 − (1 − p)^(L/L_ref)`, keyed draws per offered packet. Framing 36 B (RFC 8691
+  §4.2 LLC/SNAP). Unit tests hold the ConstantPath limit (PHY air time, 40-56 µs over the
+  line rate). Not wired: P19.4 builds the PER curve from the link budget, reads the WP-13
+  CBR and puts `carry`'s `RsuBackhaul` air leg on it under `sch`.
+- P19.4 part 1, M11 (2026-10-28, branch only): under `sch`, `ChannelPlan` maps `mbr` to
+  the run's service channel unless `radio.channels` places it (`run/channels.rs`), so a
+  relayed report leaves channel 172. `foundations::relayed_reports_move_to_the_advertised_service_channel`:
+  six two-radio vehicles, one attacker, 174 as service channel: 241 report frames on 172
+  under `constant`, 228 on 174 and none on 172 under `sch`, 79 vs 83 reports relayed.
+  Default unchanged.
+- P19.4 part 2, downloads (2026-10-28, branch only): under `sch`, binding a relayed vehicle
+  (top-up, re-enrolment, trust fetch) opens a service-channel session
+  (`Engine::sch_session` -> `BackendAccess::bind_relay_sch`): the vehicle's position and
+  velocity at bind (the contact window is a physical law), the mast, the unit's measured
+  CBR on the service channel, alternating access for a one-radio unit, and the run's loss
+  curve (`attach_wsa_providers`: PER of a 1 536-octet frame at the safety MCS against
+  `CandidateRangePlan::los_snr_db` of the RSU's EIRP, every 5 m to 1 km; range = farthest
+  point under 99 %). `Carrier::sch_carry` runs each kernel message over a TCP/TLS 1.3
+  connection on `SchLeg` (the SCH session, then the unit's wired line). The session's
+  frames share one half-duplex medium (`RsuSchPath::free_at`). A connection that gives up
+  is reopened at the next message, and the message never arrives (`SCH_NEVER`), because a
+  `PathOracle` answers an arrival time and cannot report a loss. **Open:** the top-up then
+  stays in flight; a real OBU retries at its next contact (RSU Spec v4.1 §2.2). New
+  carrier counters `sch_messages`, `sch_delivered`, `sch_failed` (serialised only when
+  non-zero). Transport tests `rsu_sch::download_success_falls_with_speed` (40 passes at
+  5/10/20/30 m/s, 4 MB: 38, 36, 31, 27 complete) and `download_success_falls_with_sch_load`
+  (CBR 0.1/0.3/0.5 at 20 m/s: 30, 28, 23). Default byte-identical.
+- P19.4 part 3, retry (2026-10-28, branch only): a vehicle whose SCH transfer gave up is
+  recorded by the carrier (`take_sch_failures`), and `ScmsPhase2::abort_cut_off_flows`
+  drops its relayed flows (top-up, re-enrolment, trust fetch; `relayed_flows_cut_off`)
+  before the top-ups fall due, so it starts again while a verified unit is in range (RSU
+  Spec v4.1 §2.2). This closes the part 2 open item. A retry is a new request, not a
+  resumed download (ASSUMPTION; CAMP's download resumption is not modelled).
+  `foundations::a_cut_off_download_is_retried_at_the_next_contact`: six vehicles; at
+  0 dBm 12 of 12 top-ups complete; at -15 dBm 24 start, 19 are cut off and 5 complete.
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC

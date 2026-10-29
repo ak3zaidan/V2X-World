@@ -1016,12 +1016,25 @@ changes G-SCMS by design. Re-bless only those cases, and list them.
   - *`mtu_bytes` (l.613).* RFC 8691 §4.1: "The default MTU for IP packets on 802.11-OCB is
     inherited from [RFC2464] and, as such, is 1500 octets". RFC 8200's 1 280 minimum also
     applies. Cite RFC 8691, the OCB-specific RFC, over bare RFC 2464. Verified.
+  **Built, 2026-10-28:** codec `v2xw-msg/src/wsa.rs` (hand-written UPER over
+  `j2735::uper`), oracle `tests/wsa_oracle.rs` with `tests/oracle/wsa_oracle.py` and
+  `tests/fixtures/wsa_asn1tools.txt`, oracle copy `tools/oracle/asn1/ieee1609.3/`,
+  `RsuRuntime::wsa_payload` (84 octets). See the adoption plan's P19.1 note.
 - **P19.2** (3 h): the RSU sends the encoded WSA on air; `WsaUser` decides; the vehicle
   binds to the RSU only after a WSA in `sch` mode.
+  **P19.2 built, 2026-10-28:** `net.rsu_ip.{air, wsa_interval_ms}`; WSA providers on
+  relaying units, the WSA user in `ObuRuntime::learn_wsa`, relay searches restricted to
+  units with a fresh verified WSA. See the adoption plan's P19.2 note.
 - **P19.3** (3 h): `RsuSchPath` (contact window, PER, CBR access, WP-16 interval) with
   unit tests against `ConstantPath` limits (no loss, infinite contact, so it is equal).
+  **P19.3 built, 2026-10-28:** `crates/v2xw-radio/src/rsu_sch.rs` (`RsuSchPath`, card
+  `transport/80211p-sch`, 6 unit tests). See the adoption plan's P19.3 note.
 - **P19.4** (3 h): wiring in `backend.rs` `carry`; downloads, CRL and reports moved to
   the SCH; settings and units.
+  **P19.4 built, 2026-10-28:** M11 (`mbr` on the service channel under `sch`) and the
+  download sessions (`Carrier::sch_carry`, TCP/TLS over `RsuSchPath` + the unit's line).
+  The two accept tests are transport-level (`rsu_sch.rs`); a cut-off flow is dropped and
+  started again at the next contact (`abort_cut_off_flows`). See the adoption plan's P19.4 notes.
 - **P19.5** (3 h): `tests/rsu_sch.rs`, the expectation rows, the faults, and
   `scms-real/06-validation-summary.md` rows M11 and U5 updated.
 

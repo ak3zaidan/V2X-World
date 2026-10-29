@@ -904,7 +904,7 @@ Rate control (inter-transmission time) [Rostami 2018 Eq. 1-2, Table 1]:
 
 | Parameter | Value |
 |---|---|
-| λ density smoothing weight | 0.5: `N_smooth(t) = λ·N(t) + (1 − λ)·N_smooth(t − 1)`, N = vehicles within 100 m |
+| λ density smoothing weight | 0.5: `N_smooth(t) = λ·N(t) + (1 − λ)·N_smooth(t − 1)`, N = vehicles within 100 m; N counts the RVs whose BSMs were **received** (decoded temporary IDs), not verified: FMVSS 150 NPRM preamble, 82 FR 3890 ("decode the message enough to expose the various temporary IDs of the received BSMs"), and S5.5.1, 82 FR 4014 ("N(k) is the Vehicle Density within 100 m"). As built (2026-10-28): `Stores::heard`, filled at the parse, before the verification policy |
 | B density coefficient | 25 |
 | `vMaxITT` | 600 ms |
 | minimum ITT | 100 ms (`MaxITT = 100 ms` when `N_smooth ≤ B`, linear up to `vMaxITT` at `(vMaxITT/100)·B`, capped) |
