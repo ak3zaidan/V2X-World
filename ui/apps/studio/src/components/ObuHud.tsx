@@ -29,7 +29,8 @@ import { int, shortDigest } from "../lib/format.js";
 import { hasData, hudGroups, type HudField } from "../lib/telemetry.js";
 import { bearingDeg } from "../lib/feed.js";
 import { toGeodetic } from "../lib/geo.js";
-import { hasPkiPool, linkText, pseudonymLine } from "../lib/security.js";
+import { hasPkiPool, linkText, pseudonymLine, signingStatus } from "../lib/security.js";
+import { CertBadge } from "./pki/CertStatus.js";
 import { openVehicle } from "./pki-records/state.js";
 import { openPanel } from "../shell/route.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
@@ -171,6 +172,8 @@ export function ObuHud(): React.JSX.Element | null {
     return hasData(f) && (keepZero || f.raw !== 0) ? <Value key={key} field={f} label={label} keepZero={keepZero} /> : null;
   };
   const pool = security && typeof security.pool_valid === "number" ? security.pool_valid : null;
+  // Read, not subscribed: the clock ticks every frame, and the row it is compared with arrives once a second.
+  const signing = signingStatus(security, useStudio.getState().simTimeNs);
   const link = security ? linkText(security) : null;
   // Where this radio signs and verifies: on the reference OBU the two run on different
   // hardware, which is why verify reads faster than sign there.
@@ -196,6 +199,11 @@ export function ObuHud(): React.JSX.Element | null {
         </Row>
         <Row title="security" testId="hud-row-security">
           {[
+            signing === null ? null : (
+              <span key="signing" className="hud-field plain" data-testid="hud-sec-status">
+                <CertBadge status={signing} label={signing === "expired" && pool === 0 ? "no valid certificate" : undefined} />
+              </span>
+            ),
             pool === null ? null : (
               <Plain key="pool" k={pool === 1 ? "valid certificate" : "valid certificates"} v={int(pool)} testId="hud-sec-pool" tone={pool === 0 ? "warn" : undefined} />
             ),

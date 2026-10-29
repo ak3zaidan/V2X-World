@@ -15,7 +15,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  certOf,
   componentIndex,
   ctlSummary,
   formatBytes,
@@ -24,7 +23,6 @@ import {
   GROUND_TRUTH,
   knowledgeOf,
   time32Date,
-  type CertAnswer,
   type KnowledgeAnswer,
   type PkiActivity,
   type PkiComponent,
@@ -34,9 +32,10 @@ import {
 import { flowInfo, isDevice, messagesOf, messageText, observedBy, roleInfo, type TrustMessage } from "../../lib/pkiTopology.js";
 import { engine } from "../../state/engine.js";
 import { CloseIcon } from "../../shell/Icons.js";
-import { chooseTab } from "../pki-records/state.js";
-import { JerTree } from "./PduDecoder.js";
+import { chooseTab, usePkiView } from "../pki-records/state.js";
+import { CertificateCard } from "./CertificateCard.js";
 import { Topology } from "./Topology.js";
+import { TrustChain } from "./TrustChain.js";
 
 /** Messages the Overview remembers for the cards' "recent messages", newest last. */
 const LOG_CAP = 600;
@@ -50,6 +49,10 @@ function TrustList({ trust }: { readonly trust: TrustAnswer }): React.JSX.Elemen
   const [history, setHistory] = useState(false);
   return (
     <section className="pki-ctl-strip">
+      <p className="pki-ctl-says">
+        The <b>trust list (CTL)</b> names the {ctl.roots === 1 ? "root" : `${ctl.roots} roots`} every device trusts. It changes only when {s.ctl.quorum} of the {s.ctl.electors} electors endorse the change; this version is endorsed
+        by {s.ctl.signers.length}.
+      </p>
       <div className="pki-gov-row">
         <span className="pki-ctl mono" data-testid="pki-ctl" title="The certificate trust list (CTL): the roots every device trusts, signed by a quorum of electors">
           CTL seq {ctl.sequence} · {ctl.roots} root{ctl.roots === 1 ? "" : "s"} · {s.ctl.bytes} B · effective {time32Date(s.ctl.effective)}
@@ -183,53 +186,6 @@ function DevicesCard({ provider, log, view, onClose }: { readonly provider: PkiP
         <RecentMessages id={`devices/${provider.label}`} log={log} view={view} />
       </div>
     </aside>
-  );
-}
-
-/** A certificate's decode and validation trace. */
-function CertCard({ id8 }: { readonly id8: string }): React.JSX.Element {
-  const [cert, setCert] = useState<CertAnswer | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [tree, setTree] = useState(false);
-  useEffect(() => {
-    let live = true;
-    setCert(null);
-    setError(null);
-    engine
-      .request("inspect.cert", { hashedid8: id8 }, { quiet: true, timeoutMs: 8000 })
-      .then((a) => live && setCert(certOf(a)))
-      .catch((err: unknown) => live && setError(err instanceof Error ? err.message : String(err)));
-    return () => {
-      live = false;
-    };
-  }, [id8]);
-  return (
-    <section className="pki-card-section" data-testid="pki-cert">
-      <h4>
-        Certificate <span className="mono">{id8}</span>
-        {cert ? <span className={cert.valid ? "pill ok" : "pill warn"}>{cert.valid ? "valid" : "invalid"}</span> : null}
-      </h4>
-      {error ? <p className="faint">The engine said: {error}</p> : null}
-      {cert ? (
-        <>
-          <p className="dim mono" title="This certificate, its issuers, and the root's HashedId8">
-            chain {cert.chain.join(" → ")}
-          </p>
-          <ol className="pki-trace" data-testid="pki-cert-trace">
-            {cert.trace.map((s) => (
-              <li key={s.rule} className={`st-${s.status}`}>
-                <span className="mono">{s.rule}</span> <b>{s.status}</b>
-                {s.detail.length > 0 ? <span className="dim"> — {s.detail.join("; ")}</span> : null}
-              </li>
-            ))}
-          </ol>
-          <button type="button" className="linklike" onClick={() => setTree((t) => !t)} aria-expanded={tree}>
-            {tree ? "hide" : "show"} the decoded certificate
-          </button>
-          {tree ? <JerTree jer={cert.tree} testId="pki-cert-tree" /> : null}
-        </>
-      ) : null}
-    </section>
   );
 }
 
@@ -429,7 +385,14 @@ function ComponentCard({
           </section>
         ) : null}
         <RecentMessages id={c.id} log={log} view={view} />
-        {c.cert ? <CertCard id8={c.cert} /> : <p className="faint">It holds no certificate of its own.</p>}
+        {c.cert ? (
+          <section className="pki-card-section">
+            <h4>Its certificate</h4>
+            <CertificateCard id8={c.cert} holder={c.id} />
+          </section>
+        ) : (
+          <p className="faint">It holds no certificate of its own: it signs nothing.</p>
+        )}
         {["ra", "aca", "la1", "la2", "ma", "eca"].includes(c.role) ? (
           knows ? (
             <KnowledgeCard entity={c.id} view={view} />
@@ -467,7 +430,8 @@ export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; read
   useEffect(() => {
     if (selected === null) return undefined;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape" && !e.defaultPrevented) {
+      // A certificate opened over the card closes first (its drawer listens for the same key).
+      if (e.key === "Escape" && !e.defaultPrevented && usePkiView.getState().cert === null) {
         // Marked handled, so the shell's Escape (close the panel) leaves the panel open.
         e.preventDefault();
         setSelected(null);
@@ -485,10 +449,15 @@ export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; read
   return (
     <div className={drawer ? "pki-body with-drawer" : "pki-body"} data-testid="pki-trust">
       <div className="pki-main">
+        <p className="pki-lead" data-testid="pki-overview-lead">
+          Who runs the certificate system and what is happening now. Each provider runs its own authorities; the dots are messages travelling
+          between them as the run goes. <b>Click any box</b> for what it does, its certificate and what it knows.
+        </p>
         <Topology trust={trust} messages={fresh} view={view} selected={selected} onSelect={setSelected} />
+        <TrustChain state={s} onSelect={setSelected} selected={selected} />
         <TrustList trust={trust} />
-        <p className="pki-devices dim" data-testid="pki-devices">
-          devices: {total} ({s.providers.map((p) => `${p.label.replace(/^provider-/, "")} ${p.devices.devices}`).join(" / ")}) · enrolled{" "}
+        <p className="pki-devices dim" data-testid="pki-devices" title="Vehicles and roadside units, all providers: how many hold an enrolment certificate, how many have pseudonym certificates, how many are revoked, and how many enrolment certificates their RA refuses">
+          vehicles and roadside units: {total} ({s.providers.map((p) => `${p.label.replace(/^provider-/, "")} ${p.devices.devices}`).join(" / ")}) · enrolled{" "}
           {s.providers.reduce((n, p) => n + p.devices.enrolled, 0)} · provisioned {s.providers.reduce((n, p) => n + p.devices.provisioned, 0)} · revoked{" "}
           {s.providers.reduce((n, p) => n + p.devices.revoked, 0)} · blocklisted {s.providers.reduce((n, p) => n + p.devices.blocklisted, 0)}
         </p>

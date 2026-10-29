@@ -67,3 +67,10 @@ export function lifecycleOf(d: Pick<VehicleDetail, "pseudonyms" | "grid" | "revo
   const batches = [...per.entries()].sort((a, b) => a[0] - b[0]).map(([i, certs]) => ({ i, certs }));
   return { events: events.sort((a, b) => a.t - b.t), beforeRun, t0, t1: t1 > t0 ? t1 : t0 + 1, batches };
 }
+
+/** A round tick step for a span of `ns`, so the axis shows four to eight labels. */
+export function tickStep(ns: number): number {
+  const s = ns / 1e9;
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 21_600, 43_200, 86_400, 172_800, 604_800];
+  return (steps.find((x) => s / x <= 8) ?? 604_800) * 1e9;
+}
