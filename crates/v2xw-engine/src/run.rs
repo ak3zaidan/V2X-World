@@ -575,6 +575,13 @@ pub struct RunReport {
     /// `timeLeftInSlot`, behaviour only).
     #[serde(skip_serializing_if = "is_zero_u64")]
     pub mac_guard_deferrals: u64,
+    /// WP-20: the distance emergency-class vehicles drove in the run, metres (speed times
+    /// the mobility step, summed). Measured only when the scenario names
+    /// `traffic.emergency_yield` (on or off), so other reports are unchanged; in a fixed
+    /// window, faster emergency vehicles drive further. A completed-trip travel time
+    /// would be biased by the window (faster vehicles complete longer trips).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub emergency_distance_m: u64,
     /// WP-16 invariant: single-radio frames that went on the air in a guard or across
     /// their interval's end. Must be 0; a late poll is the only way to make one.
     #[serde(skip_serializing_if = "is_zero_u64")]
@@ -1120,6 +1127,9 @@ pub struct Engine {
     /// summed into the report with the nodes still present. Until 2026-10-19 a departed
     /// node's refusals were dropped from `receiver_validation` with it.
     departed_rx: ReceiverValidationReport,
+    /// WP-20: emergency vehicles' distance so far, metres, when the scenario names
+    /// `traffic.emergency_yield` ([`RunReport::emergency_distance_m`]).
+    ev_distance_m: Option<f64>,
     /// The actors' bodies at the last published state, for the vehicles-on-the-path
     /// test; rebuilt with the snapshot, and only when vehicle blockage is composed.
     bodies: link::BodyIndex,
@@ -1715,6 +1725,11 @@ impl Engine {
             &scenario,
             sidelink.as_ref().map_or(dsrc_freq_hz, |sl| sl.freq_hz),
         );
+        let ev_distance_m = scenario
+            .traffic
+            .as_ref()
+            .is_some_and(|t| t.emergency_yield.is_some())
+            .then_some(0.0);
         let mut engine = Engine {
             snapshot: ActorSnapshot::new(0, SNAPSHOT_CELL_M),
             weather: crate::wiring::initial_weather(&scenario),
@@ -1816,6 +1831,7 @@ impl Engine {
             departed_credentials: Vec::new(),
             lifecycle: Vec::new(),
             departed_rx: ReceiverValidationReport::default(),
+            ev_distance_m,
             bodies: link::BodyIndex::default(),
             radios: radios::RadioIndex::default(),
             nodes: BTreeMap::new(),
@@ -2954,6 +2970,9 @@ impl Engine {
             self.report.trips_unroutable = unroutable;
         }
         self.report.gcbr = self.gcbr.as_ref().map(|g| g.tally);
+        if let Some(d) = self.ev_distance_m {
+            self.report.emergency_distance_m = d.round() as u64;
+        }
         // WP-16: the 1609.4 gate's holds; zero (and not serialised) without it.
         if self.wave.is_some()
             && let Some(mac) = self.mac.as_ref()
@@ -4267,9 +4286,15 @@ impl Engine {
                 }
             }
         }
+        let step_s = self.scenario.time.mobility_step().as_secs_f64();
         for (actor, k) in &update.states {
             if let Some(rec) = self.actors.get_mut(actor) {
                 rec.last = *k;
+                if rec.class == v2xw_mobility::VehicleClass::Emergency
+                    && let Some(d) = self.ev_distance_m.as_mut()
+                {
+                    *d += k.vel.norm_2d() * step_s;
+                }
             }
         }
         for (actor, code) in &update.activities {

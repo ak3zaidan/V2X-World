@@ -98,6 +98,14 @@ families:
   - name: intersections
     base: ../connected-intersections.yaml
     set: {time.duration_s: 60.0, metrics: [all]}
+  # WP-20: the base of emergency-priority.yaml (one vehicle in ten an emergency vehicle
+  # with beacons, signalised procedural grid, 3000 veh/h) for 120 s, with the yielding
+  # block named (off) so both runs report the emergency vehicles' distance
+  # (report.emergency_distance_m). The plan named emergency-priority.yaml itself, which
+  # runs on Manhattan; its procedural base is the same traffic at a fraction of the cost.
+  - name: emergency
+    base: ../connected-intersections.yaml
+    set: {time.duration_s: 120.0, traffic.emergency_yield: {enabled: false}, metrics: [all]}
 
 routes:
   # Red runners matter where signals and SPaT are: RLVW warns of exactly their entries.
@@ -117,6 +125,7 @@ routes:
   # nothing.
   - {prefix: traffic.vehicle_dynamics.power_limit, families: [grade-truck, freight]}
   - {prefix: traffic.vehicle_dynamics, families: [freight]}
+  - {prefix: traffic.emergency_yield, families: [emergency]}
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
   - {prefix: net, families: [gn, dsrc, security]}

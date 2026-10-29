@@ -126,3 +126,6 @@
 - {setting: traffic.vehicle_dynamics.grade, change: true, metric: traffic.speed_mean_mps, expect: same, min_change: 0.0,
    source: "g sin(theta) is zero on a level road (SUMO KraussPS aMax - g sin(slope)); the freight road is flat, so the grade alone moves nothing"}
 
+# ---- Traffic yields to emergency vehicles (WP-20; emergency family = connected-intersections.yaml, 120 s) ----
+- {setting: traffic.emergency_yield.enabled, change: true, metric: report.emergency_distance_m, expect: up, min_change: 0.02,
+   source: "drivers pull to the right-hand edge and stop for an approaching emergency vehicle, and every other driver yields it the right of way (NY VTL 1144(a), re-read 2026-10-28; UVC 11-405); it passes a red after stopping (UVC 11-106(b)2): in a fixed window it drives further. The plan's report.emergency_travel_time_s was replaced: a completed-trip time over a 120 s window is biased (faster vehicles complete longer trips). SUMO bluelight device behaviour"}

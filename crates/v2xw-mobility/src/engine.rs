@@ -856,6 +856,10 @@ impl VehicleDynamicsParams {
 /// the stop a red asks for stands [`STOP_LINE_OFFSET_M`] short of it, with slack.
 const EV_RED_LINE_M: f64 = 3.0;
 
+/// Below this speed a conflicting claimant short of its line is taken to be yielding to an
+/// emergency vehicle at a red, m/s: the cross street stops for it (NY VTL §1144(a)).
+const EV_RED_STANDING_MPS: f64 = 0.5;
+
 /// The fastest an emergency vehicle creeps from its stop at a red to the line, m/s:
 /// 5 mi/h. **A choice**: "proceed with caution" has no figure.
 const EV_RED_CREEP_MPS: f64 = 2.235;
@@ -873,14 +877,19 @@ const EV_RED_CLEAR_S: f64 = 4.0;
 /// `reaction_distance_m` short of their rear: the siren trigger. How they make way is the
 /// jurisdiction's ([`crate::rules::EmergencyYield`]):
 ///
-/// * in the emergency vehicle's own lane, with a lane to the right: they ease off (no
-///   acceleration) and change right, re-planning the route if that lane cannot make
-///   their next turn;
-/// * in the emergency vehicle's lane with no lane to the right: they drive on (until the
-///   sub-lane edge offset of P20.2, there is nowhere to pull over to that lets it past);
-/// * in any other lane of the carriageway: they slow at their comfortable deceleration
-///   and stop, unless the stop line ahead is nearer than that stop needs ("clear of any
-///   intersection", NY VTL §1144(a)), and stand until it has passed.
+/// * in the emergency vehicle's own lane, with a lane to the right: they change right at
+///   the speed the traffic allows, re-planning the route if that lane cannot make their
+///   next turn;
+/// * in the emergency vehicle's lane with no lane to the right: they drive on (there is
+///   nowhere to pull over to that lets it past; the sub-lane edge offset of P20.2 moves
+///   them to the edge);
+/// * in any other lane of the carriageway, once any lane change is complete: they slow
+///   at their comfortable deceleration and stop, unless the stop line ahead is nearer
+///   than that stop needs ("clear of any intersection", NY VTL §1144(a)), and stand until
+///   it has passed.
+///
+/// The emergency vehicle itself keeps left: it makes no discretionary change to the
+/// right, and passes a red after stopping ([`Self::red_pass_speed_mps`]).
 ///
 /// Off by default; a reaction reads ground truth (the siren is heard, the lightbar seen),
 /// which the plan's V2X trigger (P20.4) replaces with belief.
@@ -6932,6 +6941,40 @@ impl Mobility for NativeMobility {
                         });
                     }
                 }
+                // Every other driver yields the right of way to an emergency vehicle at the
+                // junction (NY VTL §1144(a) binds "the driver of every other vehicle", the
+                // cross street included, and keeps them clear of the intersection): one
+                // approaching a junction where an emergency vehicle with beacons is within
+                // the reaction distance of its own line on a movement whose path meets
+                // this one stops at the line, if it can at its comfortable deceleration.
+                if along
+                    && self.params.emergency_yield.enabled
+                    && self.lamp_params.emergency_beacons
+                    && actor.class != VehicleClass::Emergency
+                    && !actor.class.is_vru()
+                    && decision == EntryDecision::Proceed
+                    && junction.stop_line_gap_m > 0.0
+                    && let Some(movement) = junction
+                        .movement_lane
+                        .filter(|l| world.lane(*l).kind == LaneKind::Internal)
+                    && conflicts.iter().any(|c| {
+                        c.actor != actor.id
+                            && c.stop_line_gap_m >= 0.0
+                            && c.stop_line_gap_m <= self.params.emergency_yield.reaction_distance_m
+                            && snapshot
+                                .view(c.actor)
+                                .is_some_and(|v| v.class == VehicleClass::Emergency)
+                            && c.movement_lane.is_some_and(|m| {
+                                m != movement && self.zones.of(movement).iter().any(|z| z.other == m)
+                            })
+                    })
+                {
+                    let room = (junction.stop_line_gap_m - STOP_LINE_OFFSET_M).max(0.0);
+                    let b = actor.driver.comfort_decel_mps2.max(0.5);
+                    if ego.speed_mps * ego.speed_mps / (2.0 * b) <= room + 0.5 {
+                        decision = EntryDecision::Stop { gap_m: room };
+                    }
+                }
                 // An emergency vehicle at a red (UVC §11-106(b)2): it stops, or slows to
                 // `red_pass_speed_mps`, at the line, and goes on once no vehicle is inside
                 // on a conflicting path, the exit has room and no conflicting vehicle
@@ -6960,9 +7003,12 @@ impl Mobility for NativeMobility {
                         .movement_lane
                         .filter(|l| world.lane(*l).kind == LaneKind::Internal)
                     && !self.junction_blocked(world, &snapshot, &occupancy, actor, movement)
+                    // A claimant standing short of its line is yielding (the rule above);
+                    // one still moving towards it may not be able to.
                     && !conflicts.iter().any(|c| {
                         c.conflicts
                             && c.actor != actor.id
+                            && c.speed_mps > EV_RED_STANDING_MPS
                             && c.arrival_s.unwrap_or_else(|| {
                                 c.stop_line_gap_m.max(0.0) / c.speed_mps.max(0.1)
                             }) < EV_RED_CLEAR_S
@@ -7480,11 +7526,14 @@ impl Mobility for NativeMobility {
                     ev_edge = Some(rescue && leftmost);
                 }
                 if ev.lane == actor.lane && !rescue {
-                    if right {
-                        ev_move_right = true;
-                        accel = accel.min(0.0);
-                    }
-                } else {
+                    // Out of its way first, at the speed the traffic allows: slowing in
+                    // its lane only holds it up (the corridor runs of
+                    // `tests/emergency_yield.rs`).
+                    ev_move_right = right;
+                } else if actor.transition.is_none() {
+                    // A driver part-way across a lane change finishes it before stopping:
+                    // stopped mid-change, the body stood across the emergency vehicle's
+                    // lane and held it 16 s (`tests/emergency_yield.rs`, seed 11).
                     let v = ego.speed_mps;
                     let b = actor.driver.comfort_decel_mps2.max(0.5);
                     let to_line = lane.length_m - actor.s_m;
@@ -7853,6 +7902,21 @@ impl Mobility for NativeMobility {
                     }
                     _ => mobil.decide(ctx, ego, nbrs, &self.weather),
                 };
+                // An emergency vehicle responding keeps left of the traffic pulling right:
+                // no discretionary change to the right (a strategic one, which its route
+                // needs, is taken above). Moving right put it behind a bus at its stop
+                // (`tests/emergency_yield.rs`, seed 11).
+                if self.ev_runs_beacons(actor)
+                    && matches!(
+                        decision.lane_change,
+                        LaneChangeDecision::Change {
+                            side: Side::Right,
+                            ..
+                        }
+                    )
+                {
+                    decision.lane_change = LaneChangeDecision::Stay;
+                }
                 // Heavy goods vehicles keep out of a motorway's leftmost lane where the
                 // carriageway has three or more ([`crate::drivers`], StVO §18(11)).
                 if self.params.human.truck_lane_restriction
