@@ -24,7 +24,7 @@
 .pkir-table td { border-bottom: 1px solid var(--border); padding: 4px 6px; white-space: nowrap; }
 .pkir-table tbody tr { cursor: pointer; }
 .pkir-table tbody tr:hover { background: var(--bg-raised); }
-.pkir-table tr.sel { background: var(--accent-dim); }
+.pkir-table tr.sel { background: color-mix(in srgb, var(--accent) 16%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
 .pkir-table tr.sub td { color: var(--text-dim); }
 .pkir-table.compact td { padding: 2px 6px; }
 .pkir-table .bad, .pkir-card .bad { color: var(--err); }

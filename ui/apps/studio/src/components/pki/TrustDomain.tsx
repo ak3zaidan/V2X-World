@@ -180,27 +180,26 @@ function DevicesCard({ provider, log, view, onClose }: { readonly provider: PkiP
         <p className="pki-does">{info.does}</p>
         <dl className="pki-pairs">
           <dt>Devices</dt>
-          <dd className="mono">{d.devices}</dd>
+          <dd>
+            <b className="mono">{d.devices}</b>
+            <span className="dim" title="No provider publishes its fleet share: this split is the scenario's setting">
+              {" "}
+              · {(provider.fleet_share * 100).toFixed(0)}% of the fleet (assumed)
+            </span>
+          </dd>
           <dt title="Hold an enrolment certificate (EC) from this provider's Enrolment CA">Enrolled</dt>
           <dd className="mono">{d.enrolled}</dd>
-          <dt title="Provisioned: have downloaded pseudonym certificates from the RA">With pseudonym certificates</dt>
+          <dt title="Have downloaded pseudonym certificates from the RA">With pseudonyms</dt>
           <dd className="mono">{d.provisioned}</dd>
-          <dt title="The provider's own revocation counter, as the engine reports it. The strip's “devices revoked” counts the devices a published revocation list names, which every other view uses; the two can differ while a revocation is on its way to the list.">
-            Revoked, by the provider's own counter
+          <dt title="The provider's own revocation counter. The strip's “devices revoked” counts the devices a published list names; the two differ while a revocation is on its way to the list.">
+            Revoked
           </dt>
           <dd className="mono">{d.revoked}</dd>
-          <dt title="Blocklisted: the RA refuses their enrolment certificate after a revocation, so they get no new pseudonyms">Blocked from new certificates</dt>
+          <dt title="The RA refuses their enrolment certificate after a revocation, so they get no new pseudonyms">Blocked</dt>
           <dd className="mono">{d.blocklisted}</dd>
-          <dt>Share of the fleet</dt>
-          <dd className="mono">
-            {(provider.fleet_share * 100).toFixed(0)}%{" "}
-            <em className="assume" title="No provider publishes its fleet share: this split is the scenario's setting">
-              assumed
-            </em>
-          </dd>
         </dl>
         <button type="button" className="linklike" onClick={() => chooseTab("vehicles")} data-testid="pki-open-vehicles">
-          Open the vehicles
+          Open the vehicles ›
         </button>
         <RecentMessages id={`devices/${provider.label}`} log={log} view={view} />
       </div>

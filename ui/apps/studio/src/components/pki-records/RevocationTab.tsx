@@ -253,25 +253,42 @@ function CrlCard({ id8, view, head }: { readonly id8: string; readonly view: str
         {close}
       </h3>
       <div className="pkir-facts">
-        <span>
-          <b>{entries}</b> entr{entries === 1 ? "y" : "ies"}: {v.linkage.length} <Term k="linkage-entry">by linkage seed</Term> (whole vehicles), {v.hash.length}{" "}
-          <Term k="hash-entry">by hash</Term> (single certificates)
+        <span
+          data-testid="pki-crl-says"
+          title={
+            entries === 0
+              ? "An empty list: it revokes nothing, and says so with a signature, so a device knows it is up to date."
+              : "A linkage entry lets a receiver recognise every pseudonym certificate of one vehicle from the revocation week on, without naming it. A hash entry names one certificate."
+          }
+        >
+          {entries === 0 ? (
+            <b>empty</b>
+          ) : (
+            <>
+              {v.linkage.length > 0 ? (
+                <>
+                  <b>{v.linkage.length}</b> <Term k="linkage-entry">{v.linkage.length === 1 ? "vehicle" : "vehicles"}</Term>
+                </>
+              ) : null}
+              {v.linkage.length > 0 && v.hash.length > 0 ? " · " : null}
+              {v.hash.length > 0 ? (
+                <>
+                  <b>{v.hash.length}</b> <Term k="hash-entry">{v.hash.length === 1 ? "certificate" : "certificates"}</Term>
+                </>
+              ) : null}
+            </>
+          )}
         </span>
-        <span>{formatBytes(v.len)} signed</span>
+        <span className="dim">{formatBytes(v.len)}</span>
         {head ? (
-          <span className={head.sla_now_s < 0 ? "bad" : undefined}>
-            {head.sla_now_s < 0 ? `replacement ${slaText(head.sla_now_s)}` : `must be replaced within ${slaText(head.sla_now_s)}`}
+          <span className={head.sla_now_s < 0 ? "bad" : "dim"} title="nextCrl: the deadline by which a newer list must replace this one">
+            {head.sla_now_s < 0 ? `replacement ${slaText(head.sla_now_s)}` : `replace within ${slaText(head.sla_now_s)}`}
           </span>
         ) : null}
         <span className="faint mono" title="HashedId8: how devices refer to this list">
           {grouped(id8)}
         </span>
       </div>
-      <p className="pki-lead" data-testid="pki-crl-says">
-        {entries === 0
-          ? "An empty list: it revokes nothing, and says so with a signature, so a device knows it is up to date."
-          : `${v.linkage.length > 0 ? `${v.linkage.length} linkage entr${v.linkage.length === 1 ? "y" : "ies"}: each lets a receiver recognise every pseudonym certificate of one vehicle from the revocation week on, without naming the vehicle. ` : ""}${v.hash.length > 0 ? `${v.hash.length} hash entr${v.hash.length === 1 ? "y" : "ies"}: each names one certificate by its hash. ` : ""}`}
-      </p>
       {v.linkage.length > 0 ? (
         <table className="pkir-table compact" data-testid="pki-crl-entries">
           <thead>
