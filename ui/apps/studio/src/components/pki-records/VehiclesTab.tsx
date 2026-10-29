@@ -106,7 +106,7 @@ function PoolCell({ r, revoked }: { readonly r: VehicleRow; readonly revoked: bo
       {p.withAhead > p.now ? (
         <span className="faint">
           {" "}
-          · <span className="mono">{p.withAhead}</span> incl. {aheadText(p.ahead)}
+          · +<span className="mono">{p.withAhead - p.now}</span> ahead
         </span>
       ) : null}
     </td>
@@ -160,10 +160,10 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
   const enrolled = uniform(all, (r) => r.enrolled);
   const allEnrolled = all.length > 0 && enrolled.same && enrolled.value === true;
   const same: string[] = [];
-  if (allEnrolled) same.push("enrolled with its provider");
-  if (all.length > 0 && ctl.same) same.push(ctl.value === null ? "no trust list (CTL) reported" : `trust list (CTL) version ${String(ctl.value)}`);
+  if (allEnrolled) same.push("enrolled");
+  if (all.length > 0 && ctl.same) same.push(ctl.value === null ? "no trust list reported" : `trust list v${String(ctl.value)}`);
   if (driving.length > 0 && crl.same) same.push(listSentence(installedList(driving[0].security, heads)));
-  if (driving.length > 0 && topup.same && topup.value !== undefined) same.push(`${topupSentence(topup.value)}${(counts.get("revoked") ?? 0) > 0 ? " (revoked vehicles get none)" : ""}`);
+  if (driving.length > 0 && topup.same && topup.value !== undefined) same.push(`${topupSentence(topup.value)}${(counts.get("revoked") ?? 0) > 0 ? " (none for the revoked)" : ""}`);
   return (
     <div className={chosen ? "pkir-split" : "pkir-split single"} data-testid="pki-vehicles">
       <div className="pkir-table-wrap">
@@ -304,15 +304,15 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
 /** The installed list in the "Every vehicle" sentence. */
 function listSentence(l: ReturnType<typeof installedList>): string {
   if (!l) return "no revocation list (CRL) installed";
-  return `has installed ${l.provider ? `${l.provider}'s ` : "the "}revocation list (CRL) version ${l.version} (${l.entries} entr${l.entries === 1 ? "y" : "ies"})`;
+  return `revocation list ${l.provider ? `${l.provider} ` : ""}v${l.version}`;
 }
 
 /** The next top-up in the "Every vehicle" sentence. */
 function topupSentence(v: string): string {
   if (v === "none") return "no top-up planned";
-  if (v === "due" || v === "in flight") return `next pseudonym top-up ${v}`;
+  if (v === "due" || v === "in flight") return `top-up ${v}`;
   if (v === "–") return "no top-up reported";
-  return `next pseudonym top-up ${v}`;
+  return `next top-up ${v}`;
 }
 
 /**
