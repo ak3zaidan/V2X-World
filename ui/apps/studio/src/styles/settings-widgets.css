@@ -26,6 +26,9 @@
 .duration-words { font-size: 12px; margin-left: 6px; }
 .setting-irrelevant { font-style: italic; }
 .settings-sub-blurb { margin: 0 0 6px; font-size: 12px; max-width: 72ch; }
+.compose-picker { display: inline-flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
+.us-banner { margin: 4px 0 10px; }
+.us-banner.ok { border-color: var(--border); }
 
 .choice { display: flex; flex-direction: column; gap: 4px; }
 .choice select { max-width: 420px; }

@@ -551,6 +551,16 @@ export function controlKind(f: Field): string {
   }
 }
 
+/** The engine's US-system verdict on a `scenario.validate` answer (`us_system`), when it gave one. */
+export function usSystemOf(res: unknown): { usSystem?: { isUs: boolean; reasons: string[] } } {
+  const u = (res as { us_system?: unknown } | null)?.us_system;
+  if (u === null || typeof u !== "object") return {};
+  const o = u as { is_us?: unknown; reasons?: unknown };
+  if (typeof o.is_us !== "boolean") return {};
+  const reasons = Array.isArray(o.reasons) ? o.reasons.filter((r): r is string => typeof r === "string") : [];
+  return { usSystem: { isUs: o.is_us, reasons } };
+}
+
 /** The first sentence of an explanation, for the one line under a control. */
 export function oneLine(text: string | undefined): string {
   if (!text) return "";

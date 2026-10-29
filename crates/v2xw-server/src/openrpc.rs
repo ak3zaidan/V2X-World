@@ -680,7 +680,13 @@ fn all_methods() -> Vec<Value> {
                 json!({"valid": {"type": "boolean"}, "errors": validation,
                        "warnings": validation,
                        "resolved_tiers": {"type": "object"},
-                       "estimated_cost": {"type": "object"}}),
+                       "estimated_cost": {"type": "object"},
+                       // Whether an SCMS run is the deployed US system, and if not why
+                       // (scms-real/08 §4.2 item 7); null off an SCMS run.
+                       "us_system": {"type": ["object", "null"],
+                                     "properties": {"is_us": {"type": "boolean"},
+                                                    "reasons": {"type": "array",
+                                                                "items": {"type": "string"}}}}}),
             ),
             &[-32602],
         ),

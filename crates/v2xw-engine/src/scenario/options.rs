@@ -1619,6 +1619,40 @@ fn rows_of(path: &str, ids: &[&str]) -> Vec<Value> {
     ids.iter().map(|v| option_row(path, v, "")).collect()
 }
 
+/// The providers each deployment preset names, home provider first, and where a document
+/// states its preset and, under `custom`, its own list (08-settings-ux-and-gaps §4.1 item 6).
+/// A field whose values depend on the deployment carries this, so the form fills the
+/// provider half from the document.
+pub fn provider_sets() -> Value {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    let mut by_preset = serde_json::Map::new();
+    for id in Preset::IDS {
+        if let Some(p) = Preset::parse(id).filter(|p| *p != Preset::Custom) {
+            let names: Vec<String> = Deployment::preset(p)
+                .providers
+                .iter()
+                .map(|q| q.name.clone())
+                .collect();
+            by_preset.insert(id.to_string(), json!(names));
+        }
+    }
+    json!({
+        "preset_path": "security.scms.deployment.preset",
+        // An SCMS run with no deployment block runs the US system (`phase2::deployment_of`).
+        "default_preset": Preset::UsProduction2025.id(),
+        "custom_path": "security.scms.deployment.providers",
+        "by_preset": by_preset,
+    })
+}
+
+/// How a value at `path` is composed of a provider and a choice (`x-options-compose`): a
+/// failure's server is `<provider>/<role>`, or the bare role for the home provider
+/// (`crypto_config::failure_target`).
+pub fn compose_of(path: &str) -> Option<Value> {
+    (path == "actors.backend.failures[].node")
+        .then(|| json!({"qualifier": "provider", "separator": "/", "providers": provider_sets()}))
+}
+
 /// The provider names the presets use, each saying which presets name it.
 fn provider_name_rows() -> Vec<Value> {
     use v2xw_proto::scms::deployment::{Deployment, Preset};

@@ -1101,6 +1101,13 @@ impl Walk<'_> {
         }
         // When the field matters (08 §4.2 item 5): the form greys it otherwise, with the
         // reason, and keeps its value.
+        // Values that depend on the deployment the document names (08 §4.1 item 6).
+        if let Some(c) = options::compose_of(path) {
+            out.insert("x-options-compose".into(), c);
+        }
+        if path == "security.scms.deployment.providers[].name" {
+            out.insert("x-options-by-preset".into(), options::provider_sets());
+        }
         if let Some((on, values)) = options::relevant_when(path) {
             out.insert("x-relevant-when".into(), json!({"path": on, "in": values}));
         }
@@ -2340,6 +2347,40 @@ mod tests {
                 "{patch} produced no range error at {field}: {errors:?}"
             );
         }
+    }
+
+    /// The dependent sets (08 §4.1 item 6, piece A4): a failure's server composes a provider
+    /// of the deployment with a role, and a provider's name is offered from its preset; both
+    /// carry each preset's providers, home provider first, as the deployment builds them.
+    #[test]
+    fn the_failure_server_and_provider_name_follow_the_deployment() {
+        let all = fields();
+        let at = |p: &str| {
+            all.iter()
+                .find(|f| f["x-path"].as_str() == Some(p))
+                .cloned()
+                .unwrap_or_else(|| panic!("{p} is not published"))
+        };
+        let node = at("actors.backend.failures[].node");
+        let compose = &node["x-options-compose"];
+        assert_eq!(compose["separator"], json!("/"));
+        let by = &compose["providers"]["by_preset"];
+        let names = at("security.scms.deployment.providers[].name");
+        assert_eq!(&names["x-options-by-preset"]["by_preset"], by);
+        use v2xw_proto::scms::deployment::{Deployment, Preset};
+        for id in ["us-production-2025", "us-test-ctl-2025", "camp-reference"] {
+            let p = Preset::parse(id).expect("a preset");
+            let want: Vec<Value> = Deployment::preset(p)
+                .providers
+                .iter()
+                .map(|q| json!(q.name))
+                .collect();
+            assert_eq!(by[id], Value::Array(want), "{id}");
+        }
+        assert_eq!(
+            compose["providers"]["default_preset"],
+            json!("us-production-2025")
+        );
     }
 
     /// What the A2 form reads beyond the menus (08 §4.2): every Misbehaviour Authority

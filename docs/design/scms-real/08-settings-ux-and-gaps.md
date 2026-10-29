@@ -943,6 +943,35 @@ the_new_scms_keys_carry_help_presets_and_relevance` (the module presets not look
 under its second root finding no guide row; `decay.factor`'s preset moved to 1.9). The first
 and third mask each other, so each ran in its own build. No golden moved.
 
+**Status, A4 (2026-10-29): built.** Dependent sets and the US banner (§4.1 item 6, §4.2
+items 2 and 7).
+
+* Engine: `options::provider_sets()` gives each preset's providers, home provider first, as
+  `Deployment::preset` builds them, plus where a document names its preset and its custom
+  list. `actors.backend.failures[].node` carries it in `x-options-compose` (`separator: "/"`),
+  `prov[].name` in `x-options-by-preset`. Choice: the sets ride on the two fields rather than
+  a top-level `scms.providers_by_preset`, so the form needs nothing outside the field.
+* `phase2::us_system`: on an SCMS run, `is_us` and each departure in words. The deployment's
+  part is `Deployment::is_us` (preset, electors, quorum, required roles); the rest are the
+  values the menus badge "not US" (envelope, signature, KEM, home-provider chain file, LOP,
+  committees). Choice under §9: the banner is stricter than the manifest's `is_us`, because a
+  run on a post-quantum signature is not the US system however its deployment is laid out.
+  `scenario.validate` returns it as `us_system` (null off an SCMS run), and the OpenRPC
+  document lists the field.
+* UI: `ProviderRolePicker` (the deployment's providers beside the role menu; the home
+  provider's server written bare, another's as `provider-b/crlg`; "Other…" still types a
+  committee member), provider names filtered by the document's preset (any name under
+  `custom`), and the banner at the top of Certificates & SCMS from the last Check ("This run
+  is the US system", "Not the US system: electors 7, signature ecdsa-p384", or that the run
+  has no SCMS).
+
+Checks, each shown red under its named fault and reverted:
+`phase2::settings_menu_tests::the_us_verdict_names_each_departure` (the electors reason
+dropped), `publish::tests::the_failure_server_and_provider_name_follow_the_deployment` (the
+compose insertion dropped), vitest `test/scms-compose.test.ts` (the home provider's server
+written qualified; the verdict not carried to the store). `v2xw-server --test rpc` passes
+with the new field in the OpenRPC document. No golden moved.
+
 After A0, B and C edit only their own files. They make a key live by flipping their own
 module's `KEY_STATUS` and refusal, never by editing `validate.rs`.
 

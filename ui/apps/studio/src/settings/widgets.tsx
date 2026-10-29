@@ -8,10 +8,11 @@
  * model id: the lists come from the engine, so a model added to the engine appears here unedited.
  */
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 
 import type { Choice, ItemField, NumberPreset } from "../lib/schema.js";
-import { getPointer, setPointer } from "../lib/schema.js";
+import { getPointer, joinComposed, presetIn, providersIn, setPointer, splitComposed } from "../lib/schema.js";
+import { SettingsDocContext } from "./docContext.js";
 
 import "../styles/settings-widgets.css";
 
@@ -422,6 +423,12 @@ function ItemControl({
   onChange: (v: unknown) => void;
 }): React.JSX.Element {
   const common = { id, "aria-describedby": `${id}-desc` } as const;
+  if (field.compose && field.choices) {
+    return <ProviderRolePicker id={id} field={field} compose={field.compose} value={value} onChange={onChange} />;
+  }
+  if (field.providerNames && field.choices) {
+    return <ProviderName common={common} field={field} value={value} onChange={onChange} />;
+  }
   if (field.kind === "map" && field.keyChoices) {
     return (
       <MapRows
@@ -456,6 +463,79 @@ function ItemControl({
   }
   if (field.kind === "json") return <ItemJson id={id} value={value} onChange={onChange} />;
   return <input {...common} type="text" value={value === undefined || value === null ? "" : String(value)} onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)} />;
+}
+
+/**
+ * A server of a named provider (08-settings-ux-and-gaps §4.2 item 2): the provider menu (the
+ * deployment's providers, from its preset or its custom list) beside the role menu. The home
+ * provider's server is written bare (`crlg`), another's qualified (`provider-b/crlg`).
+ */
+function ProviderRolePicker({
+  id,
+  field,
+  compose,
+  value,
+  onChange,
+}: {
+  id: string;
+  field: ItemField;
+  compose: NonNullable<ItemField["compose"]>;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}): React.JSX.Element {
+  const doc = useContext(SettingsDocContext);
+  const providers = providersIn(compose.providers, doc);
+  const { provider, role } = splitComposed(value, compose.separator, providers);
+  const write = (p: string, r: string): void => onChange(joinComposed(p, r, compose.separator, providers));
+  const providerChoices: Choice[] = providers.map((p, i) => ({
+    value: p,
+    label: i === 0 ? `${p} (home)` : p,
+    description: i === 0 ? "The home provider: its servers are named bare." : "Another provider on the trust list.",
+    available: true,
+  }));
+  return (
+    <span className="compose-picker" data-testid="provider-role-picker">
+      <ChoiceSelect
+        common={{ id: `${id}-provider`, "aria-describedby": `${id}-desc` }}
+        choices={providerChoices}
+        open={false}
+        nullable={false}
+        value={provider}
+        onChange={(p) => write(String(p ?? ""), role)}
+        compact
+      />
+      <span className="faint">{compose.separator}</span>
+      <ChoiceSelect
+        common={{ id, "aria-describedby": `${id}-desc` }}
+        choices={field.choices ?? []}
+        open={field.choicesOpen === true}
+        nullable={false}
+        value={role}
+        onChange={(r) => write(provider, String(r ?? ""))}
+        compact
+      />
+    </span>
+  );
+}
+
+/** A provider's name: the names the document's preset deploys; any name under a custom list. */
+function ProviderName({
+  common,
+  field,
+  value,
+  onChange,
+}: {
+  common: Common;
+  field: ItemField;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}): React.JSX.Element {
+  const doc = useContext(SettingsDocContext);
+  const sets = field.providerNames;
+  const names = sets ? providersIn(sets, doc) : [];
+  const custom = sets !== undefined && presetIn(sets, doc) === "custom";
+  const choices = custom ? (field.choices ?? []) : (field.choices ?? []).filter((c) => names.includes(String(c.value)));
+  return <ChoiceSelect common={common} choices={choices} open={custom || field.choicesOpen === true} nullable={false} value={value} onChange={onChange} compact />;
 }
 
 function ItemJson({ id, value, onChange }: { id: string; value: unknown; onChange: (v: unknown) => void }): React.JSX.Element {

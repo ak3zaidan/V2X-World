@@ -22,7 +22,7 @@ import { engine } from "./engine.js";
 import { useStudio, type ScenarioListItem } from "./store.js";
 import { changedPointers, getPointer, setPointer } from "../lib/schema.js";
 import { describeError } from "../lib/errors.js";
-import { isUnsupported, settingsFields, type Field } from "../settings/model.js";
+import { isUnsupported, settingsFields, usSystemOf, type Field } from "../settings/model.js";
 
 /** The message shape on the settings channel. */
 type ChannelMessage =
@@ -131,7 +131,7 @@ export function inertEdits(fields: readonly Field[], edits: readonly string[]): 
 export async function checkDraft(): Promise<string> {
   const draft = useStudio.getState().draft;
   const res = await engine.request("scenario.validate", { ...(draft ? { scenario: draft } : {}), strict: false });
-  useStudio.getState().setValidation({ valid: res.valid, errors: res.errors, warnings: res.warnings });
+  useStudio.getState().setValidation({ valid: res.valid, errors: res.errors, warnings: res.warnings, ...usSystemOf(res) });
   return res.valid
     ? "The engine accepts these settings."
     : `${res.errors.length} setting${res.errors.length === 1 ? "" : "s"} need fixing — each is marked where it is.`;

@@ -33,6 +33,70 @@ export interface Subgroup {
   readonly blurb?: string;
 }
 
+/**
+ * The providers a deployment names (08-settings-ux-and-gaps §4.1 item 6): each preset's, and,
+ * under `custom`, the names the document's own provider list holds.
+ */
+export interface ProviderSets {
+  readonly presetPath: string;
+  readonly defaultPreset: string;
+  readonly customPath: string;
+  readonly byPreset: Readonly<Record<string, readonly string[]>>;
+}
+
+const dottedPointer = (dotted: string): string => `/${dotted.split(".").join("/")}`;
+
+/** The deployment preset `doc` names, or the default one. */
+export function presetIn(sets: ProviderSets, doc: unknown): string {
+  const raw = getPointer(doc, dottedPointer(sets.presetPath));
+  return typeof raw === "string" && raw !== "" ? raw : sets.defaultPreset;
+}
+
+/** The provider names `doc` deploys, home provider first. */
+export function providersIn(sets: ProviderSets, doc: unknown): string[] {
+  const ptr = dottedPointer;
+  const preset = presetIn(sets, doc);
+  if (preset !== "custom") return [...(sets.byPreset[preset] ?? [])];
+  const list = getPointer(doc, ptr(sets.customPath));
+  return Array.isArray(list)
+    ? list.map((p) => (p !== null && typeof p === "object" ? (p as Record<string, unknown>).name : undefined)).filter((n): n is string => typeof n === "string")
+    : [];
+}
+
+/** `provider-b/crlg` → provider-b and crlg; a bare `crlg` is the home provider's (the first). */
+export function splitComposed(value: unknown, separator: string, providers: readonly string[]): { provider: string; role: string } {
+  const text = typeof value === "string" ? value : "";
+  const cut = text.indexOf(separator);
+  return cut >= 0
+    ? { provider: text.slice(0, cut), role: text.slice(cut + separator.length) }
+    : { provider: providers[0] ?? "", role: text };
+}
+
+/** A provider and a role as the document writes them: bare for the home provider (the
+ * first), `provider/role` for any other (`crypto_config::failure_target`); `undefined` with no role. */
+export function joinComposed(provider: string, role: string, separator: string, providers: readonly string[]): string | undefined {
+  if (role === "") return undefined;
+  return provider === "" || provider === providers[0] ? role : `${provider}${separator}${role}`;
+}
+
+/** The `ProviderSets` a published node carries under `key`, or `undefined`. */
+export function providerSetsOf(node: unknown): ProviderSets | undefined {
+  if (node === null || typeof node !== "object") return undefined;
+  const o = node as Record<string, unknown>;
+  const by = o.by_preset;
+  if (typeof o.preset_path !== "string" || typeof o.custom_path !== "string" || by === null || typeof by !== "object") return undefined;
+  const byPreset: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(by as Record<string, unknown>)) {
+    if (Array.isArray(v)) byPreset[k] = v.filter((x): x is string => typeof x === "string");
+  }
+  return {
+    presetPath: o.preset_path,
+    defaultPreset: typeof o.default_preset === "string" ? o.default_preset : "",
+    customPath: o.custom_path,
+    byPreset,
+  };
+}
+
 /** When a field matters (`x-relevant-when`): the field at `path` holds one of `in`. */
 export interface RelevantWhen {
   readonly path: string;
@@ -63,6 +127,10 @@ export interface ItemField {
   readonly keyChoices?: readonly Choice[];
   readonly keyOpen?: boolean;
   readonly valueFields?: readonly ItemField[];
+  /** A `<provider><separator><role>` value (`x-options-compose`): a provider menu beside the role menu. */
+  readonly compose?: { readonly separator: string; readonly providers: ProviderSets };
+  /** A provider name, offered from the document's preset (`x-options-by-preset`). */
+  readonly providerNames?: ProviderSets;
 }
 
 /** A widget in the scenario form. */
@@ -110,6 +178,15 @@ export function subgroupOf(row: Record<string, unknown>): Subgroup | undefined {
   if (typeof o.id !== "string" || typeof o.label !== "string") return undefined;
   const blurb = row["x-subgroup-blurb"];
   return { id: o.id, label: o.label, order: typeof o.order === "number" ? o.order : 99, ...(typeof blurb === "string" ? { blurb } : {}) };
+}
+
+/** The `x-options-compose` of a published node, or `undefined`. */
+export function composeOf(row: Record<string, unknown>): ItemField["compose"] {
+  const c = row["x-options-compose"];
+  if (c === null || typeof c !== "object") return undefined;
+  const o = c as Record<string, unknown>;
+  const providers = providerSetsOf(o.providers);
+  return providers && typeof o.separator === "string" ? { separator: o.separator, providers } : undefined;
 }
 
 /** The `x-relevant-when` of a published node, or `undefined`. */
@@ -500,6 +577,8 @@ export function fieldsFromPublished(
       ...(typeof row.maximum === "number" ? { max: row.maximum } : {}),
       ...(typeof row["x-step"] === "number" ? { step: row["x-step"] } : {}),
       ...(choices ? { choices, choicesOpen: row["x-options-open"] === true } : {}),
+      ...(composeOf(row) ? { compose: composeOf(row) } : {}),
+      ...(providerSetsOf(row["x-options-by-preset"]) ? { providerNames: providerSetsOf(row["x-options-by-preset"]) } : {}),
     };
   };
   /** The map at `mapPointer` as a field, when the engine publishes its keys (`x-key-options`). */
