@@ -958,29 +958,44 @@ export function clockText(s: number): string {
   return h === 0 ? days(d) : h === 24 ? days(d + 1) : `${days(d)} ${h} h`;
 }
 
+/** Where a chart of `s` should look, and how sparse the series is over the run. */
+export interface DataView {
+  readonly from: number;
+  readonly to: number;
+  /** The windows that reported cover under a quarter of the run: on the run's axis the line is a sliver. */
+  readonly zoomed: boolean;
+  /** How many of the observed windows fall inside `from`–`to`, and how many there are. */
+  readonly inside: number;
+  readonly windows: number;
+}
+
 /**
- * The x extent a small chart of `s` should use. Over the whole run (`0` to `runEndS`) unless the
- * windows that reported span under a quarter of it: a fast-forwarded run reports only while its
- * radio runs (say the first ten minutes of five days), and on the run's axis that line is a sliver
- * at the left edge. Then the extent is the reporting windows' own, padded a little, and `zoomed`
- * says so, so the axis can tell the reader.
+ * The x extent a chart of `s` should open on. Over the whole run (`0` to `runEndS`) unless the
+ * windows that reported cover under a quarter of it: a fast-forwarded run reports only while its
+ * radio runs (the first minutes of five days, then a few windows days apart), and on the run's
+ * axis that line is a sliver at the left edge. Then the extent is the shortest stretch that holds
+ * nine windows in ten, padded a little; `zoomed` says so and `inside` how many it holds, so the
+ * axis can tell the reader. Coverage is the windows' count times their usual spacing.
  */
-export function dataView(s: Series, runEndS: number): { from: number; to: number; zoomed: boolean } {
-  let first = Number.NaN;
-  let last = Number.NaN;
-  let n = 0;
-  for (let i = 0; i < s.t.length; i++) {
-    if (Number.isNaN(s.v[i])) continue;
-    if (n === 0) first = s.t[i];
-    last = s.t[i];
-    n++;
-  }
-  const end = Math.max(runEndS, Number.isFinite(last) ? last : 0);
-  if (n < 2 || end <= 0) return { from: 0, to: end, zoomed: false };
-  const span = last - first;
-  if (span >= end * 0.25) return { from: 0, to: end, zoomed: false };
-  const pad = Math.max(span * 0.03, 1e-3);
-  return { from: Math.max(0, first - pad), to: last + pad, zoomed: true };
+export function dataView(s: Series, runEndS: number): DataView {
+  const t: number[] = [];
+  for (let i = 0; i < s.t.length; i++) if (!Number.isNaN(s.v[i])) t.push(s.t[i]);
+  const n = t.length;
+  const last = n > 0 ? t[n - 1]! : 0;
+  const end = Math.max(runEndS, last);
+  const whole: DataView = { from: 0, to: end, zoomed: false, inside: n, windows: n };
+  if (n < 2 || end <= 0) return whole;
+  const gaps = t.slice(1).map((x, i) => x - t[i]!).sort((a, b) => a - b);
+  const step = gaps[Math.floor(gaps.length / 2)]!;
+  if (n * step >= end * 0.25) return whole;
+  const k = Math.max(2, Math.ceil(n * 0.9));
+  let best = 0;
+  for (let i = 1; i + k - 1 < n; i++) if (t[i + k - 1]! - t[i]! < t[best + k - 1]! - t[best]!) best = i;
+  const lo = t[best]!;
+  const hi = t[best + k - 1]!;
+  if (hi - lo >= end * 0.25) return whole;
+  const pad = Math.max((hi - lo) * 0.03, step, 1e-3);
+  return { from: Math.max(0, lo - pad), to: Math.min(end, hi + pad), zoomed: true, inside: k, windows: n };
 }
 
 /** Seconds as a reader counts them: `850 ms`, `42 s`, `6.5 min`, `24 h`, `2.5 days`. */

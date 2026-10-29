@@ -107,8 +107,10 @@ describe("the summary's pure half", () => {
       threats: { attackers: [{ fraction: 0.05 }] },
     };
     expect(scenarioLine(scenario, { tNs: 300e9, tEndNs: 300e9, actors: 113, nodes: 121 }, null)).toBe(
-      "manhattan-5min: 300 s simulated, 113 road users at the end, DSRC (IEEE 802.11p), US SCMS credentials, 5 % attackers.",
+      "manhattan-5min: 5 min simulated, 113 road users at the end, DSRC (IEEE 802.11p), US SCMS credentials, 5 % attackers.",
     );
+    // A long run part-way through reads in days and hours, not "357024 of 433200 s".
+    expect(scenarioLine(null, { tNs: 357_024e9, tEndNs: 433_200e9, actors: 0, nodes: 0 }, "long")).toBe("long: 4 days 3 h of 5 days simulated.");
     expect(scenarioLine(null, { tNs: 0, tEndNs: 0, actors: 0, nodes: 0 }, "fixture")).toBe("fixture.");
     expect(attackerShare({ threats: { attackers: [{ fraction: 0.7 }, { fraction: 0.6 }] } })).toBe(1);
   });

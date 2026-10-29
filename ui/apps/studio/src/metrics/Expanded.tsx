@@ -22,7 +22,7 @@ import { closePanel } from "../shell/route.js";
 import { useStudio } from "../state/store.js";
 import { BreakdownSection, type Range } from "./Breakdown.js";
 import { Brush, MainChart, type ChartLine } from "./Chart.js";
-import { classify, judge, judgedLabel, judgedSeries, verdictParts, type HealthLevel } from "./health.js";
+import { classify, isCumulative, judge, judgedLabel, judgedSeries, verdictParts, type HealthLevel } from "./health.js";
 import { BandTable, HealthChip } from "./HealthBadge.js";
 import { slotColour } from "./tokens.js";
 import { sideBAvailable } from "./data.js";
@@ -340,7 +340,7 @@ export function Expanded({
                 aria-pressed={dataFirst}
                 onClick={resetRange}
                 data-testid="metric-range-data"
-                title={`This metric reported only between ${clockText(heroView.from)} and ${clockText(heroView.to)} of the ${clockText(extent)} run`}
+                title={`${heroView.inside} of this metric's ${heroView.windows} reporting windows fall between ${clockText(heroView.from)} and ${clockText(heroView.to)} of the ${clockText(extent)} run; Whole run shows them all`}
               >
                 Windows with data
               </button>
@@ -362,7 +362,7 @@ export function Expanded({
           </span>
           <span className="mx-range-text" data-testid="metric-range-text" title="Drag across the chart or the strip under it to zoom; double-click the chart for the whole run.">
             {formatNumber(from)}–{formatNumber(to)} s of {formatNumber(extent)} s{following && run.state === "running" ? ", following the run" : ""}
-            {dataFirst ? " (the windows that reported)" : ""}
+            {dataFirst ? `, where ${heroView.inside} of its ${heroView.windows} windows are` : ""}
           </span>
         </div>
       </div>
@@ -458,7 +458,7 @@ function Headline({
   const band = f.health;
   const latest = latestOf(series);
   const level: HealthLevel | null = band && judged ? classify(band, latest) : null;
-  const j = useMemo(() => (band && judged ? judge(f.base, f.unit, band, series, f.label) : null), [band, judged, f.base, f.unit, f.label, series]);
+  const j = useMemo(() => (band && judged ? judge(f.base, f.unit, band, series, f.label, isCumulative(f.definition)) : null), [band, judged, f.base, f.unit, f.label, f.definition, series]);
   const stat = band && judged ? judgedLabel(band) : seriesName === f.base ? "" : seriesLabel(f, seriesName);
   const whole = useMemo(() => (level === null ? rangeStats(series, 0, Math.max(extent, lastT(series))) : null), [level, series, extent]);
   let parts: string[] = [];

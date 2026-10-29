@@ -5,7 +5,7 @@
  */
 
 import type { BackendSnapshot } from "../lib/backend.js";
-import { formatNumber, glanceNumber, readable, type GroupRow, type Series } from "./model.js";
+import { clockText, formatNumber, glanceNumber, readable, type GroupRow, type Series } from "./model.js";
 
 // ------------------------------------------------------------------------------------------------
 // The scenario in one line
@@ -67,7 +67,7 @@ export function scenarioLine(
   const parts: string[] = [];
   const shownS = run.tNs / 1e9;
   const endS = run.tEndNs / 1e9;
-  if (shownS > 0) parts.push(endS > 0 && Math.abs(endS - shownS) > 0.5 ? `${round(shownS)} of ${round(endS)} s simulated` : `${round(shownS)} s simulated`);
+  if (shownS > 0) parts.push(endS > 0 && Math.abs(endS - shownS) > 0.5 ? `${clockText(shownS)} of ${clockText(endS)} simulated` : `${clockText(shownS)} simulated`);
   if (run.actors > 0) parts.push(`${run.actors.toLocaleString("en-US")} road users at the end`);
   const rat = str(get(scenario, ["radio", "rat"]));
   if (rat !== null) parts.push(RAT_NAMES[rat] ?? rat);
@@ -87,9 +87,6 @@ export function scenarioPurpose(scenario: unknown): string | null {
   return m ? m[1] : flat;
 }
 
-function round(x: number): string {
-  return x >= 100 ? String(Math.round(x)) : String(Math.round(x * 10) / 10);
-}
 
 // ------------------------------------------------------------------------------------------------
 // The headline numbers
@@ -350,6 +347,8 @@ export interface CredentialRow {
  */
 export function credentialRows(c: {
   readonly revoked: number | null;
+  /** The CRL Generators' entries, added over providers (the crl_entries metric follows only the list published last). */
+  readonly crlEntries?: number | null;
   readonly crlVersions: number | null;
   readonly filed: number | null;
   readonly inShuffle: number | null;
@@ -357,6 +356,7 @@ export function credentialRows(c: {
 }): CredentialRow[] {
   const out: CredentialRow[] = [];
   if (c.revoked !== null) out.push({ id: "revoked", label: "Devices revoked (by the MA)", value: formatNumber(c.revoked) });
+  if (c.crlEntries !== undefined && c.crlEntries !== null) out.push({ id: "crl-entries", label: "Entries on the revocation lists (CRLs), all providers", value: formatNumber(c.crlEntries) });
   if (c.crlVersions !== null) out.push({ id: "crl-versions", label: "Revocation lists signed (CRL versions)", value: formatNumber(c.crlVersions) });
   if (c.filed !== null) out.push({ id: "filed", label: "Misbehaviour reports filed", value: formatNumber(c.filed) });
   const pending = (c.revoked ?? 0) === 0 && (c.inShuffle ?? 0) > 0;

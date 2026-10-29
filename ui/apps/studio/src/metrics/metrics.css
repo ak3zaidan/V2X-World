@@ -558,6 +558,10 @@
 .scms-tile-split { font-size: 10.5px; color: var(--text-faint); display: flex; flex-wrap: wrap; column-gap: 4px; }
 .scms-split-part { white-space: nowrap; }
 .scms-actions { display: inline-flex; flex-wrap: nowrap; gap: 8px; }
+
+/* The header's buttons keep their words on one line; the run line wraps instead. */
+.metrics-panel .fullpanel-head > button { white-space: nowrap; flex: none; }
+.metrics-panel .fullpanel-head [data-testid="metrics-run"] { min-width: 0; }
 .scms-spark { display: block; width: 100%; height: 22px; margin-top: 3px; }
 .scms-spark path { fill: none; stroke: var(--viz-1); stroke-width: 1.6; stroke-linejoin: round; }
 
@@ -573,7 +577,7 @@
 .scms-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .scms-step-num { font-size: 18px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; line-height: 1.2; }
 .scms-step-label { font-size: 11.5px; color: var(--text-dim); line-height: 1.25; }
-.scms-flow-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 34px; max-width: 128px; padding: 0 6px; text-align: center; }
+.scms-flow-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 34px; max-width: 112px; padding: 0 6px; text-align: center; }
 .scms-flow-line { font-size: 20px; line-height: 1; color: var(--text-dim); }
 .scms-flow-drop { font-size: 11px; line-height: 1.25; color: color-mix(in srgb, var(--warn) 55%, var(--text-dim)); margin-top: 2px; }
 

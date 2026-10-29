@@ -792,6 +792,11 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
   const shuffleS = firstOf(s, ["ra"], "shuffle_window_s");
   const sentTotal = cell || viaRsu ? (cell?.total ?? 0) + (viaRsu?.total ?? 0) : null;
   const notSent = filed !== null && sentTotal !== null ? Math.max(0, filed.total - sentTotal) : 0;
+  // Downstream of the upload, the RA and the MA hold more than the vehicles count as sent (the MA
+  // also receives reports another provider's MA shares): then the filed-to-sent gap is not reports
+  // left behind, and saying "N still on the vehicles" would be wrong.
+  const downstream = (shuffle?.total ?? 0) + (atMa?.total ?? 0);
+  const gapIsReal = sentTotal !== null && downstream <= sentTotal;
   const funnel: FunnelStep[] = present([
     filed && { id: "filed", label: "Filed by vehicles", value: filed.total, hint: "Misbehaviour reports (MBRs) the vehicles' detectors wrote." },
     sentTotal !== null
@@ -799,10 +804,14 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
           id: "sent",
           label: "Uploaded to the RA",
           value: sentTotal,
-          hint: `${formatNumber(cell?.total ?? 0)} over cellular, ${formatNumber(viaRsu?.total ?? 0)} relayed by roadside units${waiting ? `; ${formatNumber(waiting.total)} waiting for coverage` : ""}.`,
-          ...(notSent > 0
+          hint: `${formatNumber(cell?.total ?? 0)} over cellular, ${formatNumber(viaRsu?.total ?? 0)} relayed by roadside units${waiting ? `; ${formatNumber(waiting.total)} waiting for coverage` : ""}.${
+            notSent > 0 && !gapIsReal
+              ? ` The RA and the MA hold ${formatNumber(downstream)} reports, more than this counts as sent (the MA also receives reports other providers share), so the ${formatNumber(notSent)} between filed and sent are not reports left behind; the engine does not break the difference down.`
+              : ""
+          }`,
+          ...(notSent > 0 && gapIsReal
             ? {
-                drop: `${formatNumber(notSent)} still on the vehicles${waiting && waiting.total > 0 ? ` (${formatNumber(waiting.total)} wait for coverage)` : ""}`,
+                drop: `${formatNumber(notSent)} not uploaded${waiting && waiting.total > 0 ? ` (${formatNumber(waiting.total)} wait for coverage)` : ""}`,
               }
             : {}),
         }
@@ -1043,7 +1052,7 @@ function costSection(m: MetricReader): ScmsSection {
   const wait = m.latest("verify_wait.p95");
   const parts: string[] = [];
   if (over !== null) parts.push(`security takes ${words(over, "ratio")} of the bytes on air`);
-  if (wait !== null) parts.push(`95 % of messages wait under ${words(wait, "ms")} to be verified`);
+  if (wait !== null) parts.push(wait <= 0 ? "messages do not queue to be verified (95th-percentile wait 0 ms)" : `95 % of messages wait under ${words(wait, "ms")} to be verified`);
   const failed = rows.filter((r) => !BY_DESIGN.has(r.key)).reduce((a, r) => a + (r.value as number), 0);
   const designed = rows.filter((r) => BY_DESIGN.has(r.key)).reduce((a, r) => a + (r.value as number), 0);
   if (rows.length > 0)
@@ -1106,7 +1115,7 @@ function backendSection(m: MetricReader, s: BackendSnapshot | null, tNs: number,
       value: l.utilisation,
       display: `${busyPct(l.utilisation)} %`,
       level: levelOf(l.utilisation),
-      hint: `${formatNumber(served.get(l.id) ?? 0)} requests served${l.meanWaitMs !== null ? `, ${glanceNumber(l.meanWaitMs)} ms mean wait` : ""}${l.depth > 0 ? `, ${formatNumber(l.depth)} waiting now` : ""}.`,
+      hint: `${formatNumber(served.get(l.id) ?? 0)} requests served${l.meanWaitMs !== null ? `, ${words(l.meanWaitMs, "ms")} mean wait` : ""}${l.depth > 0 ? `, ${formatNumber(l.depth)} waiting now` : ""}.`,
     })),
   };
   let messages = 0;
@@ -1145,7 +1154,7 @@ function backendSection(m: MetricReader, s: BackendSnapshot | null, tNs: number,
       title: "Busiest authority",
       value: busyPct(top.utilisation),
       unit: "% busy",
-      meaning: `${top.name}${top.meanWaitMs !== null ? `; a request waits ${glanceNumber(top.meanWaitMs)} ms on average` : ""}.`,
+      meaning: `${top.name}${top.meanWaitMs !== null ? `; a request waits ${words(top.meanWaitMs, "ms")} on average` : ""}.`,
       level,
       cue:
         level === "healthy"

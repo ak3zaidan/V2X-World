@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { snapshotOf } from "../src/lib/backend.js";
 import type { HealthBand } from "../src/metrics/health.js";
-import { expectedBand, whenText, withExpectations, type Judgement } from "../src/metrics/health.js";
+import { expectedBand, isCumulative, judge, whenText, withExpectations, type Judgement } from "../src/metrics/health.js";
 import { clockText, dataView, display, familiesOf, type GroupRow, type SeriesDef } from "../src/metrics/model.js";
 import { briefSentences, credentialRows } from "../src/metrics/summaryModel.js";
 import {
@@ -192,9 +192,15 @@ describe("the five questions", () => {
     ]);
     expect(f[1]!.hint).toContain("74 over cellular, 76 relayed by roadside units; 2 waiting for coverage");
     // The reports between two steps are accounted for on the arrow, not left for the reader to subtract.
-    expect(f[1]!.drop).toBe("45 still on the vehicles (2 wait for coverage)");
+    expect(f[1]!.drop).toBe("45 not uploaded (2 wait for coverage)");
     expect(f[3]!.drop).toBe("150 wait in the shuffle");
     expect(f[0]!.drop).toBeUndefined();
+    // When the RA and the MA hold more than the vehicles count as sent (shared reports), the gap is
+    // not reports left behind: no arrow claims it, and the step's hint says why.
+    const shared = { ...snap, entities: snap.entities.map((e) => (e.id === "ma" ? { ...e, state: { ...e.state, reports_received: 300 } } : e)) };
+    const g = scmsOverview(shared, m, { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "misbehaviour")!.funnel!;
+    expect(g[1]!.drop).toBeUndefined();
+    expect(g[1]!.hint).toContain("not reports left behind");
   });
 
   it("calls a low recall pending, not a problem, while the reports wait in the RA's shuffle", () => {
@@ -417,8 +423,15 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
     expect(v.zoomed).toBe(true);
     expect(v.from).toBeLessThan(300);
     expect(v.to).toBeGreaterThan(600);
-    expect(v.to).toBeLessThan(700);
-    expect(dataView(s, 800)).toEqual({ from: 0, to: 800, zoomed: false });
+    expect(v.to).toBeLessThanOrEqual(700);
+    expect(dataView(s, 800)).toMatchObject({ from: 0, to: 800, zoomed: false });
+    // A few windows days later do not stretch the view back over the whole run.
+    const t = [...Array.from({ length: 40 }, (_, i) => 300 + i * 10), 200_000, 300_000];
+    const late = dataView({ t: new Float64Array(t), v: new Float64Array(t.length).fill(1) }, 433_200);
+    expect(late.zoomed).toBe(true);
+    expect(late.to).toBeLessThan(1000);
+    expect(late.inside).toBe(38);
+    expect(late.windows).toBe(42);
   });
 
   it("names the metrics the overview shows, so their cards below do not say \"no data\"", () => {
@@ -442,5 +455,17 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
       bottleneck: null,
     });
     expect(brief[1]).toBe("Vehicles filed 452 misbehaviour reports and no device was revoked; 320 reports wait in the RA's shuffle, so detection is not judged yet.");
+  });
+
+  it("judges a cumulative metric on its whole-run figure, not on a mean of its windows", () => {
+    const band: HealthBand = { ...poolBand, better: "lower", caution: 0.2, unhealthy: 0.5 };
+    const s = { t: new Float64Array([0, 60, 120, 180]), v: new Float64Array([0.94, 0.7, 0.4, 0.238]) };
+    expect(isCumulative("The share of pseudonym changes a global passive observer bridges correctly, cumulative over the run.")).toBe(true);
+    expect(isCumulative("Mean end-to-end latency over the window.")).toBe(false);
+    const j = judge("linkability", "ratio", band, s, "Linkability", true)!;
+    expect(j.mean).toBe(0.238);
+    expect(j.level).toBe("caution");
+    expect(j.cumulative).toBe(true);
+    expect(judge("linkability", "ratio", band, s, "Linkability")!.level).toBe("unhealthy");
   });
 });

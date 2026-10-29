@@ -163,10 +163,12 @@ export interface Judgement {
   readonly band: HealthBand;
   /** The judged series' name. */
   readonly series: string;
-  /** The mean of the windows that reported a value. */
+  /** The mean of the windows that reported a value; for a cumulative metric, its last window (the whole run's figure). */
   readonly mean: number;
   /** The level of that mean. */
   readonly level: HealthLevel;
+  /** The metric accumulates over the run (`linkability`): its last window is the run's value, and a mean of its windows would mean nothing. */
+  readonly cumulative: boolean;
   /** The worst window's value and its start, in simulated seconds. */
   readonly worst: number;
   readonly worstAtS: number;
@@ -201,7 +203,8 @@ export function worseLevel(a: HealthLevel, b: HealthLevel): HealthLevel {
  * run spent unhealthy, then caution; a run whose mean is healthy but had unhealthy windows still
  * ranks above a fully healthy one. `null` when the series has no observed window.
  */
-export function judge(base: string, unit: string, band: HealthBand, series: Series, label = labelOf(base)): Judgement | null {
+export function judge(base: string, unit: string, band: HealthBand, series: Series, label = labelOf(base), cumulative = false): Judgement | null {
+  let last = Number.NaN;
   let n = 0;
   let sum = 0;
   let caution = 0;
@@ -218,6 +221,7 @@ export function judge(base: string, unit: string, band: HealthBand, series: Seri
     if (!Number.isFinite(v)) continue;
     if (n === 0) firstS = series.t[i];
     lastS = series.t[i];
+    last = v;
     n++;
     sum += v;
     const lv = classify(band, v);
@@ -233,7 +237,7 @@ export function judge(base: string, unit: string, band: HealthBand, series: Seri
     }
   }
   if (n === 0) return null;
-  const mean = sum / n;
+  const mean = cumulative ? last : sum / n;
   const level = classify(band, mean) ?? "healthy";
   const worstLevel = classify(band, worst) ?? "healthy";
   const cautionShare = caution / n;
@@ -247,6 +251,7 @@ export function judge(base: string, unit: string, band: HealthBand, series: Seri
     series: judgedSeries(base, band),
     mean,
     level,
+    cumulative,
     worst,
     worstAtS: worstAt,
     worstLevel,
@@ -259,6 +264,11 @@ export function judge(base: string, unit: string, band: HealthBand, series: Seri
     outToS: outTo,
     severity,
   };
+}
+
+/** Whether a metric's definition says it accumulates over the run, so its newest window is the run's value. */
+export function isCumulative(definition: string): boolean {
+  return /cumulative over the run|over the run so far|since the run (began|started)/i.test(definition);
 }
 
 /** The judgements outside the healthy band (by mean or by a window), worst first; ties by name. */

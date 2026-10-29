@@ -27,10 +27,10 @@ import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
 import { AgentSlot } from "./AgentSlot.js";
 import { fetchCatalogue, fetchGroups, fetchSeries, metricPeriodNs } from "./data.js";
-import { classify, judge, judgedSeries, LEVEL_LABEL, noteOf, outOfBand, whenText, withExpectations, worseLevel, type HealthLevel, type Judgement } from "./health.js";
+import { classify, isCumulative, judge, judgedSeries, LEVEL_LABEL, noteOf, outOfBand, whenText, withExpectations, worseLevel, type HealthLevel, type Judgement } from "./health.js";
 import { BandTable, HealthDot, HealthLine } from "./HealthBadge.js";
 import { useRunKey } from "./hooks.js";
-import { chooseBinNs, displayText, familiesOf, formatNumber, worstFirst, type MetricFamily } from "./model.js";
+import { chooseBinNs, clockText, displayText, familiesOf, formatNumber, worstFirst, type MetricFamily } from "./model.js";
 import { countOf, firstProvider, POOLED } from "./scmsModel.js";
 
 /** Metrics the credential overview pools over the run (no per-window value, but a run total). */
@@ -95,7 +95,7 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
   const unmeasured: MetricFamily[] = [];
   for (const f of banded) {
     const s = series.get(judgedSeries(f.base, f.health!));
-    const j = s ? judge(f.base, f.unit, f.health!, s, f.label) : null;
+    const j = s ? judge(f.base, f.unit, f.health!, s, f.label, isCumulative(f.definition)) : null;
     if (j === null) unmeasured.push(f);
     else judgements.push(j);
   }
@@ -192,6 +192,7 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
     brief,
     credentialRows: credentialRows({
       revoked: count(["ma"], ["revocations"]),
+      crlEntries: count(["crlg"], ["entries"]) ?? count(["ca"], ["ca_crl_entries"]),
       crlVersions: count(["crlg"], ["versions_signed"]) ?? count(["ca"], ["ca_crl_sequence"]),
       filed: count(["ee"], ["reports_filed"]),
       inShuffle: count(["ra"], ["reports_in_shuffle"]),
@@ -299,7 +300,7 @@ function SummaryDialog(): React.JSX.Element {
       <div ref={host} className="rsum" role="dialog" aria-modal="true" aria-labelledby="rsum-title" tabIndex={-1} data-testid="run-summary">
         <header className="rsum-head">
           <h2 id="rsum-title">Run summary</h2>
-          <span className={`rsum-state ${finished ? "done" : ""}`}>{finished ? "Finished" : `Run so far · ${formatNumber(tNs / 1e9)} s`}</span>
+          <span className={`rsum-state ${finished ? "done" : ""}`}>{finished ? "Finished" : `Run so far · ${clockText(tNs / 1e9)}`}</span>
           <span className="grow" />
           <button type="button" className="small" onClick={refresh} disabled={load.status === "loading"} data-testid="run-summary-refresh">
             {load.status === "loading" ? "Reading…" : "Refresh"}
@@ -369,7 +370,7 @@ function SummaryDialog(): React.JSX.Element {
                   {HEADLINES.map((g) => {
                     const extra = g.id === "credentials" ? data.credentialRows : [];
                     // Detection reads from the authorities' rule (pending while reports wait in the shuffle), never twice.
-                    const items = g.items.filter((i) => (data.headline.get(i.series) ?? null) !== null && !(i.series === "det_recall" && extra.some((r) => r.id === "detection")));
+                    const items = g.items.filter((i) => (data.headline.get(i.series) ?? null) !== null && !(i.series === "det_recall" && extra.some((r) => r.id === "detection")) && !(i.series === "crl_entries" && extra.some((r) => r.id === "crl-entries")));
                     return (
                       <div key={g.id} className="rsum-tile" data-testid={`run-summary-tile-${g.id}`}>
                         <h4>{g.title}</h4>
@@ -433,7 +434,11 @@ function SummaryDialog(): React.JSX.Element {
                           </div>
                           <HealthLine band={j.band} value={j.level === "healthy" ? j.worst : j.mean} unit={j.unit} />
                           <p className="dim rsum-when">
-                            {j.level === "healthy" ? "Run mean healthy; " : `Run mean ${displayText(j.base, j.mean, j.unit)}; `}
+                            {j.cumulative
+                              ? `Over the whole run ${displayText(j.base, j.mean, j.unit)}${j.level === "healthy" ? ", healthy" : ""}; `
+                              : j.level === "healthy"
+                                ? "Run mean healthy; "
+                                : `Run mean ${displayText(j.base, j.mean, j.unit)}; `}
                             {whenText(j, data.atS)}.
                             {nodes && nodes.length > 0 ? ` Worst nodes: ${nodes.map((n) => `${n.key} (${displayText(j.base, n.value, j.unit)})`).join(", ")}.` : ""}
                           </p>
