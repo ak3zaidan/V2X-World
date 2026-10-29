@@ -34,6 +34,10 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
   return (
     <div className="pkir-split" data-testid="pki-crls">
       <div className="pkir-table-wrap">
+        <p className="pkir-pad pki-lead">
+          A <b>certificate revocation list (CRL)</b> is how a revocation reaches the vehicles: each provider's CRL Generator signs a new list on a
+          schedule, and every list must be replaced before its <b>next due</b> time. Click a row for its versions, and a version for its entries.
+        </p>
         <table className="pkir-table" data-testid="pki-crl-table">
           <thead>
             <tr>
@@ -103,7 +107,11 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
         {crls ? <Providers providers={crls.providers} /> : null}
         {crls?.ctl ? <Ctl ctl={crls.ctl} /> : null}
       </div>
-      {chosen ? <CrlCard id8={chosen} view={view} head={crls?.crls.find((c) => c.id8 === chosen) ?? null} /> : <div className="pkir-card dim">Choose a list to see its entries.</div>}
+      {chosen ? (
+        <CrlCard id8={chosen} view={view} head={crls?.crls.find((c) => c.id8 === chosen) ?? null} />
+      ) : (
+        <div className="pkir-card dim">Choose a list to see what it revokes: each entry, and in ground truth which vehicles' certificates it matches.</div>
+      )}
     </div>
   );
 }
@@ -138,10 +146,23 @@ function CrlCard({ id8, view, head }: { readonly id8: string; readonly view: str
         <span>{v.hash.length} hash entries</span>
         {head ? <span>SLA {slaText(head.sla_now_s)}</span> : null}
       </div>
+      <p className="pki-lead" data-testid="pki-crl-says">
+        {v.linkage.length + v.hash.length === 0
+          ? "An empty list: it revokes nothing, and says so with a signature, so a device knows it is up to date."
+          : `${v.linkage.length > 0 ? `${v.linkage.length} linkage entr${v.linkage.length === 1 ? "y" : "ies"}: each lets a receiver compute every pseudonym certificate of one vehicle from week iRev on, without naming the vehicle. ` : ""}${v.hash.length > 0 ? `${v.hash.length} hash entr${v.hash.length === 1 ? "y" : "ies"}: each names one certificate by its hash. ` : ""}`}
+      </p>
       {v.linkage.length > 0 ? (
         <table className="pkir-table compact" data-testid="pki-crl-entries">
           <thead>
-            <tr><th>la1Id</th><th>la2Id</th><th>iRev</th><th>iMax</th><th>jMax</th><th>seeds at iRev</th>{gt ? <th>Revokes (ground truth)</th> : null}</tr>
+            <tr>
+              <th title="Linkage Authority 1's id">la1Id</th>
+              <th title="Linkage Authority 2's id">la2Id</th>
+              <th title="The week revocation starts from">iRev</th>
+              <th title="The last week the entry needs to cover">iMax</th>
+              <th title="Certificates per week">jMax</th>
+              <th title="The two Linkage Authorities' seeds at iRev: from them a receiver derives every linkage value of the vehicle">seeds at iRev</th>
+              {gt ? <th>Revokes (ground truth)</th> : null}
+            </tr>
           </thead>
           <tbody>
             {v.linkage.map((e, k) => (
@@ -173,7 +194,7 @@ function CrlCard({ id8, view, head }: { readonly id8: string; readonly view: str
       ) : null}
       {!gt ? <p className="faint">Which vehicles these entries revoke is ground truth; choose the ground-truth view to see it.</p> : null}
       <details>
-        <summary>CrlContents (JER)</summary>
+        <summary>The raw list (CrlContents, decoded JER)</summary>
         <pre className="pkir-pre">{JSON.stringify(v.contents, null, 1)}</pre>
       </details>
     </div>

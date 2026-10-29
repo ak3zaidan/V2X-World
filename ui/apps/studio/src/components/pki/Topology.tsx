@@ -12,7 +12,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { GROUND_TRUTH, formatSpan, type PkiComponent, type TrustAnswer } from "../../lib/pki.js";
+import { GROUND_TRUTH, formatSpan, roleLabel, type PkiComponent, type TrustAnswer } from "../../lib/pki.js";
 import {
   FLOW_INFO,
   flowInfo,
@@ -140,6 +140,7 @@ export function Topology({
           data-status="not-deployed"
         >
           {roleInfo(n.role).name}
+          <small className="acr">not deployed</small>
         </div>
       );
     const c = n.component as PkiComponent;
@@ -278,6 +279,7 @@ function NodeButton({
       <span className="r">
         {c.role === "elector" ? `${info.name} ${c.instance + 1}` : info.name}
         {c.instance > 0 && c.role !== "elector" ? <sub>{c.instance + 1}</sub> : null}
+        {c.role !== "elector" && c.role !== "manager" && roleLabel(c.role) !== info.name ? <small className="acr">{roleLabel(c.role)}</small> : null}
       </span>
       {c.queue && c.queue.depth > 0 ? <span className="pki-q">{c.queue.depth}</span> : null}
     </button>

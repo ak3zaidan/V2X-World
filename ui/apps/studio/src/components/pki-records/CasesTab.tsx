@@ -25,7 +25,7 @@ import {
   type CaseStep,
   type CaseView,
 } from "../../lib/pkiRecords.js";
-import { caseSteps, STAGE_HELP } from "../../lib/pkiCases.js";
+import { caseHeadline, caseSteps, STAGE_HELP, STAGE_STORY } from "../../lib/pkiCases.js";
 import { usePki, usePkiView } from "./state.js";
 import { Locked } from "./VehiclesTab.js";
 
@@ -48,6 +48,10 @@ export function CasesTab({ view }: { readonly view: string | null }): React.JSX.
             As {entityLabel(view)}: the steps it took part in{view.includes("/ma/") ? " and its own case table" : ""}; no reporter or accused is named.
           </p>
         ) : null}
+        <p className="pkir-pad pki-lead">
+          A <b>case</b> follows one misbehaving sender from the first report to the moment other vehicles refuse its messages: reported, decided, traced
+          without naming it, put on the revocation list, enforced.
+        </p>
         <p className="pkir-pad dim">
           {cases.length} case{cases.length === 1 ? "" : "s"} · {open} open
         </p>
@@ -85,6 +89,7 @@ function CaseRow({ c, selected, onSelect }: { readonly c: CaseView; readonly sel
   const col = boardColumn(c);
   const label = col === "refused" ? "Refused" : (BOARD_COLUMNS.find((b) => b.stage === col)?.label ?? "Seen in steps only");
   const enf = enforcement(c);
+  const head = caseHeadline(c);
   return (
     <li>
       <button
@@ -112,6 +117,7 @@ function CaseRow({ c, selected, onSelect }: { readonly c: CaseView; readonly sel
             `${c.steps.length} steps`
           )}
           {enf ? ` · installed by ${enf.installed}` : ""}
+          {head.toList !== null ? ` · on the list after ${secondsText(head.toList)}` : ""}
         </span>
       </button>
     </li>
@@ -136,6 +142,7 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
           <b className="mono">{secondsText(last - first)}</b>
         </p>
       ) : null}
+      <Story c={c} />
       {gt ? (
         <button type="button" className="pkir-link" onClick={() => set({ mapMode: "case" })} data-testid="pki-case-map">
           Show its reporters and accused on the map
@@ -169,10 +176,14 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
             <div className="pkir-step-marker" aria-hidden="true" />
             <div className="pkir-step-body">
               <div className="pkir-step-head">
-                <b title={STAGE_HELP[s.stage]?.term}>{s.label}</b>
+                <b title={STAGE_HELP[s.stage]?.term}>{STAGE_STORY[s.stage]?.title ?? s.label}</b>
+                <span className="faint pki-stage-term" title={STAGE_HELP[s.stage]?.term}>
+                  {s.label}
+                </span>
                 {s.reached && s.t !== null ? <span className="mono faint">{secondsText(s.t)}</span> : <span className="faint">not reached</span>}
                 {s.waitNs !== null && s.waitNs > 0 ? <span className="mono faint">waited {secondsText(s.waitNs)}</span> : null}
               </div>
+              {STAGE_STORY[s.stage] ? <div className="pki-stage-says">{STAGE_STORY[s.stage].says}</div> : null}
               {s.detail ? <div className="faint mono pkir-step-detail">{s.detail}</div> : null}
               {s.learned.length > 0 ? (
                 <ul className="pkir-learned" data-testid="pki-case-learned">
@@ -215,6 +226,17 @@ function CaseDetail({ c, gt }: { readonly c: CaseView; readonly gt: boolean }): 
 
 function StepMessages({ messages }: { readonly messages: readonly CaseStep[] }): React.JSX.Element {
   return (
+    <details className="pki-step-msgs">
+      <summary className="faint">
+        {messages.length} message{messages.length === 1 ? "" : "s"} between the authorities
+      </summary>
+      <StepMessageList messages={messages} />
+    </details>
+  );
+}
+
+function StepMessageList({ messages }: { readonly messages: readonly CaseStep[] }): React.JSX.Element {
+  return (
     <ul className="pkir-step-msgs">
       {messages.map((m) => (
         <li key={m.id} title={STEP_LEARNS[m.name] ?? m.name}>
@@ -226,3 +248,36 @@ function StepMessages({ messages }: { readonly messages: readonly CaseStep[] }):
   );
 }
 
+
+/**
+ * The case as four beats a reader takes in at once — reported, decided, on the list, refused —
+ * each with the time since the first report, and how many devices refuse the sender now.
+ */
+function Story({ c }: { readonly c: CaseView }): React.JSX.Element {
+  const h = caseHeadline(c);
+  const reached = new Set(c.stages.map((s) => s.stage));
+  const beats: { key: string; title: string; at: number | null; done: boolean; note?: string }[] = [
+    { key: "reports-in", title: "Reported", at: reached.has("reports-in") ? 0 : null, done: reached.has("reports-in") },
+    { key: "decision", title: h.refused ? "Not revoked" : "MA decided", at: h.toDecision, done: reached.has("decision") || h.refused },
+    { key: "crl-published", title: "On the list", at: h.toList, done: reached.has("crl-published") },
+    {
+      key: "enforced",
+      title: "Devices refuse it",
+      at: h.toEnforced,
+      done: reached.has("enforced"),
+      note: h.enforced ? `${h.enforced.installed} of ${h.enforced.of} vehicles` : undefined,
+    },
+  ];
+  return (
+    <ol className="pki-story" data-testid="pki-case-story" aria-label="The case in four steps">
+      {beats.map((b) => (
+        <li key={b.key} className={b.done ? "done" : "todo"} data-beat={b.key}>
+          <span className="pki-story-dot" aria-hidden="true" />
+          <b>{b.title}</b>
+          <span className="mono">{b.done && b.at !== null ? (b.at === 0 ? "t = 0" : `+${secondsText(b.at)}`) : "not yet"}</span>
+          {b.note ? <span className="faint">{b.note}</span> : null}
+        </li>
+      ))}
+    </ol>
+  );
+}

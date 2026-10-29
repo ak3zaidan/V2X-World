@@ -44,6 +44,44 @@ export const STAGE_HELP: Readonly<Record<string, { readonly term: string }>> = {
   enforced: { term: "Devices that installed the list drop the revoked device's messages" },
 };
 
+/**
+ * Each stage as a step of a story a reader follows without the acronyms: a short title and the
+ * one sentence of what happens there. The standard stage name stays beside it (`STAGE_HELP`).
+ */
+export const STAGE_STORY: Readonly<Record<string, { readonly title: string; readonly says: string }>> = {
+  "reports-in": { title: "Vehicles report it", says: "Receivers that saw implausible messages send signed misbehaviour reports to the Misbehaviour Authority (MA)." },
+  corroborated: { title: "Reports agree", says: "Enough independent reports point at the same pseudonym for the MA to act." },
+  decision: { title: "The MA decides to revoke", says: "An operator's review, or the automatic rule, decides the sender is misbehaving." },
+  "plv-lookup": {
+    title: "Certificate traced",
+    says: "The pseudonym CA (ACA) maps the certificate to its linkage chain and the RA blocks the enrolment certificate. No one learns who the vehicle is.",
+  },
+  "la-seeds": { title: "Linkage seeds released", says: "Each Linkage Authority releases its seed; together they cover all of the vehicle's certificates from that week on." },
+  "crl-published": { title: "On the revocation list", says: "The CRL Generator signs a new certificate revocation list (CRL) carrying the seeds. The list is public." },
+  enforced: { title: "Devices refuse it", says: "Vehicles that installed the list drop the revoked vehicle's messages." },
+  refused: { title: "Not revoked", says: "The MA decided the reports did not justify revocation." },
+};
+
+/**
+ * A case's headline numbers: time from the first report to the decision, to the list and to the
+ * first refusing device, ns, each null until reached; and how many devices refuse it.
+ */
+export function caseHeadline(c: CaseView): {
+  readonly toDecision: number | null;
+  readonly toList: number | null;
+  readonly toEnforced: number | null;
+  readonly enforced: { installed: number; of: number } | null;
+  readonly refused: boolean;
+} {
+  const times = new Map(stageTimes(c).map((s) => [s.stage, s.t]));
+  const t0 = times.get("reports-in") ?? (times.size > 0 ? Math.min(...times.values()) : null);
+  const since = (s: string): number | null => {
+    const t = times.get(s);
+    return t === undefined || t0 === null ? null : t - t0;
+  };
+  return { toDecision: since("decision"), toList: since("crl-published"), toEnforced: since("enforced"), enforced: enforcement(c), refused: times.has("refused") };
+}
+
 /** One stage of the diagram. */
 export interface CaseStepRow {
   readonly stage: string;

@@ -23,6 +23,7 @@ import { useCallback, useEffect, useState } from "react";
 import { JsonRpcError, RpcErrorCode } from "@vwp/protocol";
 
 import { GROUND_TRUTH, trustOf, viewOptions, type TrustAnswer } from "../../lib/pki.js";
+import { ctlRootIds, ownersOf } from "../../lib/pkiCert.js";
 import { asCrls, entityLabel, viewChoices } from "../../lib/pkiRecords.js";
 import { engine } from "../../state/engine.js";
 import { useStudio } from "../../state/store.js";
@@ -31,6 +32,7 @@ import { togglePanel } from "../../shell/route.js";
 import { BackendPanel } from "../BackendView.js";
 import { MapModePicker, RecordsBody } from "../pki-records/RecordsTabs.js";
 import { RECORDS_TABS, chooseTab, usePki, usePkiView, type PkiTab, type RecordsTab } from "../pki-records/state.js";
+import { CertDrawer } from "./CertificateCard.js";
 import { FlowsTab } from "./FlowsTab.js";
 import { HealthStrip } from "./HealthStrip.js";
 import { TrustDomain } from "./TrustDomain.js";
@@ -102,6 +104,13 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
     try {
       const answer = trustOf(await engine.request("inspect.trust", {}, { quiet: true, timeoutMs: 4000 }));
       setTrust(answer);
+      // Whose each authority certificate is, so any certificate card can name its chain.
+      if (answer) {
+        const owners = ownersOf(answer.state);
+        const roots = ctlRootIds(answer.state);
+        const was = usePkiView.getState();
+        if (JSON.stringify(owners) !== JSON.stringify(was.owners) || roots.join() !== was.ctlRoots.join()) usePkiView.getState().set({ owners, ctlRoots: roots });
+      }
       setUnsupported(false);
       setError(answer === null ? "The engine answered inspect.trust, but not with a trust domain." : null);
     } catch (err) {
@@ -117,6 +126,9 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
     const id = window.setInterval(() => void poll(), POLL_MS);
     return () => window.clearInterval(id);
   }, [poll, connection, unsupported]);
+
+  // A certificate opened over the panel does not outlive it.
+  useEffect(() => () => usePkiView.getState().set({ cert: null }), []);
 
   // A run with no PKI view: the CCMS keeps the single-provider Backend diagram.
   if (unsupported) return <BackendPanel close={close} />;
@@ -191,6 +203,7 @@ export function PkiPanel({ close }: { readonly close: () => void }): React.JSX.E
       ) : (
         <TrustDomain trust={trust} view={activeView} />
       )}
+      <CertDrawer />
     </div>
   );
 }

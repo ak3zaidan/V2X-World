@@ -34,7 +34,8 @@ import { engine } from "../state/engine.js";
 import { useStudio, type InspectorTab } from "../state/store.js";
 import { int, radioBreakdown, radioSentence, shortDigest, simClock } from "../lib/format.js";
 import { SPARKLINE_SERIES, hasData, hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
-import { hasPkiPool, linkText, pseudonymLine, untilText } from "../lib/security.js";
+import { hasPkiPool, linkText, pseudonymLine, signingStatus, untilText } from "../lib/security.js";
+import { CertBadge } from "./pki/CertStatus.js";
 import { openVehicle } from "./pki-records/state.js";
 import { openPanel } from "../shell/route.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
@@ -212,6 +213,7 @@ function Overview(): React.JSX.Element {
     security && ((security.outbox_reports ?? 0) > 0 || (security.reports_uploaded ?? 0) > 0)
       ? `${int(security.reports_uploaded ?? 0)} uploaded, ${int(security.outbox_reports ?? 0)} waiting`
       : null;
+  const signing = signingStatus(security, simTimeNs);
   const shownQueues = queues.filter((q) => (q.p50 ?? 0) > 0 || (q.p95 ?? 0) > 0 || q.drops.some((d) => d.value !== null && d.value > 0));
 
   return (
@@ -266,6 +268,18 @@ function Overview(): React.JSX.Element {
 
       <Section title="Security" testId="insp-security">
         {[
+          signing !== null ? (
+            <Fragment key="signing">
+              <dt>signing certificate</dt>
+              <dd>
+                <CertBadge
+                  status={signing}
+                  label={signing === "expired" && (security?.pool_valid === 0 || security?.pseudonym === null) ? "No valid certificate" : undefined}
+                  testId="inspector-cert-status"
+                />
+              </dd>
+            </Fragment>
+          ) : null,
           fact("certificates", pool, "inspector-pool", security?.pool_valid === 0 ? "err" : undefined),
           fact("this one expires", untilText(security?.cert_valid_until ?? null, simTimeNs)),
           fact("next top-up", topup, "inspector-topup"),

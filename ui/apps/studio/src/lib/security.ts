@@ -150,6 +150,24 @@ export function untilText(atNs: number | null | undefined, nowNs: number): strin
 }
 
 /**
+ * The state of the certificate the node signs with, in the PKI views' shared vocabulary
+ * (`lib/pkiCert.ts` `CertStatus`): revoked when it found itself on an installed CRL, expired when
+ * it holds none it can sign with or the one it holds has passed its end, expiring within the
+ * last minute of its window, valid otherwise; null with no security row.
+ */
+export function signingStatus(row: NodeSecurityRow | null, nowNs: number): "valid" | "expiring" | "expired" | "revoked" | null {
+  if (!row) return null;
+  if (row.self_revoked === true) return "revoked";
+  if (row.pseudonym === null || row.pool_valid === 0) return "expired";
+  const until = row.cert_valid_until;
+  if (typeof until === "number" && Number.isFinite(until)) {
+    if (until <= nowNs) return "expired";
+    if (until - nowNs < 60e9) return "expiring";
+  }
+  return "valid";
+}
+
+/**
  * Whether the PKI view has this node's certificate pool (WP-E3): the US SCMS publishes
  * `node.credentials` per vehicle; the European CCMS and a run with no credential system do not.
  */

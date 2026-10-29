@@ -325,3 +325,201 @@
 .pki-node .pki-dot { position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; }
 .pki-node .pki-lock { position: absolute; top: 3px; left: 3px; width: 8px; height: 8px; }
 .pki-node { padding: 0 4px; }
+
+/* ---------------------------------------------------------------------------------------------
+   Certificates in one visual language (components/pki/CertStatus.tsx, lib/pkiCert.ts): a shape
+   in the state's colour beside its label, so a state reads without colour. Untrusted is the
+   palette's reddish purple, apart from revoked's vermilion and told apart by its shield.
+   --------------------------------------------------------------------------------------------- */
+:root { --pki-untrusted: #cc79a7; }
+:root[data-theme="light"] { --pki-untrusted: #aa4488; }
+
+.pki-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; line-height: 1; }
+.pki-badge .pki-glyph { flex: none; }
+.pki-badge-label { color: inherit; }
+.pki-badge.compact { gap: 0; }
+.pki-status-legend { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; }
+.pki-status-legend .pki-badge { font-weight: 500; font-size: 11px; }
+.pki-glyph { display: inline-block; vertical-align: -1px; }
+
+/* The certificate card. */
+.pki-certcard { display: flex; flex-direction: column; gap: 8px; font-size: 12px; border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: var(--radius); padding: 10px 12px; background: var(--bg-panel); }
+.pki-certcard.st-valid { border-left-color: var(--ok); }
+.pki-certcard.st-expiring { border-left-color: var(--warn); }
+.pki-certcard.st-expired { border-left-color: var(--text-faint); }
+.pki-certcard.st-revoked { border-left-color: var(--err); }
+.pki-certcard.st-untrusted { border-left-color: var(--pki-untrusted); }
+.pki-certcard.st-not-yet-valid { border-left-color: var(--accent); }
+.pki-certcard-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pki-certcard-head h4 { margin: 0; font-size: 13.5px; font-weight: 600; }
+.pki-certcard-head .pki-badge { font-size: 12.5px; }
+.pki-certcard-id { margin: -2px 0 0; font-size: 12px; }
+.pki-certcard-about { margin: 0; line-height: 1.45; }
+.pki-certcard-why { margin: 0; font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
+.pki-certcard-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 4px 10px; align-items: start; }
+.pki-certcard-row > .k, .pki-certcard-facts dt { color: var(--text-dim); }
+.pki-certcard-facts { grid-template-columns: 84px minmax(0, 1fr); gap: 4px 10px; }
+.pki-perms { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.pki-validity { display: flex; flex-direction: column; gap: 3px; margin-bottom: 2px; }
+.pki-validity-bar { position: relative; height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--ok) 22%, var(--bg-raised)); overflow: visible; }
+.pki-validity.st-expired .pki-validity-bar, .pki-validity.st-revoked .pki-validity-bar, .pki-validity.st-untrusted .pki-validity-bar { background: color-mix(in srgb, var(--text-faint) 25%, var(--bg-raised)); }
+.pki-validity.st-not-yet-valid .pki-validity-bar { background: color-mix(in srgb, var(--accent) 22%, var(--bg-raised)); }
+.pki-validity-bar .used { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px 0 0 4px; background: color-mix(in srgb, var(--text-faint) 45%, transparent); }
+.pki-validity-bar .now { position: absolute; top: -3px; width: 2px; height: 14px; margin-left: -1px; background: var(--text); border-radius: 1px; }
+.pki-validity-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-faint); }
+.pki-chainlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.pki-chainlist li { position: relative; padding: 0 0 0 18px; }
+.pki-chainlist li:not(:last-child) { padding-bottom: 2px; }
+.pki-chainlist li:not(:last-child)::before { content: ""; position: absolute; left: 4px; top: 10px; bottom: -4px; border-left: 2px solid var(--border-strong); }
+.pki-chain-node { position: absolute; left: 0; top: 3px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--bg-panel); box-sizing: border-box; }
+.pki-chainlist li.leaf .pki-chain-node { border-color: var(--accent); background: var(--accent); }
+.pki-chainlist li.root .pki-chain-node { border-radius: 2px; border-color: var(--text-dim); }
+.pki-chain-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.pki-chain-by { display: block; font-size: 10.5px; padding: 1px 0 2px; }
+.pki-certlink { font-size: 11.5px; padding: 0; }
+.pki-certcard-checks { display: flex; flex-direction: column; gap: 4px; }
+.pki-certcard .pki-trace { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 3px; }
+.pki-certcard .pki-trace li { display: grid; grid-template-columns: 14px max-content minmax(0, 1fr); gap: 6px; align-items: baseline; }
+.pki-certcard .pki-trace li.st-pass { color: var(--ok); }
+.pki-certcard .pki-trace li.st-fail { color: var(--err); }
+.pki-certcard .pki-trace li.st-skipped { color: var(--text-faint); }
+.pki-certcard .pki-trace li b { color: var(--text); font-weight: 500; }
+.pki-certcard .pki-trace li.st-fail b { color: var(--err); font-weight: 600; }
+.pki-certcard .pki-trace li .dim { overflow-wrap: anywhere; }
+
+/* The health strip: a status shape, the number with its unit, and one line of what it means. */
+.pki-health { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; padding: 8px 16px; }
+.pki-health .pki-stat { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; text-align: left; min-width: 0; }
+.pki-stat-mark { padding-top: 3px; color: var(--text-faint); flex: none; }
+.pki-stat.tone-ok .pki-stat-mark { color: var(--ok); }
+.pki-stat.tone-warn .pki-stat-mark { color: var(--warn); }
+.pki-stat.tone-bad .pki-stat-mark { color: var(--err); }
+.pki-stat-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pki-stat-main { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; color: var(--text); }
+.pki-health .pki-stat b { font-size: 16px; }
+.pki-stat-sub { font-size: 11px; color: var(--text-faint); line-height: 1.3; }
+
+/* Vehicles: a lead line, the fleet's states, the at-a-glance tiles and the week grid. */
+.pki-lead { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-dim); max-width: 860px; }
+.pki-lead b { color: var(--text); font-weight: 600; }
+.pki-vsummary { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12px; }
+.pki-vsummary-item { display: inline-flex; align-items: center; gap: 4px; }
+.pki-vstate { display: inline-flex; align-items: center; gap: 4px; border-color: currentColor; }
+.pki-vstate .pki-glyph { flex: none; }
+.pkir-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.pki-vehicle-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pki-vehicle-head .pki-vstate { font-size: 11.5px; font-weight: 500; }
+.pki-vstate-meaning { margin: -2px 0 8px; font-size: 11.5px; }
+.pki-glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; margin: 4px 0 10px; }
+.pki-tile { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-raised); min-width: 0; font-size: 12px; }
+.pki-tile .k { font-size: 11px; color: var(--text-dim); }
+.pki-tile b { font-weight: 600; font-size: 13px; }
+.pki-tile .pki-certlink { font-size: 12.5px; text-align: left; }
+.pki-tile .sub { font-size: 11px; color: var(--text-faint); }
+.pki-tile .ok { color: var(--ok); }
+.pki-tile .bad, .pki-glance .bad { color: var(--err); }
+.pki-tile .warn { color: var(--warn); }
+.pki-choose ul { margin: 4px 0 0; padding-left: 18px; line-height: 1.6; }
+.pki-history { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; max-height: 160px; overflow: auto; }
+.pki-weekgrid .cell { fill: transparent; stroke: var(--border-strong); stroke-width: 0.8; stroke-dasharray: 2 2; }
+.pki-weekgrid .cell.valid { fill: color-mix(in srgb, var(--ok) 75%, transparent); stroke: none; }
+.pki-weekgrid .cell.active { fill: var(--ok); stroke: var(--text); stroke-width: 1.6; stroke-dasharray: none; }
+.pki-weekgrid .cell.downloaded { fill: color-mix(in srgb, var(--accent) 45%, transparent); stroke: var(--accent); stroke-width: 0.8; stroke-dasharray: none; opacity: 1; }
+.pki-weekgrid .cell.expired { fill: color-mix(in srgb, var(--text-faint) 40%, transparent); stroke: none; }
+.pki-weekgrid .cell.revoked { fill: var(--err); stroke: none; }
+.pki-weekgrid .cell.gt-revoked { stroke: var(--err); stroke-width: 1.6; stroke-dasharray: none; }
+.pki-weekgrid .cell.has-id { cursor: pointer; }
+.pki-weekgrid .cell.has-id:hover { stroke: var(--text); stroke-width: 1.2; stroke-dasharray: none; }
+.pki-weekgrid .now-col { fill: color-mix(in srgb, var(--accent) 10%, transparent); }
+.pki-weekgrid .now-label { fill: var(--accent); font-weight: 600; }
+.pki-weekgrid .now { stroke: none; }
+.pki-cell-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.pki-cell-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.pki-cell-legend i { display: none; }
+
+/* The vehicle timeline's ticks, "now" and key. */
+.pkir-life .tick { stroke: var(--border); stroke-dasharray: 1 3; }
+.pkir-life .now-line { stroke: var(--accent); stroke-width: 1.5; }
+.pkir-life .now-label { fill: var(--accent); }
+.pkir-life rect.pseudo { cursor: pointer; }
+.pkir-life rect.pseudo:hover { stroke: var(--text); stroke-width: 1; }
+.pki-life-key { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 2px 0; font-size: 11px; }
+.pki-life-key span { display: inline-flex; align-items: center; gap: 4px; }
+.pki-life-key .k { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+.pki-life-key .k.enrolment { background: var(--ok); }
+.pki-life-key .k.download { background: var(--accent); }
+.pki-life-key .k.pseudo { width: 14px; height: 8px; border-radius: 1px; background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.pki-life-key .k.report { background: var(--warn); }
+.pki-life-key .k.revocation { background: var(--err); }
+
+/* Misbehaviour: the case in four beats, then each stage as a sentence. */
+.pki-story { list-style: none; margin: 6px 0 10px; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
+.pki-story li { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 16px 6px 0 0; font-size: 12px; }
+.pki-story li::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 2px; background: var(--border); }
+.pki-story li.done::before { background: var(--accent); }
+.pki-story li:last-child::before { right: auto; width: 12px; }
+.pki-story-dot { position: absolute; left: 0; top: 0; width: 12px; height: 12px; border-radius: 50%; box-sizing: border-box; border: 2px solid var(--border-strong); background: var(--bg-panel); }
+.pki-story li.done .pki-story-dot { border-color: var(--accent); background: var(--accent); }
+.pki-story li[data-beat="enforced"].done .pki-story-dot { border-color: var(--err); background: var(--err); }
+.pki-story li.todo { color: var(--text-faint); }
+.pki-story li .mono { font-size: 11.5px; color: var(--text-dim); }
+.pki-stage-term { font-size: 10.5px; }
+.pki-stage-says { font-size: 11.5px; color: var(--text-dim); line-height: 1.4; margin-top: 1px; }
+.pkir-steps > li.pending .pki-stage-says { color: var(--text-faint); }
+.pki-step-msgs summary { cursor: pointer; font-size: 11px; margin-top: 3px; }
+
+/* The decoder: plain words first, a gloss beside known fields, raw bytes on request. */
+.pki-pdu-what { margin: 0; font-size: 12.5px; line-height: 1.45; }
+.pki-layer-what { margin: 0 0 4px; font-size: 11.5px; }
+.pki-tree-line .g { color: var(--text-faint); font-family: var(--sans); font-size: 10.5px; margin-left: 8px; }
+.pki-tree-line .g::before { content: "— "; }
+.pki-raw-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); }
+.pki-pad { padding: 8px 12px; margin: 0; }
+
+/* A topology node: the plain name, the standard acronym under it. */
+.pki-node.pki-comp .r { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.1; max-width: 100%; }
+.pki-node .acr { font-size: 9.5px; font-family: var(--mono); color: var(--text-faint); letter-spacing: 0.02em; }
+.pki-node.ghost { flex-direction: column; line-height: 1.1; gap: 0; }
+.pki-node.ghost .acr { font-family: var(--sans); font-size: 9px; }
+.pki-ctl-says { margin: 0 0 6px; font-size: 12px; line-height: 1.45; color: var(--text-dim); }
+.pki-ctl-says b { color: var(--text); }
+
+/* How trust flows: the CTL, then each provider's chain left to right. */
+.pki-section-title { margin: 0 0 6px; font-size: 13px; font-weight: 600; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.pki-section-title .dim { font-size: 11.5px; font-weight: 400; }
+.pki-trustchain { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pki-tc-ctl { display: flex; }
+.pki-tc-provider { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 14px; border-left: 2px solid var(--border-strong); }
+.pki-tc-provider.off-ctl { border-left-color: var(--pki-untrusted); border-left-style: dashed; }
+.pki-tc-name { font-size: 11.5px; color: var(--text-dim); min-width: 74px; }
+.pki-tc-arrow { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; }
+.pki-tc-arrow.broken { color: var(--pki-untrusted); font-weight: 600; }
+.pki-tc-fan { display: flex; flex-wrap: wrap; gap: 4px; }
+.pki-tc-box { display: inline-flex; flex-direction: column; gap: 1px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-raised); color: var(--text); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.pki-tc-box b { font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+.pki-tc-box span { font-size: 10.5px; color: var(--text-faint); }
+.pki-tc-box:hover { border-color: var(--accent-dim); }
+.pki-tc-box.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.pki-tc-box:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pki-tc-box.status-offline { border-style: dashed; background: repeating-linear-gradient(45deg, var(--bg-raised) 0 5px, color-mix(in srgb, var(--text-faint) 18%, var(--bg-raised)) 5px 7px); }
+.pki-tc-box.status-faulted { border-color: var(--err); }
+.pki-tc-box.ghost { border-style: dashed; background: transparent; color: var(--text-faint); cursor: default; }
+.pki-tc-box.ctl { cursor: default; border-color: var(--accent-dim); background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised)); }
+.pki-tc-box .pki-lock { position: static; }
+.pki-tc-foot { margin: 0; font-size: 11px; }
+
+/* A certificate opened from anywhere: a drawer over the panel's right edge. */
+.pki-panel { position: relative; }
+.pki-certdrawer {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: min(440px, 100%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -8px 0 24px color-mix(in srgb, #000 30%, transparent);
+}

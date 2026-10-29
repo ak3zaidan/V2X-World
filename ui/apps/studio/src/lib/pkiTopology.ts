@@ -464,6 +464,13 @@ export interface Health {
   readonly crlAgeS: number | null;
   /** Whether a provider's newest list is past its nextCrl. */
   readonly crlOverdue: boolean;
+  /**
+   * Seconds until the soonest provider's next list is due (its newest list's `nextCrl` against the
+   * snapshot's clock), negative when overdue; null before any list.
+   */
+  readonly crlDueS: number | null;
+  /** Vehicles whose pools the certificate count covers; null outside ground truth. */
+  readonly vehicles: number | null;
   readonly devices: number;
   readonly revoked: number;
 }
@@ -488,6 +495,7 @@ export function healthOf(
   if (vehicles) for (const v of vehicles) if (v.security?.topup_in_flight === true) pending += 1;
   let age: number | null = null;
   let overdue = false;
+  let due: number | null = null;
   for (const p of s.providers) {
     const mine = s.crls.filter((h) => h.provider === p.label);
     if (mine.length === 0) continue;
@@ -495,6 +503,7 @@ export function healthOf(
     const a = Math.max(0, (trust.t_ns - newest.issued_at) / 1e9);
     age = age === null ? a : Math.max(age, a);
     if (newest.sla_s < 0) overdue = true;
+    due = due === null ? newest.sla_s : Math.min(due, newest.sla_s);
   }
   const open = cases ? cases.filter((c) => !c.stages.some((x) => x.stage === "enforced" || x.stage === "refused")).length : null;
   let devices = 0;
@@ -513,6 +522,8 @@ export function healthOf(
     openCases: open,
     crlAgeS: age,
     crlOverdue: overdue,
+    crlDueS: due,
+    vehicles: vehicles ? vehicles.length : null,
     devices,
     revoked,
   };

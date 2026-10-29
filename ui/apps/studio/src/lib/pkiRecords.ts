@@ -137,12 +137,12 @@ export function flatCells(g: Grid): CredCell[] {
 
 /** Plain words for a cell state, for the legend and a cell's title. */
 export const CELL_LABEL: Readonly<Record<CellState, string>> = {
-  active: "active (signing now)",
+  active: "in use now (signing)",
   valid: "valid this week",
-  downloaded: "downloaded, a later week",
+  downloaded: "downloaded for a later week",
   expired: "expired",
   revoked: "revoked",
-  "not-yet-available": "not yet available",
+  "not-yet-available": "not downloaded yet",
 };
 
 /** A vehicle's credential state, the map overlay's colour (00-gap-analysis §3.2). */

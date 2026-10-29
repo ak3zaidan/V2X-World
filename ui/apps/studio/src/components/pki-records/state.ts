@@ -53,6 +53,15 @@ export interface PkiViewState {
   mapMode: PkiMapMode;
   /** Rings the map overlay last drew, for its legend. */
   tagged: number;
+  /**
+   * Whose certificate each authority HashedId8 is (`provider/role/instance`), from the newest trust
+   * snapshot: what lets a certificate card name every link of its chain in plain words.
+   */
+  owners: Readonly<Record<string, string>>;
+  /** The CTL's roots as HashedId8 (the last 8 bytes of each HashedId32), from the same snapshot. */
+  ctlRoots: readonly string[];
+  /** A certificate card opened from anywhere in the view, by HashedId8, with what is known of its holder. */
+  cert: { readonly id8: string; readonly holder: string | null } | null;
   set: (patch: Partial<Omit<PkiViewState, "set">>) => void;
 }
 
@@ -64,6 +73,9 @@ export const usePkiView = create<PkiViewState>((set) => ({
   crl: null,
   mapMode: "off",
   tagged: 0,
+  owners: {},
+  ctlRoots: [],
+  cert: null,
   set: (patch) => set(patch),
 }));
 

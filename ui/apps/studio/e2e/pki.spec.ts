@@ -168,6 +168,13 @@ test("Flows: a provisioning run as a sequence diagram, the shuffle wait, the dec
   const leaves = (v: unknown): number => (Array.isArray(v) ? v.reduce<number>((n, x) => n + leaves(x), 0) : typeof v === "object" && v !== null ? Object.values(v).reduce<number>((n, x) => n + leaves(x), 0) : 1);
   await expect(dec.getByTestId("pdu-tree-0").locator('[data-leaf="1"]')).toHaveCount(leaves(gt?.tree.layers[0]?.jer));
   await expect(dec.getByTestId("pdu-plaintext")).toBeVisible();
+  // Plain words first: what the message is and who it goes to; the raw bytes wait behind a toggle.
+  await expect(dec.getByTestId("pdu-what")).toContainText("Pseudonym certificate request");
+  await expect(dec.getByTestId("pdu-tree-0").locator(".g").first()).toBeVisible();
+  await expect(dec.getByTestId("pdu-hex-0")).toHaveCount(0);
+  await dec.getByTestId("pdu-raw-toggle").check();
+  await expect(dec.getByTestId("pdu-hex-0")).toBeVisible();
+  await dec.getByTestId("pdu-raw-toggle").uncheck();
   await page.screenshot({ path: process.env.VWP_SHOT_DIR ? join(process.env.VWP_SHOT_DIR, "pki-flows-fixture.png") : join(here, "../test-results/pki-flows-fixture.png") });
 
   // As the ACA: it never saw the device's request; it saw the RA's cert-request and cannot read
