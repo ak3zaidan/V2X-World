@@ -421,7 +421,7 @@ function SettingRowImpl({
         <div className="setting-meta">
           {inherited !== undefined && value === undefined ? (
             <span className="inherited" data-testid="setting-inherited" title="Set in the older parameter block (security.protocol.params); a value here wins">
-              set in the older parameter block
+              from the older block
             </span>
           ) : null}
           {f.hasDefault && modified ? (
@@ -437,6 +437,11 @@ function SettingRowImpl({
                 Reset
               </button>
             </span>
+          ) : null}
+          {f.emptyText && !f.choices && value !== undefined && value !== null ? (
+            <button type="button" className="linkbutton" data-testid="setting-clear" onClick={() => onEdit(f.pointer, undefined)} title="Remove this value">
+              Clear ({f.emptyText})
+            </button>
           ) : null}
           {rec && !recSame ? (
             <span data-testid="setting-recommended" title={`Recommended: ${f.recommended}`}>

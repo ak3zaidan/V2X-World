@@ -101,8 +101,9 @@ input.num::placeholder { color: var(--text-faint); }
 .settings-window .setting-desc .more { flex: none; margin-left: 0; }
 .choice-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .settings-window .settings-sub-blurb { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.us-banner.ok { border-left-color: var(--ok, #3fb950); }
+.us-banner.ok { border-left-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .settings-window .coming-soon { font-size: 12px; margin: 14px 0 4px; }
 .list-editor:has(> .empty-note), .map-rows:has(> .empty-note) { flex-direction: row; align-items: center; gap: 10px; }
 .json-collapsed summary { cursor: pointer; font-size: 12px; }
 .json-collapsed[open] summary { margin-bottom: 4px; }
+.settings-window .setting-move.top { margin: 0 0 10px; justify-content: space-between; border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }

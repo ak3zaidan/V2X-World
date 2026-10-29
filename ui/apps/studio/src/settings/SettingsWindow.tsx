@@ -345,6 +345,16 @@ export function SettingsWindow({
         {g.id === "group-scms" ? (
           <UsBanner verdict={validation?.usSystem} local={localUsVerdict(draft, fields)} protocol={getPointer(draft, "/security/protocol/id")} />
         ) : null}
+        {g.id === "group-scms" && movable.length > 0 ? (
+          <div className="note setting-move top" data-testid="params-move-top">
+            <span>
+              {movable.length} lifecycle values come from this scenario's older parameter block.
+            </span>
+            <button type="button" className="btn small" onClick={() => moveIntoFields(draft, movable).forEach((w) => editSetting(w.pointer, w.value))}>
+              Move them into the form
+            </button>
+          </div>
+        ) : null}
         {subsOf(g, basic)}
         {advCount > 0 && basicCount > 0 ? (
           <button
