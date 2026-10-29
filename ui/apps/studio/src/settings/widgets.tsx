@@ -49,6 +49,7 @@ export function ChoiceSelect({
   onChange,
   compact,
   defaultValue,
+  unsetLabel,
 }: {
   common: Common;
   choices: readonly Choice[];
@@ -59,6 +60,8 @@ export function ChoiceSelect({
   compact?: boolean;
   /** The value the engine uses while the key is unset: the unset entry names it. */
   defaultValue?: unknown;
+  /** The words for "unset" when unset is a choice of its own ("None"). */
+  unsetLabel?: string;
 }): React.JSX.Element {
   const known = choices.find((c) => sameValue(value, c.value));
   const fallback = defaultValue === undefined ? undefined : choices.find((c) => sameValue(defaultValue, c.value));
@@ -107,8 +110,8 @@ export function ChoiceSelect({
           onChange(picked ? picked.value : v);
         }}
       >
-        {unset || nullable ? (
-          <option value={UNSET}>{fallback ? `${fallback.label} (default)` : nullable ? "Default" : "— choose —"}</option>
+        {unset || nullable || unsetLabel ? (
+          <option value={UNSET}>{unsetLabel ?? (fallback ? `${fallback.label} (default)` : nullable ? "Default" : "— choose —")}</option>
         ) : null}
         {!known && !unset ? <option value={String(value)}>{String(value)} (not in the list)</option> : null}
         {choices.map((c) => (
@@ -245,7 +248,7 @@ export function MapRows({
   const emptyValue = (): unknown => (leaf ? (leaf.kind === "number" || leaf.kind === "integer" ? (leaf.min ?? 0) : leaf.choices?.find((c) => c.available)?.value ?? "") : {});
   return (
     <div className="map-rows" data-testid="map-rows">
-      {keys.length === 0 ? <div className="dim">None.</div> : null}
+      {keys.length === 0 ? <div className="dim empty-note">None</div> : null}
       {keys.map((k) => {
         const id = `${idBase}-${k.replace(/\W/g, "_")}`;
         const own = keyChoices.find((c) => String(c.value) === k);
@@ -353,10 +356,12 @@ export function NumberWithPresets({
   );
   const effective = typeof value === "number" ? value : defaultValue;
   const words = unit === "s" && typeof effective === "number" ? durationWords(effective) : "";
+  // The words are left out when the chip already says them ("10 min").
+  const hideWords = words !== "" && (presets ?? []).some((p) => p.value === effective && p.label.toLowerCase().startsWith(words.toLowerCase()));
   const head = (
     <span className="num-box">
       {input}
-      {words !== "" ? (
+      {words !== "" && !hideWords ? (
         <span className={typeof value === "number" ? "dim duration-words" : "faint duration-words"} data-testid="duration-words">
           {words}
         </span>
@@ -681,7 +686,7 @@ export function ListEditor({
   };
   return (
     <div className="list-editor" data-testid="list-editor">
-      {list.length === 0 ? <div className="dim">None.</div> : null}
+      {list.length === 0 ? <div className="dim empty-note">None</div> : null}
       {list.map((item, i) => (
         <div className="list-item" key={i} data-testid="list-item">
           <div className="list-item-head">

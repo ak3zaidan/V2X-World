@@ -23,13 +23,16 @@ export interface Overlay {
   readonly pair?: boolean;
   readonly min?: number;
   readonly max?: number;
-  /** What an empty box means ("never"). */
+  /** What an empty box means ("never"); on a menu, the words for "unset". */
   readonly emptyText?: string;
+  /** What one element of a list is called on its Add button. */
+  readonly noun?: string;
 }
 
 const strategy = "security.pseudonym_change.strategy";
 const latency = "security.scms.deployment.latency";
 const policy = "security.verification_policy";
+const committee = { path: "security.threshold.protocol", in: [], notIn: [null] };
 
 export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
   // Deployment.
@@ -128,6 +131,30 @@ export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
   // Receiver checks.
   "/security/on_demand_threshold": { defaultValue: 0.5, relevantWhen: { path: policy, in: ["on-demand"] } },
   "/security/prioritized_horizon_m": { defaultValue: 300, relevantWhen: { path: policy, in: ["prioritized"] } },
+
+  // Threshold committees: absent, one server signs; every other key only matters with a protocol.
+  "/security/threshold/protocol": {
+    label: "Signing committees",
+    help: "Split the pseudonym CA's and CRL Generator's keys across a committee of servers.",
+    emptyText: "None (one server signs)",
+  },
+  "/security/threshold/members": { help: "Servers in each committee.", defaultValue: 5, relevantWhen: committee },
+  "/security/threshold/quorum": { help: "Servers that must take part in each signature.", defaultValue: 3, relevantWhen: committee },
+  "/security/threshold/roles": { label: "Committees for", help: "Which authorities sign as a committee.", defaultValue: ["pca", "crl", "linkage"], relevantWhen: committee },
+  "/security/threshold/linkage_members": { help: "When it differs from the committee size.", emptyText: "same as above", relevantWhen: committee },
+  "/security/threshold/linkage_quorum": { help: "When it differs from the committee quorum.", emptyText: "same as above", relevantWhen: committee },
+  "/security/threshold/umbrella_leaves": { defaultValue: 20 },
+  "/security/threshold/umbrella_inner": { defaultValue: "frost-p256" },
+  "/security/threshold/preprocessed": { help: "Precompute the offline round, so a signature needs one online round.", defaultValue: false, relevantWhen: committee },
+  "/security/threshold/round_timeout_ms": { help: "How long to wait for a member before leaving it out.", defaultValue: 500, relevantWhen: committee },
+  "/security/threshold/retry_after_s": { help: "Wait before retrying a signing that ran out of members.", defaultValue: 30, relevantWhen: committee },
+  "/security/threshold/ask_all": { label: "Ask every member, keep the first quorum", help: "Off asks exactly a quorum.", defaultValue: true, relevantWhen: committee },
+  "/security/threshold/member_latency_ms": { help: "One-way delay between committee servers.", defaultValue: 20, relevantWhen: committee },
+
+  // Failures & servers.
+  "/actors/backend/entities": { label: "Server hardware", help: "A different machine or queue for one server role." },
+  "/actors/backend/links": { label: "Backend links", help: "Latency and capacity of one link between two servers.", noun: "link" },
+  "/actors/backend/failures": { label: "Server failures", help: "A server that is down, slow or lying for part of the run.", noun: "failure" },
 
   // Security & Crypto: the hardware that signs and checks.
   "/nodes/per_class": { label: "On-board unit per vehicle class", help: "A different unit for one class of vehicle; the rest use the one above." },

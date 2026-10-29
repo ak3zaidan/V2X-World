@@ -133,6 +133,9 @@ export interface ItemField {
   readonly compose?: { readonly separator: string; readonly providers: ProviderSets };
   /** A provider name, offered from the document's preset (`x-options-by-preset`). */
   readonly providerNames?: ProviderSets;
+  /** The engine's `x-status` and note for the element field, when it published one. */
+  readonly status?: string;
+  readonly statusNote?: string;
 }
 
 /** A widget in the scenario form. */
@@ -172,6 +175,8 @@ export interface FormField {
   readonly relevantWhen?: RelevantWhen;
   /** What an empty box means, when unset is a choice of its own ("never"). */
   readonly emptyText?: string;
+  /** What one element of a list is called on its Add button ("link", "failure"). */
+  readonly noun?: string;
 }
 
 /** The `x-subgroup` of a published node, or `undefined`. */
@@ -583,6 +588,8 @@ export function fieldsFromPublished(
       ...(choices ? { choices, choicesOpen: row["x-options-open"] === true } : {}),
       ...(composeOf(row) ? { compose: composeOf(row) } : {}),
       ...(providerSetsOf(row["x-options-by-preset"]) ? { providerNames: providerSetsOf(row["x-options-by-preset"]) } : {}),
+      ...(typeof row["x-status"] === "string" ? { status: row["x-status"] } : {}),
+      ...(typeof row["x-status-note"] === "string" ? { statusNote: row["x-status-note"] } : {}),
     };
   };
   /** The map at `mapPointer` as a field, when the engine publishes its keys (`x-key-options`). */

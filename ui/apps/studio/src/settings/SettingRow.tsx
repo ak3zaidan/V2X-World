@@ -16,7 +16,7 @@ import { memo, useContext, useEffect, useState } from "react";
 import type { ValidationError } from "@vwp/protocol";
 
 import { EventsEditor } from "../components/EventsEditor.js";
-import { STATUS_BADGE, breadcrumbOf, controlKind, describeValue, fieldPath, isUnsupported, oneLine, type Field } from "./model.js";
+import { STATUS_BADGE, isComingSoon, breadcrumbOf, controlKind, describeValue, fieldPath, isUnsupported, oneLine, type Field } from "./model.js";
 import { ScmsProviders } from "./ScmsProviders.js";
 import { SettingsDocContext } from "./docContext.js";
 import { getPointer, type Choice, type ItemField } from "../lib/schema.js";
@@ -71,7 +71,7 @@ function Widget({
     return <RangePair common={common} value={value} min={field.min} max={field.max} onChange={onChange} />;
   }
   if (field.kind === "multi" && field.choices) {
-    return <MultiCheck common={common} choices={field.choices} value={value} onChange={onChange} />;
+    return <MultiCheck common={common} choices={field.choices} value={value === undefined && field.hasDefault ? field.defaultValue : value} onChange={onChange} />;
   }
   if (field.pointer === PROVIDERS_POINTER && field.itemFields) {
     return <ScmsProviders idBase={id} fields={field.itemFields} onChange={onChange} />;
@@ -84,7 +84,7 @@ function Widget({
         template={field.itemTemplate}
         value={value}
         onChange={onChange}
-        noun={nounOf(field.label)}
+        noun={field.noun ?? nounOf(field.label)}
       />
     );
   }
@@ -98,6 +98,7 @@ function Widget({
         value={value}
         onChange={onChange}
         {...(field.hasDefault ? { defaultValue: field.defaultValue } : {})}
+        {...(field.emptyText ? { unsetLabel: field.emptyText } : {})}
       />
     );
   }
@@ -243,6 +244,13 @@ function StatusBadge({ field }: { field: Field }): React.JSX.Element | null {
   if (!field.status) return null;
   // "Partly applied" is said in the field's "more"; as a pill on every deployment row it was noise.
   if (field.status === "partial") return null;
+  if (isComingSoon(field)) {
+    return (
+      <span className="field-status off" title={field.statusNote} data-testid="field-status" data-status="coming-soon">
+        coming soon
+      </span>
+    );
+  }
   const badge = STATUS_BADGE[field.status];
   if (!badge) return null;
   return (
@@ -294,7 +302,9 @@ function SettingRowImpl({
   const full = [f.explain, f.help].filter((t): t is string => !!t && t.trim() !== "").join("\n\n");
   const hasMore = full.replace(/[`*]/g, "").replace(/\s+/g, " ").trim() !== line || (f.status !== "wired" && !!f.statusNote);
   const defaultWords = f.hasDefault ? (f.choices?.find((c) => String(c.value) === String(f.defaultValue))?.label ?? describeValue(f.defaultValue)) : "";
-  const rec = f.recommended ? shortRec(f.recommended) : undefined;
+  const recRaw = f.recommended ? shortRec(f.recommended) : undefined;
+  // A recommendation that is a menu value ("frost-p256") reads as the menu's words.
+  const rec = recRaw === undefined ? undefined : (f.choices?.find((c) => String(c.value) === recRaw.replace(/\.$/, ""))?.label ?? recRaw);
   const flat = (t: string): string => t.toLowerCase().replace(/[,\s]/g, "");
   const defaultSpellings = f.hasDefault
     ? [defaultWords, describeValue(f.defaultValue), f.defaultValue === true ? "on" : f.defaultValue === false ? "off" : ""].filter((t) => t !== "").map(flat)
@@ -401,12 +411,12 @@ function SettingRowImpl({
         <div className="setting-meta">
           {inherited !== undefined && value === undefined ? (
             <span className="inherited" data-testid="setting-inherited" title="Set in the older parameter block (security.protocol.params); a value here wins">
-              {describeValue(inherited)} from the older parameter block
+              set in the older parameter block
             </span>
           ) : null}
           {f.hasDefault && modified ? (
             <span>
-              Default <code>{defaultWords}</code>{" "}
+              Default {f.choices ? defaultWords : <code>{defaultWords}</code>}{" "}
               <button
                 type="button"
                 className="linkbutton"

@@ -102,3 +102,5 @@ input.num::placeholder { color: var(--text-faint); }
 .choice-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .settings-window .settings-sub-blurb { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .us-banner.ok { border-left-color: var(--ok, #3fb950); }
+.settings-window .coming-soon { font-size: 12px; margin: 14px 0 4px; }
+.list-editor:has(> .empty-note), .map-rows:has(> .empty-note) { flex-direction: row; align-items: center; gap: 10px; }

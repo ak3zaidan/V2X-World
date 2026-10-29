@@ -136,7 +136,6 @@ function Card({
   const roles: string[] = [...US_ROLES, ...(extrasOn ? EXTRA_ROLES : [])];
   const id = `${idBase}-${v.name.replace(/\W/g, "_")}`;
   const usOk = isUsProvider(v);
-  const anySoon = fields.some((f) => /^\/(site|sites|lat_deg|lon_deg|capacity|ma_policy|ica_levels)(\/|$)/.test(f.key));
   return (
     <div className="prov-card" data-testid="provider-card" data-provider={v.name}>
       <div className="prov-head">
@@ -287,11 +286,7 @@ function Card({
           </label>
         ) : null}
       </div>
-      {anySoon ? (
-        <div className="faint prov-soon" data-testid="provider-soon">
-          Coming soon: server sites, server capacity, per-provider MA policy, more CA levels.
-        </div>
-      ) : null}
+
     </div>
   );
 }

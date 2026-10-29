@@ -62,6 +62,7 @@ export function withOverlay(f: Field): Field {
     ...(o.min !== undefined && f.min === undefined ? { min: o.min } : {}),
     ...(o.max !== undefined && f.max === undefined ? { max: o.max } : {}),
     ...(o.emptyText ? { emptyText: o.emptyText } : {}),
+    ...(o.noun ? { noun: o.noun } : {}),
   };
 }
 
@@ -79,6 +80,39 @@ export function fieldPath(f: Field): string {
  */
 export function isUnsupported(f: Field): boolean {
   return f.status === "not-implemented" || f.status === "unknown" || f.status === "refused";
+}
+
+/**
+ * A setting the engine names and refuses because it is not built yet (its note starts "Not built
+ * yet"): the MA policies, server sites and capacity, deeper CA hierarchies. The window does not
+ * offer it; it shows one "coming soon" line instead, and the field appears by itself once the engine
+ * wires it.
+ */
+export function isComingSoon(f: Field): boolean {
+  return f.status === "refused" && /^not built yet/i.test((f.statusNote ?? "").trim());
+}
+
+/** The features behind the coming-soon fields, in words, once each. */
+export function comingSoonFeatures(fields: readonly Field[]): string[] {
+  const names: [RegExp, string][] = [
+    [/\/ma_polic(y|ies)(\/|$)/, "MA policies"],
+    [/\/(site|sites|lat_deg|lon_deg)(\/|$)/, "server sites"],
+    [/\/capacity(\/|$)/, "server capacity"],
+    [/\/ica_levels$/, "more CA levels"],
+  ];
+  const out: string[] = [];
+  const add = (pointer: string, label: string): void => {
+    const hit = names.find(([re]) => re.test(pointer))?.[1] ?? label;
+    if (!out.includes(hit)) out.push(hit);
+  };
+  for (const f of fields) {
+    if (isComingSoon(f)) add(f.pointer, f.label);
+    // A list element's own fields (a provider's site, its CA levels) carry their status too.
+    for (const i of f.itemFields ?? []) {
+      if (i.status === "refused" && /^not built yet/i.test((i.statusNote ?? "").trim())) add(`${f.pointer}/-${i.key}`, i.label);
+    }
+  }
+  return out;
 }
 
 /** True when an unapplied edit touches this field (or anything inside it, for a collection). */

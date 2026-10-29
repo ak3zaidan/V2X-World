@@ -45,6 +45,8 @@ import {
   isEdited,
   isModified,
   isBasic,
+  isComingSoon,
+  comingSoonFeatures,
   isUnsupported,
   matches,
   oneLine,
@@ -123,7 +125,8 @@ function UsBanner({
       </div>
     );
   }
-  const v = verdict ?? local;
+  // The form's own reading is live; the engine's (from the last Check) adds what the form cannot see.
+  const v = local.isUs && verdict && !verdict.isUs ? verdict : local;
   return (
     <div className={`note us-banner${v.isUs ? " ok" : ""}`} data-testid="us-banner" data-us={v.isUs ? "true" : "false"}>
       {v.isUs ? (
@@ -194,13 +197,22 @@ export function SettingsWindow({
   const edits = useMemo(() => (draft === null ? [] : changedPointers(scenario, draft)), [scenario, draft]);
   const dirty = edits.length > 0;
   const anyLevels = useMemo(() => fields.some((f) => f.level !== undefined), [fields]);
-  const unsupportedCount = useMemo(() => fields.filter(isUnsupported).length, [fields]);
+  const unsupportedCount = useMemo(() => fields.filter((f) => isUnsupported(f) && !isComingSoon(f)).length, [fields]);
+  const soon = useMemo(() => comingSoonFeatures(fields), [fields]);
   const isMod = useCallback((f: Field) => isEdited(f, edits) || isModified(f, getPointer(draft, f.pointer)), [edits, draft]);
   const modifiedCount = useMemo(() => fields.filter(isMod).length, [fields, isMod]);
 
   // Every field the filters allow, in its section; the page then shows one section, or every
   // section's matches while a search or the Modified filter is on.
-  const visible = useMemo(() => fields.filter((f) => showUnsupported || !isUnsupported(f) || isEdited(f, edits)), [fields, showUnsupported, edits]);
+  const visible = useMemo(
+    () =>
+      fields.filter((f) =>
+        isComingSoon(f)
+          ? isEdited(f, edits) || getPointer(draft, f.pointer) !== undefined
+          : showUnsupported || !isUnsupported(f) || isEdited(f, edits),
+      ),
+    [fields, showUnsupported, edits, draft],
+  );
   const fullTree = useMemo(() => buildResearchTree(visible), [visible]);
   const filtering = query.trim() !== "" || modifiedOnly;
   const found = useMemo(
@@ -336,6 +348,11 @@ export function SettingsWindow({
           </button>
         ) : null}
         {showAdv && advCount > 0 ? <div className="settings-advanced">{subsOf(g, (f) => !basic(f))}</div> : null}
+        {g.id === "group-scms" && soon.length > 0 ? (
+          <p className="faint coming-soon" data-testid="coming-soon">
+            Coming soon: {soon.join(", ")}.
+          </p>
+        ) : null}
       </section>
     );
   };
