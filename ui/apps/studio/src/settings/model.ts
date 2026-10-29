@@ -19,6 +19,7 @@ import {
   type PublishedRow,
   type Subgroup,
 } from "../lib/schema.js";
+import { overlayOf } from "./scmsOverlay.js";
 
 /** A field of either source, with the engine's statement about it when the engine published one. */
 export type Field = FormField &
@@ -38,10 +39,32 @@ export function settingsFields(
   schema: unknown,
   doc: unknown,
 ): { readonly fields: readonly Field[]; readonly source: FieldSource } {
-  if (published.length > 0) return { fields: fieldsFromPublished(published, schema, doc), source: "published" };
+  if (published.length > 0) return { fields: fieldsFromPublished(published, schema, doc).map(withOverlay), source: "published" };
   const generated = schema ? fieldsFromJsonSchema(schema) : [];
   if (generated.length > 0) return { fields: generated, source: "schema" };
   return { fields: PHASE1_FIELDS, source: "builtin" };
+}
+
+/** A field with the window's own words, default and relevance for it (`scmsOverlay.ts`). */
+export function withOverlay(f: Field): Field {
+  const o = overlayOf(f.pointer);
+  if (!o) return f;
+  const engineDefault = f.hasDefault === true;
+  return {
+    ...f,
+    ...(o.label ? { label: o.label } : {}),
+    ...(o.help ? { explain: o.help } : {}),
+    ...(o.unit !== undefined ? (o.unit === "" ? { unit: undefined } : { unit: o.unit }) : {}),
+    ...(o.defaultValue !== undefined && !engineDefault ? { hasDefault: true, defaultValue: o.defaultValue } : {}),
+    ...(o.relevantWhen && !f.relevantWhen ? { relevantWhen: o.relevantWhen } : {}),
+    ...(o.level ? { level: o.level } : {}),
+    ...(o.pair && (f.kind === "json" || f.kind === "list") ? { kind: "pair" as const } : {}),
+    ...(o.min !== undefined && f.min === undefined ? { min: o.min } : {}),
+    ...(o.max !== undefined && f.max === undefined ? { max: o.max } : {}),
+    ...(o.emptyText ? { emptyText: o.emptyText } : {}),
+    ...(o.noun ? { noun: o.noun } : {}),
+    ...(o.keywords ? { help: `${f.help ?? ""} ${o.keywords}`.trim() } : {}),
+  };
 }
 
 /** The dotted path a scenario file spells the field with. */
@@ -58,6 +81,39 @@ export function fieldPath(f: Field): string {
  */
 export function isUnsupported(f: Field): boolean {
   return f.status === "not-implemented" || f.status === "unknown" || f.status === "refused";
+}
+
+/**
+ * A setting the engine names and refuses because it is not built yet (its note starts "Not built
+ * yet"): the MA policies, server sites and capacity, deeper CA hierarchies. The window does not
+ * offer it; it shows one "coming soon" line instead, and the field appears by itself once the engine
+ * wires it.
+ */
+export function isComingSoon(f: Field): boolean {
+  return f.status === "refused" && /^not built yet/i.test((f.statusNote ?? "").trim());
+}
+
+/** The features behind the coming-soon fields, in words, once each. */
+export function comingSoonFeatures(fields: readonly Field[]): string[] {
+  const names: [RegExp, string][] = [
+    [/\/ma_polic(y|ies)(\/|$)/, "MA policies"],
+    [/\/(site|sites|lat_deg|lon_deg)(\/|$)/, "server sites"],
+    [/\/capacity(\/|$)/, "server capacity"],
+    [/\/ica_levels$/, "more CA levels"],
+  ];
+  const out: string[] = [];
+  const add = (pointer: string, label: string): void => {
+    const hit = names.find(([re]) => re.test(pointer))?.[1] ?? label;
+    if (!out.includes(hit)) out.push(hit);
+  };
+  for (const f of fields) {
+    if (isComingSoon(f)) add(f.pointer, f.label);
+    // A list element's own fields (a provider's site, its CA levels) carry their status too.
+    for (const i of f.itemFields ?? []) {
+      if (i.status === "refused" && /^not built yet/i.test((i.statusNote ?? "").trim())) add(`${f.pointer}/-${i.key}`, i.label);
+    }
+  }
+  return out;
 }
 
 /** True when an unapplied edit touches this field (or anything inside it, for a collection). */
@@ -249,6 +305,20 @@ export function buildTree(fields: readonly Field[], metas: readonly GroupMeta[])
   return out;
 }
 
+/**
+ * The engine reports a deployment problem against the whole block, naming the key in its message
+ * ("security.scms.deployment: quorum: 3 of 2 electors; …"). Such an error is moved to the key's own
+ * field, and the message keeps only the plain words.
+ */
+export function refineError(e: ValidationError): ValidationError {
+  const p = errorPointer(e.path);
+  if (p !== "/security/scms/deployment") return e;
+  const m = /^(?:security\.scms\.deployment:\s*)?(providers|quorum|electors|preset|latency|options\.\w+|fibre_fraction|per_link_ms)(?:\.[\w-]+)*:\s*(.*)$/s.exec(e.message.trim());
+  if (!m) return e;
+  const key = m[1].replace(/\./g, "/");
+  return { ...e, path: `/security/scms/deployment/${key}`, message: m[2].charAt(0).toUpperCase() + m[2].slice(1) };
+}
+
 /** A validation error's path as a pointer: the engine sends pointers, older builds dotted paths. */
 export function errorPointer(path: string): string {
   if (path.startsWith("/")) return path;
@@ -267,7 +337,8 @@ export function errorsByField(
 ): { readonly byPointer: ReadonlyMap<string, ValidationError[]>; readonly unplaced: readonly ValidationError[] } {
   const byPointer = new Map<string, ValidationError[]>();
   const unplaced: ValidationError[] = [];
-  for (const e of errors) {
+  for (const raw of errors) {
+    const e = refineError(raw);
     const p = errorPointer(e.path);
     let best: Field | null = null;
     for (const f of fields) {
@@ -330,12 +401,11 @@ export const RESEARCH_SECTIONS: readonly ResearchSection[] = [
   { id: "dcc", name: "Congestion Control", blurb: "How radios back off when the channel is busy." },
   { id: "messages", name: "Messages", blurb: "Which messages are sent, how often, and the applications using them.", home: "messages" },
   { id: "net", name: "Networking", blurb: "WSMP or GeoNetworking/BTP, forwarding and fragmentation.", home: "net" },
-  { id: "security", name: "Security & Crypto", blurb: "Signature schemes, verification policy, crypto hardware and certificate caches.", home: "security" },
+  { id: "security", name: "Security & Crypto", blurb: "How messages are signed, and which ones a receiver checks.", home: "security" },
   {
     id: "scms",
     name: "Certificates & SCMS",
-    blurb:
-      "The certificate system: providers and authorities, pseudonym certificates per week and when they change, the RA shuffle, downloads, enrolment, revocation lists and the Misbehaviour Authority.",
+    blurb: "Who issues certificates, how vehicles get and change them, and how misbehaving ones are revoked.",
   },
   { id: "backend", name: "Backend & Cellular", blurb: "The SCMS backend and the cellular and IP links that reach it." },
   { id: "attackers", name: "Attackers", blurb: "Attackers, jammers, eavesdroppers and misbehaviour detection.", home: "threats" },
@@ -513,14 +583,17 @@ export function irrelevantReason(f: Field, doc: unknown, fields: readonly Field[
   if (!w) return undefined;
   const target = `/${w.path.split(".").join("/")}`;
   const value = getPointer(doc, target);
-  const holds = w.in.some((x) => x === value || (value === undefined && x === null));
-  if (holds) return undefined;
+  const is = (x: unknown): boolean => x === value || ((value === undefined || value === null) && x === null);
   const of = fields.find((x) => x.pointer === target);
   const name = of?.label ?? w.path;
+  if (w.notIn) return w.notIn.some(is) ? `Only used when ${name} is set.` : undefined;
+  const holds = w.in.some(is);
+  if (holds) return undefined;
   const words = w.in
-    .map((x) => of?.choices?.find((c) => c.value === x)?.label ?? (x === null ? "unset" : String(x)))
+    .filter((x) => x !== null)
+    .map((x) => `“${of?.choices?.find((c) => c.value === x)?.label ?? String(x)}”`)
     .join(" or ");
-  return `Applies only when ${name} is ${words}.`;
+  return `Only used with ${words}.`;
 }
 
 /**

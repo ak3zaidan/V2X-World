@@ -34,19 +34,23 @@ import {
 } from "../state/settings.js";
 import { RestartNow } from "../components/RestartNow.js";
 import { useRevealSetting } from "../lib/links.js";
-import { changedPointers, getPointer } from "../lib/schema.js";
+import { changedLeaves, getPointer } from "../lib/schema.js";
 import {
   buildResearchTree,
   irrelevantReason,
   describeValue,
   errorPointer,
   errorsByField,
+  refineError,
   fieldPath,
   isEdited,
   isModified,
   isBasic,
+  isComingSoon,
+  comingSoonFeatures,
   isUnsupported,
   matches,
+  oneLine,
   researchSectionOf,
   settingsFields,
   type Field,
@@ -58,6 +62,9 @@ import "../styles/quick.css";
 import "../styles/settings.css";
 import { SettingsDocContext } from "./docContext.js";
 import { SettingRow } from "./SettingRow.js";
+import { PROVIDERS_POINTER, describeProviders, localUsVerdict } from "./scmsDeployment.js";
+import { SUBGROUP_BLURBS } from "./scmsOverlay.js";
+import { inheritedValue, movableKeys, moveIntoFields } from "./legacyParams.js";
 
 const SECTION_KEY = "v2xw.settings.section";
 const ADVANCED_KEY = "v2xw.settings.advanced";
@@ -78,15 +85,24 @@ function save(key: string, value: unknown): void {
   }
 }
 
-function ProblemList({ items, onJump }: { items: readonly ValidationError[]; onJump: (pointer: string) => void }): React.JSX.Element | null {
+function ProblemList({
+  items,
+  onJump,
+  nameOf,
+}: {
+  items: readonly ValidationError[];
+  onJump: (pointer: string) => void;
+  nameOf: (pointer: string) => string | undefined;
+}): React.JSX.Element | null {
   if (items.length === 0) return null;
   return (
     <div className="note err" data-testid="validation-err">
-      {items.map((e, i) => (
+      {items.map(refineError).map((e, i) => (
         <div key={`${e.path}-${i}`}>
-          <button type="button" className="linklike" onClick={() => onJump(errorPointer(e.path))}>
-            <code>{e.path}</code>
-          </button>{" "}
+          <button type="button" className="linklike" onClick={() => onJump(errorPointer(e.path))} title={e.path}>
+            {nameOf(errorPointer(e.path)) ?? <code>{e.path}</code>}
+          </button>
+          {": "}
           {e.message}
           {e.hint ? <span className="faint"> ({e.hint})</span> : null}
         </div>
@@ -105,34 +121,34 @@ function sectionIdOf(f: Field, tree: readonly ResearchGroup[]): string | undefin
  * engine's own verdict on the last Check (`scenario.validate` `us_system`).
  */
 function UsBanner({
-  checked,
   verdict,
-  onCheck,
+  local,
+  protocol,
 }: {
-  checked: boolean;
   verdict: { readonly isUs: boolean; readonly reasons: readonly string[] } | undefined;
-  onCheck: () => void;
+  local: { readonly isUs: boolean; readonly reasons: readonly string[] };
+  protocol: unknown;
 }): React.JSX.Element {
-  if (checked && !verdict) {
+  if (typeof protocol === "string" && !protocol.includes("scms")) {
     return (
       <div className="note us-banner" data-testid="us-banner" data-us="none">
-        This run uses no US SCMS credential system, so these settings do not apply to it.
+        This run uses the European credential system; the US SCMS settings below do not apply.
       </div>
     );
   }
-  if (!verdict) {
-    return (
-      <div className="note us-banner" data-testid="us-banner" data-us="unknown">
-        Check the settings to see whether this run is the US system.{" "}
-        <button type="button" className="linkbutton" onClick={onCheck}>
-          Check
-        </button>
-      </div>
-    );
-  }
+  // The form's own reading is live; the engine's (from the last Check) adds what the form cannot see.
+  const v = local.isUs && verdict && !verdict.isUs ? verdict : local;
   return (
-    <div className={`note us-banner${verdict.isUs ? " ok" : ""}`} data-testid="us-banner" data-us={verdict.isUs ? "true" : "false"}>
-      {verdict.isUs ? "This run is the US system." : `Not the US system: ${verdict.reasons.join(", ") || "a setting the US does not use"}.`}
+    <div className={`note us-banner${v.isUs ? " ok" : ""}`} data-testid="us-banner" data-us={v.isUs ? "true" : "false"}>
+      {v.isUs ? (
+        <>
+          <b>US system.</b> <span className="dim">Everything here matches the deployed US SCMS.</span>
+        </>
+      ) : (
+        <>
+          <b>Not the US system:</b> {v.reasons.join(", ") || "a setting the US does not use"}.
+        </>
+      )}
     </div>
   );
 }
@@ -189,16 +205,25 @@ export function SettingsWindow({
   }, []);
 
   const { fields, source } = useMemo(() => settingsFields(extras.fields, schema, scenario), [extras.fields, schema, scenario]);
-  const edits = useMemo(() => (draft === null ? [] : changedPointers(scenario, draft)), [scenario, draft]);
+  const edits = useMemo(() => (draft === null ? [] : changedLeaves(scenario, draft)), [scenario, draft]);
   const dirty = edits.length > 0;
   const anyLevels = useMemo(() => fields.some((f) => f.level !== undefined), [fields]);
-  const unsupportedCount = useMemo(() => fields.filter(isUnsupported).length, [fields]);
+  const unsupportedCount = useMemo(() => fields.filter((f) => isUnsupported(f) && !isComingSoon(f)).length, [fields]);
+  const soon = useMemo(() => comingSoonFeatures(fields), [fields]);
   const isMod = useCallback((f: Field) => isEdited(f, edits) || isModified(f, getPointer(draft, f.pointer)), [edits, draft]);
   const modifiedCount = useMemo(() => fields.filter(isMod).length, [fields, isMod]);
 
   // Every field the filters allow, in its section; the page then shows one section, or every
   // section's matches while a search or the Modified filter is on.
-  const visible = useMemo(() => fields.filter((f) => showUnsupported || !isUnsupported(f) || isEdited(f, edits)), [fields, showUnsupported, edits]);
+  const visible = useMemo(
+    () =>
+      fields.filter((f) =>
+        isComingSoon(f)
+          ? isEdited(f, edits) || getPointer(draft, f.pointer) !== undefined
+          : showUnsupported || !isUnsupported(f) || isEdited(f, edits),
+      ),
+    [fields, showUnsupported, edits, draft],
+  );
   const fullTree = useMemo(() => buildResearchTree(visible), [visible]);
   const filtering = query.trim() !== "" || modifiedOnly;
   const found = useMemo(
@@ -217,6 +242,7 @@ export function SettingsWindow({
     return out;
   }, [fields, edits, fullTree]);
 
+  const movable = useMemo(() => movableKeys(draft, new Set(fields.map((f) => f.pointer))), [draft, fields]);
   const problems = useMemo(() => errorsByField(fields, validation?.errors ?? []), [fields, validation]);
   const inert = useMemo(() => inertEdits(fields, edits), [fields, edits]);
   const presets = presetsOf(list);
@@ -267,21 +293,39 @@ export function SettingsWindow({
       durationS={f.pointer === "/events" ? durationS : undefined}
       canPick={!detached}
       irrelevant={irrelevantReason(f, draft, fields)}
+      inherited={inheritedValue(draft, f.pointer)}
       onEdit={editSetting}
       onUndo={undoEdit}
     />
+
     </SettingsDocContext.Provider>
   );
+
+  /**
+   * A setting that does not apply while the document leaves it unset is left out (the pseudonym
+   * distance under a time-based change); one the document sets stays, greyed, so no value is
+   * hidden. A search shows everything.
+   */
+  const hiddenNow = (f: Field): boolean =>
+    // The backend's credential system is the vehicles' one unless someone set it apart.
+    (!filtering && f.pointer === "/actors/backend/protocol" && !isEdited(f, edits) &&
+      getPointer(draft, f.pointer) === getPointer(draft, "/security/protocol/id")) ||
+    (!filtering && !isEdited(f, edits) && !isModified(f, getPointer(draft, f.pointer)) &&
+    (getPointer(draft, f.pointer) === undefined || f.hasDefault === true) && irrelevantReason(f, draft, fields) !== undefined);
 
   /** One section's sub-headings with the fields `keep` allows. */
   const subsOf = (g: ResearchGroup, keep: (f: Field) => boolean): React.JSX.Element[] =>
     g.subs
-      .map((s) => ({ s, shown: s.fields.filter(keep) }))
+      .map((s) => ({ s, shown: s.fields.filter((f) => keep(f) && !hiddenNow(f)) }))
       .filter(({ shown }) => shown.length > 0)
       .map(({ s, shown }) => (
         <div key={s.key} className="settings-sub">
           {g.subs.length > 1 ? <h4 data-testid="settings-subheading">{s.label}</h4> : null}
-          {g.subs.length > 1 && s.blurb ? <p className="faint settings-sub-blurb">{s.blurb}</p> : null}
+          {g.subs.length > 1 && s.blurb ? (
+            <p className="faint settings-sub-blurb" title={s.blurb}>
+              {(s.key.startsWith("sg:") ? SUBGROUP_BLURBS[s.key.slice(3)] : undefined) ?? oneLine(s.blurb)}
+            </p>
+          ) : null}
           {shown.map((f) => row(f, s.key))}
         </div>
       ));
@@ -299,7 +343,17 @@ export function SettingsWindow({
         </div>
         {g.id === "group-run" ? runExtras : null}
         {g.id === "group-scms" ? (
-          <UsBanner checked={validation !== null} verdict={validation?.usSystem} onCheck={() => void runSettingsAction("Check", checkDraft)} />
+          <UsBanner verdict={validation?.usSystem} local={localUsVerdict(draft, fields, (f) => irrelevantReason(f as Field, draft, fields) === undefined)} protocol={getPointer(draft, "/security/protocol/id")} />
+        ) : null}
+        {g.id === "group-scms" && movable.length > 0 ? (
+          <div className="note setting-move top" data-testid="params-move-top">
+            <span>
+              {movable.length} lifecycle values come from this scenario's older parameter block.
+            </span>
+            <button type="button" className="btn small" onClick={() => moveIntoFields(draft, movable).forEach((w) => editSetting(w.pointer, w.value))}>
+              Move them into the form
+            </button>
+          </div>
         ) : null}
         {subsOf(g, basic)}
         {advCount > 0 && basicCount > 0 ? (
@@ -314,6 +368,11 @@ export function SettingsWindow({
           </button>
         ) : null}
         {showAdv && advCount > 0 ? <div className="settings-advanced">{subsOf(g, (f) => !basic(f))}</div> : null}
+        {g.id === "group-scms" && soon.length > 0 ? (
+          <p className="faint coming-soon" data-testid="coming-soon">
+            Coming soon: {soon.join(", ")}.
+          </p>
+        ) : null}
       </section>
     );
   };
@@ -543,7 +602,11 @@ export function SettingsWindow({
               <span className={`pill ${validation.valid ? "ok" : "err"}`} data-testid="validation-state">
                 {validation.valid ? "ready to run" : "needs fixing"}
               </span>
-              <ProblemList items={validation.errors} onJump={jumpToField} />
+              <ProblemList
+                items={validation.errors}
+                onJump={jumpToField}
+                nameOf={(p) => fields.filter((f) => p === f.pointer || p.startsWith(`${f.pointer}/`)).sort((a, b) => b.pointer.length - a.pointer.length)[0]?.label}
+              />
               {validation.warnings.length > 0 ? (
                 <div className="note" data-testid="validation-warn">
                   {validation.warnings.map((w, i) => (
@@ -575,9 +638,9 @@ export function SettingsWindow({
                     {c.section ? <span className="faint">{c.section} › </span> : null}
                     {c.field?.label ?? c.pointer}
                   </button>
-                  <code className="change-from">{describeValue(c.from)}</code>
+                  <code className="change-from">{c.pointer === PROVIDERS_POINTER ? describeProviders(c.from) : describeValue(c.from)}</code>
                   <span className="faint">→</span>
-                  <code className="change-to">{describeValue(c.to)}</code>
+                  <code className="change-to">{c.pointer === PROVIDERS_POINTER ? describeProviders(c.to) : describeValue(c.to)}</code>
                   <button type="button" className="icon-button tiny" onClick={() => undoEdit(c.pointer)} title="Undo this change" aria-label="Undo this change">
                     ↶
                   </button>

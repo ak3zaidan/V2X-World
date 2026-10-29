@@ -101,6 +101,8 @@ export function providerSetsOf(node: unknown): ProviderSets | undefined {
 export interface RelevantWhen {
   readonly path: string;
   readonly in: readonly unknown[];
+  /** Applies whenever the value at `path` is none of these (`in` is then ignored). */
+  readonly notIn?: readonly unknown[];
 }
 
 /** A named value for a number (`x-presets`): "Rush hour", "5 minutes (SAE J2945/1)". */
@@ -131,6 +133,9 @@ export interface ItemField {
   readonly compose?: { readonly separator: string; readonly providers: ProviderSets };
   /** A provider name, offered from the document's preset (`x-options-by-preset`). */
   readonly providerNames?: ProviderSets;
+  /** The engine's `x-status` and note for the element field, when it published one. */
+  readonly status?: string;
+  readonly statusNote?: string;
 }
 
 /** A widget in the scenario form. */
@@ -168,6 +173,10 @@ export interface FormField {
   readonly subgroup?: Subgroup;
   /** When the field matters; outside that it is drawn greyed with the reason, never hidden. */
   readonly relevantWhen?: RelevantWhen;
+  /** What an empty box means, when unset is a choice of its own ("never"). */
+  readonly emptyText?: string;
+  /** What one element of a list is called on its Add button ("link", "failure"). */
+  readonly noun?: string;
 }
 
 /** The `x-subgroup` of a published node, or `undefined`. */
@@ -579,6 +588,8 @@ export function fieldsFromPublished(
       ...(choices ? { choices, choicesOpen: row["x-options-open"] === true } : {}),
       ...(composeOf(row) ? { compose: composeOf(row) } : {}),
       ...(providerSetsOf(row["x-options-by-preset"]) ? { providerNames: providerSetsOf(row["x-options-by-preset"]) } : {}),
+      ...(typeof row["x-status"] === "string" ? { status: row["x-status"] } : {}),
+      ...(typeof row["x-status-note"] === "string" ? { statusNote: row["x-status-note"] } : {}),
     };
   };
   /** The map at `mapPointer` as a field, when the engine publishes its keys (`x-key-options`). */
@@ -675,6 +686,9 @@ export function fieldsFromPublished(
       out[i] = { ...f, kind: "map", keyChoices: asMap.keyChoices, keyOpen: asMap.keyOpen, valueFields: asMap.valueFields };
       continue;
     }
+    // A map whose keys come from the document (`nodes.per_class`, by vehicle class) keeps its
+    // value's fields, so the window can offer the keys it finds.
+    if (mapValues) out[i] = { ...f, valueFields: mapValues };
     // A `[from, to]` pair (`x-pair`): two number boxes with the element's unit and range.
     const pairNode = index.get(f.pointer);
     if (pairNode?.["x-pair"] === true) {
@@ -728,4 +742,21 @@ export function changedPointers(a: unknown, b: unknown, at = ""): string[] {
     return keys.flatMap((k) => changedPointers(a[k], b[k], `${at}/${k.replace(/~/g, "~0").replace(/\//g, "~1")}`));
   }
   return JSON.stringify(a) === JSON.stringify(b) ? [] : [at === "" ? "/" : at];
+}
+
+/**
+ * Like {@link changedPointers}, but a block the one side lacks entirely is still split into its
+ * leaves, so a first edit under `security.scms` is "providers changed", not "security.scms changed"
+ * (which no field owns, so no row showed it as edited).
+ */
+export function changedLeaves(a: unknown, b: unknown): string[] {
+  const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  const expand = (p: string): string[] => {
+    const x = getPointer(a, p);
+    const y = getPointer(b, p);
+    if (!((x === undefined && isObject(y)) || (y === undefined && isObject(x)))) return [p];
+    const inner = changedPointers(isObject(x) ? x : {}, isObject(y) ? y : {}, p).filter((q) => q !== p);
+    return inner.length === 0 ? [p] : inner.flatMap(expand);
+  };
+  return changedPointers(a, b).flatMap(expand);
 }

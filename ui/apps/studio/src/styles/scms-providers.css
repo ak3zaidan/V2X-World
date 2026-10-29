@@ -1,0 +1,56 @@
+/* The SCMS provider cards (settings/ScmsProviders.tsx). */
+
+.prov-list { display: flex; flex-direction: column; gap: 10px; }
+.prov-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  padding: 10px 12px 12px;
+}
+.prov-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.settings-window .prov-head select { width: auto; flex: none; min-width: 140px; }
+.prov-tag { font-size: 11px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+.prov-label {
+  margin: 10px 0 4px;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.prov-roles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 4px 16px; }
+.prov-role { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+.prov-role-name { display: flex; flex-direction: column; font-size: 12.5px; line-height: 1.2; cursor: default; }
+.prov-role-hint { font-size: 10.5px; color: var(--text-faint); }
+.prov-role-hint .warn-text { color: var(--warn); }
+
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; flex: none; }
+.stepper button {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+}
+.stepper button:hover:not(:disabled) { background: var(--bg-hover, var(--border)); }
+.stepper button:disabled { color: var(--text-faint); opacity: 0.5; }
+.stepper output { min-width: 26px; text-align: center; font-variant-numeric: tabular-nums; font-size: 13px; }
+.stepper.changed { border-color: var(--accent); }
+.stepper.changed output { color: var(--accent); font-weight: 600; }
+.stepper.fixed { border-color: transparent; }
+.stepper.fixed output { min-width: 78px; color: var(--text-dim); }
+
+.prov-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px 16px; }
+.prov-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-dim); min-width: 0; }
+.prov-field select, .prov-field input[type="number"] { width: 100%; }
+.prov-inline { display: flex; align-items: center; gap: 6px; min-height: 26px; }
+.prov-inline input[type="number"] { max-width: 90px; }
+.prov-inline input[type="checkbox"] { width: auto; }
+.prov-field .changed, .prov-field select.changed { border-color: var(--accent); }
+.prov-extras { margin-top: 6px; font-size: 11.5px; }
+.prov-note { font-size: 11.5px; margin-top: 4px; }
+.prov-soon { font-size: 11.5px; margin-top: 10px; }
+.prov-empty, .prov-foot { display: flex; align-items: center; gap: 10px; font-size: 12px; }

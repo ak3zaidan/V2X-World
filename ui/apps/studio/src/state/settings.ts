@@ -87,7 +87,22 @@ export function currentEdits(): string[] {
 
 /** Put one value into the draft. */
 export function editSetting(pointer: string, value: unknown): void {
-  useStudio.getState().setDraft((prev) => setPointer<Record<string, unknown>>(prev ?? {}, pointer, value));
+  const scenario = useStudio.getState().scenario;
+  useStudio.getState().setDraft((prev) => {
+    let next = setPointer<Record<string, unknown>>(prev ?? {}, pointer, value);
+    if (value !== undefined) return next;
+    // Clearing the last key of a block this edit created (a first provider change under an absent
+    // `security.scms`) removes the block too, so undoing it leaves no empty `{}` behind.
+    let at = pointer.slice(0, pointer.lastIndexOf("/"));
+    while (at !== "") {
+      const block = getPointer(next, at);
+      const empty = block !== null && typeof block === "object" && !Array.isArray(block) && Object.values(block).every((v) => v === undefined);
+      if (!empty || getPointer(scenario, at) !== undefined) break;
+      next = setPointer<Record<string, unknown>>(next, at, undefined);
+      at = at.slice(0, at.lastIndexOf("/"));
+    }
+    return next;
+  });
 }
 
 /** Put one setting back to what the engine holds for the next run. */

@@ -13,6 +13,7 @@ import { useContext, useEffect, useState } from "react";
 import type { Choice, ItemField, NumberPreset } from "../lib/schema.js";
 import { getPointer, joinComposed, presetIn, providersIn, setPointer, splitComposed } from "../lib/schema.js";
 import { SettingsDocContext } from "./docContext.js";
+import { durationWords } from "../lib/duration.js";
 
 import "../styles/settings-widgets.css";
 
@@ -47,6 +48,8 @@ export function ChoiceSelect({
   value,
   onChange,
   compact,
+  defaultValue,
+  unsetLabel,
 }: {
   common: Common;
   choices: readonly Choice[];
@@ -55,8 +58,13 @@ export function ChoiceSelect({
   value: unknown;
   onChange: (v: unknown) => void;
   compact?: boolean;
+  /** The value the engine uses while the key is unset: the unset entry names it. */
+  defaultValue?: unknown;
+  /** The words for "unset" when unset is a choice of its own ("None"). */
+  unsetLabel?: string;
 }): React.JSX.Element {
   const known = choices.find((c) => sameValue(value, c.value));
+  const fallback = defaultValue === undefined ? undefined : choices.find((c) => sameValue(defaultValue, c.value));
   const unset = value === undefined || value === null || value === "";
   const [typing, setTyping] = useState(false);
   useEffect(() => {
@@ -80,8 +88,10 @@ export function ChoiceSelect({
     );
   }
   const current = known ? String(known.value) : unset ? UNSET : String(value);
+  const shown = known ?? (unset ? fallback : undefined);
   return (
     <span className={compact ? "choice compact" : "choice"}>
+      <span className="choice-row">
       <select
         {...common}
         value={current}
@@ -100,8 +110,8 @@ export function ChoiceSelect({
           onChange(picked ? picked.value : v);
         }}
       >
-        {unset || nullable ? (
-          <option value={UNSET}>{nullable ? "Engine default" : "— choose —"}</option>
+        {unset || nullable || unsetLabel ? (
+          <option value={UNSET}>{unsetLabel ?? (fallback ? `${fallback.label} (default)` : nullable ? "Default" : "— choose —")}</option>
         ) : null}
         {!known && !unset ? <option value={String(value)}>{String(value)} (not in the list)</option> : null}
         {choices.map((c) => (
@@ -112,15 +122,11 @@ export function ChoiceSelect({
         ))}
         {open ? <option value={CUSTOM}>Other…</option> : null}
       </select>
-      <OptionExplainer choices={choices} />
-      {known?.us === false ? (
-        <span className="badge-not-us" data-testid="not-us" title="The deployed US system does not use this value">
-          not US
-        </span>
-      ) : null}
-      {!compact && known?.description ? (
+      {compact ? null : <OptionExplainer choices={choices} />}
+      </span>
+      {!compact && shown?.description ? (
         <span className="choice-desc" data-testid="choice-desc">
-          {known.description}
+          {shown.description}
         </span>
       ) : null}
     </span>
@@ -137,7 +143,7 @@ export function OptionExplainer({ choices }: { choices: readonly Choice[] }): Re
   const [open, setOpen] = useState(false);
   if (choices.length === 0) return null;
   return (
-    <span className="option-explainer">
+    <span className={open ? "option-explainer open" : "option-explainer"}>
       <button
         type="button"
         className="icon-button tiny"
@@ -237,7 +243,7 @@ export function MapRows({
   const emptyValue = (): unknown => (leaf ? (leaf.kind === "number" || leaf.kind === "integer" ? (leaf.min ?? 0) : leaf.choices?.find((c) => c.available)?.value ?? "") : {});
   return (
     <div className="map-rows" data-testid="map-rows">
-      {keys.length === 0 ? <div className="dim">None.</div> : null}
+      {keys.length === 0 ? <div className="dim empty-note">None</div> : null}
       {keys.map((k) => {
         const id = `${idBase}-${k.replace(/\W/g, "_")}`;
         const own = keyChoices.find((c) => String(c.value) === k);
@@ -313,6 +319,8 @@ export function NumberWithPresets({
   presets,
   unit,
   onChange,
+  defaultValue,
+  emptyText,
 }: {
   common: Common;
   value: unknown;
@@ -323,11 +331,17 @@ export function NumberWithPresets({
   presets?: readonly NumberPreset[];
   unit?: string;
   onChange: (v: unknown) => void;
+  /** Shown greyed in the empty box: what the engine uses while the key is unset. */
+  defaultValue?: unknown;
+  /** What an empty box means when there is no number to show ("never"). */
+  emptyText?: string;
 }): React.JSX.Element {
   const input = (
     <input
       {...common}
       type="number"
+      className="num"
+      placeholder={typeof defaultValue === "number" ? String(defaultValue) : emptyText}
       value={typeof value === "number" ? value : ""}
       min={min}
       max={max}
@@ -335,16 +349,31 @@ export function NumberWithPresets({
       onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
     />
   );
-  if (!presets || presets.length === 0) return input;
-  const active = presets.find((p) => p.value === value);
+  const effective = typeof value === "number" ? value : defaultValue;
+  const words = unit === "s" && typeof effective === "number" ? durationWords(effective) : "";
+  // The words are left out when the chip already says them ("10 min").
+  const hideWords = words !== "" && (presets ?? []).some((p) => p.value === effective && p.label.toLowerCase().startsWith(words.toLowerCase()));
+  const head = (
+    <span className="num-box">
+      {input}
+      {words !== "" && !hideWords ? (
+        <span className={typeof value === "number" ? "dim duration-words" : "faint duration-words"} data-testid="duration-words">
+          {words}
+        </span>
+      ) : null}
+    </span>
+  );
+  if (!presets || presets.length === 0) return <span className="number-presets">{head}</span>;
+  const active = presets.find((p) => p.value === effective);
   return (
     <span className="number-presets">
+      {head}
       <span className="preset-chips" role="group" aria-label="Common values">
         {presets.map((p) => (
           <button
             key={p.label}
             type="button"
-            className={p === active ? "preset-chip active" : "preset-chip"}
+            className={p === active ? (typeof value === "number" ? "preset-chip active" : "preset-chip active default") : "preset-chip"}
             aria-pressed={p === active}
             title={`${p.value}${unit ? ` ${unit}` : ""}${p.note ? ` — ${p.note}` : ""}`}
             data-testid="preset-chip"
@@ -353,10 +382,6 @@ export function NumberWithPresets({
             {p.label}
           </button>
         ))}
-      </span>
-      <span className="preset-custom">
-        {input}
-        <span className="faint">{active ? active.note : "custom value"}</span>
       </span>
     </span>
   );
@@ -656,7 +681,7 @@ export function ListEditor({
   };
   return (
     <div className="list-editor" data-testid="list-editor">
-      {list.length === 0 ? <div className="dim">None.</div> : null}
+      {list.length === 0 ? <div className="dim empty-note">None</div> : null}
       {list.map((item, i) => (
         <div className="list-item" key={i} data-testid="list-item">
           <div className="list-item-head">
