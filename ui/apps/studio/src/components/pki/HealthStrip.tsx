@@ -49,7 +49,6 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
   const withAhead = inRun ? inRun.reduce((n, v) => n + Math.max(validOf(v), v.usable), 0) : null;
   const perVehicle = certificates !== null && inRun && inRun.length > 0 ? certificates / inRun.length : null;
   const every = h.crlNewest ? (cadence[h.crlNewest.provider] ?? null) : null;
-  const nextIn = h.crlAgeS !== null && every !== null ? Math.max(0, every - h.crlAgeS) : null;
   // A revoked vehicle with nothing to sign with is revocation working, not a shortage.
   const starving = inRun ? inRun.filter((v) => v.enrolled && v.usable === 0 && v.revoked !== true && (v.truth?.revoked_certs ?? 0) === 0).length : 0;
   const jmax = inRun?.[0]?.jmax ?? null;
@@ -64,7 +63,7 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
     <div className="pki-health" role="group" aria-label="System health" data-testid="pki-health">
       <Stat
         tab="vehicles"
-        label="pseudonym certificates valid now"
+        label="certificates valid now"
         value={certificates === null ? dash : certificates.toLocaleString()}
         sub={
           certificates === null
@@ -72,7 +71,7 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
             : starving > 0
               ? `${starving} vehicle${starving === 1 ? " has" : "s have"} none left to sign with`
               : perVehicle !== null
-                ? `about ${perVehicle.toFixed(0)} per vehicle${withAhead !== null && withAhead > certificates ? ` · ${withAhead.toLocaleString()} incl. weeks ahead` : ""}`
+                ? `pseudonym certificates, about ${perVehicle.toFixed(0)} per vehicle${withAhead !== null && withAhead > certificates ? ` · ${withAhead.toLocaleString()} incl. weeks ahead` : ""}`
                 : "no vehicle in the run has reported yet"
         }
         tip={
@@ -109,9 +108,9 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
             ? "no list published yet"
             : h.crlDueS < 0
               ? `the next is overdue by ${ageText(-h.crlDueS)}`
-              : `${h.crlNewest ? `${h.crlNewest.provider} v${h.crlNewest.version} · ` : ""}${nextIn !== null && every !== null ? `next within ${ageText(nextIn)} (every ${ageText(every)})` : `next due within ${ageText(h.crlDueS)}`}`
+              : `${h.crlNewest ? `${h.crlNewest.provider} v${h.crlNewest.version} · ` : ""}${every !== null ? `a revocation is listed within ${ageText(every)}` : `next due within ${ageText(h.crlDueS)}`}`
         }
-        tip={`How long ago the newest certificate revocation list (CRL) of any provider was issued, and when the next one comes.${every !== null ? ` This scenario publishes a list every ${ageText(every)}.` : ""} Every list also prints a deadline by which it must be replaced (its nextCrl): the soonest is ${h.crlDueS === null ? "not set yet" : h.crlDueS < 0 ? `overdue by ${ageText(-h.crlDueS)}` : `in ${ageText(h.crlDueS)}`}.`}
+        tip={`How long ago the newest certificate revocation list (CRL) of any provider was issued.${every !== null ? ` This scenario's CRL Generators gather new revocations and publish them every ${ageText(every)}; with nothing new, no list is published.` : ""} Every list also prints a deadline by which it must be replaced (its nextCrl): the soonest is ${h.crlDueS === null ? "not set yet" : h.crlDueS < 0 ? `overdue by ${ageText(-h.crlDueS)}` : `in ${ageText(h.crlDueS)}`}.`}
         tone={h.crlOverdue ? "bad" : h.crlAgeS === null ? "idle" : "ok"}
         testId="pki-health-crl"
       />

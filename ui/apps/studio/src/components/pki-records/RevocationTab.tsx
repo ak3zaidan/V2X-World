@@ -213,10 +213,13 @@ function NextList({ head, cadenceS, nowNs }: { readonly head: CrlHead; readonly 
     );
   if (cadenceS !== null && cadenceS > 0) {
     const since = Math.max(0, (nowNs - head.issued_at) / 1e9);
-    const left = Math.max(0, cadenceS - (since % cadenceS));
     return (
-      <td data-testid="pki-crl-sla" data-basis="schedule" title={`The scenario publishes a list every ${slaText(cadenceS)}. ${deadline}`}>
-        <span className="mono">within {slaText(left)}</span> <span className="faint pki-nowrap">(every {slaText(cadenceS)})</span>
+      <td
+        data-testid="pki-crl-sla"
+        data-basis="schedule"
+        title={`The scenario's CRL Generator gathers new revocations and publishes them every ${slaText(cadenceS)}; with nothing new it publishes no list (this one is ${slaText(since)} old). ${deadline}`}
+      >
+        <span className="mono">within {slaText(cadenceS)}</span> <span className="faint">of a revocation</span>
       </td>
     );
   }
@@ -408,7 +411,7 @@ function Providers({
     return (
       <>
         <h4 className="pkir-pad">How the providers publish</h4>
-        <p className="pkir-pad pki-provider-rules" data-testid="pki-crl-providers" data-same="1">
+        <p className="pkir-pad pki-provider-rules-one" data-testid="pki-crl-providers" data-same="1">
           <b>{providers.length === 2 ? "Both providers" : `All ${providers.length} providers`}</b>{" "}
           <span className="dim">
             ({providers.map((x) => `${x.label}${x.home ? ", home" : ""}`).join("; ")}) · {p.on_ctl ? "roots on the trust list" : "roots NOT on the trust list"} · {maModeText(p.ma_mode)}

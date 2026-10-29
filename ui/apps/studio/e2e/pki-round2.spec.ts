@@ -147,7 +147,7 @@ test("Revocation: the next list by the scenario's schedule, and who each list re
   await expect(sla.first()).toBeVisible();
   // The fixture's generators publish on a schedule: the next list is said by it, the nextCrl deadline sits in the tooltip.
   await expect(sla.first()).toHaveAttribute("data-basis", "schedule");
-  await expect(sla.first()).toContainText(/within .* \(every /);
+  await expect(sla.first()).toContainText(/within \d+ s of a revocation/);
   await expect(sla.first()).toHaveAttribute("title", /nextCrl/);
   await panel.getByTestId("pki-crl-entries-link").first().click();
   const card = panel.getByTestId("pki-crl-card");

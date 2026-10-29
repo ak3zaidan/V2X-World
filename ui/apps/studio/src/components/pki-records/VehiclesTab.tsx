@@ -33,7 +33,6 @@ import {
   revocationStory,
   secondsText,
   slaText,
-  time32Text,
   type CellState,
   type CredCell,
   type CredentialContext,
@@ -151,15 +150,20 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
   const driving = all.filter((r) => stateOf.get(r.device) !== "left");
   const now = list?.t_ns ?? 0;
   const ctl = uniform(all, (r) => r.ctl_sequence ?? null);
-  const crl = uniform(all, (r) => installedListText(installedList(r.security, heads)));
-  const topup = uniform(driving, (r) => nextTopup(r, now));
+  // The lists and top-ups of the vehicles still driving: one that left keeps its last record, and a
+  // revoked one is blocked from top-ups (its card and its state say so), so neither unfolds a column.
+  const crl = uniform(driving, (r) => installedListText(installedList(r.security, heads)));
+  const topup = uniform(
+    driving.filter((r) => stateOf.get(r.device) !== "revoked"),
+    (r) => nextTopup(r, now),
+  );
   const enrolled = uniform(all, (r) => r.enrolled);
   const allEnrolled = all.length > 0 && enrolled.same && enrolled.value === true;
   const same: string[] = [];
   if (allEnrolled) same.push("enrolled with its provider");
   if (all.length > 0 && ctl.same) same.push(ctl.value === null ? "no trust list (CTL) reported" : `trust list (CTL) version ${String(ctl.value)}`);
-  if (all.length > 0 && crl.same) same.push(listSentence(installedList(all[0].security, heads)));
-  if (driving.length > 0 && topup.same) same.push(topupSentence(topup.value ?? "–"));
+  if (driving.length > 0 && crl.same) same.push(listSentence(installedList(driving[0].security, heads)));
+  if (driving.length > 0 && topup.same && topup.value !== undefined) same.push(`${topupSentence(topup.value)}${(counts.get("revoked") ?? 0) > 0 ? " (revoked vehicles get none)" : ""}`);
   return (
     <div className={chosen ? "pkir-split" : "pkir-split single"} data-testid="pki-vehicles">
       <div className="pkir-table-wrap">
@@ -198,7 +202,7 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
         ) : null}
         {same.length > 0 ? (
           <p className="pkir-pad faint" data-testid="pki-vehicles-same">
-            Every vehicle: {same.join(" · ")}.
+            Every vehicle{(counts.get("left") ?? 0) > 0 ? " still in the run" : ""}: {same.join(" · ")}.
           </p>
         ) : null}
         {all.length > 0 ? (
@@ -399,7 +403,7 @@ function AtAGlance({
           {!d.enrolled
             ? "not enrolled"
             : ecLimit
-              ? "lifetime not modelled in this scenario: its compressed calendar gives enrolment certificates under an hour, which the engine writes as zero (open it)"
+              ? "lifetime not modelled in this scenario (open it for why)"
               : ecOk
                 ? "enrolled with its provider"
                 : `a receiver reads it as ${CERT_STATUS[ec.status].label.toLowerCase()} (open it)`}
@@ -477,7 +481,7 @@ function AtAGlance({
             </b>
             <span className="sub" data-testid="pki-glance-revoked-by">
               {story && story.lists.length > 0
-                ? `on ${story.lists[0].provider}'s list v${story.lists[0].version}, ${dateText(story.lists[0].issue_date)}`
+                ? `on ${story.lists[0].provider}'s list v${story.lists[0].version}, published at ${secondsText(story.lists[0].issued_at)}`
                 : "a published list names it"}
               {story?.refusing ? ` · ${story.refusing.installed} of ${story.refusing.of} vehicles refuse it` : ""}
               {story?.caseId ? (
@@ -511,11 +515,6 @@ function caseLabel(id: string): string {
 function openCase(id: string): void {
   usePkiView.getState().set({ caseId: id });
   chooseTab("cases");
-}
-
-/** A Time32 to the minute in the run's calendar. */
-function dateText(t: number): string {
-  return time32Text(t).slice(5, 16);
 }
 
 /** The lists that revoke a vehicle and its case (ground truth), asked only for a revoked vehicle. */
