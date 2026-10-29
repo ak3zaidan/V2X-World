@@ -307,8 +307,11 @@ export function SettingsWindow({
    * hidden. A search shows everything.
    */
   const hiddenNow = (f: Field): boolean =>
-    !filtering && !isEdited(f, edits) && !isModified(f, getPointer(draft, f.pointer)) &&
-    (getPointer(draft, f.pointer) === undefined || f.hasDefault === true) && irrelevantReason(f, draft, fields) !== undefined;
+    // The backend's credential system is the vehicles' one unless someone set it apart.
+    (!filtering && f.pointer === "/actors/backend/protocol" && !isEdited(f, edits) &&
+      getPointer(draft, f.pointer) === getPointer(draft, "/security/protocol/id")) ||
+    (!filtering && !isEdited(f, edits) && !isModified(f, getPointer(draft, f.pointer)) &&
+    (getPointer(draft, f.pointer) === undefined || f.hasDefault === true) && irrelevantReason(f, draft, fields) !== undefined);
 
   /** One section's sub-headings with the fields `keep` allows. */
   const subsOf = (g: ResearchGroup, keep: (f: Field) => boolean): React.JSX.Element[] =>
