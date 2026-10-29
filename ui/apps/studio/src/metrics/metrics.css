@@ -532,8 +532,8 @@
 .scms-answer { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 10px; font-size: 13.5px; line-height: 1.45; color: var(--text); max-width: 120ch; }
 .scms-answer .lmark { flex: none; position: relative; top: -1px; }
 
-/* At most five tiles a row, none narrower than 200 px: a number and its unit always fit on one line. */
-.scms-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(max(200px, calc((100% - 32px) / 5)), 1fr)); gap: 8px; }
+/* As many tiles a row as fit at 168 px: a number and its unit always fit on one line. */
+.scms-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 8px; }
 .scms-tile {
   display: flex;
   flex-direction: column;
@@ -634,7 +634,7 @@
   background: repeating-linear-gradient(135deg, var(--viz-seq) 0 3px, color-mix(in srgb, var(--viz-seq) 22%, transparent) 3px 6px);
 }
 .scms-hatch-key { display: inline-block; width: 18px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
-.scms-caveat { font-size: 12px; line-height: 1.45; margin: 0 0 8px; padding: 6px 10px; border: 1px dashed var(--border-strong); border-radius: 6px; color: var(--text); max-width: 110ch; }
+.scms-caveat { font-size: 11.5px; line-height: 1.4; margin: 0 0 6px; color: var(--text-dim); cursor: help; }
 .scms-total { font-size: 12px; margin: 6px 0 0; color: var(--text); font-weight: 600; }
 .scms-bar-axis { margin-top: -1px; }
 .scms-axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-faint); border-top: 1px solid var(--baseline); padding-top: 1px; font-variant-numeric: tabular-nums; }

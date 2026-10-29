@@ -27,7 +27,6 @@ import type { HealthLevel } from "./health.js";
 /** The section's name: the dashboard's navigation uses the same words. */
 export const SCMS_TITLE = "Credentials at a glance";
 
-const WORDS: Readonly<Record<number, string>> = { 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven" };
 
 /** What the overview tells the dashboard: each question's verdict, and the metrics it shows a value for. */
 export interface ScmsReport {
@@ -219,18 +218,19 @@ function MiniSpark({ series, label, base, unit }: { series: Series; label: strin
 
 function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen: (base: string) => void }): React.JSX.Element {
   const spark = t.spark ? overview.series.get(t.spark) : undefined;
-  const tip = [t.cue, t.pending, t.source, t.metric ? "Click to open its full chart." : null].filter(Boolean).join("\n\n");
+  // The tile shows the plain name; the standard term in brackets is in the tooltip.
+  const short = t.title.replace(/\s*\([^)]*\)\s*$/, "") || t.title;
+  const tip = [short !== t.title ? t.title : null, t.meaning, t.cue, t.pending, t.source, t.metric ? "Click to open its full chart." : null].filter(Boolean).join("\n\n");
   const body = (
     <>
-      <span className="scms-tile-title">{t.title}</span>
+      <span className="scms-tile-title">{short}</span>
       <span className="scms-tile-value">
         <span className="scms-num" data-testid={`scms-value-${t.id}`}>
           {t.value}
         </span>
         {t.unit !== "" ? <span className="scms-unit">{t.unit}</span> : null}
-        {t.level ? <LevelMark level={t.level} /> : t.pending ? <PendingMark /> : null}
+        {t.level ? <LevelMark level={t.level} compact={t.level === "healthy"} /> : t.pending ? <PendingMark /> : null}
       </span>
-      <span className="scms-tile-meaning">{t.meaning}</span>
       {t.level && t.level !== "healthy" && t.cue ? <span className={`scms-tile-cue ${t.level}`}>{t.cue.split(". Thresholds:")[0]}</span> : null}
       {t.pending ? (
         <span className="scms-tile-cue pending" data-testid={`scms-pending-${t.id}`}>
@@ -294,9 +294,6 @@ function Funnel({ steps }: { steps: readonly FunnelStep[] }): React.JSX.Element 
           </li>
         ))}
       </ol>
-      <p className="dim scms-note">
-        Hover or focus a step for what it counts. Reports wait in the RA's shuffle by design, so the MA cannot tell who sent them; cases and revocations count suspects, not reports.
-      </p>
     </div>
   );
 }
@@ -304,7 +301,7 @@ function Funnel({ steps }: { steps: readonly FunnelStep[] }): React.JSX.Element 
 function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => void; testId: string }): React.JSX.Element {
   return (
     <div className="scms-block" data-testid={testId}>
-      <h5>
+      <h5 title={`${b.note}${b.limit ? ` The dashed line: ${b.limit.label}.` : ""}`}>
         {b.title}
         {b.metric && b.rows.length > 0 && b.idle === undefined ? (
           <button type="button" className="linklike scms-chart-link" onClick={() => onOpen(b.metric!)}>
@@ -321,9 +318,9 @@ function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => vo
       ) : (
         <>
           {b.caveat ? (
-            <p className="scms-caveat" data-testid={`${testId}-caveat`}>
+            <p className="scms-caveat" data-testid={`${testId}-caveat`} title={b.caveat}>
               <span className="scms-hatch-key" aria-hidden="true" />
-              {b.caveat}
+              Hatched: a window the scenario compresses, not a deployment's time.
             </p>
           ) : null}
           <ul className="scms-bars">
@@ -360,10 +357,6 @@ function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => vo
               {b.total}
             </p>
           ) : null}
-          <p className="dim scms-note">
-            {b.note}
-            {b.limit ? ` The dashed line: ${b.limit.label}.` : ""}
-          </p>
         </>
       )}
     </div>
@@ -546,11 +539,7 @@ export function ScmsOverview({
       </header>
       {open ? (
         <div id="scms-body">
-          <p className="dim scms-intro">
-            {o.sections.length === 1 ? "One question" : `${WORDS[o.sections.length] ?? o.sections.length} questions`} about the credential system, each answered from the engine's own counts and metrics. Hover or focus a number for where it comes from; click one with a
-            chart to open it.
-            {src.status === "loading" ? " Reading the authorities' counts…" : src.snapshot === null ? " The engine published no Backend snapshot, so only the catalogue's metrics appear." : ""}
-          </p>
+          {src.status === "loading" ? <p className="dim scms-intro">Reading the authorities' counts…</p> : null}
           <AnswerStrip sections={o.sections} />
           <div className="scms-grid">
             {o.sections.map((s) => (
