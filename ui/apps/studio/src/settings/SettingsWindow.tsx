@@ -37,6 +37,7 @@ import { useRevealSetting } from "../lib/links.js";
 import { changedPointers, getPointer } from "../lib/schema.js";
 import {
   buildResearchTree,
+  irrelevantReason,
   describeValue,
   errorPointer,
   errorsByField,
@@ -55,6 +56,7 @@ import { JsonView } from "./JsonView.js";
 import { applyPatch } from "./quick.js";
 import "../styles/quick.css";
 import "../styles/settings.css";
+import { SettingsDocContext } from "./docContext.js";
 import { SettingRow } from "./SettingRow.js";
 
 const SECTION_KEY = "v2xw.settings.section";
@@ -96,6 +98,43 @@ function ProblemList({ items, onJump }: { items: readonly ValidationError[]; onJ
 /** The section id a field is shown under (its research section, or its engine group's). */
 function sectionIdOf(f: Field, tree: readonly ResearchGroup[]): string | undefined {
   return tree.find((g) => g.subs.some((s) => s.fields.includes(f)))?.id;
+}
+
+/**
+ * Whether these settings are the deployed US SCMS (08-settings-ux-and-gaps §4.2 item 7), from the
+ * engine's own verdict on the last Check (`scenario.validate` `us_system`).
+ */
+function UsBanner({
+  checked,
+  verdict,
+  onCheck,
+}: {
+  checked: boolean;
+  verdict: { readonly isUs: boolean; readonly reasons: readonly string[] } | undefined;
+  onCheck: () => void;
+}): React.JSX.Element {
+  if (checked && !verdict) {
+    return (
+      <div className="note us-banner" data-testid="us-banner" data-us="none">
+        This run uses no US SCMS credential system, so these settings do not apply to it.
+      </div>
+    );
+  }
+  if (!verdict) {
+    return (
+      <div className="note us-banner" data-testid="us-banner" data-us="unknown">
+        Check the settings to see whether this run is the US system.{" "}
+        <button type="button" className="linkbutton" onClick={onCheck}>
+          Check
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className={`note us-banner${verdict.isUs ? " ok" : ""}`} data-testid="us-banner" data-us={verdict.isUs ? "true" : "false"}>
+      {verdict.isUs ? "This run is the US system." : `Not the US system: ${verdict.reasons.join(", ") || "a setting the US does not use"}.`}
+    </div>
+  );
 }
 
 export function SettingsWindow({
@@ -216,8 +255,8 @@ export function SettingsWindow({
   useRevealSetting(jumpToField, fields.length > 0);
 
   const row = (f: Field, sectionKey: string): React.JSX.Element => (
+    <SettingsDocContext.Provider key={f.pointer} value={draft}>
     <SettingRow
-      key={f.pointer}
       field={f}
       sectionKey={sectionKey}
       value={getPointer(draft, f.pointer)}
@@ -227,9 +266,11 @@ export function SettingsWindow({
       devDetails={devDetails}
       durationS={f.pointer === "/events" ? durationS : undefined}
       canPick={!detached}
+      irrelevant={irrelevantReason(f, draft, fields)}
       onEdit={editSetting}
       onUndo={undoEdit}
     />
+    </SettingsDocContext.Provider>
   );
 
   /** One section's sub-headings with the fields `keep` allows. */
@@ -239,7 +280,8 @@ export function SettingsWindow({
       .filter(({ shown }) => shown.length > 0)
       .map(({ s, shown }) => (
         <div key={s.key} className="settings-sub">
-          {g.subs.length > 1 ? <h4>{s.label}</h4> : null}
+          {g.subs.length > 1 ? <h4 data-testid="settings-subheading">{s.label}</h4> : null}
+          {g.subs.length > 1 && s.blurb ? <p className="faint settings-sub-blurb">{s.blurb}</p> : null}
           {shown.map((f) => row(f, s.key))}
         </div>
       ));
@@ -256,6 +298,9 @@ export function SettingsWindow({
           {g.blurb ? <span className="faint">{g.blurb}</span> : null}
         </div>
         {g.id === "group-run" ? runExtras : null}
+        {g.id === "group-scms" ? (
+          <UsBanner checked={validation !== null} verdict={validation?.usSystem} onCheck={() => void runSettingsAction("Check", checkDraft)} />
+        ) : null}
         {subsOf(g, basic)}
         {advCount > 0 && basicCount > 0 ? (
           <button

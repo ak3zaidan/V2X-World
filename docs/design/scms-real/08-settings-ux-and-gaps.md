@@ -889,6 +889,99 @@ electors bound), `scms_presets_lie_inside_their_ranges` (a preset moved out of r
 the parser refuses) and `the_promoted_lifecycle_keys_act_like_their_params_spelling` (a key
 dropped from `entries()`). No golden moved.
 
+**Status, A2 (2026-10-29): built.** The UI of §4.2 items 1, 3, 4, 5, 6, 8 and 9, the engine
+facts they read, and the §10 Playwright spec with its twin. Items 2 (composite picker) and 7
+(US banner) are A4's.
+
+* Engine: `x-pair` on `pseudonym_change.silent_period_s`; `x-relevant-when` from
+  `options::relevant_when` (fixed-path conditions only: latency, pseudonym strategy,
+  verification policy, umbrella protocol, RSU air link, the MA pipeline); the twelve
+  `detection.ma.params` keys of both pipelines are typed fields with unit, range, guide row
+  and their pipeline (`x-relevant-when` on `detection.ma.id`), the block carries
+  `x-typed-children` and the form drops its JSON box. The loader (`MaHost::from_scenario`)
+  now enforces those ranges. `detection.ma.id` publishes its default, the corroborating
+  authority an absent key runs; keys only the legacy pipeline takes publish their value as
+  `x-pipeline-value`, not as a default, because writing nothing never runs that pipeline.
+* UI: `MapRows` (a key menu from `x-key-options` and the value's control, or a row of
+  fields for a struct value) at the top level and inside a list row (a provider's
+  `components`, `sites`, `capacity`); `RangePair`; an "i" button beside every menu listing
+  each option with its sentence, US / not-US badge and, for a disabled one, the reason; a
+  "not US" badge on the chosen value; "= 1 week 1 h" beside every `s` number; greyed rows
+  with "Applies only when …" (value kept); the SCMS page's sub-headings, order and help
+  from `x-subgroup`; `data-kind` on every row.
+* Choice under §9: the Security & Crypto page keeps signature, KEM, envelope and
+  verification policy, as the owner's layout has it; their `x-subgroup` files them only
+  when they are shown on the SCMS page. Conditions inside a list element (`failures[].extra_ms`
+  under `slow`, `prov[].ma_review_s` under `manual-review`) are left to the loader's refusal.
+
+Checks, each shown red under its named fault and reverted: `publish::tests::
+the_authority_parameters_are_fields_and_relevance_names_real_values` (the corroborating
+pipeline's range check removed), vitest `test/scms-menus.test.ts` (the `x-typed-children`
+skip removed), and `e2e-engine/scms-settings.spec.ts` against the real engine: the main
+test (a keyed map reported as `json`) and its built-in twin (`check()` made a no-op: "expected
+to fail, but passed"). No golden moved.
+
+**Status, A3 (2026-10-29): built.** Words, presets and relevance for the §5-§8 keys.
+
+* Words: the modules' `Opt` rows (A0) already give every value a label and a sentence; A3 adds
+  a guide row (`x-explain`, `x-recommended`) for every §5-§8 key. A key that repeats under
+  several roots (`ma_policies.*.…`, `providers[].capacity.*.…`) has one row, written at its
+  first root, which `guide::hint` finds for the others.
+* Presets: `options::MODULE_PRESETS`, keyed by the path below the root
+  (`options::module_key`), so the same named values serve every root: the §6 capacity values
+  and the §7 MA policy values, each with its source or ASSUMPTION. `decay.hour_et` is the
+  same 24-hour menu as `report_decay_hour_et`.
+* Relevance: the MA policy's dependent fields (`decay.factor`/`hour_et` under
+  `daily-multiplier`, `half_life_s` under `half-life`, `population_guard.c`/`m` under
+  `cluster`, `decision.review_s` under `manual-review`, `evidence.tau_m` under `catch`) at the
+  fixed `ma_policy` root. Choice under §9: an absent mode is the preset's, which may be either,
+  so it does not grey the field (`null` in `x-relevant-when`).
+* Configuration-reference line added.
+
+Check, shown red under three named faults and reverted: `publish::tests::
+the_new_scms_keys_carry_help_presets_and_relevance` (the module presets not looked up; a key
+under its second root finding no guide row; `decay.factor`'s preset moved to 1.9). The first
+and third mask each other, so each ran in its own build. No golden moved.
+
+**Status, A4 (2026-10-29): built.** Dependent sets and the US banner (§4.1 item 6, §4.2
+items 2 and 7).
+
+* Engine: `options::provider_sets()` gives each preset's providers, home provider first, as
+  `Deployment::preset` builds them, plus where a document names its preset and its custom
+  list. `actors.backend.failures[].node` carries it in `x-options-compose` (`separator: "/"`),
+  `prov[].name` in `x-options-by-preset`. Choice: the sets ride on the two fields rather than
+  a top-level `scms.providers_by_preset`, so the form needs nothing outside the field.
+* `phase2::us_system`: on an SCMS run, `is_us` and each departure in words. The deployment's
+  part is `Deployment::is_us` (preset, electors, quorum, required roles); the rest are the
+  values the menus badge "not US" (envelope, signature, KEM, home-provider chain file, LOP,
+  committees). Choice under §9: the banner is stricter than the manifest's `is_us`, because a
+  run on a post-quantum signature is not the US system however its deployment is laid out.
+  `scenario.validate` returns it as `us_system` (null off an SCMS run), and the OpenRPC
+  document lists the field.
+* UI: `ProviderRolePicker` (the deployment's providers beside the role menu; the home
+  provider's server written bare, another's as `provider-b/crlg`; "Other…" still types a
+  committee member), provider names filtered by the document's preset (any name under
+  `custom`), and the banner at the top of Certificates & SCMS from the last Check ("This run
+  is the US system", "Not the US system: electors 7, signature ecdsa-p384", or that the run
+  has no SCMS).
+
+Checks, each shown red under its named fault and reverted:
+`phase2::settings_menu_tests::the_us_verdict_names_each_departure` (the electors reason
+dropped), `publish::tests::the_failure_server_and_provider_name_follow_the_deployment` (the
+compose insertion dropped), vitest `test/scms-compose.test.ts` (the home provider's server
+written qualified; the verdict not carried to the store). `v2xw-server --test rpc` passes
+with the new field in the OpenRPC document. No golden moved.
+
+**Status, A5 (2026-10-29): built.** The final pass over the SCMS help. 57 SCMS settings had no
+guide row (deployment, providers, the committee block, the pseudonym and signer-identifier
+numbers, the backend entities, links and failures); each now has a real-world sentence and a
+recommended value with its source, so the one line under every SCMS control is the guide's.
+`publish::tests::every_scms_setting_explains_itself_under_its_heading` keeps it so: every SCMS
+leaf has `x-explain`, every one but the relay's `net.rsu_ip` sits under one of the eight §3
+sub-headings, and each heading has its help. Faults, each in its own build because the first
+masks the second: the `security.kem` guide row removed, and `security.kem` filed under no
+sub-heading. No golden moved.
+
 After A0, B and C edit only their own files. They make a key live by flipping their own
 module's `KEY_STATUS` and refusal, never by editing `validate.rs`.
 

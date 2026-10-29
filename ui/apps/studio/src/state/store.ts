@@ -315,6 +315,9 @@ export interface ValidationView {
   readonly valid: boolean;
   readonly errors: readonly ValidationError[];
   readonly warnings: readonly ValidationError[];
+  /** Whether the checked settings are the deployed US SCMS, and if not why
+   * (`scenario.validate` `us_system`, 08-settings-ux-and-gaps §4.2 item 7); absent off an SCMS run. */
+  readonly usSystem?: { readonly isUs: boolean; readonly reasons: readonly string[] };
 }
 
 /** The vehicle overlay's sections. */

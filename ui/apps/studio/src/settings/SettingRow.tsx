@@ -16,8 +16,9 @@ import { memo, useEffect, useState } from "react";
 import type { ValidationError } from "@vwp/protocol";
 
 import { EventsEditor } from "../components/EventsEditor.js";
-import { STATUS_BADGE, breadcrumbOf, describeValue, fieldPath, isUnsupported, oneLine, type Field } from "./model.js";
-import { ChoiceSelect, ListEditor, MultiCheck, NumberWithPresets } from "./widgets.js";
+import { STATUS_BADGE, breadcrumbOf, controlKind, describeValue, fieldPath, isUnsupported, oneLine, type Field } from "./model.js";
+import { durationWords } from "../lib/duration.js";
+import { ChoiceSelect, ListEditor, MapRows, MultiCheck, NumberWithPresets, RangePair } from "./widgets.js";
 
 /** What one element of a list is called, from the list's title: "Attackers" → "Attacker". */
 function nounOf(label: string): string {
@@ -45,6 +46,21 @@ function Widget({
   const common = { id, "aria-invalid": invalid || undefined, "aria-describedby": `${id}-desc` } as const;
   if (field.kind === "boolean") {
     return <input {...common} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
+  }
+  if (field.kind === "map" && field.keyChoices) {
+    return (
+      <MapRows
+        idBase={id}
+        keyChoices={field.keyChoices}
+        keyOpen={field.keyOpen === true}
+        valueFields={field.valueFields ?? []}
+        value={value}
+        onChange={onChange}
+      />
+    );
+  }
+  if (field.kind === "pair") {
+    return <RangePair common={common} value={value} min={field.min} max={field.max} unit={field.unit} onChange={onChange} />;
   }
   if (field.kind === "multi" && field.choices) {
     return <MultiCheck common={common} choices={field.choices} value={value} onChange={onChange} />;
@@ -104,7 +120,7 @@ function Widget({
       />
     );
   }
-  if (field.kind === "json" || field.kind === "multi" || field.kind === "list") return <JsonWidget {...common} value={value} onChange={onChange} />;
+  if (field.kind === "json" || field.kind === "multi" || field.kind === "list" || field.kind === "map") return <JsonWidget {...common} value={value} onChange={onChange} />;
   return (
     <input {...common} type="text" value={value === undefined || value === null ? "" : String(value)} onChange={(e) => onChange(e.target.value)} />
   );
@@ -202,6 +218,8 @@ export interface SettingRowProps {
   readonly devDetails: boolean;
   readonly durationS: number | undefined;
   readonly canPick: boolean;
+  /** Why the field does not apply to the document as it stands (`x-relevant-when`). */
+  readonly irrelevant?: string;
   readonly onEdit: (pointer: string, value: unknown) => void;
   readonly onUndo: (pointer: string) => void;
 }
@@ -216,6 +234,7 @@ function SettingRowImpl({
   devDetails,
   durationS,
   canPick,
+  irrelevant,
   onEdit,
   onUndo,
 }: SettingRowProps): React.JSX.Element {
@@ -227,12 +246,14 @@ function SettingRowImpl({
   const line = oneLine(f.explain ?? f.help);
   const full = [f.explain, f.help].filter((t): t is string => !!t && t.trim() !== "").join("\n\n");
   const hasMore = full.replace(/[`*]/g, "").replace(/\s+/g, " ").trim() !== line || (f.status !== "wired" && !!f.statusNote);
-  const wide = f.kind === "list" || f.kind === "multi" || f.kind === "json" || f.pointer === "/events";
+  const wide = f.kind === "list" || f.kind === "multi" || f.kind === "json" || f.kind === "map" || f.pointer === "/events";
   return (
     <div
-      className={`setting${unsupported ? " inactive" : ""}${edited ? " edited" : ""}${modified ? " modified" : ""}${invalid ? " invalid" : ""}${wide ? " wide" : ""}`}
+      className={`setting${unsupported || irrelevant ? " inactive" : ""}${edited ? " edited" : ""}${modified ? " modified" : ""}${invalid ? " invalid" : ""}${wide ? " wide" : ""}`}
       data-testid="setting"
       data-pointer={f.pointer}
+      data-kind={f.pointer === "/events" ? "events" : controlKind(f)}
+      data-relevant={irrelevant ? "false" : "true"}
       data-edited={edited ? "true" : "false"}
       data-modified={modified ? "true" : "false"}
       id={`setting${f.pointer.replace(/\W/g, "_")}`}
@@ -251,6 +272,11 @@ function SettingRowImpl({
           <StatusBadge field={f} />
         </label>
         <div className="setting-desc" id={`${id}-desc`}>
+          {irrelevant ? (
+            <span className="setting-irrelevant" data-testid="setting-irrelevant">
+              {irrelevant}{" "}
+            </span>
+          ) : null}
           <span data-testid="setting-explain">{line}</span>
           {hasMore ? (
             <button type="button" className="linkbutton more" onClick={() => setMore((m) => !m)} aria-expanded={more}>
@@ -286,6 +312,11 @@ function SettingRowImpl({
             <Widget field={f} value={value} onChange={(v) => onEdit(f.pointer, v)} invalid={invalid} />
           )}
           {f.kind === "boolean" ? <span className="dim">{value === true ? "on" : "off"}</span> : null}
+          {f.unit === "s" && typeof value === "number" && durationWords(value) !== "" ? (
+            <span className="dim duration-words" data-testid="duration-words">
+              = {durationWords(value)}
+            </span>
+          ) : null}
           {edited ? (
             <button type="button" className="icon-button tiny" data-testid="setting-undo" onClick={() => onUndo(f.pointer)} title="Undo this edit" aria-label="Undo this edit">
               ↶

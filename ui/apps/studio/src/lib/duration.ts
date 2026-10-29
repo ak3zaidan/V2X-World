@@ -29,3 +29,26 @@ export function durationEdits(doc: unknown, seconds: number): { readonly pointer
   return edits;
 }
 
+/** A span of seconds in words: 604800 → "1 week", 608400 → "1 week 1 h", 90 → "1 min 30 s". */
+export function durationWords(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 60) return "";
+  const units: [number, string][] = [
+    [365 * 86400, "year"],
+    [7 * 86400, "week"],
+    [86400, "day"],
+    [3600, "h"],
+    [60, "min"],
+    [1, "s"],
+  ];
+  const parts: string[] = [];
+  let rest = Math.round(seconds);
+  for (const [size, name] of units) {
+    const n = Math.floor(rest / size);
+    if (n === 0) continue;
+    rest -= n * size;
+    const plural = n > 1 && (name === "year" || name === "week" || name === "day") ? "s" : "";
+    parts.push(`${n.toLocaleString("en-US")} ${name}${plural}`);
+    if (parts.length === 2) break;
+  }
+  return parts.join(" ");
+}

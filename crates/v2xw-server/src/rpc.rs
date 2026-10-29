@@ -1430,10 +1430,16 @@ fn scenario_validate(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Ou
         (errors, warnings)
     };
     let (actors, nodes) = ctx.run.counts();
+    // The settings window's US banner (scms-real/08 §4.2 item 7): the engine's verdict on
+    // the same document, `null` off an SCMS run or for a document that does not load.
+    let us_system = v2xw_engine::Scenario::from_document(doc.clone())
+        .ok()
+        .and_then(|s| v2xw_engine::phase2::us_system(&s));
     Ok(Outcome::of(json!({
         "valid": errors.is_empty(),
         "errors": errors,
         "warnings": warnings,
+        "us_system": us_system,
         "resolved_tiers": {"radio": "abstract", "security": "abstract", "mobility": "abstract"},
         "estimated_cost": {
             "actors": actors, "nodes": nodes,

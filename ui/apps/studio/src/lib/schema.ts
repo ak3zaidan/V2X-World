@@ -21,6 +21,86 @@ export interface Choice {
   readonly label: string;
   readonly description?: string;
   readonly available: boolean;
+  /** `true` for the value the deployed US system uses, `false` for one it does not (a "not US" badge). */
+  readonly us?: boolean;
+}
+
+/** An SCMS sub-heading (`x-subgroup`, 08-settings-ux-and-gaps §3): its order lives with the engine. */
+export interface Subgroup {
+  readonly id: string;
+  readonly label: string;
+  readonly order: number;
+  readonly blurb?: string;
+}
+
+/**
+ * The providers a deployment names (08-settings-ux-and-gaps §4.1 item 6): each preset's, and,
+ * under `custom`, the names the document's own provider list holds.
+ */
+export interface ProviderSets {
+  readonly presetPath: string;
+  readonly defaultPreset: string;
+  readonly customPath: string;
+  readonly byPreset: Readonly<Record<string, readonly string[]>>;
+}
+
+const dottedPointer = (dotted: string): string => `/${dotted.split(".").join("/")}`;
+
+/** The deployment preset `doc` names, or the default one. */
+export function presetIn(sets: ProviderSets, doc: unknown): string {
+  const raw = getPointer(doc, dottedPointer(sets.presetPath));
+  return typeof raw === "string" && raw !== "" ? raw : sets.defaultPreset;
+}
+
+/** The provider names `doc` deploys, home provider first. */
+export function providersIn(sets: ProviderSets, doc: unknown): string[] {
+  const ptr = dottedPointer;
+  const preset = presetIn(sets, doc);
+  if (preset !== "custom") return [...(sets.byPreset[preset] ?? [])];
+  const list = getPointer(doc, ptr(sets.customPath));
+  return Array.isArray(list)
+    ? list.map((p) => (p !== null && typeof p === "object" ? (p as Record<string, unknown>).name : undefined)).filter((n): n is string => typeof n === "string")
+    : [];
+}
+
+/** `provider-b/crlg` → provider-b and crlg; a bare `crlg` is the home provider's (the first). */
+export function splitComposed(value: unknown, separator: string, providers: readonly string[]): { provider: string; role: string } {
+  const text = typeof value === "string" ? value : "";
+  const cut = text.indexOf(separator);
+  return cut >= 0
+    ? { provider: text.slice(0, cut), role: text.slice(cut + separator.length) }
+    : { provider: providers[0] ?? "", role: text };
+}
+
+/** A provider and a role as the document writes them: bare for the home provider (the
+ * first), `provider/role` for any other (`crypto_config::failure_target`); `undefined` with no role. */
+export function joinComposed(provider: string, role: string, separator: string, providers: readonly string[]): string | undefined {
+  if (role === "") return undefined;
+  return provider === "" || provider === providers[0] ? role : `${provider}${separator}${role}`;
+}
+
+/** The `ProviderSets` a published node carries under `key`, or `undefined`. */
+export function providerSetsOf(node: unknown): ProviderSets | undefined {
+  if (node === null || typeof node !== "object") return undefined;
+  const o = node as Record<string, unknown>;
+  const by = o.by_preset;
+  if (typeof o.preset_path !== "string" || typeof o.custom_path !== "string" || by === null || typeof by !== "object") return undefined;
+  const byPreset: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(by as Record<string, unknown>)) {
+    if (Array.isArray(v)) byPreset[k] = v.filter((x): x is string => typeof x === "string");
+  }
+  return {
+    presetPath: o.preset_path,
+    defaultPreset: typeof o.default_preset === "string" ? o.default_preset : "",
+    customPath: o.custom_path,
+    byPreset,
+  };
+}
+
+/** When a field matters (`x-relevant-when`): the field at `path` holds one of `in`. */
+export interface RelevantWhen {
+  readonly path: string;
+  readonly in: readonly unknown[];
 }
 
 /** A named value for a number (`x-presets`): "Rush hour", "5 minutes (SAE J2945/1)". */
@@ -35,13 +115,22 @@ export interface ItemField {
   /** The pointer inside the element: `/id`, `/fraction`, `/schedule/from_s`. */
   readonly key: string;
   readonly label: string;
-  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json";
+  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "map";
   readonly unit?: string;
   readonly help?: string;
   readonly min?: number;
   readonly max?: number;
+  readonly step?: number;
   readonly choices?: readonly Choice[];
   readonly choicesOpen?: boolean;
+  /** For a `map`: the keys it offers (`x-key-options`), and the fields of one value (key `""` for a leaf). */
+  readonly keyChoices?: readonly Choice[];
+  readonly keyOpen?: boolean;
+  readonly valueFields?: readonly ItemField[];
+  /** A `<provider><separator><role>` value (`x-options-compose`): a provider menu beside the role menu. */
+  readonly compose?: { readonly separator: string; readonly providers: ProviderSets };
+  /** A provider name, offered from the document's preset (`x-options-by-preset`). */
+  readonly providerNames?: ProviderSets;
 }
 
 /** A widget in the scenario form. */
@@ -54,7 +143,7 @@ export interface FormField {
    * `multi` is a list of strings from a closed set (message sets, applications), edited as
    * checkboxes; `list` is a list of objects edited element by element.
    */
-  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "multi" | "list";
+  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "multi" | "list" | "map" | "pair";
   readonly unit?: string;
   readonly help?: string;
   readonly options?: readonly string[];
@@ -71,6 +160,41 @@ export interface FormField {
   readonly min?: number;
   readonly max?: number;
   readonly step?: number;
+  /** For a `map`: the keys it offers and the fields of one value (a `""` key for a leaf value). */
+  readonly keyChoices?: readonly Choice[];
+  readonly keyOpen?: boolean;
+  readonly valueFields?: readonly ItemField[];
+  /** The SCMS sub-heading the engine files this field under. */
+  readonly subgroup?: Subgroup;
+  /** When the field matters; outside that it is drawn greyed with the reason, never hidden. */
+  readonly relevantWhen?: RelevantWhen;
+}
+
+/** The `x-subgroup` of a published node, or `undefined`. */
+export function subgroupOf(row: Record<string, unknown>): Subgroup | undefined {
+  const g = row["x-subgroup"];
+  if (g === null || typeof g !== "object") return undefined;
+  const o = g as Record<string, unknown>;
+  if (typeof o.id !== "string" || typeof o.label !== "string") return undefined;
+  const blurb = row["x-subgroup-blurb"];
+  return { id: o.id, label: o.label, order: typeof o.order === "number" ? o.order : 99, ...(typeof blurb === "string" ? { blurb } : {}) };
+}
+
+/** The `x-options-compose` of a published node, or `undefined`. */
+export function composeOf(row: Record<string, unknown>): ItemField["compose"] {
+  const c = row["x-options-compose"];
+  if (c === null || typeof c !== "object") return undefined;
+  const o = c as Record<string, unknown>;
+  const providers = providerSetsOf(o.providers);
+  return providers && typeof o.separator === "string" ? { separator: o.separator, providers } : undefined;
+}
+
+/** The `x-relevant-when` of a published node, or `undefined`. */
+export function relevantWhenOf(row: Record<string, unknown>): RelevantWhen | undefined {
+  const r = row["x-relevant-when"];
+  if (r === null || typeof r !== "object") return undefined;
+  const o = r as Record<string, unknown>;
+  return typeof o.path === "string" && Array.isArray(o.in) ? { path: o.path, in: o.in } : undefined;
 }
 
 /** The `x-options` rows of a published node, or `undefined`. */
@@ -88,6 +212,7 @@ export function choicesOf(row: Record<string, unknown>): Choice[] | undefined {
       label: typeof o.label === "string" && o.label !== "" ? o.label : String(value),
       ...(typeof o.description === "string" && o.description !== "" ? { description: o.description } : {}),
       available: o.available !== false,
+      ...(typeof o.us === "boolean" ? { us: o.us } : {}),
     });
   }
   return out.length > 0 ? out : undefined;
@@ -416,6 +541,9 @@ export function fieldsFromPublished(
     ...(typeof row.minimum === "number" ? { min: row.minimum } : {}),
     ...(typeof row.exclusiveMinimum === "number" ? { min: row.exclusiveMinimum } : {}),
     ...(typeof row.maximum === "number" ? { max: row.maximum } : {}),
+    ...(typeof row["x-step"] === "number" ? { step: row["x-step"] } : {}),
+    ...(subgroupOf(row) ? { subgroup: subgroupOf(row) } : {}),
+    ...(relevantWhenOf(row) ? { relevantWhen: relevantWhenOf(row) } : {}),
     status: statusOf(row["x-status"]),
     statusNote: typeof row["x-status-note"] === "string" ? row["x-status-note"] : "",
     collection,
@@ -429,9 +557,45 @@ export function fieldsFromPublished(
   });
 
   // What a list's element rows say about it: a list of strings from a closed set becomes
-  // checkboxes, a list of objects whose fields are leaves becomes a row-by-row editor.
+  // checkboxes, a list of objects whose fields are leaves becomes a row-by-row editor. A map whose
+  // keys the engine publishes (`x-key-options`) becomes a row per key (08-settings-ux-and-gaps §4.2
+  // item 1), at the top level and inside a list element (a provider's servers).
   const multi = new Map<string, { choices: Choice[]; open: boolean }>();
   const items = new Map<string, ItemField[]>();
+  const maps = new Map<string, ItemField[]>();
+  const nested = new Map<string, Map<string, ItemField[]>>();
+  const itemFieldOf = (row: PublishedRow, rel: string): ItemField => {
+    const choices = choicesOf(row);
+    return {
+      key: rel,
+      label: typeof row.title === "string" ? row.title : humanise(rel.split("/").pop() ?? rel),
+      kind: kindOfRow(row),
+      ...(typeof row.unit === "string" && row.unit !== "" ? { unit: row.unit } : {}),
+      ...(typeof row.description === "string" ? { help: row.description } : {}),
+      ...(typeof row.minimum === "number" ? { min: row.minimum } : {}),
+      ...(typeof row.exclusiveMinimum === "number" ? { min: row.exclusiveMinimum } : {}),
+      ...(typeof row.maximum === "number" ? { max: row.maximum } : {}),
+      ...(typeof row["x-step"] === "number" ? { step: row["x-step"] } : {}),
+      ...(choices ? { choices, choicesOpen: row["x-options-open"] === true } : {}),
+      ...(composeOf(row) ? { compose: composeOf(row) } : {}),
+      ...(providerSetsOf(row["x-options-by-preset"]) ? { providerNames: providerSetsOf(row["x-options-by-preset"]) } : {}),
+    };
+  };
+  /** The map at `mapPointer` as a field, when the engine publishes its keys (`x-key-options`). */
+  const mapFieldOf = (mapPointer: string, rel: string, valueFields: readonly ItemField[]): ItemField | undefined => {
+    const node = index.get(mapPointer);
+    const keyChoices = node ? choicesOf({ "x-options": node["x-key-options"] }) : undefined;
+    if (!node || !keyChoices) return undefined;
+    return {
+      key: rel,
+      label: typeof node.title === "string" ? node.title : humanise(rel.split("/").pop() ?? rel),
+      kind: "map",
+      ...(typeof node.description === "string" ? { help: node.description } : {}),
+      keyChoices,
+      keyOpen: node["x-key-options-open"] === true,
+      valueFields,
+    };
+  };
   for (const row of fields) {
     const pointer = row["x-pointer"];
     if (typeof pointer !== "string" || pointer === "") continue;
@@ -440,27 +604,37 @@ export function fieldsFromPublished(
       const root = pointer.slice(0, cut);
       const rootRow = index.get(root) ?? row;
       push(fromRow({ ...rootRow, "x-group": rootRow["x-group"] ?? row["x-group"] }, root, true, "json"));
-      // Only a list (`/-`), and only one level deep: a nested list or map stays inside the JSON.
-      if (pointer.charAt(cut + 1) !== "-") continue;
       const rel = pointer.slice(cut + 2);
-      if (/\/[-*](\/|$)/.test(rel)) continue;
+      const deeper = rel.search(/\/[-*](\/|$)/);
+      if (pointer.charAt(cut + 1) === "*") {
+        // A map's value: a leaf (`rel` empty) or a field of a struct, however deep; a list or map
+        // inside the value stays in that value's own JSON.
+        if (deeper < 0) {
+          const list = maps.get(root) ?? [];
+          list.push(itemFieldOf(row, rel));
+          maps.set(root, list);
+        }
+        continue;
+      }
+      if (deeper >= 0) {
+        // A map inside a list element (`providers[].components`): one level, leaf or struct values.
+        const mapRel = rel.slice(0, deeper);
+        const inner = rel.slice(deeper + 2);
+        if (rel.charAt(deeper + 1) === "*" && !/\/[-*](\/|$)/.test(inner)) {
+          const byMap = nested.get(root) ?? new Map<string, ItemField[]>();
+          const list = byMap.get(mapRel) ?? [];
+          list.push(itemFieldOf(row, inner));
+          byMap.set(mapRel, list);
+          nested.set(root, byMap);
+        }
+        continue;
+      }
       const choices = choicesOf(row);
       if (rel === "" && choices && (row.kind === "enum" || row.kind === "string")) {
         multi.set(root, { choices, open: row["x-options-open"] === true });
       } else if (rel !== "") {
         const list = items.get(root) ?? [];
-        const kind = kindOfRow(row);
-        list.push({
-          key: rel,
-          label: typeof row.title === "string" ? row.title : humanise(rel.split("/").pop() ?? rel),
-          kind,
-          ...(typeof row.unit === "string" && row.unit !== "" ? { unit: row.unit } : {}),
-          ...(typeof row.description === "string" ? { help: row.description } : {}),
-          ...(typeof row.minimum === "number" ? { min: row.minimum } : {}),
-          ...(typeof row.exclusiveMinimum === "number" ? { min: row.exclusiveMinimum } : {}),
-          ...(typeof row.maximum === "number" ? { max: row.maximum } : {}),
-          ...(choices ? { choices, choicesOpen: row["x-options-open"] === true } : {}),
-        });
+        list.push(itemFieldOf(row, rel));
         items.set(root, list);
       }
       continue;
@@ -478,6 +652,9 @@ export function fieldsFromPublished(
         ...(variantChoices ? { choices: variantChoices, choicesOpen: false } : {}),
       });
     }
+    // A block whose every key the engine publishes as a field of its own (`x-typed-children`,
+    // `detection.ma.params`) is edited through those fields, not as JSON.
+    if (row["x-typed-children"] === true) continue;
     push(fromRow(row, pointer, false, kindOfRow(row)));
   }
 
@@ -492,8 +669,31 @@ export function fieldsFromPublished(
       out[i] = { ...f, kind: "multi", choices: m.choices, choicesOpen: m.open };
       continue;
     }
-    const fieldsOf = items.get(f.pointer);
-    if (fieldsOf && fieldsOf.some((x) => x.choices !== undefined)) {
+    const mapValues = maps.get(f.pointer);
+    const asMap = mapValues ? mapFieldOf(f.pointer, "", mapValues) : undefined;
+    if (asMap) {
+      out[i] = { ...f, kind: "map", keyChoices: asMap.keyChoices, keyOpen: asMap.keyOpen, valueFields: asMap.valueFields };
+      continue;
+    }
+    // A `[from, to]` pair (`x-pair`): two number boxes with the element's unit and range.
+    const pairNode = index.get(f.pointer);
+    if (pairNode?.["x-pair"] === true) {
+      const el = fields.find((r) => r["x-pointer"] === `${f.pointer}/-`);
+      out[i] = {
+        ...f,
+        kind: "pair",
+        ...(el && typeof el.minimum === "number" ? { min: el.minimum } : {}),
+        ...(el && typeof el.maximum === "number" ? { max: el.maximum } : {}),
+        ...(el && typeof el.unit === "string" && el.unit !== "" ? { unit: el.unit } : {}),
+      };
+      continue;
+    }
+    const inner = nested.get(f.pointer);
+    const innerMaps = inner
+      ? [...inner].map(([rel, vf]) => mapFieldOf(`${f.pointer}/-${rel}`, rel, vf)).filter((x): x is ItemField => x !== undefined)
+      : [];
+    const fieldsOf = [...(items.get(f.pointer) ?? []), ...innerMaps];
+    if (fieldsOf.length > 0 && fieldsOf.some((x) => x.choices !== undefined)) {
       const template = index.get(f.pointer)?.["x-item-template"];
       out[i] = { ...f, kind: "list", itemFields: fieldsOf, ...(template !== undefined ? { itemTemplate: template } : {}) };
     }

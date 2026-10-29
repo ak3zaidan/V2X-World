@@ -405,6 +405,20 @@ impl MaHost {
                 ),
             )
         };
+        // The ranges the settings form shows (`validate::BOUNDS`, 08 §2.5), checked after the
+        // type checks below so a wrong type keeps its own message.
+        let in_range = || -> Result<()> {
+            for (key, value) in map {
+                let path = format!("detection.ma.params.{key}");
+                if let (Some(b), Some(v)) =
+                    (crate::scenario::validate::bound_of(&path), value.as_f64())
+                    && !b.admits(v)
+                {
+                    return Err(bad(key, value, &format!("in {}", b.describe())));
+                }
+            }
+            Ok(())
+        };
         match choice.id.as_str() {
             MA_LEGACY_WINDOW => {
                 let mut p = MaParams::default();
@@ -420,6 +434,7 @@ impl MaHost {
                         other => return Err(unknown(other, MA_LEGACY_PARAM_KEYS)),
                     }
                 }
+                in_range()?;
                 Ok(MaHost::Legacy(LegacyWindow::new(p)))
             }
             MA_CORROBORATED => {
@@ -437,6 +452,7 @@ impl MaHost {
                         other => return Err(unknown(other, MA_CORROBORATED_PARAM_KEYS)),
                     }
                 }
+                in_range()?;
                 Ok(MaHost::Corroborated(v2xw_threat::CorroboratedMa::new(p)))
             }
             other => Err(conflict(
@@ -8750,6 +8766,83 @@ pub const REFUSED_BUTTERFLIES: [&str; 2] = ["unified", "cubk"];
 /// builds (c parallel workers, the default, or one).
 pub const SERVICE_MODEL_IDS: [&str; 2] = ["service/mmc", "service/mm1"];
 
+/// Whether a scenario is the deployed US SCMS, and if not, why (08-settings-ux-and-gaps
+/// §4.2 item 7: the settings window's banner, from `scenario.validate`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UsSystem {
+    /// No setting departs from the US system.
+    pub is_us: bool,
+    /// Each departure in words ("electors 7", "signature ml-dsa-65"); empty when `is_us`.
+    pub reasons: Vec<String>,
+}
+
+/// The US verdict on an SCMS run (`None` on any other credential protocol, or a deployment
+/// that does not build, which the loader reports itself).
+///
+/// The deployment's part is [`Deployment::is_us`], the manifest's own flag; the rest are the
+/// values the settings menus badge "not US" (`scenario::options::us_of`): the envelope, the
+/// signature and KEM schemes, the chain-file scope, the LOP and authority committees.
+///
+/// [`Deployment::is_us`]: v2xw_proto::scms::deployment::Deployment::is_us
+#[must_use]
+pub fn us_system(scenario: &Scenario) -> Option<UsSystem> {
+    use v2xw_proto::scms::deployment::{Preset, US_ELECTORS, US_QUORUM, US_REQUIRED_ROLES};
+    let protocol = scenario
+        .actors
+        .backend
+        .protocol
+        .clone()
+        .or_else(|| scenario.security.protocol.as_ref().map(|c| c.id.clone()));
+    if protocol.as_deref() != Some(CAMP_SCMS) {
+        return None;
+    }
+    let d = deployment_of(scenario, true).ok()?;
+    let mut reasons = Vec::new();
+    if d.preset == Preset::CampReference {
+        reasons.push("the CAMP reference design".to_string());
+    }
+    if d.electors != US_ELECTORS {
+        reasons.push(format!("electors {}", d.electors));
+    }
+    if d.quorum != US_QUORUM {
+        reasons.push(format!("quorum {}", d.quorum));
+    }
+    for p in &d.providers {
+        for role in US_REQUIRED_ROLES {
+            if p.count(role) == 0 {
+                reasons.push(format!("{} runs no {role}", p.name));
+            }
+        }
+    }
+    if !d.is_us() && reasons.is_empty() {
+        reasons.push("the deployment is not the US one".to_string());
+    }
+    if d.options.lop {
+        reasons.push("a Location Obscurer Proxy".to_string());
+    }
+    let sec = &scenario.security;
+    for (path, value) in [
+        ("security.envelope", sec.envelope.as_str()),
+        ("security.signature", sec.signature.as_str()),
+        ("security.kem", sec.kem.as_str()),
+    ] {
+        if crate::scenario::options::us_of(path, value) == Some(false) {
+            let leaf = path.rsplit('.').next().unwrap_or(path);
+            reasons.push(format!("{leaf} {value}"));
+        }
+    }
+    if matches!(home_chain_file_of(scenario), Ok(true)) {
+        reasons.push("chain file: home provider only".to_string());
+    }
+    if sec.threshold.is_some() {
+        reasons.push("authority committees".to_string());
+    }
+    Some(UsSystem {
+        is_us: reasons.is_empty(),
+        reasons,
+    })
+}
+
 /// Whether each device's chain file holds only its own provider's CA certificates
 /// (`security.scms.chain_file: home-provider`) rather than every CTL provider's
 /// (`all-providers`, the default).
@@ -10446,5 +10539,47 @@ mod settings_menu_tests {
         let empty = serde_json::to_value(crate::scenario::schema::LifecycleSpec::default())
             .expect("serialises");
         assert_eq!(empty, json!({}));
+    }
+
+    /// The settings window's US banner (08 §4.2 item 7): the default SCMS run is the US
+    /// system; each departure is named; a run on another protocol has no verdict.
+    #[test]
+    fn the_us_verdict_names_each_departure() {
+        let camp = |scms: serde_json::Value| {
+            let mut s = with_scms(scms, None);
+            s.security.protocol =
+                Some(serde_json::from_value(json!({"id": CAMP_SCMS})).expect("a choice"));
+            s
+        };
+        let us = us_system(&camp(json!({}))).expect("an SCMS run has a verdict");
+        assert_eq!(
+            us,
+            UsSystem {
+                is_us: true,
+                reasons: vec![]
+            }
+        );
+        let seven = us_system(&camp(json!({"deployment": {"preset": "us-production-2025",
+                                                          "electors": 7}})))
+        .expect("a verdict");
+        assert!(!seven.is_us);
+        assert!(
+            seven.reasons.iter().any(|r| r == "electors 7"),
+            "{:?}",
+            seven.reasons
+        );
+        let mut p384 = camp(json!({}));
+        p384.security.signature = "ecdsa-p384".into();
+        let v = us_system(&p384).expect("a verdict");
+        assert_eq!(v.reasons, vec!["signature ecdsa-p384".to_string()]);
+        let camp_ref = us_system(&camp(json!({"deployment": {"preset": "camp-reference"}})))
+            .expect("a verdict");
+        assert!(
+            camp_ref
+                .reasons
+                .iter()
+                .any(|r| r.contains("CAMP reference"))
+        );
+        assert_eq!(us_system(&Scenario::minimal()), None);
     }
 }

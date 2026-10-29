@@ -1588,31 +1588,69 @@ pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
             Some((rows_of(path, &crate::phase2::SCMS_ENTITIES), true))
         }
         // The hour the report store re-weights, as the 24 hours of the Eastern clock.
-        "security.scms.lifecycle.report_decay_hour_et" => Some((
-            (0..24)
-                .map(|h| {
-                    json!({
-                        "value": h,
-                        "label": format!("{h:02}:00 ET"),
-                        "description": if h == 5 {
-                            "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time (the US value)."
-                        } else {
-                            "Stored reports are re-weighted every day at this Eastern hour."
-                        },
-                        "available": true,
-                    })
-                })
-                .collect(),
-            true,
-        )),
+        "security.scms.lifecycle.report_decay_hour_et" => Some((hour_rows(), true)),
+        // The MA policy's daily multiplier hour, the same 24-hour menu (08 §7).
+        _ if module_key(path) == Some("decay.hour_et") => Some((hour_rows(), true)),
         // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
         _ => crate::scenario::module_keys::options(path),
     }
 }
 
+/// The 24 hours of the Eastern clock, for a daily re-weighting hour (MBR v1.0 §2.2: 05:00).
+fn hour_rows() -> Vec<Value> {
+    (0..24)
+        .map(|h| {
+            json!({
+                "value": h,
+                "label": format!("{h:02}:00 ET"),
+                "description": if h == 5 {
+                    "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time (the US value)."
+                } else {
+                    "Stored evidence is re-weighted every day at this Eastern hour."
+                },
+                "available": true,
+            })
+        })
+        .collect()
+}
+
 /// `option_row` for each of `ids`.
 fn rows_of(path: &str, ids: &[&str]) -> Vec<Value> {
     ids.iter().map(|v| option_row(path, v, "")).collect()
+}
+
+/// The providers each deployment preset names, home provider first, and where a document
+/// states its preset and, under `custom`, its own list (08-settings-ux-and-gaps §4.1 item 6).
+/// A field whose values depend on the deployment carries this, so the form fills the
+/// provider half from the document.
+pub fn provider_sets() -> Value {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    let mut by_preset = serde_json::Map::new();
+    for id in Preset::IDS {
+        if let Some(p) = Preset::parse(id).filter(|p| *p != Preset::Custom) {
+            let names: Vec<String> = Deployment::preset(p)
+                .providers
+                .iter()
+                .map(|q| q.name.clone())
+                .collect();
+            by_preset.insert(id.to_string(), json!(names));
+        }
+    }
+    json!({
+        "preset_path": "security.scms.deployment.preset",
+        // An SCMS run with no deployment block runs the US system (`phase2::deployment_of`).
+        "default_preset": Preset::UsProduction2025.id(),
+        "custom_path": "security.scms.deployment.providers",
+        "by_preset": by_preset,
+    })
+}
+
+/// How a value at `path` is composed of a provider and a choice (`x-options-compose`): a
+/// failure's server is `<provider>/<role>`, or the bare role for the home provider
+/// (`crypto_config::failure_target`).
+pub fn compose_of(path: &str) -> Option<Value> {
+    (path == "actors.backend.failures[].node")
+        .then(|| json!({"qualifier": "provider", "separator": "/", "providers": provider_sets()}))
 }
 
 /// The provider names the presets use, each saying which presets name it.
@@ -2608,12 +2646,201 @@ pub static SCMS_PRESETS: &[Preset] = &[
     ),
 ];
 
+/// The presets of the keys 08 §6-§7 add, by the key's path below its root (`module_key`):
+/// server capacity and the MA policy. The same named values serve every root the key
+/// appears under (the deployment's and a provider's capacity; `ma_policy` and each
+/// `ma_policies` entry).
+pub static MODULE_PRESETS: &[Preset] = &[
+    sp(
+        "workers",
+        "1 worker",
+        1.0,
+        "One request at a time: an M/M/1 queue.",
+    ),
+    sp(
+        "workers",
+        "4 workers",
+        4.0,
+        "ASSUMPTION: the engine's default; no provider publishes its server capacity.",
+    ),
+    sp("workers", "16 workers", 16.0, "A larger deployment."),
+    sp(
+        "workers",
+        "64 workers",
+        64.0,
+        "The abstract tier's capacity: in effect no queueing.",
+    ),
+    sp(
+        "queue_limit",
+        "100 requests",
+        100.0,
+        "A small queue: bursts are refused early.",
+    ),
+    sp(
+        "queue_limit",
+        "1,000 requests",
+        1_000.0,
+        "A moderate queue.",
+    ),
+    sp(
+        "queue_limit",
+        "10,000 requests",
+        10_000.0,
+        "A deep queue: bursts wait rather than being refused.",
+    ),
+    sp("overhead_ms", "0 ms", 0.0, "No fixed cost per request."),
+    sp(
+        "overhead_ms",
+        "1 ms",
+        1.0,
+        "ASSUMPTION: the engine's default fixed cost per request.",
+    ),
+    sp("overhead_ms", "5 ms", 5.0, "A slower stack."),
+    sp(
+        "overhead_ms",
+        "20 ms",
+        20.0,
+        "A heavily loaded or remote stack.",
+    ),
+    sp(
+        "evidence.tau_m",
+        "1 m",
+        1.0,
+        "SM-MBR gpsDrift: the position accuracy a report is held to.",
+    ),
+    sp(
+        "evidence.event_window_s",
+        "5 s",
+        5.0,
+        "F2MD DELTA_REPORT_TIME.",
+    ),
+    sp(
+        "evidence.event_min_reporters",
+        "2 reporters",
+        2.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.min_events",
+        "3 events",
+        3.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.min_distinct_reporters",
+        "3 reporters (the legacy k)",
+        3.0,
+        "The legacy engine's report_threshold_k; below 2 a single report can revoke.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 minute",
+        60.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 hour",
+        3_600.0,
+        "Evidence gathered over an hour.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 day",
+        86_400.0,
+        "Evidence gathered over a day.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 week",
+        604_800.0,
+        "Evidence gathered over a week.",
+    ),
+    sp(
+        "decay.factor",
+        "0.9 a day",
+        0.9,
+        "SCMS Manager MBR v1.0 §2.3.1 DailyMultiplier.",
+    ),
+    sp(
+        "decay.hour_et",
+        "05:00 ET",
+        5.0,
+        "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time.",
+    ),
+    sp(
+        "decay.half_life_s",
+        "1 hour",
+        3_600.0,
+        "Evidence halves every hour.",
+    ),
+    sp(
+        "decay.half_life_s",
+        "1 day",
+        86_400.0,
+        "Evidence halves every day.",
+    ),
+    sp(
+        "population_guard.c",
+        "10 devices",
+        10.0,
+        "ASSUMPTION: a class with ten accused devices is crowded.",
+    ),
+    sp(
+        "population_guard.m",
+        "2 ×",
+        2.0,
+        "ASSUMPTION: twice the reporters in a crowded class.",
+    ),
+    sp(
+        "defence.reputation_max",
+        "40 accusations",
+        40.0,
+        "The legacy engine's PipelineConfig.reputation_max.",
+    ),
+    sp(
+        "defence.report_budget",
+        "30 reports",
+        30.0,
+        "The legacy engine's PipelineConfig.report_budget.",
+    ),
+    sp("decision.review_s", "1 hour", 3_600.0, "A fast operator."),
+    sp(
+        "decision.review_s",
+        "8 h, one working shift",
+        28_800.0,
+        "ASSUMPTION: the CV pilots' manual review, one shift.",
+    ),
+    sp(
+        "decision.review_s",
+        "1 business day",
+        86_400.0,
+        "The SCMS Manager's one-business-day service level.",
+    ),
+];
+
+/// The roots the keys of 08 §6-§7 repeat under, as the prefix to strip.
+const MODULE_ROOTS: [&str; 4] = [
+    "security.scms.deployment.capacity.*.",
+    "security.scms.deployment.providers[].capacity.*.",
+    "security.scms.ma_policy.",
+    "security.scms.ma_policies.*.",
+];
+
+/// `path` below its module root (`security.scms.ma_policies.*.decay.factor` →
+/// `decay.factor`), or `None` for a path no module root holds.
+pub fn module_key(path: &str) -> Option<&str> {
+    MODULE_ROOTS.iter().find_map(|r| path.strip_prefix(r))
+}
+
 /// The presets for `path`, as `[{label, value, note}]`, or `None`.
 pub fn presets(path: &str) -> Option<Value> {
+    let key = module_key(path);
     let rows: Vec<Value> = PRESETS
         .iter()
         .chain(SCMS_PRESETS)
         .filter(|p| p.path == path)
+        .chain(MODULE_PRESETS.iter().filter(|p| Some(p.path) == key))
         .map(|p| json!({"label": p.label, "value": p.value, "note": p.note}))
         .collect();
     (!rows.is_empty()).then(|| Value::Array(rows))
@@ -3005,8 +3232,101 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.backend.links[].to" => "To",
         "actors.backend.links[].latency_ms" => "Latency",
         "actors.backend.links[].capacity_mbps" => "Capacity",
+        "detection.ma.params" => "Authority parameters",
+        "detection.ma.params.event_window_s" => "One event lasts at most",
+        "detection.ma.params.event_min_reporters" => "Reporters an event needs",
+        "detection.ma.params.min_events" => "Events needed in the window",
+        "detection.ma.params.window_s" => "Evidence window",
+        "detection.ma.params.min_reporters" => "Distinct reporters needed",
+        "detection.ma.params.defence" => "Only trusted reporters count",
+        "detection.ma.params.reputation_max" => "Distrust a reporter reported this often",
+        "detection.ma.params.report_budget" => "Rate-limit a reporter after",
+        "detection.ma.params.report_threshold_k" => "Trusted reporters needed",
+        "detection.ma.params.revoke_min_seconds" => "Distinct seconds of evidence",
+        "detection.ma.params.revoke_persist_s" => "Evidence must persist for",
+        "detection.ma.params.revoke_window_s" => "Evidence window (legacy)",
         // 08-settings-ux-and-gaps §5-§8: the keys an engine module owns.
         _ => return crate::scenario::module_keys::words(path).map(|k| k.title),
+    })
+}
+
+/// Whether the list at `path` is a `[from, to]` pair (`x-pair`, 08 §4.2 item 3).
+pub fn is_pair(path: &str) -> bool {
+    path == "security.pseudonym_change.silent_period_s"
+}
+
+/// When the field at `path` matters (`x-relevant-when`, 08 §4.2 item 5): the path of the
+/// field it depends on and the values under which it acts; `null` stands for that field left
+/// out. Only conditions on a field at a fixed path are listed; a condition inside a list
+/// element (`failures[].extra_ms` under `slow`) is the loader's to refuse.
+pub fn relevant_when(path: &str) -> Option<(&'static str, Vec<Value>)> {
+    let corroborated = crate::phase2::MA_CORROBORATED;
+    let legacy = crate::phase2::MA_LEGACY_WINDOW;
+    Some(match path {
+        "security.scms.deployment.fibre_fraction" | "security.scms.deployment.per_link_ms" => (
+            "security.scms.deployment.latency",
+            vec![json!("region"), Value::Null],
+        ),
+        "security.pseudonym_change.period_s" => {
+            ("security.pseudonym_change.strategy", vec![json!("time")])
+        }
+        "security.pseudonym_change.distance_m" => (
+            "security.pseudonym_change.strategy",
+            vec![json!("distance")],
+        ),
+        "security.pseudonym_change.mix_zone_radius_m"
+        | "security.pseudonym_change.mix_zone_min_age_s" => (
+            "security.pseudonym_change.strategy",
+            vec![json!("mix-zone")],
+        ),
+        "security.on_demand_threshold" => {
+            ("security.verification_policy", vec![json!("on-demand")])
+        }
+        "security.prioritized_horizon_m" => {
+            ("security.verification_policy", vec![json!("prioritized")])
+        }
+        "security.threshold.umbrella_leaves" | "security.threshold.umbrella_inner" => {
+            ("security.threshold.protocol", vec![json!("umbrella")])
+        }
+        "net.rsu_ip.wsa_interval_ms" => ("net.rsu_ip.air", vec![json!("sch")]),
+        // The MA policy's dependent fields (08 §7); an absent mode is the preset's, which
+        // may be either, so it does not grey the field.
+        "security.scms.ma_policy.decay.factor" | "security.scms.ma_policy.decay.hour_et" => (
+            "security.scms.ma_policy.decay.mode",
+            vec![json!("daily-multiplier"), Value::Null],
+        ),
+        "security.scms.ma_policy.decay.half_life_s" => (
+            "security.scms.ma_policy.decay.mode",
+            vec![json!("half-life"), Value::Null],
+        ),
+        "security.scms.ma_policy.population_guard.c"
+        | "security.scms.ma_policy.population_guard.m" => (
+            "security.scms.ma_policy.population_guard.mode",
+            vec![json!("cluster"), Value::Null],
+        ),
+        "security.scms.ma_policy.decision.review_s" => (
+            "security.scms.ma_policy.decision.mode",
+            vec![json!("manual-review"), Value::Null],
+        ),
+        "security.scms.ma_policy.evidence.tau_m" => (
+            "security.scms.ma_policy.evidence.accuracy_weighting",
+            vec![json!("catch"), Value::Null],
+        ),
+        "detection.ma.params.event_window_s"
+        | "detection.ma.params.event_min_reporters"
+        | "detection.ma.params.min_events"
+        | "detection.ma.params.window_s"
+        | "detection.ma.params.min_reporters" => ("detection.ma.id", vec![json!(corroborated)]),
+        "detection.ma.params.report_threshold_k"
+        | "detection.ma.params.revoke_min_seconds"
+        | "detection.ma.params.revoke_persist_s"
+        | "detection.ma.params.revoke_window_s" => ("detection.ma.id", vec![json!(legacy)]),
+        "detection.ma.params.defence"
+        | "detection.ma.params.reputation_max"
+        | "detection.ma.params.report_budget" => {
+            ("detection.ma.id", vec![json!(corroborated), json!(legacy)])
+        }
+        _ => return None,
     })
 }
 

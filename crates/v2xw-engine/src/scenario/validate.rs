@@ -1830,6 +1830,87 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "whether report sizes are modelled",
     },
+    // The Misbehaviour Authority's parameters as typed fields (08 §2.5), checked by
+    // `phase2::MaHost::from_scenario` after its own type checks. The lower edges are that
+    // parser's (a count is at least 1, a corroborating window above 0 s); the upper edges
+    // bracket every published configuration (F2MD, the legacy engine's `PipelineConfig`).
+    Bound {
+        path: "detection.ma.params.event_window_s",
+        lo: 0.0,
+        hi: 3_600.0,
+        exclusive_lo: true,
+        what: "how long one event lasts",
+    },
+    Bound {
+        path: "detection.ma.params.event_min_reporters",
+        lo: 1.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the reporters an event needs",
+    },
+    Bound {
+        path: "detection.ma.params.min_events",
+        lo: 1.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the events needed in the window",
+    },
+    Bound {
+        path: "detection.ma.params.window_s",
+        lo: 0.0,
+        hi: 86_400.0,
+        exclusive_lo: true,
+        what: "the evidence window",
+    },
+    Bound {
+        path: "detection.ma.params.min_reporters",
+        lo: 1.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the distinct reporters needed",
+    },
+    Bound {
+        path: "detection.ma.params.reputation_max",
+        lo: 0.0,
+        hi: 1_000_000.0,
+        exclusive_lo: false,
+        what: "the reports against a reporter before it is distrusted",
+    },
+    Bound {
+        path: "detection.ma.params.report_budget",
+        lo: 0.0,
+        hi: 1_000_000.0,
+        exclusive_lo: false,
+        what: "the reports a reporter may file before it is rate-limited",
+    },
+    Bound {
+        path: "detection.ma.params.report_threshold_k",
+        lo: 1.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the trusted reporters needed",
+    },
+    Bound {
+        path: "detection.ma.params.revoke_min_seconds",
+        lo: 1.0,
+        hi: 3_600.0,
+        exclusive_lo: false,
+        what: "the distinct seconds the evidence must span",
+    },
+    Bound {
+        path: "detection.ma.params.revoke_persist_s",
+        lo: 0.0,
+        hi: 3_600.0,
+        exclusive_lo: false,
+        what: "how long the evidence must persist",
+    },
+    Bound {
+        path: "detection.ma.params.revoke_window_s",
+        lo: 0.0,
+        hi: 86_400.0,
+        exclusive_lo: false,
+        what: "the window the evidence must be sustained in",
+    },
     // A unit must hold at least one certificate; 65 536 is far above any neighbourhood
     // a 1 km radio range holds.
     // A lower edge of the HSM signing time; the upper edge is the profile's own bound,
