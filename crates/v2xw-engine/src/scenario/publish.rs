@@ -713,6 +713,11 @@ fn unit_for(path: &str) -> &'static str {
     if let Some((_, u)) = UNIT_OVERRIDES.iter().find(|(p, _)| *p == path) {
         return u;
     }
+    if let Some(k) = super::module_keys::words(path)
+        && !k.unit.is_empty()
+    {
+        return k.unit;
+    }
     let leaf = path.rsplit('.').next().unwrap_or(path);
     let leaf = leaf.trim_end_matches("[]");
     for (suffix, unit) in UNIT_SUFFIXES {
@@ -1064,6 +1069,13 @@ impl Walk<'_> {
                 out.insert("maximum".into(), json!(b.hi));
             }
             out.insert("x-range".into(), json!(b.describe()));
+        }
+        // The step a number's control moves by, where the key's module states one
+        // (08-settings-ux-and-gaps §5-§8).
+        if let Some(k) = super::module_keys::words(path)
+            && k.step > 0.0
+        {
+            out.insert("x-step".into(), json!(k.step));
         }
         if let Some(c) = validate::choices_of(path) {
             out.insert("enum".into(), json!(c.values));
@@ -1614,6 +1626,84 @@ mod tests {
         );
     }
 
+    /// Every key an engine module owns (08-settings-ux-and-gaps §5-§8) reaches the page
+    /// as the owner asked of every SCMS setting: a title; a menu with a label and a
+    /// sentence per value (a refused value saying why) for text; a unit, a range and a
+    /// step for a number; and the module's own status, refused until it is built.
+    #[test]
+    fn module_keys_publish_menus_ranges_and_status() {
+        let owned = |p: &str| {
+            crate::ma_policy::KEY_STATUS
+                .iter()
+                .chain(crate::scms_topology::KEY_STATUS)
+                .any(|k| {
+                    p == k.path
+                        || p.strip_prefix(k.path)
+                            .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+                })
+        };
+        let mut seen = Vec::new();
+        let mut bad = Vec::new();
+        for f in fields() {
+            let path = f.get("x-path").and_then(Value::as_str).unwrap_or("");
+            if !owned(path) {
+                continue;
+            }
+            seen.push(path.to_string());
+            let s = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            if s("x-status") != "refused" {
+                bad.push(format!("{path}: status {}, not refused", s("x-status")));
+            }
+            if options::title(path).is_none() {
+                bad.push(format!("{path}: no title"));
+            }
+            match s("kind").as_str() {
+                "number" | "integer" => {
+                    for k in ["unit", "x-range"] {
+                        if s(k).is_empty() {
+                            bad.push(format!("{path}: no {k}"));
+                        }
+                    }
+                    if f.get("x-step").and_then(Value::as_f64).is_none() {
+                        bad.push(format!("{path}: no x-step"));
+                    }
+                }
+                "boolean" => {}
+                kind => {
+                    let rows = f.get("x-options").and_then(Value::as_array);
+                    if kind != "enum" || rows.is_none_or(Vec::is_empty) {
+                        bad.push(format!("{path}: a {kind} with no menu"));
+                    }
+                    for r in rows.into_iter().flatten() {
+                        let txt = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
+                        if txt("label").is_empty() || txt("description").is_empty() {
+                            bad.push(format!("{path}: a value with no label or description: {r}"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{bad:#?}");
+        for anchor in [
+            "security.scms.ma_policy.preset",
+            "security.scms.ma_policies.*.threshold.min_distinct_reporters",
+            "security.scms.deployment.providers[].ma_policy",
+            "security.scms.deployment.providers[].sites.*",
+            "security.scms.deployment.capacity.*.workers",
+            "security.scms.deployment.providers[].ica_levels",
+        ] {
+            assert!(
+                seen.iter().any(|p| p == anchor),
+                "{anchor} is not published: {seen:#?}"
+            );
+        }
+        assert!(
+            seen.len() >= 60,
+            "only {} module leaves published",
+            seen.len()
+        );
+    }
+
     /// Every number published carries a unit, or is declared dimensionless.
     #[test]
     fn every_number_publishes_a_unit() {
@@ -1692,6 +1782,11 @@ mod tests {
         for s in SLOTS {
             if !known(s.path) {
                 unknown.push(format!("SLOTS {}", s.path));
+            }
+        }
+        for p in crate::scenario::module_keys::table_paths() {
+            if !known(&p) {
+                unknown.push(format!("module key {p}"));
             }
         }
         for (p, _) in UNIT_OVERRIDES {

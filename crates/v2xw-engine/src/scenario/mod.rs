@@ -32,6 +32,7 @@
 pub mod guide;
 pub mod merge;
 pub mod migrate;
+pub mod module_keys;
 pub mod options;
 pub mod publish;
 pub mod schema;

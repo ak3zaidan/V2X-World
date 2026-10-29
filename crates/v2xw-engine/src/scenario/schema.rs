@@ -3581,6 +3581,173 @@ pub struct ScmsSpec {
     /// (0.04 unless set, RS_BSP_168).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rx_max_future_s: Option<f64>,
+    /// The Misbehaviour Authority's decision rule as one declarative policy: a preset, with
+    /// any field written beside it overriding the preset's (08-settings-ux-and-gaps §7).
+    /// Absent: today's MA (`detection.ma`, or the corroborating default). Not built yet:
+    /// only `preset: cv-pilot-manual`, which is today's default MA, loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ma_policy: Option<MaPolicySpec>,
+    /// Named MA policies, for a provider's own `ma_policy` or a sweep over
+    /// `security.scms.ma_policy.preset` (08 §7). Not built yet: any entry is refused.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ma_policies: BTreeMap<String, MaPolicySpec>,
+}
+
+/// `security.scms.ma_policy`: one MA decision policy (08-settings-ux-and-gaps §7). Every
+/// field left out keeps the preset's value.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaPolicySpec {
+    /// The family member the policy starts from: `cv-pilot-manual` (default, the CV-pilot
+    /// operator review over today's corroborating rule), `corroborated-auto`,
+    /// `legacy-window`, `pseudonym-k`, `device-k`, `catch`, `cluster` or `custom`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    /// What one case is about: `pseudonym` (one certificate) or `device` (every
+    /// certificate of one device, linked through the linkage authorities).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
+    /// Which reports count as evidence, and how reports group into events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<MaEvidenceSpec>,
+    /// How much evidence revokes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<MaThresholdSpec>,
+    /// How old evidence loses weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decay: Option<MaDecaySpec>,
+    /// A guard against revoking a whole device population that shares one benign trigger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub population_guard: Option<MaPopulationGuardSpec>,
+    /// The defences against false reports: trusted reporters and report budgets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defence: Option<MaDefenceSpec>,
+    /// Who makes the final decision: an operator after review, or the rule at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<MaDecisionSpec>,
+}
+
+/// `security.scms.ma_policy.evidence`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaEvidenceSpec {
+    /// Per report subtype (SM-MBR v1.0: `RandomPosition`, `ConstantPosition`, `MaxSpeed`,
+    /// `MaxAcceleration`, `BrakeAcceleration`), the score one report of it adds; 0 ignores
+    /// the subtype.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rules: BTreeMap<String, MaRuleSpec>,
+    /// `none`, or `catch`: discount the share of a position deviation that the accused's
+    /// own stated accuracy explains (CaTch, Kamel et al., IEEE WCNC 2019).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accuracy_weighting: Option<String>,
+    /// Under `catch`, the deviation one metre of stated accuracy excuses, m (1, SM-MBR
+    /// gpsDrift).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tau_m: Option<f64>,
+    /// Reports about one subject within this long of the first are one event, s (5, F2MD
+    /// `DELTA_REPORT_TIME`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_window_s: Option<f64>,
+    /// Distinct reporters an event needs before it counts (2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_min_reporters: Option<u32>,
+}
+
+/// `security.scms.ma_policy.evidence.rules.<subtype>`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaRuleSpec {
+    /// The score one report of this subtype adds; 0 ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+}
+
+/// `security.scms.ma_policy.threshold`: how much evidence revokes. A limit of 0 is not
+/// used.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaThresholdSpec {
+    /// Events needed inside the window (3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_events: Option<u32>,
+    /// Summed report score needed inside the window (0: not used).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_score: Option<f64>,
+    /// Reports needed inside the window (0: not used).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_reports: Option<u32>,
+    /// Distinct reporters needed over the counted events (3, the legacy k). Below 2 a
+    /// single report can revoke, which is unsound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_distinct_reporters: Option<u32>,
+    /// The sliding window the evidence must fall in, s (60).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_s: Option<f64>,
+}
+
+/// `security.scms.ma_policy.decay`: how old evidence loses weight.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaDecaySpec {
+    /// `none` (evidence keeps its weight until it leaves the window), `daily-multiplier`
+    /// (multiplied by `factor` once a day at `hour_et`, as SCMS Manager MBR v1.0 has the
+    /// device's report store do) or `half-life`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Under `daily-multiplier`, the factor applied once a day (0.9, MBR v1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factor: Option<f64>,
+    /// Under `daily-multiplier`, the hour it is applied, US Eastern time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hour_et: Option<u32>,
+    /// Under `half-life`, the time evidence takes to lose half its weight, s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub half_life_s: Option<f64>,
+}
+
+/// `security.scms.ma_policy.population_guard`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaPopulationGuardSpec {
+    /// `off`, or `cluster`: when `c` or more devices of one class are accused within the
+    /// window, a device in that class needs `m` times the reporters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Under `cluster`, the accused devices that make a class crowded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c: Option<u32>,
+    /// Under `cluster`, the multiplier on the reporters a device in a crowded class needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub m: Option<u32>,
+}
+
+/// `security.scms.ma_policy.defence`: the gates against false reports.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaDefenceSpec {
+    /// Whether only trusted reporters count (on, the legacy `ma_defense`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_reporters: Option<bool>,
+    /// A reporter itself accused this often inside the window stops being trusted (40).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reputation_max: Option<u32>,
+    /// A reporter filing about more subjects than this inside the window is rate-limited
+    /// (30).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_budget: Option<u32>,
+}
+
+/// `security.scms.ma_policy.decision`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaDecisionSpec {
+    /// `manual-review` (an operator reviews each case, as in the CV pilots) or
+    /// `automatic` (the rule revokes at once).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Under `manual-review`, the operator's review time, s (ASSUMPTION: 8 h, one shift).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_s: Option<f64>,
 }
 
 /// `security.scms.lifecycle`: the credential lifecycle's knobs as typed, published fields.
@@ -3801,6 +3968,31 @@ pub struct DeploymentSpec {
     /// provider's MA (on).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ma_report_sharing: Option<bool>,
+    /// Server capacity per role, for every provider (08-settings-ux-and-gaps §6). A role
+    /// left out keeps today's 4 workers, 1 ms overhead and unlimited queue (ASSUMPTION: no
+    /// provider publishes its capacity). Not built yet: any entry is refused.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capacity: BTreeMap<String, CapacitySpec>,
+}
+
+/// `security.scms.deployment.capacity.<role>`: one role's servers (08 §6). Every default
+/// is an ASSUMPTION; the cryptography's own time comes from the hardware profile.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapacitySpec {
+    /// Servers working in parallel, the c of M/M/c (4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workers: Option<u32>,
+    /// Requests that may wait beyond the busy workers; one more is refused as busy and
+    /// the device retries. Unset: unlimited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_limit: Option<u32>,
+    /// Time per request beyond the cryptography, ms (1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overhead_ms: Option<f64>,
+    /// `mmc` (the workers serve in parallel, default) or `fifo-1` (one request at a time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
 }
 
 impl DeploymentSpec {
@@ -3846,6 +4038,34 @@ pub struct ProviderSpec {
     /// `on-decision`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crl_publication: Option<String>,
+    /// The cloud site its servers run at (08-settings-ux-and-gaps §5): a site from the
+    /// catalogue of published cloud-region locations, or `custom` with `lat_deg` and
+    /// `lon_deg`. Which site a provider uses stays an ASSUMPTION. Not built yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+    /// A site per role, overriding `site` for that role (for example the MA in one region
+    /// and the RA in another). Not built yet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sites: BTreeMap<String, String>,
+    /// Under `site: custom`, the site's latitude, degrees (your assumption). Not built yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lat_deg: Option<f64>,
+    /// Under `site: custom`, the site's longitude, degrees (your assumption). Not built
+    /// yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lon_deg: Option<f64>,
+    /// Server capacity per role for this provider, overriding the deployment's (08 §6).
+    /// Not built yet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capacity: BTreeMap<String, CapacitySpec>,
+    /// Its MA's policy: a preset id or a name from `security.scms.ma_policies` (08 §7).
+    /// Not built yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ma_policy: Option<String>,
+    /// Intermediate CA levels between its root and its issuing CAs (08 §8): 1 is the US
+    /// system; 2 to 5 are deeper hierarchies, not the US. Not built yet: only 1 loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ica_levels: Option<u32>,
 }
 
 /// `security.scms.deployment.options`.

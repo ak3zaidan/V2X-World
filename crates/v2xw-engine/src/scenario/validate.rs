@@ -4402,9 +4402,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
 ];
 
 /// The status entry that governs `path`: the longest matching prefix.
+///
+/// The keys an engine module owns (`crate::scenario::module_keys`) state their status
+/// beside their code, and compete here on the same longest-match rule.
 pub fn status_of(path: &str) -> Option<&'static KeyStatus> {
     KEY_STATUS
         .iter()
+        .chain(crate::scenario::module_keys::key_status())
         .filter(|k| covers(k.path, path))
         .max_by_key(|k| k.path.len())
 }
@@ -4425,7 +4429,10 @@ fn covers(entry: &str, path: &str) -> bool {
 
 /// The bound declared for `path`, if there is one.
 pub fn bound_of(path: &str) -> Option<&'static Bound> {
-    BOUNDS.iter().find(|b| b.path == path)
+    BOUNDS
+        .iter()
+        .find(|b| b.path == path)
+        .or_else(|| crate::scenario::module_keys::bound(path))
 }
 
 /// The choice set declared for `path`, if there is one.
@@ -4458,6 +4465,9 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     e.extend(crate::driving::validate(s));
     network_audit(s, &mut e);
     scms_lifecycle(s, &mut e);
+    // 08-settings-ux-and-gaps §5-§8: the keys the MA-policy and topology modules own.
+    crate::ma_policy::validate(s, &mut e);
+    crate::scms_topology::validate(s, &mut e);
     unreachable_keys(s, &mut e);
     absent_radio_holders(s, &mut e);
     perception(s, &mut e);

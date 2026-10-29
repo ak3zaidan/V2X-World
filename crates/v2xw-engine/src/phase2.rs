@@ -285,6 +285,9 @@ pub(crate) enum MaHost {
     /// `threat/ma/corroborated`: reports correlated into events, revocation on
     /// independent corroborated events over time.
     Corroborated(v2xw_threat::CorroboratedMa),
+    /// `security.scms.ma_policy`: a declarative policy (08-settings-ux-and-gaps §7). Not
+    /// built yet: [`crate::ma_policy::PolicyMa`] has no value, so this arm never runs.
+    Policy(crate::ma_policy::PolicyMa),
 }
 
 impl MaHost {
@@ -292,6 +295,7 @@ impl MaHost {
         match self {
             MaHost::Legacy(m) => m.ingest_evidence(r, at),
             MaHost::Corroborated(m) => m.ingest_evidence(r, at),
+            MaHost::Policy(m) => m.ingest_evidence(r, at),
         }
     }
 
@@ -299,6 +303,7 @@ impl MaHost {
         match self {
             MaHost::Legacy(_) => MA_LEGACY_WINDOW,
             MaHost::Corroborated(_) => MA_CORROBORATED,
+            MaHost::Policy(_) => crate::ma_policy::MODEL_ID,
         }
     }
 
@@ -306,6 +311,7 @@ impl MaHost {
         match self {
             MaHost::Legacy(m) => m.subjects(),
             MaHost::Corroborated(m) => m.subjects(),
+            MaHost::Policy(m) => m.subjects(),
         }
     }
 
@@ -315,6 +321,7 @@ impl MaHost {
         match self {
             MaHost::Legacy(_) => None,
             MaHost::Corroborated(m) => Some(m.summary(subject).corroborated_events),
+            MaHost::Policy(m) => m.corroborated_events(subject),
         }
     }
 
@@ -322,6 +329,7 @@ impl MaHost {
         match self {
             MaHost::Legacy(_) => None,
             MaHost::Corroborated(m) => Some(m.peak_unrevoked_events()),
+            MaHost::Policy(m) => m.peak_unrevoked_events(),
         }
     }
 
@@ -329,12 +337,17 @@ impl MaHost {
         match self {
             MaHost::Legacy(m) => m.trust_infrastructure(digest),
             MaHost::Corroborated(m) => m.trust_infrastructure(digest),
+            MaHost::Policy(m) => m.trust_infrastructure(digest),
         }
     }
 
     /// The pipeline `detection.ma` names, with its parameters; the corroborating one
     /// when the key is absent.
     pub(crate) fn from_scenario(scenario: &Scenario) -> Result<MaHost> {
+        // `security.scms.ma_policy` (08-settings-ux-and-gaps §7): `None` is today's MA.
+        if let Some(policy) = crate::ma_policy::host(scenario)? {
+            return Ok(MaHost::Policy(policy));
+        }
         let Some(choice) = &scenario.detection.ma else {
             return Ok(MaHost::Corroborated(v2xw_threat::CorroboratedMa::defaults()));
         };
@@ -2967,6 +2980,8 @@ impl Phase2 {
             runs.push(peer);
         }
         runs.insert(0, scms);
+        // Server capacity per role (08-settings-ux-and-gaps §6), on every provider's run.
+        crate::scms_topology::apply_capacity(scenario, &mut runs)?;
         // Per provider (WP-D1): its own CRL publication rule, and its own MA mode when
         // the scenario names one for it (`providers[].ma_mode`; otherwise the run-wide
         // `ma_review_s` rule applies to every provider).
@@ -8854,6 +8869,10 @@ pub fn deployment_of(
         if let Some(f) = p.fleet_share {
             q.fleet_share = f;
         }
+        // Server sites and CA depth (08-settings-ux-and-gaps §5, §8). A site overrides
+        // the region, so it is applied after it.
+        crate::scms_topology::apply_sites(p, q)?;
+        crate::scms_topology::ica_levels(p, q)?;
         if let Some(on) = p.on_ctl {
             q.on_ctl = on;
         }
