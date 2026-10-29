@@ -356,9 +356,9 @@ function DevicesNode({
       <span className="r">{info.name}</span>
       {d ? (
         <span className="dim pki-devices-line">
-          <b>{d.devices}</b> devices · {d.enrolled} enrolled · {d.provisioned} with pseudonym certificates
+          <b>{d.devices}</b> devices · {d.enrolled} enrolled · {d.provisioned} with pseudonyms
           {d.blocklisted > 0 ? (
-            <span title="Refused by the RA after a revocation: their enrolment certificate is on its blocklist. How many devices are revoked is in the strip above."> · {d.blocklisted} blocked from new certificates</span>
+            <span title="Refused by the RA after a revocation: their enrolment certificate is on its blocklist. How many devices are revoked is in the strip above."> · {d.blocklisted} blocked</span>
           ) : (
             ""
           )}
