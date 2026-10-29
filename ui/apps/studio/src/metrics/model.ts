@@ -987,7 +987,9 @@ export function dataView(s: Series, runEndS: number): DataView {
   const last = n > 0 ? t[n - 1]! : 0;
   const end = Math.max(runEndS, last);
   const whole: DataView = { from: 0, to: end, sparse: false, zoomed: false, inside: n, windows: n };
-  if (n < 2 || end <= 0) return whole;
+  if (end <= 0 || n === 0) return whole;
+  // One window (or one overview bin): on the run's axis a point at an edge, which reads as nothing.
+  if (n === 1) return { ...whole, sparse: true };
   const gaps = t.slice(1).map((x, i) => x - t[i]!);
   // The spacing of two neighbouring windows (or bins): the smallest gap. A median would take a
   // binned overview's few far-apart bins for the spacing and miss that the run is mostly empty.

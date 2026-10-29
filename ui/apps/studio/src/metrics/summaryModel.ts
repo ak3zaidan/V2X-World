@@ -306,6 +306,8 @@ export interface BriefInput {
     readonly slowestStageS: number | null;
     /** Reports held in the RA's shuffle while nobody is revoked yet: detection is not judged (`scmsModel.ts`, the same rule). */
     readonly pendingInShuffle?: number | null;
+    /** The share of attacking vehicles revoked so far (det_recall, level = vehicle), when judged. */
+    readonly recall?: number | null;
   } | null;
   readonly bottleneck: { readonly stage: string | null; readonly stageShare: number | null; readonly entity: string | null; readonly utilisation: number | null } | null;
 }
@@ -338,6 +340,8 @@ export interface CredentialRow {
   readonly id: string;
   readonly label: string;
   readonly value: string;
+  /** The published band's verdict, where one judges the row (detection recall). */
+  readonly level?: "healthy" | "caution" | "unhealthy" | null;
 }
 
 /**
@@ -353,6 +357,7 @@ export function credentialRows(c: {
   readonly filed: number | null;
   readonly inShuffle: number | null;
   readonly recall: number | null;
+  readonly recallLevel?: "healthy" | "caution" | "unhealthy" | null;
 }): CredentialRow[] {
   const out: CredentialRow[] = [];
   if (c.revoked !== null) out.push({ id: "revoked", label: "Devices revoked (by the MA)", value: formatNumber(c.revoked) });
@@ -361,7 +366,7 @@ export function credentialRows(c: {
   if (c.filed !== null) out.push({ id: "filed", label: "Misbehaviour reports filed", value: formatNumber(c.filed) });
   const pending = (c.revoked ?? 0) === 0 && (c.inShuffle ?? 0) > 0;
   if (pending) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: `pending: ${formatNumber(c.inShuffle!)} in the RA's shuffle` });
-  else if (c.recall !== null) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: w(c.recall, "ratio") });
+  else if (c.recall !== null) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: w(c.recall, "ratio"), level: c.recallLevel ?? null });
   return out;
 }
 
@@ -404,6 +409,7 @@ export function briefSentences(b: BriefInput): string[] {
       const rv = m.revoked === 0 ? "no device was revoked" : `${formatNumber(m.revoked)} ${m.revoked === 1 ? "device was" : "devices were"} revoked`;
       s = s === "" ? cap(rv) : `${s} and ${rv}`;
       if (m.revoked > 0 && m.honestRevoked !== null) s += m.honestRevoked === 0 ? ", none of them honest" : `, ${formatNumber(m.honestRevoked)} of them honest`;
+      if (m.revoked > 0 && m.recall !== undefined && m.recall !== null) s += ` (${w(m.recall, "ratio")} of the attackers)`;
     }
     if (m.slowestStageS !== null) s += `; the slowest revocation step took ${w(m.slowestStageS, "s")} (p95)`;
     if ((m.revoked ?? 0) === 0 && (m.pendingInShuffle ?? 0) > 0)

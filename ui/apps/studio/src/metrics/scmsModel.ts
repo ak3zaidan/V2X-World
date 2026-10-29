@@ -447,7 +447,7 @@ const STAGE_WORDS: Readonly<Record<string, string>> = {
   report_sent: "report sent",
   report_received: "report at the MA",
   decision: "MA decides",
-  resolved: "device identified (PCA and LAs)",
+  resolved: "device identified (Pseudonym CA and Linkage Authorities)",
   issued: "on a signed CRL",
   published: "CRL published",
   first_rsu_broadcast: "first roadside broadcast",
@@ -679,7 +679,7 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
       ? countTile(listed, {
           id: "crl_entries",
           title: "Entries on the revocation lists (CRLs)",
-          unit: "entries",
+          unit: listed?.total === 1 ? "entry" : "entries",
           meaning: "Revoked devices on the newest CRL of each provider, added up; receivers refuse their messages.",
           source: "CRL Generators: entries, from the Backend snapshot. The crl_entries metric follows only the list published last.",
           metric: "crl_entries",
@@ -691,7 +691,7 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
         countTile(listed, {
           id: "crl_entries",
           title: "Entries on the revocation list (CRL)",
-          unit: "entries",
+          unit: listed?.total === 1 ? "entry" : "entries",
           meaning: "Revoked devices on the newest published certificate revocation list; receivers refuse their messages.",
           source: "CRL Generator: entries, from the Backend snapshot.",
         })),

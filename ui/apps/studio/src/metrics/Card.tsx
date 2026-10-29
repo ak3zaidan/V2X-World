@@ -187,7 +187,7 @@ export function Sparkline({
             <span title="The range of the line">{geom.flat ? `constant ${displayText(base, geom.dataLo, unit)}` : rangeText(base, geom.dataLo, geom.dataHi, unit)}</span>
             <span className="grow" />
             <span title={byWindow ? "The windows that reported, evenly spaced: this run reported in short stretches far apart, which on a time axis would be a sliver" : undefined}>
-              {byWindow ? `${clockText(lastT(series))} · by window` : clockText(to)}
+              {byWindow ? (observedCount(series) === 1 ? "one window" : `${clockText(lastT(series))} · by window`) : clockText(to)}
             </span>
           </>
         )}

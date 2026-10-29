@@ -151,6 +151,9 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
   const healthyThroughout = judgements.filter((j) => j.level === "healthy" && j.worstLevel === "healthy").length;
   const outs = outOfBand(judgements);
   const honest = accusations?.rows.find((r) => r.key === "vehicle")?.value ?? null;
+  // Detection recall per attacking vehicle (else per report), and its band's verdict.
+  const recallV = recallRows?.rows.find((r) => r.key === "vehicle")?.value ?? recallRows?.rows.find((r) => r.key === "report")?.value ?? null;
+  const recallBand = families.find((f) => f.base === "det_recall")?.health ?? null;
   const brief = briefSentences({
     judged:
       judgements.length === 0
@@ -175,6 +178,7 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
       honestRevoked: honest,
       slowestStageS: headline.get("revocation_latency_stage.p95") ?? null,
       pendingInShuffle: count(["ra"], ["reports_in_shuffle"]),
+      recall: recallV,
     },
     bottleneck: { stage: stage ? stageName(stage.key) : null, stageShare: stage?.share ?? null, entity: entities[0]?.name ?? null, utilisation: entities[0]?.utilisation ?? null },
   });
@@ -196,7 +200,8 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
       crlVersions: count(["crlg"], ["versions_signed"]) ?? count(["ca"], ["ca_crl_sequence"]),
       filed: count(["ee"], ["reports_filed"]),
       inShuffle: count(["ra"], ["reports_in_shuffle"]),
-      recall: recallRows?.rows.find((r) => r.key === "vehicle")?.value ?? recallRows?.rows.find((r) => r.key === "report")?.value ?? null,
+      recall: recallV,
+      recallLevel: recallBand ? classify(recallBand, recallV) : null,
     }),
   };
 }
@@ -397,6 +402,7 @@ function SummaryDialog(): React.JSX.Element {
                               <div key={r.id} className="rsum-item" data-testid={`run-summary-cred-${r.id}`}>
                                 <dt>{r.label}</dt>
                                 <dd>
+                                  {r.level ? <HealthDot level={r.level} /> : null}
                                   <span className="mono">{r.value}</span>
                                 </dd>
                               </div>

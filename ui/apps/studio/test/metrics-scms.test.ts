@@ -432,6 +432,8 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
     expect(late.to).toBeLessThan(1000);
     expect(late.inside).toBe(40);
     expect(late.windows).toBe(42);
+    // A lone window is drawn as a point in the middle, never at an edge.
+    expect(dataView({ t: new Float64Array([120]), v: new Float64Array([1]) }, 433_200).sparse).toBe(true);
   });
 
   it("names the metrics the overview shows, so their cards below do not say \"no data\"", () => {
@@ -455,6 +457,9 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
       bottleneck: null,
     });
     expect(brief[1]).toBe("Vehicles filed 452 misbehaviour reports and no device was revoked; 320 reports wait in the RA's shuffle, so detection is not judged yet.");
+    const judged = briefSentences({ judged: null, delivery: null, credentials: null, misbehaviour: { filed: 452, revoked: 2, honestRevoked: 0, slowestStageS: null, pendingInShuffle: 320, recall: 0.5 }, bottleneck: null });
+    expect(judged[1]).toBe("Vehicles filed 452 misbehaviour reports and 2 devices were revoked, none of them honest (50 % of the attackers).");
+    expect(credentialRows({ revoked: 2, crlVersions: null, filed: null, inShuffle: 0, recall: 0.5, recallLevel: "caution" })[1]!.level).toBe("caution");
   });
 
   it("judges a cumulative metric on its whole-run figure, not on a mean of its windows", () => {
