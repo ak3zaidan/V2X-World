@@ -23,6 +23,8 @@ function worthANote(o: Observation): boolean {
   return o.kind === "finished" || o.kind === "failed" || o.severity === "warning" || o.severity === "critical";
 }
 
+const SHOW_NOTES = false;
+
 export function AgentBadge(): React.JSX.Element | null {
   const start = useAgentWatch((s) => s.start);
   const available = useAgentWatch((s) => s.available);
@@ -63,7 +65,8 @@ export function AgentBadge(): React.JSX.Element | null {
     <span className="agent-badge" data-testid="agent-badge" title={latest?.text ?? "The agent watches every run and sums it up at the end"}>
       <span className={watching ? "agent-live-dot on" : "agent-live-dot"} aria-label={watching ? "the agent is watching the run" : "the agent is idle"} />
       {unseen > 0 && !panelOpen ? <span className="agent-badge-count">{unseen}</span> : null}
-      {note !== null && !panelOpen ? (
+      {/* The bottom-right note is off (owner, 2026-10-29): findings stay in the header count and the Agent panel. */}
+      {SHOW_NOTES && note !== null && !panelOpen ? (
         <span
           role="status"
           className={`agent-note sev-${note.severity}`}

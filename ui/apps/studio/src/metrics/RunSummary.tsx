@@ -226,19 +226,6 @@ async function collect(tNs: number, scenario: unknown, finished = false): Promis
   };
 }
 
-/** Opens the summary by itself once per run, when a run this page saw playing finishes. */
-function useAutoOpen(): void {
-  const runKey = useRunKey();
-  const state = useStudio((s) => s.run.state);
-  const sawPlaying = useRef<string>("");
-  useEffect(() => {
-    if (state === "running" || state === "seeking" || state === "paused") sawPlaying.current = runKey;
-    if (state === "finished" && sawPlaying.current === runKey && useRunSummary.getState().autoOpenedFor !== runKey) {
-      useRunSummary.getState().noteAutoOpened(runKey);
-    }
-  }, [state, runKey]);
-}
-
 /** The header's door to the summary: "Summary", marked once the run has finished. */
 export function RunSummaryButton(): React.JSX.Element | null {
   const state = useStudio((s) => s.run.state);
@@ -259,7 +246,7 @@ export function RunSummaryButton(): React.JSX.Element | null {
 }
 
 export function RunSummary(): React.JSX.Element | null {
-  useAutoOpen();
+  // No auto-open at the end of a run (owner, 2026-10-29): the summary is computed and opened from the header.
   const open = useRunSummary((s) => s.open);
   if (!open) return null;
   return <SummaryDialog />;

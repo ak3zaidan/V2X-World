@@ -152,7 +152,7 @@ export function describeStatus(input: StatusInput): StatusView {
           ? "Press Run again to rewind to the start, or drag the timeline to look back over what happened."
           : "The engine closed the stream because there was nothing left to send. Press Run again to rewind and start over.",
       action: RUN_AGAIN,
-      banner: true,
+      banner: false,
     };
   }
 

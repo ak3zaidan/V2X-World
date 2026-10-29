@@ -87,7 +87,7 @@ describe("describeStatus", () => {
       // And the action is to run it again — never to reconnect to a run that has ended.
       expect(view.action?.kind, connection).toBe("run");
       expect(view.action?.label, connection).toBe("Run again");
-      expect(view.banner, connection).toBe(true);
+      expect(view.banner, connection).toBe(false); // no end-of-run bar (owner, 2026-10-29); the chip says "Run finished"
     }
   });
 
