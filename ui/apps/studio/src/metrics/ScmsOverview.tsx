@@ -371,14 +371,33 @@ function barWidth(v: number, max: number): number {
   return Math.max(1, Math.min(100, (v / Math.max(1e-12, max)) * 100));
 }
 
-function Panel({ s, overview, onOpen }: { s: ScmsSection; overview: Overview; onOpen: (base: string) => void }): React.JSX.Element {
+/** An answer's first sentence; the rest (caveats, references) one click away. */
+function Answer({ text }: { text: string }): React.JSX.Element {
+  const [more, setMore] = useState(false);
+  const cut = text.search(/(?<=[.;]) (?=[A-Z])/);
+  if (cut < 0) return <span>{text}</span>;
+  return (
+    <span>
+      {text.slice(0, cut)}{" "}
+      {more ? (
+        <span className="dim">{text.slice(cut + 1)}</span>
+      ) : (
+        <button type="button" className="linklike scms-more" onClick={() => setMore(true)} title={text.slice(cut + 1)}>
+          more
+        </button>
+      )}
+    </span>
+  );
+}
+
+function Panel({ s, overview, onOpen }:{ s: ScmsSection; overview: Overview; onOpen: (base: string) => void }): React.JSX.Element {
   return (
     <article className={`scms-panel${s.level ? ` ${s.level}` : s.pending ? " pending" : ""}`} id={`scms-${s.id}`} data-testid={`scms-section-${s.id}`} data-level={s.level ?? (s.pending ? "pending" : "none")} aria-labelledby={`scms-q-${s.id}`}>
       <header className="scms-panel-head">
         <h4 id={`scms-q-${s.id}`}>{s.question}</h4>
         <p className="scms-answer" data-testid={`scms-answer-${s.id}`}>
           <SectionMark s={s} />
-          <span>{s.answer}</span>
+          <Answer text={s.answer} />
         </p>
       </header>
       {s.tiles.length > 0 ? (

@@ -659,3 +659,4 @@
 
 /* The run in brief: the summary's first read, in sentences. */
 .rsum-brief p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--text); max-width: 95ch; }
+.scms-more { font-size: 12px; margin-left: 2px; color: var(--accent); }
