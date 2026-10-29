@@ -963,6 +963,8 @@ export interface DataView {
   readonly from: number;
   readonly to: number;
   /** The windows that reported cover under a quarter of the run: on the run's axis the line is a sliver. */
+  readonly sparse: boolean;
+  /** `from`–`to` is the stretch where most windows are, not the whole run. */
   readonly zoomed: boolean;
   /** How many of the observed windows fall inside `from`–`to`, and how many there are. */
   readonly inside: number;
@@ -973,9 +975,10 @@ export interface DataView {
  * The x extent a chart of `s` should open on. Over the whole run (`0` to `runEndS`) unless the
  * windows that reported cover under a quarter of it: a fast-forwarded run reports only while its
  * radio runs (the first minutes of five days, then a few windows days apart), and on the run's
- * axis that line is a sliver at the left edge. Then the extent is the shortest stretch that holds
- * nine windows in ten, padded a little; `zoomed` says so and `inside` how many it holds, so the
- * axis can tell the reader. Coverage is the windows' count times their usual spacing.
+ * axis that line is a sliver at the left edge (`sparse`). Then the extent is the largest burst of
+ * windows (windows split where a gap is far longer than their usual spacing), padded a little, when
+ * it holds at least half of them; `zoomed` says so and `inside` how many it holds, so the axis can
+ * tell the reader. Coverage is the windows' count times their spacing (the smallest gap).
  */
 export function dataView(s: Series, runEndS: number): DataView {
   const t: number[] = [];
@@ -983,19 +986,31 @@ export function dataView(s: Series, runEndS: number): DataView {
   const n = t.length;
   const last = n > 0 ? t[n - 1]! : 0;
   const end = Math.max(runEndS, last);
-  const whole: DataView = { from: 0, to: end, zoomed: false, inside: n, windows: n };
+  const whole: DataView = { from: 0, to: end, sparse: false, zoomed: false, inside: n, windows: n };
   if (n < 2 || end <= 0) return whole;
-  const gaps = t.slice(1).map((x, i) => x - t[i]!).sort((a, b) => a - b);
-  const step = gaps[Math.floor(gaps.length / 2)]!;
+  const gaps = t.slice(1).map((x, i) => x - t[i]!);
+  // The spacing of two neighbouring windows (or bins): the smallest gap. A median would take a
+  // binned overview's few far-apart bins for the spacing and miss that the run is mostly empty.
+  let step = Number.POSITIVE_INFINITY;
+  for (const g of gaps) if (g > 0 && g < step) step = g;
+  if (!Number.isFinite(step)) return whole;
   if (n * step >= end * 0.25) return whole;
-  const k = Math.max(2, Math.ceil(n * 0.9));
-  let best = 0;
-  for (let i = 1; i + k - 1 < n; i++) if (t[i + k - 1]! - t[i]! < t[best + k - 1]! - t[best]!) best = i;
-  const lo = t[best]!;
-  const hi = t[best + k - 1]!;
-  if (hi - lo >= end * 0.25) return whole;
+  const sparse: DataView = { ...whole, sparse: true };
+  // Bursts: a new one starts where the gap is far longer than the usual spacing.
+  const split = Math.max(step * 50, end * 0.01);
+  let best = { lo: 0, hi: 0, count: 0 };
+  let start = 0;
+  for (let i = 1; i <= n; i++) {
+    if (i === n || gaps[i - 1]! > split) {
+      if (i - start > best.count) best = { lo: start, hi: i - 1, count: i - start };
+      start = i;
+    }
+  }
+  const lo = t[best.lo]!;
+  const hi = t[best.hi]!;
+  if (best.count < 2 || best.count < n / 2 || hi - lo >= end * 0.25) return sparse;
   const pad = Math.max((hi - lo) * 0.03, step, 1e-3);
-  return { from: Math.max(0, lo - pad), to: Math.min(end, hi + pad), zoomed: true, inside: k, windows: n };
+  return { from: Math.max(0, lo - pad), to: Math.min(end, hi + pad), sparse: true, zoomed: true, inside: best.count, windows: n };
 }
 
 /** Seconds as a reader counts them: `850 ms`, `42 s`, `6.5 min`, `24 h`, `2.5 days`. */

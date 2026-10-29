@@ -249,7 +249,7 @@ export function MetricCard({
   const level = band && !empty ? classify(band, judgedValue) : null;
   const shown = display(f.base, latest, f.unit);
   const end = Math.max(overview.toS, series && series.t.length > 0 ? series.t[series.t.length - 1] : 0);
-  const view = hasLine && series ? { end, sparse: dataView(series, end).zoomed } : null;
+  const view = hasLine && series ? { end, sparse: dataView(series, end).sparse } : null;
   return (
     <article
       className={`mcard${empty ? " empty" : ""}${level ? ` h-${level}` : ""}`}

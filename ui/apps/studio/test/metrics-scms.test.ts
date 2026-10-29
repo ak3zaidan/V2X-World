@@ -430,7 +430,7 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
     const late = dataView({ t: new Float64Array(t), v: new Float64Array(t.length).fill(1) }, 433_200);
     expect(late.zoomed).toBe(true);
     expect(late.to).toBeLessThan(1000);
-    expect(late.inside).toBe(38);
+    expect(late.inside).toBe(40);
     expect(late.windows).toBe(42);
   });
 

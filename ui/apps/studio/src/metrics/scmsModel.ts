@@ -868,7 +868,10 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
     // Only a would-be bad verdict (or a bare zero) is set aside: a good recall stands as judged.
     recallTile !== null && pendingText !== null && (recallTile.level === "caution" || recallTile.level === "unhealthy" || (recallTile.level === null && (recallVehicle ?? recallReport) === 0))
       ? asPending(recallTile, pendingText)
-      : recallTile,
+      : recallTile !== null && shuffle !== null && shuffle.total > 0
+        ? // Judged, but not final: say what is still on its way to the MA.
+          { ...recallTile, meaning: `${recallTile.meaning} ${formatNumber(shuffle.total)} ${shuffle.total === 1 ? "report still waits" : "reports still wait"} in the RA's shuffle; more attackers may be revoked once they reach the MA.` }
+        : recallTile,
     honestRevoked !== null && m.family("false_accusations") !== undefined
       ? {
           id: "honest-revoked",
