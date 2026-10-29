@@ -154,7 +154,7 @@ export const HEADLINES: readonly HeadlineGroup[] = [
     title: "Security overhead",
     items: [
       { series: "security_overhead", label: "Security's share of the bytes on air", reduce: "mean" },
-      { series: "envelope_overhead", label: "Security bytes per payload byte", reduce: "mean" },
+      { series: "envelope_overhead", label: "Security bytes, as a multiple of the payload", reduce: "mean" },
       { series: "verify_wait.p95", label: "Worst window's p95 verification wait", reduce: "max" },
       { series: "unverified_ratio", label: "Delivered without verification", reduce: "mean" },
     ],

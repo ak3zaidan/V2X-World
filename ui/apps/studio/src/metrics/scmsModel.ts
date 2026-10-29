@@ -761,8 +761,6 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string,
   const starved = countOf(s, ["ee"], ["vehicles_starved"], first);
   const unavailable = countOf(s, ["ee"], ["cert_unavailable_s"], first);
   const files = countOf(s, ["ra"], ["files_served"], first);
-  // The vehicles in the run now (the Certificates page's Vehicles tab counts these), beside every device enrolled so far.
-  const inRun = countOf(s, ["ee"], ["vehicles"], first);
   const topupMs = firstOf(s, ["ee"], "topup_latency_ms");
   const certName = ccms ? "authorisation tickets (ATs)" : "pseudonym certificates (PCs)";
   const cal = pseudonymCalendar(scenario);
@@ -780,7 +778,7 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string,
           unit: "devices",
           meaning: `Hold the long-term credential used to ask for pseudonym certificates. Every device the run has had${
             enrolled.byProvider.length > 1 ? ", both providers" : ""
-          }, including vehicles that have left${inRun !== null ? `; ${formatNumber(inRun.total)} ${inRun.total === 1 ? "vehicle is" : "vehicles are"} in the run now` : ""}.`,
+          }, including vehicles that have left the run, so it can be more than the vehicles on the road now.`,
           level: allEnrolled ? "healthy" : "caution",
           cue: allEnrolled
             ? "Every device is enrolled, as the run expects: each is enrolled before it is deployed."
@@ -1312,7 +1310,7 @@ function costSection(m: MetricReader): ScmsSection {
       meaning: "Header, certificate or digest, and signature, as a share of each frame.",
     }) ??
       metricTile(m, "envelope_overhead", {
-        title: "Security bytes per payload byte",
+        title: "Security bytes, as a multiple of the payload",
         meaning: "Security envelope bytes as a multiple of the application's own bytes: 1.3 × means 30 % more security than payload.",
       }),
     metricTile(m, "full_cert_share", {
