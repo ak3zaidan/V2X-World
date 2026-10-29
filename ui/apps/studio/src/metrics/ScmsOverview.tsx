@@ -223,15 +223,18 @@ function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen
   const tip = [short !== t.title ? t.title : null, t.meaning, t.cue, t.pending, t.source, t.metric ? "Click to open its full chart." : null].filter(Boolean).join("\n\n");
   const body = (
     <>
-      <span className="scms-tile-title">{short}</span>
+      <span className="scms-tile-title">
+        <span>{short}</span>
+        {t.level === "healthy" ? <LevelMark level={t.level} compact /> : null}
+      </span>
       <span className="scms-tile-value">
         <span className="scms-num" data-testid={`scms-value-${t.id}`}>
           {t.value}
         </span>
         {t.unit !== "" ? <span className="scms-unit">{t.unit}</span> : null}
-        {t.level ? <LevelMark level={t.level} compact={t.level === "healthy"} /> : t.pending ? <PendingMark /> : null}
+        {t.level && t.level !== "healthy" ? <LevelMark level={t.level} /> : t.pending ? <PendingMark /> : null}
       </span>
-      {t.level && t.level !== "healthy" && t.cue ? <span className={`scms-tile-cue ${t.level}`}>{t.cue.split(". Thresholds:")[0]}</span> : null}
+      {t.level && t.level !== "healthy" && t.cue ? <span className={`scms-tile-cue ${t.level}`}>{t.cue.split(". Thresholds:")[0].split(/(?<=\.) /)[0]}</span> : null}
       {t.pending ? (
         <span className="scms-tile-cue pending" data-testid={`scms-pending-${t.id}`}>
           {t.pending}
