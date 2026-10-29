@@ -285,8 +285,8 @@ pub(crate) enum MaHost {
     /// `threat/ma/corroborated`: reports correlated into events, revocation on
     /// independent corroborated events over time.
     Corroborated(v2xw_threat::CorroboratedMa),
-    /// `security.scms.ma_policy`: a declarative policy (08-settings-ux-and-gaps §7). Not
-    /// built yet: [`crate::ma_policy::PolicyMa`] has no value, so this arm never runs.
+    /// `security.scms.ma_policy` (or a provider's own): a declarative policy
+    /// (08-settings-ux-and-gaps §7), [`crate::ma_policy::PolicyMa`].
     Policy(crate::ma_policy::PolicyMa),
 }
 
@@ -3010,6 +3010,8 @@ impl Phase2 {
                 run.state.params.ma.mode = prov.ma_mode;
             }
         }
+        // The MA policy's decision mode (08 §7), where a policy states one.
+        crate::ma_policy::apply_decision(scenario, &mut runs)?;
         // Every CRACA's CRL exists before the run (R-NOCRL): the real deployment has
         // published weekly since long before `t0` ([1609.2] `nextCrl`; a device stops
         // trusting a CRACA two weeks past it, [CAMP122] Table 67 `overdue_CRL_tolerance`),
@@ -3142,7 +3144,8 @@ impl Phase2 {
                     .iter()
                     .any(|l| l.admits(RoadMap::vehicles())),
             report_interval,
-            ma: vec![ma; providers],
+            // A provider with its own `ma_policy` hosts it (08 §7).
+            ma: crate::ma_policy::hosts(scenario, ma, providers)?,
             vehicles: 0,
             filed: BTreeMap::new(),
             checked_at: BTreeMap::new(),
@@ -6964,7 +6967,29 @@ impl Phase2 {
                 }
                 continue;
             }
-            let action = self.ma[k].ingest_evidence(&r, r.detection_time);
+            // A policy (08 §7) also reads what the MA learns about the subject: the LAs'
+            // device link, the issuing provider and the judged BSM's secMark phase, as
+            // `ma.received` records them.
+            let action = if matches!(self.ma[k], MaHost::Policy(_)) {
+                let link = crate::report_records::la_link(f.subject, self.params.scms.master_seed);
+                let issuer = format!("provider-{}", self.provider_of_device(device_of(f.subject)));
+                let secmark_phase_ms = self
+                    .report_log
+                    .as_ref()
+                    .and_then(|l| l.secmark.get(&r.report_id))
+                    .map(|sm| u32::from(*sm) % 50);
+                let hint = crate::ma_policy::SubjectHint {
+                    link: &link,
+                    issuer: &issuer,
+                    secmark_phase_ms,
+                };
+                match &mut self.ma[k] {
+                    MaHost::Policy(m) => m.ingest_linked(&r, r.detection_time, &hint),
+                    other => other.ingest_evidence(&r, r.detection_time),
+                }
+            } else {
+                self.ma[k].ingest_evidence(&r, r.detection_time)
+            };
             if self.attackers.contains_key(&f.subject) {
                 *self.attacker_at_ma.entry(f.subject).or_insert(0) += 1;
                 if let Some(events) = self.ma[k].corroborated_events(&r.subject_cert_digest) {

@@ -690,6 +690,33 @@ every digest must stay the same.
   each red under its named fault (commit message).
 * B2: engine wiring through the `MaHost::Policy` arm, `ma_policies`, per-provider policy,
   the decision mode, and tests 1, 3 and 6.
+
+  **Status, B2 (2026-10-29): built; all three keys `wired`.** `crates/v2xw-engine/src/ma_policy.rs`
+  resolves a policy (a preset, or a name from `ma_policies`, whose own preset must be a
+  built-in one; every written field over the preset's), refuses each conflict at its path
+  (`detection.ma` with any policy; an unknown preset or name; a named policy called like a
+  preset; under `legacy-window` every field it cannot read; `tau_m`, `factor`/`hour_et`,
+  `half_life_s`, `c`/`m` and `review_s` outside their mode; a decay with no score threshold,
+  which would change nothing; a written `decision` with `ma_review_s`; a provider's
+  `ma_mode` with its policy's written decision), and hosts it. **Byte-identity**: a policy
+  whose rule is `CorroborationParams::default()` with no extension (checked against that,
+  not against the preset, so a broken preset shows) is hosted as today's MA, and a decision
+  left unwritten under the CV-pilot review leaves the run's review rule alone; so
+  `cv-pilot-manual`, `custom` and `corroborated-auto` (today's rule, automatic decision) run
+  today's code. Three hook lines in `phase2.rs` (A's file; A0's single call site could not
+  carry them): `ma_policy::hosts` builds one MA per provider, `ma_policy::apply_decision`
+  sets each provider run's `MaMode` after the `ma_mode` loop, and the ingest passes the LAs'
+  link, the issuer and the secMark phase (as `ma.received` records them) to a policy host.
+  `publish::module_keys_publish_menus_ranges_and_status` now checks each module key's
+  published status against its module's own row instead of the literal `refused`, so a
+  piece that builds a key can flip it (§11). Choices (§9 rule): `identity: device` takes the
+  LAs' answer at once (the PCA and LA round trips are not modelled; the engine already
+  links a decided pseudonym the same way); the decay acts on the score only (SM-MBR's
+  multiplier is a weight); a policy's decision overrides `ma_review_s` only where written.
+  Tests: `ma_policy::tests` (resolution, refusals, hosting, menus) and
+  `tests/ma_policy.rs` (accept tests 1 on `credential-lifecycle` 200 s and
+  `revocation-latency` 300 s at 3,000 veh/h, 3 and 6), each red under its named fault.
+  Not done here: guide rows (A5), presets and relevance (A3).
 * B3: the sweep report in v2xw-experiment, `ma-replay --policies`, and tests 2, 4 and 5.
 * B4 (optional): `PyMaPolicy` and test 7.
 
