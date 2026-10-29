@@ -9,7 +9,8 @@
  * the table does not name, under the latest stage reached by its time. Pure (`test/pki-cases.test.ts`).
  */
 
-import { BOARD_COLUMNS, STEP_LEARNS, enforcement, entityLabel, evidenceText, stageTimes, type CaseStep, type CaseView } from "./pkiRecords.js";
+import { evidenceWords } from "./pkiGlossary.js";
+import { BOARD_COLUMNS, STEP_LEARNS, enforcement, entityLabel, stageTimes, type CaseStep, type CaseView } from "./pkiRecords.js";
 
 /** The stage each investigation message belongs to, by its name. */
 export const MESSAGE_STAGE: Readonly<Record<string, string>> = {
@@ -100,8 +101,8 @@ function detailOf(c: CaseView, stage: string): string {
   const d = c.stages.find((s) => s.stage === stage)?.detail ?? {};
   switch (stage) {
     case "reports-in": {
-      const ev = Array.isArray(d.evidence) ? d.evidence.map(evidenceText).join("; ") : "";
-      return ev ? `evidence ${ev}` : "";
+      const ev = Array.isArray(d.evidence) ? d.evidence.map(evidencePlain).join(" · ") : "";
+      return ev ? `What they saw: ${ev}` : "";
     }
     case "corroborated":
       return d.reports !== undefined ? `${String(d.reports)} report${Number(d.reports) === 1 ? "" : "s"}` : "";
@@ -110,12 +111,12 @@ function detailOf(c: CaseView, stage: string): string {
     case "plv-lookup":
       return d.lookups !== undefined ? `${String(d.lookups)} lookup${Number(d.lookups) === 1 ? "" : "s"}` : "";
     case "la-seeds":
-      return d.i_rev !== undefined ? `revoked from week i = ${String(d.i_rev)} · ${String(d.jmax ?? "?")} certificates a week` : "";
+      return d.i_rev !== undefined ? `revoked from week ${String(d.i_rev)} on · ${String(d.jmax ?? "?")} certificates a week` : "";
     case "crl-published":
-      return typeof d.crl_instance === "string" ? d.crl_instance : "";
+      return typeof d.crl_instance === "string" ? `on the list built by ${d.crl_instance}` : "";
     case "enforced": {
       const e = enforcement(c);
-      return e ? `installed by ${e.installed} device${e.installed === 1 ? "" : "s"} · ${e.of} in the run when last counted` : "";
+      return e ? `${e.installed} of the ${e.of} vehicles in the run have installed the list and drop its messages` : "";
     }
     default:
       return "";
@@ -181,4 +182,58 @@ export function caseSteps(c: CaseView): CaseStepRow[] {
       messages,
     };
   });
+}
+
+/** One beat of a case's four-step story. */
+export interface StoryBeat {
+  readonly key: "reports-in" | "decision" | "crl-published" | "enforced";
+  readonly title: string;
+  /** Time since the first report, ns; null until reached. */
+  readonly at: number | null;
+  readonly done: boolean;
+  readonly note?: string;
+}
+
+/**
+ * A case as the four beats a reader takes in at once — reported, the MA decided, on the list,
+ * devices refuse it — each with the time since the first report. The case list, the case card
+ * and the story use these same four words.
+ */
+export function storyBeats(c: CaseView): StoryBeat[] {
+  const h = caseHeadline(c);
+  const reached = new Set(c.stages.map((s) => s.stage));
+  return [
+    { key: "reports-in", title: "Reported", at: reached.has("reports-in") ? 0 : null, done: reached.has("reports-in") },
+    { key: "decision", title: h.refused ? "MA decided: not revoked" : "MA decided", at: h.toDecision, done: reached.has("decision") || h.refused },
+    { key: "crl-published", title: "On the list", at: h.toList, done: reached.has("crl-published") },
+    {
+      key: "enforced",
+      title: "Devices refuse it",
+      at: h.toEnforced,
+      done: reached.has("enforced"),
+      note: h.enforced ? `${h.enforced.installed} of ${h.enforced.of} vehicles` : undefined,
+    },
+  ];
+}
+
+/** The furthest beat reached, in the story's words ("Seen in steps only" when the view holds no stage). */
+export function beatNow(c: CaseView): string {
+  const done = storyBeats(c).filter((b) => b.done);
+  return done.length === 0 ? "Seen in steps only" : done[done.length - 1].title;
+}
+
+/** One piece of evidence in words: what was wrong, and whether the MA could verify it. */
+export function evidencePlain(e: unknown): string {
+  const r = (e ?? {}) as Record<string, unknown>;
+  if (typeof r.type_name === "string") {
+    const subs = Array.isArray(r.subtypes) ? r.subtypes.map((s) => String((s as Record<string, unknown>).name)) : [];
+    const what = evidenceWords([r.type_name, ...subs].join("/"));
+    const verified = r.verified === true ? "the MA verified it" : r.verified === false ? "the MA could NOT verify it" : "not verified";
+    return `${what}; ${verified}${r.shared === true ? "; shared by the other provider's MA" : ""}`;
+  }
+  if (typeof r.modelled === "string") {
+    const checks = Array.isArray(r.checks) ? r.checks.join(", ") : "";
+    return `a modelled detector (${r.modelled})${checks ? ` flagged: ${checks}` : ""}`;
+  }
+  return "evidence of an unknown kind";
 }

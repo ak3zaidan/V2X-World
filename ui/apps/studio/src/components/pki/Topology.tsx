@@ -18,9 +18,10 @@ import {
   flowInfo,
   layoutTopology,
   linkKey,
+  maModeText,
   linkLoad,
-  linkPath,
-  messagePath,
+  edgePath,
+  messageEnds,
   messageText,
   messagesOf,
   observedBy,
@@ -34,6 +35,7 @@ const TRAVEL_MS = 1100;
 /** Dots drawn per poll at most (the rest only light their links). */
 const MAX_DOTS = 60;
 
+
 export function LockIcon(): React.JSX.Element {
   return (
     <svg className="pki-lock" viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
@@ -45,7 +47,9 @@ export function LockIcon(): React.JSX.Element {
 
 interface Dot {
   readonly key: string;
-  readonly d: string;
+  /** The link's two ends, sender first: the path is read from the layout drawn now, never an old one. */
+  readonly a: string;
+  readonly b: string;
   readonly color: string;
   readonly delay: number;
   readonly title: string;
@@ -106,11 +110,12 @@ export function Topology({
     const span = Math.max(1, fresh[fresh.length - 1].t - t0);
     const next: Dot[] = [];
     for (const m of fresh.slice(-MAX_DOTS)) {
-      const d = messagePath(topo, m);
-      if (!d) continue;
+      const ends = messageEnds(topo, m);
+      if (!ends) continue;
       next.push({
         key: `${m.id}`,
-        d,
+        a: ends[0],
+        b: ends[1],
         color: flowInfo(m.flow).color,
         delay: Math.round(((m.t - t0) / span) * 700),
         title: `${messageText(m.name)} · ${m.from ?? "?"} → ${m.to ?? "?"}`,
@@ -122,6 +127,7 @@ export function Topology({
   }, [messages, view]);
 
   const done = (key: string): void => setDots((old) => old.filter((d) => d.key !== key));
+  const drawn = new Set(topo.links.map((l) => l.key));
   const signers = new Set(s.ctl.signers);
 
   /** One node, positioned in its container (a region at `ox`, `oy`, or the governance strip). */
@@ -160,6 +166,7 @@ export function Topology({
 
   return (
     <div className="pki-topo-wrap" ref={ref} data-testid="pki-topology">
+      <TopoLegend />
       <div className="pki-topo" style={{ width: topo.width, height: topo.height }} data-layout={topo.sideBySide ? "side-by-side" : "stacked"}>
         <div className="pki-topo-gov" style={{ left: 0, top: 0, width: topo.governance.w, height: topo.governance.h }} data-testid="pki-governance" aria-label="Governance">
           {topo.nodes.filter((n) => !topo.regions.some((r) => r.provider.label === n.provider)).map((n) => renderNode(n, 0, 0))}
@@ -174,7 +181,11 @@ export function Topology({
           >
             <header>
               <b className="mono">{r.provider.label}</b>
-              {r.provider.home ? <span className="pill">home</span> : null}
+              {r.provider.home ? (
+                <span className="pill" title="The home provider: the one this scenario's own vehicles enrol with first; the other providers' fleets roam in">
+                  home
+                </span>
+              ) : null}
               <span className={r.provider.on_ctl ? "pill ok" : "pill warn"} title={r.provider.on_ctl ? "Its root is on the certificate trust list (CTL): devices accept its certificates" : "Its root is not on the trust list: devices reject its certificates"}>
                 {r.provider.on_ctl ? "trusted" : "not trusted"}
               </span>
@@ -182,8 +193,8 @@ export function Topology({
                 {r.provider.region.metro}
                 {r.provider.region.assumption ? <em className="assume"> assumed</em> : null}
               </span>
-              <span className="dim" title={`Misbehaviour Authority decision mode${r.provider.ma_review_s !== null ? `; an operator reviews each case for ${formatSpan(r.provider.ma_review_s * 1e9)}` : ""}`}>
-                {r.provider.ma_mode === "manual-review" ? "manual review" : r.provider.ma_mode}
+              <span className="dim" title={`How its Misbehaviour Authority (MA) decides a case${r.provider.ma_review_s !== null ? `; an operator reviews each case for ${formatSpan(r.provider.ma_review_s * 1e9)}` : ""}`}>
+                {maModeText(r.provider.ma_mode)}
               </span>
             </header>
             {topo.nodes.filter((n) => n.provider === r.provider.label).map((n) => renderNode(n, r.x, r.y))}
@@ -199,7 +210,7 @@ export function Topology({
             return (
               <path
                 key={l.key}
-                d={linkPath(a, b).d}
+                d={edgePath(topo, a, b)}
                 className={`pki-link${n > 0 ? " busy" : ""}${l.defined ? "" : " undeclared"}${off ? " off" : ""}`}
                 style={n > 0 ? { strokeWidth: Math.min(5, 1.5 + Math.log2(1 + n)) } : undefined}
                 data-link={l.key}
@@ -209,32 +220,55 @@ export function Topology({
           })}
         </svg>
         <div className="pki-dots" aria-hidden="true">
-          {dots.map((d) => (
-            <i
-              key={d.key}
-              className="pki-msg-dot"
-              style={{ offsetPath: `path('${d.d}')`, background: d.color, animationDelay: `${d.delay}ms`, animationDuration: `${TRAVEL_MS}ms` }}
-              onAnimationEnd={() => done(d.key)}
-              title={d.title}
-            />
-          ))}
+          {dots.map((d) => {
+            // Only along a link the diagram draws now, in the layout drawn now.
+            const a = byId.get(d.a);
+            const b = byId.get(d.b);
+            if (!a || !b || !drawn.has(linkKey(d.a, d.b))) return null;
+            return (
+              <i
+                key={d.key}
+                className="pki-msg-dot"
+                style={{ offsetPath: `path('${edgePath(topo, a, b)}')`, background: d.color, animationDelay: `${d.delay}ms`, animationDuration: `${TRAVEL_MS}ms` }}
+                onAnimationEnd={() => done(d.key)}
+                title={d.title}
+              />
+            );
+          })}
         </div>
       </div>
-      <p className="pki-topo-legend dim" data-testid="pki-topo-legend">
-        {Object.entries(FLOW_INFO).map(([k, f]) => (
-          <span key={k} className="pki-key">
-            <i className="pki-swatch" style={{ background: f.color }} /> {f.name}
-          </span>
-        ))}
-        <span className="pki-key">
-          <LockIcon /> offline by design
-        </span>
-        <span className="pki-key">
-          <i className="pki-swatch ghost" /> not deployed
-        </span>
-        <span className="pki-key faulted">outage</span>
-      </p>
     </div>
+  );
+}
+
+/** What the diagram's colours and marks mean, above it so it is read first. */
+function TopoLegend(): React.JSX.Element {
+  return (
+    <p className="pki-topo-legend dim" data-testid="pki-topo-legend">
+      <span className="faint">Messages:</span>
+      {Object.entries(FLOW_INFO).map(([k, f]) => (
+        <span key={k} className="pki-key">
+          <i className="pki-swatch" style={{ background: f.color }} /> {f.name}
+        </span>
+      ))}
+      <span className="faint pki-key-sep">Boxes:</span>
+      <span className="pki-key busy" title="The dot in a box's corner lights green while it sends or receives">
+        <i className="pki-dot" /> busy in the last 2 s
+      </span>
+      <span className="pki-key" title="A grey corner dot: online, nothing in the last 2 s">
+        <i className="pki-dot idle" /> idle
+      </span>
+      <span className="pki-key">
+        <LockIcon /> offline by design
+      </span>
+      <span className="pki-key">
+        <i className="pki-swatch ghost" /> not deployed
+      </span>
+      <span className="pki-key">
+        <i className="pki-link-key" /> dashed line: a link the architecture does not define, seen in this run
+      </span>
+      <span className="pki-key faulted">outage</span>
+    </p>
   );
 }
 
@@ -277,8 +311,7 @@ function NodeButton({
     >
       {c.status === "offline" ? <LockIcon /> : <i className="pki-dot" aria-hidden="true" />}
       <span className="r">
-        {c.role === "elector" ? `${info.name} ${c.instance + 1}` : info.name}
-        {c.instance > 0 && c.role !== "elector" ? <sub>{c.instance + 1}</sub> : null}
+        <span className="nm">{c.role === "elector" || c.instance > 0 ? `${info.name} ${c.instance + 1}` : info.name}</span>
         {c.role !== "elector" && c.role !== "manager" && roleLabel(c.role) !== info.name ? <small className="acr">{roleLabel(c.role)}</small> : null}
       </span>
       {c.queue && c.queue.depth > 0 ? <span className="pki-q">{c.queue.depth}</span> : null}
@@ -311,10 +344,10 @@ function DevicesNode({
     >
       <span className="r">{info.name}</span>
       {d ? (
-        <span className="dim mono">
-          {d.devices} · enrolled {d.enrolled} · provisioned {d.provisioned}
-          {d.revoked > 0 ? <b className="bad"> · revoked {d.revoked}</b> : null}
-          {d.blocklisted > 0 ? ` · blocklisted ${d.blocklisted}` : ""}
+        <span className="dim pki-devices-line">
+          <b>{d.devices}</b> devices · {d.enrolled} enrolled · {d.provisioned} with pseudonym certificates
+          {d.revoked > 0 ? <b className="bad"> · {d.revoked} revoked</b> : null}
+          {d.blocklisted > 0 ? <span title="Refused by the RA after a revocation: their enrolment certificate is on its blocklist"> · {d.blocklisted} blocked from new certificates</span> : ""}
         </span>
       ) : null}
     </button>

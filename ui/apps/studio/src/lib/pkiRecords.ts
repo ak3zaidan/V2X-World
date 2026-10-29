@@ -14,6 +14,8 @@
  * Framework- and DOM-free, so it is tested in plain Node (`test/pki-records.test.ts`).
  */
 
+import { componentName } from "./pkiTopology.js";
+
 /** The ground-truth view's name, as the server spells it. */
 export const GROUND_TRUTH = "ground-truth";
 
@@ -146,16 +148,37 @@ export const CELL_LABEL: Readonly<Record<CellState, string>> = {
 };
 
 /** A vehicle's credential state, the map overlay's colour (00-gap-analysis §3.2). */
-export type CredentialState = "healthy" | "topup-due" | "starving" | "crl-overdue" | "revoked" | "untrusted";
+export type CredentialState = "healthy" | "between" | "topup-due" | "starving" | "crl-overdue" | "revoked" | "untrusted" | "left";
 
 export const CREDENTIAL_LABEL: Readonly<Record<CredentialState, string>> = {
   healthy: "healthy",
+  between: "between pseudonyms",
   "topup-due": "top-up due",
   starving: "starving (no usable certificate)",
   "crl-overdue": "CRL overdue",
   revoked: "revoked",
   untrusted: "untrusted provider",
+  left: "left the run",
 };
+
+/**
+ * The states in the order a reader triages them: problems first, routine work next, then the
+ * vehicles that are fine, and last the ones no longer in the run. The table sorts by it and the
+ * summary chips follow it.
+ */
+export const CREDENTIAL_ORDER: readonly CredentialState[] = ["revoked", "untrusted", "starving", "crl-overdue", "topup-due", "between", "healthy", "left"];
+
+/**
+ * A vehicle publishes its security record about once a simulated second while it drives; one
+ * older than this has left the run (its trip ended), and its last record is history, not state.
+ */
+export const LEFT_RUN_NS = 5e9;
+
+/** Whether the row is a vehicle that has left the run: its security record stopped updating. */
+export function leftRun(row: Pick<VehicleRow, "security">, nowNs: number): boolean {
+  const t = row.security?.t;
+  return typeof t === "number" && nowNs - t > LEFT_RUN_NS;
+}
 
 /** What {@link credentialState} needs beyond the row: the clock and the published lists. */
 export interface CredentialContext {
@@ -179,12 +202,18 @@ export function credentialState(row: VehicleRow, ctx: CredentialContext): Creden
   if (row.revoked || row.security?.self_revoked === true) return "revoked";
   if (ctx.groundTruth && (row.truth?.revoked_certs ?? 0) > 0) return "revoked";
   if (ctx.offCtl.has(row.provider)) return "untrusted";
-  if (!row.enrolled || row.usable === 0 || !row.active) return "starving";
+  // A vehicle whose trip ended keeps its last record: what it held when it left, not a problem now.
+  if (leftRun(row, ctx.nowNs)) return "left";
+  // Starving is "nothing to sign with": no enrolment or no usable certificate left. A vehicle
+  // with usable certificates but none active is between two pseudonyms (a normal gap), not
+  // starving; it is reported last, below anything that needs attention.
+  if (!row.enrolled || row.usable === 0) return "starving";
   if (ctx.crlOverdue.has(row.provider)) return "crl-overdue";
   const next = row.security?.next_topup;
   if (row.security?.topup_in_flight === true || (typeof next === "number" && next <= ctx.nowNs) || row.periods_ahead === 0) {
     return "topup-due";
   }
+  if (!row.active) return "between";
   return "healthy";
 }
 
@@ -451,13 +480,13 @@ export function enforcement(c: Pick<CaseView, "stages">): { installed: number; o
  */
 export const STEP_LEARNS: Readonly<Record<string, string>> = {
   "pca-lookup-request": "the accused certificate's linkage value is under investigation",
-  "pca-lookup-response": "the RA's request handle and the two LCIs, sealed for the LAs (it cannot open them)",
+  "pca-lookup-response": "the RA's request handle and the two linkage chain identifiers, sealed for the Linkage Authorities (it cannot open them)",
   "blocklist-request": "the request handle; the RA maps it to the enrolment certificate and blocklists it",
   "blocklist-notice": "that enrolment certificate is blocklisted (no re-enrolment)",
   "blocklist-response": "the blocklisting is done",
-  "seed-request": "an LCI sealed for it; the LA finds the chain and releases its seed at iRev",
-  "seed-response": "that LA's linkage seed at iRev, so with the other LA's it can revoke the device",
-  "crl-append": "the entry to list: (la1Id, la2Id, ls1, ls2, iRev, jMax)",
+  "seed-request": "a linkage chain identifier sealed for it; the Linkage Authority finds the chain and releases its seed for the revocation week",
+  "seed-response": "that Linkage Authority's seed for the revocation week; with the other Linkage Authority's seed it can list every later certificate of the device",
+  "crl-append": "the entry to put on the list: the two Linkage Authorities' ids and seeds, the first revoked week and the certificates per week",
   "crl-publish": "the signed CRL (public)",
   "crl-broadcast": "the signed CRL, for the roadside units to rebroadcast (public)",
 };
@@ -493,7 +522,7 @@ export function viewChoices(providers: readonly string[]): string[] {
 export type PkiMapMode = "off" | "provider" | "credential" | "case";
 
 export const MAP_MODE_LABEL: Readonly<Record<PkiMapMode, string>> = {
-  off: "Off",
+  off: "nothing (off)",
   provider: "Provider",
   credential: "Credential state",
   case: "Case parties",
@@ -504,6 +533,8 @@ export const PROVIDER_COLORS: readonly number[] = [0x0072b2, 0xe69f00, 0x009e73,
 
 export const CREDENTIAL_COLORS: Readonly<Record<CredentialState, number>> = {
   healthy: 0x009e73,
+  between: 0x8a8f98,
+  left: 0x5f6368,
   "topup-due": 0xe69f00,
   starving: 0xd55e00,
   "crl-overdue": 0x56b4e9,
@@ -581,10 +612,7 @@ export function byActor(tags: ReadonlyMap<number, MapTag>, actorOf: (node: numbe
 
 /** "provider-a/aca/0" → "ACA (provider-a)"; "ee/1000019" → "vehicle ee/1000019". */
 export function entityLabel(id: string): string {
-  if (id.startsWith("ee/")) return `vehicle ${id}`;
-  const [provider, role, n] = id.split("/");
-  if (!role) return id;
-  return `${role.toUpperCase()}${n && n !== "0" ? ` ${n}` : ""} (${provider})`;
+  return componentName(id, true);
 }
 
 /** Seconds of simulated time, one decimal. */

@@ -21,7 +21,7 @@
 export type CertStatus = "valid" | "expiring" | "expired" | "revoked" | "untrusted" | "not-yet-valid" | "unknown";
 
 /** The shape that carries a state without colour. */
-export type StatusShape = "check" | "clock" | "dash" | "ban" | "shield" | "hourglass" | "dots";
+export type StatusShape = "check" | "clock" | "dash" | "ban" | "shield" | "hourglass" | "dots" | "info" | "out";
 
 export interface StatusInfo {
   /** One or two words. */
@@ -56,13 +56,34 @@ export const STATUS_ORDER: readonly CertStatus[] = ["valid", "expiring", "not-ye
  * colour of the certificate state that causes it, and what it means for the vehicle.
  */
 export const VEHICLE_STATE: Readonly<Record<string, { readonly shape: StatusShape; readonly color: string; readonly meaning: string }>> = {
-  healthy: { shape: "check", color: "var(--ok)", meaning: "It holds a valid pseudonym certificate and enough for the weeks ahead." },
-  "topup-due": { shape: "clock", color: "var(--warn)", meaning: "It is about to ask, or is asking, its RA for more pseudonym certificates." },
-  "crl-overdue": { shape: "clock", color: "var(--warn)", meaning: "Its provider's next revocation list is late, so it may trust a revoked sender." },
-  starving: { shape: "dash", color: "var(--err)", meaning: "It has no valid pseudonym certificate, so it cannot sign safety messages." },
   revoked: { shape: "ban", color: "var(--err)", meaning: "A revocation list names it: receivers that installed the list drop its messages." },
   untrusted: { shape: "shield", color: "var(--pki-untrusted)", meaning: "Its provider's root is not on the trust list, so receivers reject it." },
+  starving: { shape: "dash", color: "var(--err)", meaning: "It has no usable pseudonym certificate left, so it cannot sign safety messages." },
+  "crl-overdue": { shape: "clock", color: "var(--warn)", meaning: "Its provider's next revocation list is late, so it may trust a revoked sender." },
+  "topup-due": { shape: "clock", color: "var(--accent)", meaning: "It is asking, or about to ask, its RA for its next batch of pseudonym certificates. Routine." },
+  between: { shape: "dots", color: "var(--text-dim)", meaning: "It holds usable pseudonym certificates but none is in use at this instant: it is changing pseudonym. Normal." },
+  healthy: { shape: "check", color: "var(--ok)", meaning: "It signs with a valid pseudonym certificate and holds enough for the weeks ahead." },
+  "ec-bad": {
+    shape: "hourglass",
+    color: "var(--warn)",
+    meaning: "Its enrolment certificate fails a receiver's checks (open it for why). In the deployed SCMS its RA would then refuse it new pseudonym certificates.",
+  },
+  left: {
+    shape: "out",
+    color: "var(--text-faint)",
+    meaning: "Its trip ended and it left the run; what it shows is what it held when it left. It does not count as a problem.",
+  },
 };
+
+/**
+ * Whether a queue is growing: each of the last `n` samples above the one before. A queue that is
+ * merely non-empty (routine top-ups in flight) is work in progress, not a warning.
+ */
+export function growing(samples: readonly number[], n = 3): boolean {
+  if (samples.length < n + 1) return false;
+  const tail = samples.slice(-(n + 1));
+  return tail.every((v, k) => k === 0 || v > tail[k - 1]);
+}
 
 /** A pool cell's state (`node.credentials`) in the shared vocabulary; null for an empty cell. */
 export function cellStatus(state: string): CertStatus | null {
@@ -147,6 +168,26 @@ export function whyNot(c: Pick<CertLike, "trace">): string | null {
   return `Fails “${ruleText(f.rule).label}”${detail}`;
 }
 
+/**
+ * Why a certificate fails, as a sentence a reader takes in without the rule's name: the time
+ * check in terms of its window (ended when, how long it lasted), any other check by what it
+ * means. The engine's own words stay available as the check's detail. Null when it passes.
+ */
+export function whySentence(c: Pick<CertLike, "trace" | "time32">, v: Validity | null): string | null {
+  const f = c.trace.find((s) => s.status === "fail");
+  if (!f) return null;
+  if (f.rule === "validity") {
+    if (v && v.end === v.start) {
+      return `It was issued with a lifetime of zero, so it was never valid: every receiver's time check fails${c.time32 !== null && c.time32 > v.end ? ` (its window closed ${spanWords(c.time32 - v.end)} ago)` : ""}.`;
+    }
+    if (v && c.time32 !== null && c.time32 > v.end) return `Its validity ended ${spanWords(c.time32 - v.end)} ago; it lasted ${spanWords(v.end - v.start)}.`;
+    if (v && c.time32 !== null && c.time32 < v.start) return `It is not valid yet: its validity starts in ${spanWords(v.start - c.time32)}.`;
+    return "It fails the time check: the receiver's clock is outside its validity window.";
+  }
+  const t = ruleText(f.rule);
+  return `It fails the check “${t.label}”: ${t.means.replace(/^./, (x) => x.toLowerCase()).replace(/\.$/, "")}.`;
+}
+
 /** A certificate's validity window, Time32 seconds. */
 export interface Validity {
   readonly start: number;
@@ -191,7 +232,9 @@ export function validityOf(tbs: unknown): Validity | null {
   if (per === undefined) return null;
   const s = d[1] * per;
   const unit = d[0] === "sixtyHours" ? "× 60 h" : d[0];
-  return { start, end: start + s, stated: `${d[1]} ${unit}${s >= 60 ? ` (${spanWords(s)})` : ""}` };
+  const plain = `${d[1]} ${unit}`;
+  const words = spanWords(s);
+  return { start, end: start + s, stated: s >= 60 && words !== plain ? `${plain} (${words})` : plain };
 }
 
 /** Well-known PSIDs (IEEE 1609.12), as the engine's message sets use them. */
@@ -433,6 +476,13 @@ export function chainLinks(
   });
 }
 
+/** A device id in plain words: `ee/1000000` is "Vehicle 1000000", `rsu/3` "Roadside unit 3". */
+export function deviceName(device: string): string {
+  const m = /^(ee|obu|rsu)\/(\w+)$/.exec(device);
+  if (!m) return device;
+  return m[1] === "rsu" ? `Roadside unit ${m[2]}` : `Vehicle ${m[2]}`;
+}
+
 /** A HashedId8 in groups of four, which reads and compares more easily than sixteen digits. */
 export function grouped(id8: string): string {
   return id8.replace(/(.{4})(?=.)/g, "$1 ");
@@ -444,4 +494,11 @@ export function windowWords(v: Validity | null, now: number | null): string | nu
   if (now < v.start) return `starts in ${spanWords(v.start - now)}`;
   if (now > v.end) return `ended ${spanWords(now - v.end)} ago`;
   return `ends in ${spanWords(v.end - now)}`;
+}
+
+/** An `inspect.cert` failure in words: an id the run did not keep is not an error to show raw. */
+export function certErrorText(error: string): string {
+  return /unknown certificate|not in this run|-32006/i.test(error)
+    ? "This certificate was not kept in the run's records, so it cannot be opened. The run keeps the certificates its devices and authorities used."
+    : "The engine could not look this certificate up.";
 }

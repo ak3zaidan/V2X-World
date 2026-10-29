@@ -9,18 +9,28 @@
  * snapshot carries and a dash for the rest (`lib/pkiTopology.ts` `healthOf`), and says why.
  */
 
+import { useEffect, useRef, useState } from "react";
+
 import { GROUND_TRUTH, type TrustAnswer } from "../../lib/pki.js";
-import { type StatusShape } from "../../lib/pkiCert.js";
+import { growing, type StatusShape } from "../../lib/pkiCert.js";
 import { ageText, healthOf } from "../../lib/pkiTopology.js";
-import { asCases, asVehicles } from "../../lib/pkiRecords.js";
+import { asCases, asVehicles, leftRun } from "../../lib/pkiRecords.js";
 import { chooseTab, usePki, type PkiTab } from "../pki-records/state.js";
 import { StatusGlyph } from "./CertStatus.js";
 
 const POLL_MS = 4000;
 
-type Tone = "ok" | "warn" | "bad" | "idle";
+/**
+ * `info` is work in progress or a normal outcome (a top-up in flight, a case under investigation,
+ * an attacker revoked); `warn` and `bad` are kept for real problems: a queue that keeps growing, a
+ * fleet with no certificates, an overdue revocation list.
+ */
+type Tone = "ok" | "info" | "warn" | "bad" | "idle";
 
-const TONE_SHAPE: Readonly<Record<Tone, StatusShape>> = { ok: "check", warn: "clock", bad: "ban", idle: "dots" };
+const TONE_SHAPE: Readonly<Record<Tone, StatusShape>> = { ok: "check", info: "info", warn: "clock", bad: "ban", idle: "dots" };
+
+/** Polls of the waiting-requests count kept to tell a growing queue from routine work. */
+const QUEUE_SAMPLES = 6;
 
 export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; readonly view: string | null }): React.JSX.Element {
   const gt = view === GROUND_TRUTH;
@@ -29,42 +39,66 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
   const h = healthOf(trust, vehicles?.vehicles ?? null, cases?.cases ?? null);
   const dash = gt ? "…" : "–";
   const onlyGt = gt ? undefined : "Ground truth only: an entity cannot see every vehicle's pool or every MA's cases.";
-  const perVehicle = h.certificates !== null && h.vehicles ? h.certificates / h.vehicles : null;
+  // Only the vehicles still driving: one whose trip ended keeps its last pool, which is history.
+  const inRun = vehicles ? vehicles.vehicles.filter((v) => !leftRun(v, vehicles.t_ns)) : null;
+  const certificates = inRun ? inRun.reduce((n, v) => n + v.usable, 0) : null;
+  const perVehicle = certificates !== null && inRun && inRun.length > 0 ? certificates / inRun.length : null;
+  // A revoked vehicle with nothing to sign with is revocation working, not a shortage.
+  const starving = inRun ? inRun.filter((v) => v.enrolled && v.usable === 0 && v.revoked !== true && (v.truth?.revoked_certs ?? 0) === 0).length : 0;
+  const jmax = inRun?.[0]?.jmax ?? null;
+  // One sample per new snapshot: the queue warns only when it grew across the last three.
+  const samples = useRef<number[]>([]);
+  const [queueGrowing, setQueueGrowing] = useState(false);
+  useEffect(() => {
+    samples.current = [...samples.current, h.pending].slice(-QUEUE_SAMPLES);
+    setQueueGrowing(growing(samples.current));
+  }, [trust.t_ns, h.pending]);
   return (
     <div className="pki-health" role="group" aria-label="System health" data-testid="pki-health">
       <Stat
         tab="vehicles"
         label="pseudonym certificates ready"
-        value={h.certificates === null ? dash : h.certificates.toLocaleString()}
-        sub={h.certificates === null ? "seen in ground truth only" : perVehicle !== null ? `about ${perVehicle.toFixed(0)} per vehicle, this week and later` : "no vehicle has reported yet"}
-        tip={onlyGt ?? "Usable pseudonym certificates (authorization certificates, PCs) the vehicles hold, this week and later"}
-        tone={h.certificates === null ? "idle" : h.certificates === 0 && (h.vehicles ?? 0) > 0 ? "bad" : "ok"}
+        value={certificates === null ? dash : certificates.toLocaleString()}
+        sub={
+          certificates === null
+            ? "seen in ground truth only"
+            : starving > 0
+              ? `${starving} vehicle${starving === 1 ? " has" : "s have"} none left to sign with`
+              : perVehicle !== null
+                ? `about ${perVehicle.toFixed(0)} per vehicle in the run`
+                : "no vehicle in the run has reported yet"
+        }
+        tip={
+          onlyGt ??
+          `Usable pseudonym certificates (PCs) held by the ${inRun?.length ?? 0} vehicles still in the run: what is left of this week's batch${jmax !== null ? ` (${jmax} a week)` : ""} plus the weeks each has downloaded ahead. Vehicles that left the run are not counted.`
+        }
+        tone={certificates === null ? "idle" : starving > 0 ? "warn" : "ok"}
         testId="pki-health-certs"
       />
       <Stat
         tab="flows"
         label={h.pending === 1 ? "request waiting" : "requests waiting"}
         value={h.pending.toLocaleString()}
-        sub={h.pending > 0 ? "queued at the authorities or top-ups in flight" : "every authority is keeping up"}
-        tip="Requests queued at the authorities, plus certificate top-ups in flight at the vehicles"
-        tone={h.pending > 0 ? "warn" : "ok"}
+        sub={queueGrowing ? "growing: the authorities fall behind" : h.pending > 0 ? "routine: being served now" : "every authority keeps up"}
+        tip="Requests queued at the authorities, plus certificate top-ups in flight at the vehicles. It warns only when the count has grown three snapshots running."
+        tone={queueGrowing ? "warn" : h.pending > 0 ? "info" : "ok"}
         testId="pki-health-pending"
       />
       <Stat
         tab="cases"
         label={h.openCases === 1 ? "open misbehaviour case" : "open misbehaviour cases"}
         value={h.openCases === null ? dash : String(h.openCases)}
-        sub={h.openCases === null ? "seen in ground truth only" : h.openCases > 0 ? "reported, not yet revoked or refused" : "no case under investigation"}
-        tip={onlyGt ?? "Misbehaviour cases opened and not yet enforced or refused"}
-        tone={h.openCases === null ? "idle" : h.openCases > 0 ? "warn" : "ok"}
+        sub={h.openCases === null ? "seen in ground truth only" : h.openCases > 0 ? "being investigated, normal" : "no case under investigation"}
+        tip={onlyGt ?? "Misbehaviour cases the Misbehaviour Authority (MA) opened and has not yet enforced or refused. An open case is the system working, not a fault."}
+        tone={h.openCases === null ? "idle" : h.openCases > 0 ? "info" : "ok"}
         testId="pki-health-cases"
       />
       <Stat
         tab="crls"
-        label="since the newest revocation list"
-        value={h.crlAgeS === null ? "none yet" : ageText(h.crlAgeS)}
-        sub={h.crlDueS === null ? "no list published yet" : h.crlDueS < 0 ? `overdue by ${ageText(-h.crlDueS)}` : `next list due within ${ageText(h.crlDueS)}`}
-        tip="Time since the newest certificate revocation list (CRL) was issued, the oldest across providers, and when the next is due at the latest"
+        label={h.crlAgeS === null ? "revocation list" : "last revocation list"}
+        value={h.crlAgeS === null ? "none yet" : `${ageText(h.crlAgeS)} ago`}
+        sub={h.crlDueS === null ? "no list published yet" : h.crlDueS < 0 ? `the next is overdue by ${ageText(-h.crlDueS)}` : `next one due within ${ageText(h.crlDueS)}`}
+        tip="Time since the newest certificate revocation list (CRL) was issued, the oldest across providers, and the deadline by which each list must be replaced (its nextCrl). Providers usually publish sooner, as soon as they revoke someone."
         tone={h.crlOverdue ? "bad" : h.crlAgeS === null ? "idle" : "ok"}
         testId="pki-health-crl"
       />
@@ -72,9 +106,9 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
         tab="vehicles"
         label="devices revoked"
         value={`${h.revoked} of ${h.devices}`}
-        sub={h.revoked > 0 ? (h.revokedByList ? "a published list names them" : "their providers revoked them") : "no device revoked"}
-        tip={h.revokedByList ? "Devices a published revocation list names (ground truth: installed or not), of all devices" : "Devices the providers count as revoked, of all devices"}
-        tone={h.revoked > 0 ? "bad" : "ok"}
+        sub={h.revoked > 0 ? (h.revokedByList ? "named on a published list" : "revoked by their providers") : "no device revoked"}
+        tip={`${h.revokedByList ? "Devices a published revocation list names (ground truth: installed or not), of all devices." : "Devices the providers count as revoked, of all devices."} Revoking a misbehaving device is the system working; the engine does not publish which devices were honest, so this cannot tell a wrongful revocation apart.`}
+        tone={h.revoked > 0 ? "info" : "ok"}
         testId="pki-health-revoked"
       />
     </div>

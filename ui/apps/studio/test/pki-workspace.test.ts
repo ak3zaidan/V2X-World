@@ -192,7 +192,7 @@ describe("the case step diagram", () => {
         }
       }
       const enf = enforcement(c);
-      if (enf) expect(steps.find((s) => s.stage === "enforced")!.detail).toContain(`installed by ${enf.installed}`);
+      if (enf) expect(steps.find((s) => s.stage === "enforced")!.detail).toContain(`${enf.installed} of the ${enf.of} vehicles in the run have installed the list`);
     }
     expect(named).toBeGreaterThan(5);
   });

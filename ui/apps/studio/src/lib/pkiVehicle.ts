@@ -41,7 +41,11 @@ export interface Lifecycle {
 }
 
 /** The vehicle's lifecycle from its detail and the flow instances it took part in. */
-export function lifecycleOf(d: Pick<VehicleDetail, "pseudonyms" | "grid" | "revoked" | "t" | "first_t">, flows: readonly FlowRow[], nowNs: number): Lifecycle {
+export function lifecycleOf(
+  d: Pick<VehicleDetail, "pseudonyms" | "grid" | "revoked" | "t" | "first_t"> & { readonly active?: string | null },
+  flows: readonly FlowRow[],
+  nowNs: number,
+): Lifecycle {
   const events: LifeEvent[] = [];
   const beforeRun: FlowRow[] = [];
   const downloads = flows.filter((f) => f.flow === "provisioning").sort((a, b) => a.first_t - b.first_t);
@@ -57,7 +61,11 @@ export function lifecycleOf(d: Pick<VehicleDetail, "pseudonyms" | "grid" | "revo
     events.push({ lane: "download", t: f.first_t, end: f.last_t, label: k === 0 && beforeRun.length === 0 ? "first batch" : "top-up", instance: f.instance }),
   );
   const ps = [...d.pseudonyms].sort((a, b) => a.since - b.since);
-  ps.forEach((p, k) => events.push({ lane: "pseudonym", t: p.since, end: k + 1 < ps.length ? ps[k + 1].since : Math.max(p.since, nowNs), label: p.id8, instance: null }));
+  // The newest pseudonym runs to "now" while it is still the one in use; a vehicle between two
+  // pseudonyms (no active certificate in its record) stopped signing with it by the record's time.
+  const lastEnd = (p: { readonly since: number; readonly id8: string }): number =>
+    d.active === undefined || d.active === p.id8 ? Math.max(p.since, nowNs) : Math.max(p.since, Math.min(d.t, nowNs));
+  ps.forEach((p, k) => events.push({ lane: "pseudonym", t: p.since, end: k + 1 < ps.length ? ps[k + 1].since : lastEnd(p), label: p.id8, instance: null }));
   if (d.revoked) events.push({ lane: "revocation", t: d.t, end: d.t, label: "revoked (as of this record)", instance: null });
   const times = events.flatMap((e) => [e.t, e.end]);
   const t0 = Math.min(d.first_t, ...times);
@@ -66,6 +74,21 @@ export function lifecycleOf(d: Pick<VehicleDetail, "pseudonyms" | "grid" | "revo
   for (const c of d.grid.held) if (c.state !== "not-yet-available") per.set(c.i, (per.get(c.i) ?? 0) + 1);
   const batches = [...per.entries()].sort((a, b) => a[0] - b[0]).map(([i, certs]) => ({ i, certs }));
   return { events: events.sort((a, b) => a.t - b.t), beforeRun, t0, t1: t1 > t0 ? t1 : t0 + 1, batches };
+}
+
+/** The one unit an axis reaching `maxNs` is labelled in, so its ticks never mix seconds and minutes. */
+export function axisUnit(maxNs: number): { readonly unit: string; readonly ns: number } {
+  const s = maxNs / 1e9;
+  if (s <= 300) return { unit: "s", ns: 1e9 };
+  if (s <= 3 * 3600) return { unit: "min", ns: 60e9 };
+  if (s <= 3 * 86_400) return { unit: "h", ns: 3600e9 };
+  return { unit: "d", ns: 86_400e9 };
+}
+
+/** A tick's label in the axis's unit: at most one decimal, no trailing zero ("90 s", "1.5 min"). */
+export function tickLabel(ns: number, u: { readonly unit: string; readonly ns: number }): string {
+  const v = Math.round((ns / u.ns) * 10) / 10;
+  return `${v} ${u.unit}`;
 }
 
 /** A round tick step for a span of `ns`, so the axis shows four to eight labels. */

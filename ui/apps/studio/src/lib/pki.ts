@@ -679,7 +679,7 @@ function laneRole(id: string): string {
 }
 
 function laneLabel(id: string): string {
-  if (id.startsWith("ee/")) return `EE ${id.slice(3)}`;
+  if (id.startsWith("ee/")) return `Vehicle ${id.slice(3)}`;
   const parts = id.split("/");
   const role = parts[1] ?? id;
   const inst = Number(parts[2] ?? "0");
@@ -833,6 +833,7 @@ export function formatSimT(ns: number): string {
 /** A duration in ns, at the precision it deserves (`11 ms`, `60.0 s`, `2 d 1 h`). */
 export function formatSpan(ns: number): string {
   const a = Math.abs(ns);
+  if (a < 1) return "0 s";
   if (a < 1e3) return `${ns} ns`;
   if (a < 1e6) return `${(ns / 1e3).toFixed(0)} µs`;
   if (a < 1e9) return `${(ns / 1e6).toFixed(a < 1e7 ? 1 : 0)} ms`;

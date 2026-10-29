@@ -68,7 +68,7 @@
 .pki-comp sub { font-size: 9px; }
 
 .pki-panel .warn { color: var(--warn); }
-.pki-panel .assume { font-style: normal; font-size: 10px; color: var(--warn); }
+.pki-panel .assume { font-style: normal; font-size: 10px; color: var(--text-faint); border-bottom: 1px dotted var(--text-faint); cursor: help; }
 .pki-panel .linklike { font-size: 12px; }
 .pki-panel .linklike:disabled { color: var(--text-faint); cursor: not-allowed; text-decoration: none; }
 
@@ -265,7 +265,7 @@
 .pki-node .r { overflow: hidden; text-overflow: ellipsis; }
 .pki-node.ghost {
   border-style: dashed;
-  background: transparent;
+  background: var(--bg-panel);
   color: var(--text-faint);
   font-size: 11px;
   cursor: help;
@@ -282,7 +282,8 @@
 .pki-node.devices.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .pki-node.unsigned { opacity: 0.55; }
 .pki-node.role-elector { font-size: 11px; }
-.pki-dots { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+/* Under the nodes (z-index 1, opaque): a dot travels the wire and disappears behind a box, never over its label. */
+.pki-dots { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 .pki-msg-dot {
   position: absolute;
   left: 0;
@@ -392,6 +393,7 @@
 .pki-health .pki-stat { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; text-align: left; min-width: 0; }
 .pki-stat-mark { padding-top: 3px; color: var(--text-faint); flex: none; }
 .pki-stat.tone-ok .pki-stat-mark { color: var(--ok); }
+.pki-stat.tone-info .pki-stat-mark { color: var(--accent); }
 .pki-stat.tone-warn .pki-stat-mark { color: var(--warn); }
 .pki-stat.tone-bad .pki-stat-mark { color: var(--err); }
 .pki-stat-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -489,7 +491,9 @@
 .pki-section-title .dim { font-size: 11.5px; font-weight: 400; }
 .pki-trustchain { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .pki-tc-ctl { display: flex; }
-.pki-tc-provider { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 14px; border-left: 2px solid var(--border-strong); }
+.pki-tc-provider { display: flex; flex-direction: column; gap: 6px; padding-left: 14px; border-left: 2px solid var(--border-strong); }
+.pki-tc-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pki-tc-direct { padding-left: 110px; }
 .pki-tc-provider.off-ctl { border-left-color: var(--pki-untrusted); border-left-style: dashed; }
 .pki-tc-name { font-size: 11.5px; color: var(--text-dim); min-width: 74px; }
 .pki-tc-arrow { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; }
@@ -523,3 +527,86 @@
   border-left: 1px solid var(--border-strong);
   box-shadow: -8px 0 24px color-mix(in srgb, #000 30%, transparent);
 }
+.pki-tile-cert { display: inline-flex; align-items: center; gap: 5px; }
+
+/* Polish pass: filter chips, glossary terms, tiles that need attention. */
+.pki-vsummary { gap: 4px 6px; }
+.pki-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px 2px 3px; border: 1px solid transparent; border-radius: 12px; background: none; color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.pki-chip:first-child { padding-left: 8px; }
+.pki-chip:hover { background: var(--bg-raised); }
+.pki-chip.on { border-color: var(--accent); background: var(--accent-dim); }
+.pki-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pki-term { position: relative; border-bottom: 1px dotted currentColor; cursor: help; }
+.pki-term:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 2px; }
+.pki-term:hover::after, .pki-term:focus::after {
+  content: attr(data-def);
+  position: absolute; left: 0; top: calc(100% + 4px); z-index: 30;
+  width: max-content; max-width: 300px; padding: 6px 8px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  background: var(--bg-raised); color: var(--text); box-shadow: 0 4px 14px color-mix(in srgb, #000 25%, transparent);
+  font: 400 11.5px/1.4 var(--sans); white-space: normal; text-align: left; letter-spacing: 0; text-transform: none;
+}
+.pki-tile.attn { border-color: var(--warn); }
+.pki-vtable td:first-child { font-weight: 500; }
+
+/* Header on one row: tabs, "Seen as", map colouring, Close. */
+.pki-head { flex-wrap: nowrap; }
+.pki-close { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: none; color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer; flex: none; }
+.pki-close:hover { color: var(--text); border-color: var(--border-strong); }
+.pki-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pki-context { margin: -4px 0 8px; font-size: 12px; }
+.pki-context b { font-weight: 500; color: var(--text); }
+/* The health strip in one compact row: number and label on one line, the meaning under it on one more. */
+.pki-health { padding: 6px 16px; gap: 6px; }
+.pki-health .pki-stat { padding: 5px 9px; }
+.pki-stat-main { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
+.pki-stat-main > span { overflow: hidden; text-overflow: ellipsis; }
+.pki-stat-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Topology: node names on one line, the legend above the diagram. */
+.pki-node .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.pki-topo-legend { margin: 0 0 6px; }
+.pki-key-sep { margin-left: 8px; }
+.pki-key .pki-dot.idle { opacity: 0.6; }
+.pki-link-key { display: inline-block; width: 18px; height: 0; border-top: 1.5px dashed var(--text-faint); }
+
+/* Certificate line on a component card. */
+.pki-certline { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+
+/* Messages tab. */
+.pki-newer { display: block; margin: 0 0 6px; font-size: 12px; }
+.pki-flow-hint { margin: -4px 0 6px; font-size: 11.5px; }
+.pki-pdu-type { font-size: 11px; font-weight: 400; margin-left: 4px; }
+.pki-pdu-how { font-size: 11.5px; margin: 8px 0 4px; }
+.pki-flow-row .pki-swatch { display: inline-block; vertical-align: middle; }
+
+/* Revocation tab. */
+.pki-provider-rules { list-style: none; margin: 0; display: flex; flex-direction: column; gap: 8px; font-size: 12px; line-height: 1.45; }
+.pki-crlcard-head { display: flex; align-items: center; gap: 6px; }
+.pki-crlcard-head .grow { flex: 1; }
+.pki-crltable td:first-child { white-space: nowrap; }
+
+/* Misbehaviour tab: the four beats under each case, labelled. */
+.pki-beats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; }
+.pki-beats > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pki-beats i { display: block; height: 4px; border-radius: 2px; background: var(--border); }
+.pki-beats .on i { background: var(--accent); }
+.pki-beats .refused i { background: var(--text-faint); opacity: 0.4; }
+.pki-beats small { font-size: 10px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pki-beats .on small { color: var(--text-dim); }
+.pkir-case-numbers { font-size: 11.5px; color: var(--text-dim); }
+.pkir-split.pkir-cases { grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.6fr); }
+@media (max-width: 1100px) { .pkir-split.pkir-cases { grid-template-columns: 1fr; } }
+.pki-vtable th { white-space: normal; vertical-align: bottom; line-height: 1.2; }
+.pki-head h2 { white-space: nowrap; }
+.pki-view, .pkir-picker { white-space: nowrap; flex: none; }
+.pki-view select { max-width: 260px; }
+.pkir-picker select { max-width: 150px; }
+.pkir-card .pkir-table td, .pkir-card .pkir-table th { white-space: normal; }
+.pki-beats i { height: 5px; }
+/* A long label wraps instead of squeezing its value: the label column never takes more than about half the card. */
+.pki-drawer .pki-pairs { grid-template-columns: minmax(90px, max-content) minmax(45%, 1fr); }
+.pki-drawer .pki-pairs dd { overflow-wrap: normal; word-break: normal; }
+.pki-tree .v { word-break: break-all; }
+.pki-newer { color: var(--accent); }
+.pki-tree-line { white-space: normal; }

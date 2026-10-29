@@ -9,8 +9,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { flowsOf, type FlowRow } from "../../lib/pki.js";
+import { deviceName } from "../../lib/pkiCert.js";
 import { secondsText, type VehicleDetail } from "../../lib/pkiRecords.js";
-import { LANES, lifecycleOf, tickStep } from "../../lib/pkiVehicle.js";
+import { LANES, axisUnit, lifecycleOf, tickLabel, tickStep } from "../../lib/pkiVehicle.js";
 import { engine } from "../../state/engine.js";
 import { usePkiView } from "./state.js";
 
@@ -19,16 +20,16 @@ const LANE_H = 22;
 const LEFT = 92;
 const PAD_R = 10;
 const AXIS_H = 20;
+/** Room above the lanes for the "now" label, so it never sits on a tick label. */
+const TOP = 14;
+/** A record older than this against the panel's clock says "data as of". */
+const STALE_NS = 2e9;
 
-function tickText(ns: number): string {
-  const s = Math.round(ns / 1e9);
-  if (s < 120) return `${s} s`;
-  if (s < 7200) return `${Math.round(s / 60)} min`;
-  if (s < 172_800) return `${Math.round(s / 3600)} h`;
-  return `${Math.round(s / 86_400)} d`;
-}
-
-export function VehicleTimeline({ d }: { readonly d: VehicleDetail }): React.JSX.Element {
+/**
+ * `nowNs` is the panel's clock (the newest trust snapshot), so "now" here is the time the header
+ * shows; the vehicle's own record can be older (`d.t`), and the caption says so.
+ */
+export function VehicleTimeline({ d, nowNs }: { readonly d: VehicleDetail; readonly nowNs: number }): React.JSX.Element {
   const [flows, setFlows] = useState<readonly FlowRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const set = usePkiView((s) => s.set);
@@ -51,14 +52,19 @@ export function VehicleTimeline({ d }: { readonly d: VehicleDetail }): React.JSX
       window.clearInterval(id);
     };
   }, [d.device]);
-  const life = useMemo(() => lifecycleOf(d, flows, d.t), [d, flows]);
+  const now = Math.max(nowNs, d.t, ...flows.map((f) => f.last_t));
+  const life = useMemo(() => lifecycleOf(d, flows, now), [d, flows, now]);
   const span = life.t1 - life.t0;
   const x = (t: number): number => LEFT + ((t - life.t0) / span) * (W - LEFT - PAD_R);
-  const h = LANES.length * LANE_H + AXIS_H;
+  const lanesH = LANES.length * LANE_H;
+  const h = TOP + lanesH + AXIS_H;
   const step = tickStep(span);
+  const unit = axisUnit(life.t1);
   const ticks: number[] = [];
   for (let t = Math.ceil(life.t0 / step) * step; t <= life.t1; t += step) ticks.push(t);
-  const nowX = x(d.t);
+  const nowX = x(now);
+  const stale = now - d.t > STALE_NS;
+  const asOfX = x(d.t);
   return (
     <section className="pkir-life" data-testid="pki-lifecycle">
       <h4>Certificate life on the run's clock</h4>
@@ -67,12 +73,16 @@ export function VehicleTimeline({ d }: { readonly d: VehicleDetail }): React.JSX
           Before the run: enrolled and given its first batches at the factory and dealer ({life.beforeRun.length} step{life.beforeRun.length === 1 ? "" : "s"}).
         </p>
       ) : null}
-      <svg viewBox={`0 0 ${W} ${h}`} width="100%" role="img" aria-label={`Certificate lifecycle of ${d.device}`}>
+      <svg viewBox={`0 0 ${W} ${h}`} width="100%" role="img" aria-label={`Certificate lifecycle of ${deviceName(d.device)}`} data-testid="pki-life-svg">
+        <text x={nowX} y={10} textAnchor={nowX < W / 2 ? "start" : "end"} className="axis now-label" data-testid="pki-life-now">
+          now {secondsText(now)}
+        </text>
+        <g transform={`translate(0 ${TOP})`}>
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={x(t)} x2={x(t)} y1={0} y2={LANES.length * LANE_H} className="tick" />
-            <text x={x(t)} y={LANES.length * LANE_H + 12} textAnchor="middle" className="axis">
-              {tickText(t)}
+            <line x1={x(t)} x2={x(t)} y1={0} y2={lanesH} className="tick" />
+            <text x={x(t)} y={lanesH + 12} textAnchor="middle" className="axis" data-testid="pki-life-tick">
+              {tickLabel(t, unit)}
             </text>
           </g>
         ))}
@@ -115,16 +125,20 @@ export function VehicleTimeline({ d }: { readonly d: VehicleDetail }): React.JSX
             </g>
           );
         })}
-        <line x1={nowX} x2={nowX} y1={0} y2={LANES.length * LANE_H} className="now-line" />
-        <text x={nowX} y={h - 1} textAnchor={nowX < W / 2 ? "start" : "end"} className="axis now-label">
-          now {secondsText(d.t)}
-        </text>
-        {nowX - LEFT > 90 ? (
-          <text x={LEFT} y={h - 1} className="axis">
-            {secondsText(life.t0)}
-          </text>
+        {stale ? (
+          <line x1={asOfX} x2={asOfX} y1={0} y2={lanesH} className="asof-line">
+            <title>{`The vehicle's certificate record is as of ${secondsText(d.t)}`}</title>
+          </line>
         ) : null}
+        <line x1={nowX} x2={nowX} y1={-4} y2={lanesH} className="now-line" />
+        </g>
       </svg>
+      {stale ? (
+        <p className="faint" data-testid="pki-life-asof">
+          Its certificate record is as of {secondsText(d.t)} (dashed line): a vehicle publishes it when its certificates change, so the pool and the pseudonym bar
+          stop there; messages and flows run to now.
+        </p>
+      ) : null}
       {err ? <p className="faint">The engine could not list this vehicle's flows: {err}</p> : null}
       <p className="faint pki-life-key">
         <span>

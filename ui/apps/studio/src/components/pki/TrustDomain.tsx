@@ -29,11 +29,30 @@ import {
   type PkiProvider,
   type TrustAnswer,
 } from "../../lib/pki.js";
-import { flowInfo, isDevice, messagesOf, messageText, observedBy, roleInfo, type TrustMessage } from "../../lib/pkiTopology.js";
+import {
+  ageText,
+  componentName,
+  counterText,
+  crlScheduleText,
+  deploymentText,
+  editionText,
+  flowInfo,
+  groupMessages,
+  isDevice,
+  messagesOf,
+  messageText,
+  observedBy,
+  plainNames,
+  roleInfo,
+  type TrustMessage,
+} from "../../lib/pkiTopology.js";
 import { engine } from "../../state/engine.js";
 import { CloseIcon } from "../../shell/Icons.js";
 import { chooseTab, usePkiView } from "../pki-records/state.js";
+import { certErrorText, certFacts, certStatus, grouped, windowWords } from "../../lib/pkiCert.js";
 import { CertificateCard } from "./CertificateCard.js";
+import { CertBadge } from "./CertStatus.js";
+import { useCert } from "./useCert.js";
 import { Topology } from "./Topology.js";
 import { TrustChain } from "./TrustChain.js";
 
@@ -109,9 +128,8 @@ function TrustList({ trust }: { readonly trust: TrustAnswer }): React.JSX.Elemen
 /** The other end of a message, in plain words. */
 function endText(end: string | null, home: string): string {
   if (end === null) return "?";
-  if (isDevice(end)) return end;
-  const [provider, role] = end.split("/");
-  return `${roleInfo(role ?? end).name}${provider !== home ? ` (${provider})` : ""}`;
+  const provider = end.split("/")[0];
+  return componentName(end, !isDevice(end) && provider !== home);
 }
 
 /** The messages one node sent or received, newest first, as the view may see them. */
@@ -120,7 +138,7 @@ function RecentMessages({ id, log, view }: { readonly id: string; readonly log: 
   const home = devices ?? id.split("/")[0];
   const touches = (m: TrustMessage): boolean =>
     devices !== null ? (isDevice(m.from) || isDevice(m.to)) && [m.from, m.to].some((e) => e !== null && e.startsWith(`${devices}/`)) : m.from === id || m.to === id;
-  const mine = log.filter((m) => observedBy(m, view) && touches(m)).slice(-CARD_MESSAGES).reverse();
+  const mine = groupMessages(log.filter((m) => observedBy(m, view) && touches(m)).reverse()).slice(0, CARD_MESSAGES);
   return (
     <section className="pki-card-section" data-testid="pki-card-messages">
       <h4>Recent messages</h4>
@@ -128,16 +146,19 @@ function RecentMessages({ id, log, view }: { readonly id: string; readonly log: 
         <p className="faint">None since the view opened{view === GROUND_TRUTH ? "" : " that this view observed"}.</p>
       ) : (
         <ul className="pki-recent">
-          {mine.map((m) => {
+          {mine.map(({ first: m, count, span, bytes }) => {
             const out = devices !== null ? isDevice(m.from) : m.from === id;
             return (
-              <li key={m.id} title={`${m.instance} · ${m.from ?? "?"} → ${m.to ?? "?"}`}>
+              <li key={m.id} title={`${m.instance} · ${m.from ?? "?"} → ${m.to ?? "?"}`} data-testid="pki-recent-row" data-count={count}>
                 <i className="pki-swatch" style={{ background: flowInfo(m.flow).color }} />
                 <span className="mono faint">{formatSimT(m.t)}</span>
-                <span aria-label={out ? "sent to" : "received from"}>{out ? "→" : "←"}</span>
-                <span>{endText(out ? m.to : m.from, home)}</span>
-                <span className="mono">{messageText(m.name)}</span>
-                {m.bytes !== null ? <span className="faint mono">{formatBytes(m.bytes)}</span> : null}
+                {count > 1 ? <b className="mono">{count} ×</b> : null}
+                <span>{messageText(m.name)}</span>
+                <span>
+                  {out ? "to" : "from"} {endText(out ? m.to : m.from, home)}
+                </span>
+                {count > 1 ? <span className="faint">within {formatSpan(span)}</span> : null}
+                {m.bytes !== null ? <span className="faint mono">{formatBytes(count > 1 ? bytes : m.bytes)}</span> : null}
               </li>
             );
           })}
@@ -155,7 +176,7 @@ function DevicesCard({ provider, log, view, onClose }: { readonly provider: PkiP
     <aside className="pki-drawer" data-testid="pki-card">
       <div className="pki-drawer-head">
         <h3 title={info.term}>
-          {info.name} <span className="dim mono">{provider.label}</span>
+          {info.name} <span className="dim">· {provider.label}</span>
         </h3>
         <span className="grow" />
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close the card" data-testid="pki-card-close">
@@ -165,19 +186,22 @@ function DevicesCard({ provider, log, view, onClose }: { readonly provider: PkiP
       <div className="pki-drawer-body">
         <p className="pki-does">{info.does}</p>
         <dl className="pki-pairs">
-          <dt>devices</dt>
+          <dt>Devices</dt>
           <dd className="mono">{d.devices}</dd>
-          <dt>enrolled</dt>
+          <dt title="Hold an enrolment certificate (EC) from this provider's Enrolment CA">Enrolled</dt>
           <dd className="mono">{d.enrolled}</dd>
-          <dt>provisioned</dt>
+          <dt title="Provisioned: have downloaded pseudonym certificates from the RA">With pseudonym certificates</dt>
           <dd className="mono">{d.provisioned}</dd>
-          <dt>revoked</dt>
+          <dt title="Named by a revocation list after a misbehaviour case">Revoked</dt>
           <dd className="mono">{d.revoked}</dd>
-          <dt title="Enrolment certificates the RA refuses after a revocation">blocklisted</dt>
+          <dt title="Blocklisted: the RA refuses their enrolment certificate after a revocation, so they get no new pseudonyms">Blocked from new certificates</dt>
           <dd className="mono">{d.blocklisted}</dd>
-          <dt>fleet share</dt>
+          <dt>Share of the fleet</dt>
           <dd className="mono">
-            {(provider.fleet_share * 100).toFixed(0)}% <em className="assume">assumed</em>
+            {(provider.fleet_share * 100).toFixed(0)}%{" "}
+            <em className="assume" title="No provider publishes its fleet share: this split is the scenario's setting">
+              assumed
+            </em>
           </dd>
         </dl>
         <button type="button" className="linklike" onClick={() => chooseTab("vehicles")} data-testid="pki-open-vehicles">
@@ -190,7 +214,7 @@ function DevicesCard({ provider, log, view, onClose }: { readonly provider: PkiP
 }
 
 /** What one entity holds, as `view` may see it. */
-export function KnowledgeCard({ entity, view }: { readonly entity: string; readonly view: string }): React.JSX.Element {
+export function KnowledgeCard({ entity, view, skip = [] }: { readonly entity: string; readonly view: string; readonly skip?: readonly string[] }): React.JSX.Element {
   const [k, setK] = useState<KnowledgeAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -205,12 +229,17 @@ export function KnowledgeCard({ entity, view }: { readonly entity: string; reado
     };
   }, [entity, view]);
   const knows = k && Array.isArray(k.holds.knows) ? (k.holds.knows as unknown[]).map(String) : [];
-  const counts = k ? Object.entries(k.holds).filter(([key, v]) => key !== "knows" && (typeof v === "number" || typeof v === "string")) : [];
+  // A count the component's card already lists (its "cases open" is the record's "open cases") is not repeated.
+  const counts = k
+    ? Object.entries(k.holds).filter(
+        ([key, v]) => key !== "knows" && (typeof v === "number" || typeof v === "string") && !skip.includes(sameWords(key.replace(/_/g, " "))) && !skip.includes(sameWords(counterText(key)?.label ?? "\u0000")),
+      )
+    : [];
   return (
     <section className="pki-card-section pki-knowledge" data-testid="pki-knowledge">
       <h4>
-        What {entity} knows{" "}
-        <span className="dim">{view === GROUND_TRUTH ? "(ground truth: with the join onto devices)" : "(its own view)"}</span>
+        What {componentName(entity, true)} knows{" "}
+        <span className="dim">{view === GROUND_TRUTH ? "(seen as everything: with which vehicle each record belongs to)" : "(its own view)"}</span>
       </h4>
       {error ? <p className="faint">The engine said: {error}</p> : null}
       {k ? (
@@ -218,7 +247,7 @@ export function KnowledgeCard({ entity, view }: { readonly entity: string; reado
           {knows.length > 0 ? (
             <ul className="pki-knows">
               {knows.map((x) => (
-                <li key={x}>{x}</li>
+                <li key={x}>{plainNames(x)}</li>
               ))}
             </ul>
           ) : null}
@@ -226,7 +255,7 @@ export function KnowledgeCard({ entity, view }: { readonly entity: string; reado
             <dl className="pki-pairs">
               {counts.map(([key, v]) => (
                 <div key={key} className="pki-pair">
-                  <dt>{key.replace(/_/g, " ")}</dt>
+                  <dt title={counterText(key)?.means}>{counterText(key)?.label ?? key.replace(/_/g, " ")}</dt>
                   <dd className="mono">{String(v)}</dd>
                 </div>
               ))}
@@ -235,12 +264,12 @@ export function KnowledgeCard({ entity, view }: { readonly entity: string; reado
           <p className="dim">Cannot see:</p>
           <ul className="pki-cannot" data-testid="pki-cannot-see">
             {k.cannot_see.map((x) => (
-              <li key={x}>{x}</li>
+              <li key={x}>{plainNames(x)}</li>
             ))}
           </ul>
           {k.truth ? (
             <p className="dim" data-testid="pki-truth-join">
-              Ground-truth join: {Object.keys(k.truth).join(", ")} (shown only in ground truth).
+              Only ground truth links these to vehicles: {Object.keys(k.truth).map((x) => x.replace(/_/g, " ")).join(", ")}.
             </p>
           ) : null}
         </>
@@ -249,12 +278,25 @@ export function KnowledgeCard({ entity, view }: { readonly entity: string; reado
   );
 }
 
+/** A counter's value in its unit. */
+function counterValue(v: unknown, unit: "s" | undefined): string {
+  if (typeof v === "number" && unit === "s") return ageText(v);
+  if (typeof v === "number") return v.toLocaleString();
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  return typeof v === "object" ? JSON.stringify(v) : String(v);
+}
+
+/** Words of a counter, compared without order ("cases open" is "open cases"). */
+function sameWords(a: string): string {
+  return a.toLowerCase().replace(/[^a-z ]/g, " ").split(/\s+/).filter(Boolean).sort().join(" ");
+}
+
 function ComponentCard({
   c,
   provider,
   activity,
   view,
-  crls,
+  state,
   log,
   onClose,
 }: {
@@ -262,21 +304,31 @@ function ComponentCard({
   readonly provider: PkiProvider | null;
   readonly activity: PkiActivity | undefined;
   readonly view: string;
-  readonly crls: TrustAnswer["state"]["crls"];
+  readonly state: TrustAnswer["state"];
   readonly log: readonly TrustMessage[];
   readonly onClose: () => void;
 }): React.JSX.Element {
+  const [raw, setRaw] = useState(false);
+  const cadence = usePkiView((s) => s.crlCadence);
   const ops = Object.entries(c.ops);
   const counters = Object.entries(c.counters);
-  const mine = c.role === "crlg" ? crls.filter((h) => h.provider === c.provider) : [];
+  const readable = counters.flatMap(([k, v]) => {
+    const t = counterText(k);
+    return t ? [{ k, v, t }] : [];
+  });
+  const mine = c.role === "crlg" ? state.crls.filter((h) => h.provider === c.provider) : [];
   const knows = view === GROUND_TRUTH || view === c.id;
   const info = roleInfo(c.role);
+  // The Policy Generator reports the certificate it signs with as a counter, not as `cert`.
+  const certId = c.cert ?? (typeof c.counters.certificate === "string" ? c.counters.certificate : null);
+  const signedCtl = c.role === "elector" ? state.ctl.signers.includes(c.instance) : null;
+  const due = mine.length > 0 ? Math.min(...mine.map((h) => h.sla_s)) : null;
+  const ownsKnowledge = ["ra", "aca", "la1", "la2", "ma", "eca"].includes(c.role);
   return (
     <aside className="pki-drawer" data-testid="pki-card">
       <div className="pki-drawer-head">
-        <h3 title={info.term}>
-          {info.name}
-          {c.instance > 0 ? ` ${c.instance + 1}` : ""} <span className="dim mono">{c.id}</span>
+        <h3 title={`${info.term} · ${c.id}`}>
+          {componentName(c.id)} {c.provider !== "scms-manager" ? <span className="dim">· {c.provider}</span> : null}
         </h3>
         <span className="grow" />
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close the card" data-testid="pki-card-close">
@@ -284,100 +336,118 @@ function ComponentCard({
         </button>
       </div>
       <div className="pki-drawer-body">
+        {/* 1. What it is for, in one sentence, and its standard name. */}
         <p className="pki-does" data-testid="pki-card-does">
           {info.does}
         </p>
         <dl className="pki-pairs">
-          <dt>role</dt>
-          <dd>
-            {info.term} <span className="faint mono">{c.role}</span>
-          </dd>
-          <dt>status</dt>
-          <dd className={`mono status-${c.status}`} data-testid="pki-card-status">
+          <dt>Standard name</dt>
+          <dd>{info.term}</dd>
+          <dt>Status</dt>
+          <dd className={`status-${c.status}`} data-testid="pki-card-status">
             {c.status}
             {c.status === "offline" ? " (by design: brought online only to sign)" : c.status === "faulted" ? " (an injected outage)" : ""}
           </dd>
-          {provider ? (
+          {/* 2. Its certificate in one line; the full card is further down. */}
+          <dt>Its certificate</dt>
+          <dd data-testid="pki-card-cert-line">{certId ? <CertLine id8={certId} /> : noCertText(c.role)}</dd>
+          {signedCtl !== null ? (
             <>
-              <dt>region</dt>
-              <dd>
-                {provider.region.name} ({provider.region.metro}, {provider.region.lat_deg.toFixed(2)}°, {provider.region.lon_deg.toFixed(2)}°)
-                {provider.region.assumption ? <em className="assume"> assumed</em> : null}
+              <dt>Trust list</dt>
+              <dd data-testid="pki-card-elector-signed">
+                {signedCtl ? "endorsed" : "did not endorse"} the trust list in force (CTL version {state.ctl.sequence}, endorsed by {state.ctl.signers.length} of{" "}
+                {state.ctl.electors} electors)
               </dd>
             </>
           ) : null}
-          {c.node !== null ? (
+          {c.role === "crlg" ? (
             <>
-              <dt>node</dt>
-              <dd className="mono">{c.node}</dd>
-            </>
-          ) : null}
-          <dt>traffic</dt>
-          <dd className="mono">
-            {c.traffic.sent} sent · {c.traffic.received} received · {formatBytes(c.traffic.bytes_out)} out · {formatBytes(c.traffic.bytes_in)} in
-          </dd>
-          <dt>last 2 s</dt>
-          <dd className="mono" data-testid="pki-card-activity">
-            {activity ? `${activity.messages} messages, ${formatBytes(activity.bytes)}` : "idle"}
-          </dd>
-          {c.queue ? (
-            <>
-              <dt>queue</dt>
-              <dd className="mono">
-                depth {c.queue.depth} · {c.queue.servers} servers · served {c.queue.served} · waited {formatSpan(c.queue.waited_ns)} · busy {formatSpan(c.queue.busy_ns)}
-              </dd>
+              <dt>Publishing</dt>
+              <dd data-testid="pki-card-crl-schedule">{crlScheduleText({ cadenceS: cadence[c.provider] ?? null, publication: provider?.crl_publication ?? null, dueS: due })}</dd>
             </>
           ) : null}
         </dl>
-        {ops.length > 0 ? (
-          <section className="pki-card-section">
-            <h4>Cryptographic operations</h4>
-            <dl className="pki-pairs">
-              {ops.map(([k, v]) => (
-                <div key={k} className="pki-pair">
-                  <dt className="mono">{k}</dt>
-                  <dd className="mono">{v}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
+        {/* 3. What it knows, and what it cannot see. */}
+        {ownsKnowledge ? (
+          knows ? (
+            <KnowledgeCard entity={c.id} view={view} skip={readable.map((r) => sameWords(r.t.label)).concat(counters.map(([k]) => sameWords(k.replace(/_/g, " "))))} />
+          ) : (
+            <p className="faint" data-testid="pki-knowledge-withheld">
+              What {componentName(c.id, true)} holds is its own: choose it, or everything (ground truth), in “Seen as” to see it.
+            </p>
+          )
         ) : null}
-        {counters.length > 0 ? (
-          <section className="pki-card-section">
-            <h4>Counters</h4>
-            <dl className="pki-pairs">
-              {counters.map(([k, v]) => (
-                <div key={k} className="pki-pair">
-                  <dt>{k.replace(/_/g, " ")}</dt>
-                  <dd className="mono">{typeof v === "object" ? JSON.stringify(v) : String(v)}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        ) : null}
+        {/* 4. Its activity. */}
+        <section className="pki-card-section">
+          <h4>Activity</h4>
+          <dl className="pki-pairs">
+            {provider ? (
+              <>
+                <dt>Region</dt>
+                <dd>
+                  {provider.region.name} ({provider.region.metro}, {provider.region.lat_deg.toFixed(2)}°, {provider.region.lon_deg.toFixed(2)}°)
+                  {provider.region.assumption ? (
+                    <em className="assume" title="No provider publishes where its data centres are: this region is an assumption">
+                      {" "}
+                      assumed
+                    </em>
+                  ) : null}
+                </dd>
+              </>
+            ) : null}
+            <dt>Messages</dt>
+            <dd>
+              {c.traffic.sent.toLocaleString()} sent, {c.traffic.received.toLocaleString()} received{" "}
+              <span className="dim">
+                ({formatBytes(c.traffic.bytes_out)} out, {formatBytes(c.traffic.bytes_in)} in)
+              </span>
+            </dd>
+            <dt title="The last 2 s of simulated time">Last 2 s</dt>
+            <dd data-testid="pki-card-activity">{activity ? `${activity.messages} message${activity.messages === 1 ? "" : "s"}, ${formatBytes(activity.bytes)}` : "idle"}</dd>
+            {c.queue ? (
+              <>
+                <dt title="Requests waiting for one of its servers">Work queue</dt>
+                <dd>
+                  {c.queue.depth === 0 ? "nothing waiting" : `${c.queue.depth} waiting`}
+                  <span className="dim">
+                    {" "}
+                    · {c.queue.servers} server{c.queue.servers === 1 ? "" : "s"} · {c.queue.served.toLocaleString()} served
+                    {c.queue.served > 0 ? ` · average wait ${formatSpan(c.queue.waited_ns / c.queue.served)}` : ""}
+                  </span>
+                </dd>
+              </>
+            ) : null}
+            {readable.map(({ k, v, t }) => (
+              <div key={k} className="pki-pair" data-counter={k}>
+                <dt title={t.means}>{t.label}</dt>
+                <dd className="mono">{counterValue(v, t.unit)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
         {mine.length > 0 ? (
           <section className="pki-card-section">
-            <h4>CRL heads</h4>
+            <h4>Its revocation lists</h4>
             <table className="pki-table">
               <thead>
                 <tr>
-                  <th>series</th>
-                  <th>kind</th>
-                  <th>version</th>
-                  <th>entries</th>
-                  <th>bytes</th>
-                  <th>next CRL in</th>
+                  <th title="crlSeries: which family of certificates the list covers">Series</th>
+                  <th>Revokes</th>
+                  <th>Version</th>
+                  <th>Entries</th>
+                  <th>Size</th>
+                  <th title="nextCrl: the deadline by which a newer list must replace it">Replace within</th>
                 </tr>
               </thead>
               <tbody>
                 {mine.map((h) => (
                   <tr key={h.id8}>
                     <td className="mono">{h.series}</td>
-                    <td>{h.kind}</td>
+                    <td>{h.kind === "linkage" ? "pseudonyms" : h.kind === "hash" ? "single certificates" : h.kind}</td>
                     <td className="mono">{h.version}</td>
                     <td className="mono">{h.entries}</td>
-                    <td className="mono">{h.bytes}</td>
-                    <td className={h.sla_s < 0 ? "mono warn" : "mono"}>{formatSpan(h.sla_s * 1e9)}</td>
+                    <td className="mono">{formatBytes(h.bytes)}</td>
+                    <td className={h.sla_s < 0 ? "mono warn" : "mono"}>{h.sla_s < 0 ? `overdue ${ageText(-h.sla_s)}` : ageText(h.sla_s)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -385,29 +455,83 @@ function ComponentCard({
           </section>
         ) : null}
         <RecentMessages id={c.id} log={log} view={view} />
-        {c.cert ? (
+        {certId ? (
           <section className="pki-card-section">
-            <h4>Its certificate</h4>
-            <CertificateCard id8={c.cert} holder={c.id} />
+            <h4>The certificate it signs with</h4>
+            <CertificateCard id8={certId} holder={c.id} />
           </section>
-        ) : (
-          <p className="faint">It holds no certificate of its own: it signs nothing.</p>
-        )}
-        {["ra", "aca", "la1", "la2", "ma", "eca"].includes(c.role) ? (
-          knows ? (
-            <KnowledgeCard entity={c.id} view={view} />
-          ) : (
-            <p className="faint" data-testid="pki-knowledge-withheld">
-              What {c.id} holds is its own: switch the view to ground truth or to {c.id} to see it.
-            </p>
-          )
+        ) : null}
+        {ops.length > 0 || counters.length > 0 || c.queue || c.node !== null ? (
+          <section className="pki-card-section">
+            <button type="button" className="linklike" aria-expanded={raw} onClick={() => setRaw((r) => !r)} data-testid="pki-card-raw-toggle">
+              {raw ? "▾ Hide" : "▸ Show"} engine counters (raw, as the engine reports them)
+            </button>
+            {raw ? (
+              <dl className="pki-pairs pki-raw" data-testid="pki-card-raw">
+                <div className="pki-pair">
+                  <dt className="mono">id</dt>
+                  <dd className="mono">{c.id}</dd>
+                </div>
+                {c.node !== null ? (
+                  <div className="pki-pair">
+                    <dt className="mono">node</dt>
+                    <dd className="mono">{c.node}</dd>
+                  </div>
+                ) : null}
+                {c.queue ? (
+                  <div className="pki-pair">
+                    <dt className="mono">queue</dt>
+                    <dd className="mono">
+                      depth {c.queue.depth} · servers {c.queue.servers} · served {c.queue.served} · waited {formatSpan(c.queue.waited_ns)} · busy {formatSpan(c.queue.busy_ns)}
+                    </dd>
+                  </div>
+                ) : null}
+                {counters.map(([k, v]) => (
+                  <div key={k} className="pki-pair">
+                    <dt className="mono">{k}</dt>
+                    <dd className="mono">{typeof v === "object" ? JSON.stringify(v) : String(v)}</dd>
+                  </div>
+                ))}
+                {ops.map(([k, v]) => (
+                  <div key={`op-${k}`} className="pki-pair">
+                    <dt className="mono" title="Cryptographic operations, as the engine's cost model counts them">
+                      crypto: {k}
+                    </dt>
+                    <dd className="mono">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+          </section>
         ) : null}
       </div>
     </aside>
   );
 }
 
-/** The tab. */
+/** Why a component has no certificate of its own, by role. */
+function noCertText(role: string): string {
+  if (role === "crl-store" || role === "crl-broadcast") return "none of its own: it passes on lists the CRL Generator signed";
+  if (role === "manager") return "none in this run: the SCMS Manager sets policy and decides trust-list changes, which the electors sign";
+  if (role === "lop") return "none of its own: it only forwards requests, hiding the vehicle's network address";
+  return "none of its own in this run";
+}
+
+/** A certificate's state in one line: the shared badge, its id, and how long it has left. */
+function CertLine({ id8 }: { readonly id8: string }): React.JSX.Element {
+  const { cert, error } = useCert(id8);
+  const facts = useMemo(() => (cert ? certFacts(cert.tree, null) : null), [cert]);
+  const status = cert ? certStatus(cert, facts?.validity ?? null) : "unknown";
+  const words = facts ? windowWords(facts.validity, cert?.time32 ?? null) : null;
+  return (
+    <span className="pki-certline">
+      {cert ? <CertBadge status={status} compact /> : null}
+      <span className="mono">{grouped(id8)}</span>
+      {error ? <span className="faint"> · {certErrorText(error)}</span> : words ? <span className="dim"> · {words}</span> : !cert ? <span className="faint"> · checking…</span> : null}
+    </span>
+  );
+}
+
 export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; readonly view: string }): React.JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const [fresh, setFresh] = useState<TrustMessage[]>([]);
@@ -453,13 +577,22 @@ export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; read
           Who runs the certificate system and what is happening now. Each provider runs its own authorities; the dots are messages travelling
           between them as the run goes. <b>Click any box</b> for what it does, its certificate and what it knows.
         </p>
+        <p className="pki-context dim" data-testid="pki-time" title={`Snapshot at simulated t = ${(trust.t_ns / 1e9).toFixed(0)} s`}>
+          <span title={`Deployment preset “${s.preset}”: which providers, policies and rules the run follows`}>
+            Deployment: <b>{deploymentText(s.preset)}</b>
+          </span>{" "}
+          ·{" "}
+          <span title={`Certificate and message format: ${s.edition}`}>
+            Certificate standard: <b>{editionText(s.edition)}</b>
+          </span>
+        </p>
         <Topology trust={trust} messages={fresh} view={view} selected={selected} onSelect={setSelected} />
         <TrustChain state={s} onSelect={setSelected} selected={selected} />
         <TrustList trust={trust} />
         <p className="pki-devices dim" data-testid="pki-devices" title="Vehicles and roadside units, all providers: how many hold an enrolment certificate, how many have pseudonym certificates, how many are revoked, and how many enrolment certificates their RA refuses">
-          vehicles and roadside units: {total} ({s.providers.map((p) => `${p.label.replace(/^provider-/, "")} ${p.devices.devices}`).join(" / ")}) · enrolled{" "}
-          {s.providers.reduce((n, p) => n + p.devices.enrolled, 0)} · provisioned {s.providers.reduce((n, p) => n + p.devices.provisioned, 0)} · revoked{" "}
-          {s.providers.reduce((n, p) => n + p.devices.revoked, 0)} · blocklisted {s.providers.reduce((n, p) => n + p.devices.blocklisted, 0)}
+          Vehicles and roadside units: <b>{total}</b> ({s.providers.map((p) => `${p.label} ${p.devices.devices}`).join(", ")}) · {s.providers.reduce((n, p) => n + p.devices.enrolled, 0)} enrolled ·{" "}
+          {s.providers.reduce((n, p) => n + p.devices.provisioned, 0)} with pseudonym certificates · {s.providers.reduce((n, p) => n + p.devices.revoked, 0)} revoked ·{" "}
+          {s.providers.reduce((n, p) => n + p.devices.blocklisted, 0)} blocked from new certificates
         </p>
         {view !== GROUND_TRUTH ? <KnowledgeCard entity={view} view={view} /> : null}
         <details className="pki-assumptions">
@@ -474,7 +607,7 @@ export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; read
         </details>
       </div>
       {chosen ? (
-        <ComponentCard c={chosen} provider={provider} activity={trust.activity[chosen.id]} view={view} crls={s.crls} log={log} onClose={() => setSelected(null)} />
+        <ComponentCard c={chosen} provider={provider} activity={trust.activity[chosen.id]} view={view} state={s} log={log} onClose={() => setSelected(null)} />
       ) : devicesOf ? (
         <DevicesCard provider={devicesOf} log={log} view={view} onClose={() => setSelected(null)} />
       ) : null}

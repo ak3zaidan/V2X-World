@@ -85,6 +85,9 @@ describe("the Vehicles tab", () => {
     expect(credentialState(row, ctx)).toBe("healthy");
     expect(credentialState(row, { ...ctx, nowNs: 100 })).toBe("topup-due");
     expect(credentialState({ ...row, usable: 0 }, ctx)).toBe("starving");
+    // No active certificate but usable ones in the pool: changing pseudonym, not starving.
+    expect(credentialState({ ...row, active: null }, ctx)).toBe("between");
+    expect(credentialState({ ...row, active: null, usable: 0 }, ctx)).toBe("starving");
     expect(credentialState(row, { ...ctx, crlOverdue: new Set(["p"]) })).toBe("crl-overdue");
     expect(credentialState(row, { ...ctx, offCtl: new Set(["p"]) })).toBe("untrusted");
     expect(credentialState({ ...row, revoked: true }, { ...ctx, offCtl: new Set(["p"]) })).toBe("revoked");

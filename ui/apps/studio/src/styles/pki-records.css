@@ -32,9 +32,9 @@
 .mono { font-family: var(--mono); }
 .pkir-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
 .pkir-state { padding: 1px 6px; border-radius: 9px; border: 1px solid var(--border); font-size: 11px; }
-.pkir-state.healthy { color: var(--ok); border-color: var(--ok); }
-.pkir-state.topup-due, .pkir-state.crl-overdue { color: var(--warn); border-color: var(--warn); }
-.pkir-state.starving, .pkir-state.revoked, .pkir-state.untrusted { color: var(--err); border-color: var(--err); }
+/* The colour is the state's (VEHICLE_STATE, inline); the border follows it, so a badge reads the same everywhere. */
+.pkir-state { border-color: currentColor; white-space: nowrap; }
+.pkir-table tr.left td { color: var(--text-faint); }
 .pkir-card {
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel);
   padding: 10px 12px; min-width: 0; overflow: auto;
@@ -131,3 +131,5 @@
 .pkir-sla i { display: block; height: 100%; background: var(--ok); }
 .pkir-sla.near i { background: var(--warn); }
 .pkir-sla.over i { background: var(--err); }
+.pkir-life .asof-line { stroke: var(--text-faint); stroke-width: 1; stroke-dasharray: 3 3; }
+.pkir-split.single { grid-template-columns: 1fr; }

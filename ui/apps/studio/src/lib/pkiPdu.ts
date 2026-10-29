@@ -145,3 +145,24 @@ export function fieldGloss(key: string): string | null {
   if (key.startsWith("[")) return null;
   return FIELD_GLOSS[key] ?? null;
 }
+
+/** The arrow's label: the one SPDU it carried, else the step in words and how many SPDUs. */
+export function arrowLabel(r: { readonly name: string; readonly pdus?: readonly { readonly type: string }[] }): string {
+  const types = [...new Set((r.pdus ?? []).map((p) => p.type))];
+  const n = r.pdus?.length ?? 0;
+  if (types.length === 1 && n === 1) return types[0];
+  if (n === 0) return wordsOf(r.name);
+  return `${wordsOf(r.name)} · ${n} SPDUs`;
+}
+
+/** An engine step or stage name in words (`report_sent` → "report sent"). */
+export function wordsOf(name: string): string {
+  return name.replace(/[-_]+/g, " ");
+}
+
+/** A label cut to `max` characters with an ellipsis; the full text stays in the tooltip. */
+export function fitLabel(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(1, max - 1))}…`;
+}
+

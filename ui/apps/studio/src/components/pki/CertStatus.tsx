@@ -52,6 +52,21 @@ export function StatusGlyph({ shape, size = 12 }: { readonly shape: StatusShape;
           <path d="M3 1h6M3 11h6M3.6 1.2c0 3 4.8 3 4.8 4.8S3.6 7.8 3.6 10.8M8.4 1.2c0 3-4.8 3-4.8 4.8s4.8 1.8 4.8 4.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
         </svg>
       );
+    case "info":
+      return (
+        <svg {...common}>
+          <circle cx="6" cy="6" r="4.9" fill="none" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M6 5.3v3.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          <circle cx="6" cy="3.6" r="0.8" fill="currentColor" />
+        </svg>
+      );
+    case "out":
+      return (
+        <svg {...common}>
+          <path d="M7 1.5H2.5v9H7" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+          <path d="M5 6h6M8.8 3.6 11.2 6 8.8 8.4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
     case "dots":
     default:
       return (
