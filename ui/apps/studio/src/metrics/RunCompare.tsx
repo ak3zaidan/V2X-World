@@ -82,7 +82,7 @@ export function ComparePreviousButton(): React.JSX.Element | null {
       data-testid="compare-previous-button"
       title="Compare this run with the previous one: what changed in the settings and in every metric"
     >
-      <span>Compare with previous</span>
+      <span>Compare</span>
     </button>
   );
 }

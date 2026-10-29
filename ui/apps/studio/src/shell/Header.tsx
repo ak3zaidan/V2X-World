@@ -280,17 +280,6 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
       <PkiButton />
       <button
         type="button"
-        className={inspectorOpen ? "icon-button on" : "icon-button"}
-        aria-pressed={inspectorOpen}
-        aria-label="Vehicle details"
-        onClick={() => setInspectorOpen(!inspectorOpen)}
-        data-testid="inspector-toggle"
-        title={inspectorOpen ? "Hide the details (I)" : "Details of the selected vehicle or roadside unit: messages sent and received, and queues (I)"}
-      >
-        <InspectorIcon />
-      </button>
-      <button
-        type="button"
         className={quickOpen ? "icon-button labelled on" : "icon-button labelled"}
         aria-pressed={quickOpen}
         aria-expanded={quickOpen}
@@ -309,6 +298,17 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
           }}
         />
       ) : null}
+      <button
+        type="button"
+        className={inspectorOpen ? "icon-button on" : "icon-button"}
+        aria-pressed={inspectorOpen}
+        aria-label="Vehicle details"
+        onClick={() => setInspectorOpen(!inspectorOpen)}
+        data-testid="inspector-toggle"
+        title={inspectorOpen ? "Hide the details (I)" : "Details of the selected vehicle or roadside unit: messages sent and received, and queues (I)"}
+      >
+        <InspectorIcon />
+      </button>
       <button
         type="button"
         className={panel === "settings" ? "icon-button on" : "icon-button"}
