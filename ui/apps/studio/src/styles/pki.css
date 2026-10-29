@@ -610,3 +610,4 @@
 .pki-tree .v { word-break: break-all; }
 .pki-newer { color: var(--accent); }
 .pki-tree-line { white-space: normal; }
+.pki-beats i { flex: none; width: 100%; }

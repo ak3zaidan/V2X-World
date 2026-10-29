@@ -157,8 +157,8 @@ export function VehicleTimeline({ d, nowNs }: { readonly d: VehicleDetail; reado
           <i className="k revocation" /> revoked
         </span>
       </p>
-      <p className="faint mono" data-testid="pki-life-batches" title="Certificates it holds per week (i-period): 20 a week in the US profile">
-        held per week: {life.batches.map((b) => `i${b.i} ${b.certs}`).join(" · ") || "none"}
+      <p className="faint" data-testid="pki-life-batches" title={`Certificates it holds for each week (i-period): ${d.jmax} a week in this run, 20 in the US profile`}>
+        Certificates it holds, by week: {life.batches.map((b) => `week ${b.i}: ${b.certs}`).join(" · ") || "none"}
       </p>
     </section>
   );
