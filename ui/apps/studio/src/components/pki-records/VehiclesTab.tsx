@@ -48,6 +48,7 @@ import { Term } from "../pki/Term.js";
 import { VehicleName } from "../pki/VehicleName.js";
 import { chooseTab, usePki, usePkiView } from "./state.js";
 import { VehicleTimeline } from "./VehicleTimeline.js";
+import { CloseIcon } from "../../shell/Icons.js";
 
 const CELL_PX = 14;
 /** Weeks shown past the last one the vehicle holds a certificate for. */
@@ -547,6 +548,9 @@ function VehicleCard({
         <span title={VEHICLE_STATE[shown].meaning}>
           <VehicleStateBadge st={shown} testId="pki-vehicle-card-state" />
         </span>
+        <button type="button" className="icon-button pki-vehicle-close" onClick={() => usePkiView.getState().set({ node: null })} aria-label="Close this vehicle" title="Close" data-testid="pki-vehicle-card-close">
+          <CloseIcon />
+        </button>
       </h3>
       <AtAGlance d={d} row={row} nowNs={nowNs} ec={ec} left={left} heads={heads} />
       <VehicleTimeline d={d} nowNs={Math.max(panelNow, nowNs)} />

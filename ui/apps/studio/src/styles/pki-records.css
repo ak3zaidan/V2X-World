@@ -134,3 +134,4 @@
 .pkir-life .asof-line { stroke: var(--text-faint); stroke-width: 1; stroke-dasharray: 3 3; }
 .pkir-split.single { grid-template-columns: 1fr; }
 .pkir-table tr.sel .faint { color: inherit; opacity: 0.75; }
+.pki-vehicle-head .pki-vehicle-close { margin-left: auto; }
