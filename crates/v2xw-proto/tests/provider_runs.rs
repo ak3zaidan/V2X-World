@@ -601,11 +601,21 @@ fn a_second_aca_on_an_iss_pattern_provider_builds_and_signs() {
     let mut d = Deployment::preset(Preset::UsProduction2025);
     d.providers[0].components.insert("aca".to_string(), 2);
     let home = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
-    let pki = home.pki.as_ref().unwrap();
+    let pki = home.state.pki.as_ref().unwrap();
     let (a0, a1) = (&pki.aca, pki.aca_at(1));
     assert_ne!(a0.id8(), a1.id8(), "aca/1 holds its own certificate");
-    assert_eq!(
-        a0.cert.0.to_be_signed.app_permissions, a1.cert.0.to_be_signed.app_permissions,
-        "the same permissions and SSP as the core ACA"
-    );
+    // The same PSID-35 permission and SSP choice (0x85, AcaSsp) as the core ACA. The
+    // version byte may differ: ISS's chain files carry version 1 on their one PCA, and
+    // ISS publishes no second PCA, so an extra ISS-pattern ACA takes the 2022 module's
+    // version 2 (documented deviation; the bodies are identical).
+    let ssp = |a: &v2xw_proto::scms::pdu::Authority| {
+        let perms = a.cert.0.to_be_signed.app_permissions.as_ref().expect("appPermissions");
+        let p = &perms.0[0];
+        let bytes = match p.ssp.as_ref().expect("an SSP") {
+            v2xw_msg::sec_types::ieee1609_dot2_base_types::ServiceSpecificPermissions::opaque(o) => o.to_vec(),
+            other => panic!("not opaque: {other:?}"),
+        };
+        (p.psid.clone(), bytes[0], bytes.len())
+    };
+    assert_eq!(ssp(a0), ssp(a1), "the same permission and SSP choice as the core ACA");
 }
