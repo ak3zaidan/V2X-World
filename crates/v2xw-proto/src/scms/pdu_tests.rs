@@ -293,3 +293,162 @@ fn a_component_certificate_is_verified_once_and_a_forgery_is_still_refused() {
     );
     assert!(k.signer_key(&k.aca.cert).is_ok());
 }
+
+// ---------------------------------------------------------------------------------------
+// WP-35: the information status (A16)
+// ---------------------------------------------------------------------------------------
+
+fn status(ra: Option<u32>) -> InfoStatus {
+    InfoStatus {
+        crl: vec![CrlStatusLine {
+            craca_id8: [1, 2, 3, 4, 5, 6, 7, 8],
+            series: 1,
+            issue_date: 0x0A0B_0C0D,
+        }],
+        ctl: vec![CtlStatusLine {
+            series_id: v2xw_sec::ctl::US_CTL_SERIES_ID,
+            sequence: 5,
+            last_update: 0x0102_0304,
+        }],
+        ca_ccf: 0x1122_3344,
+        ma: vec![MaStatusLine {
+            psids: vec![0x20],
+            updated: 0x5566_7788,
+        }],
+        ra,
+    }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The status encodes byte for byte as canonical COER of the cached ASN.1
+/// (`Ieee1609Dot2Dot1CertManagement.asn` l.341-410): the preamble's second bit is `ra`'s
+/// presence (the first is the extension bit), each `SEQUENCE OF` carries a one-octet
+/// quantity length, each inner `SEQUENCE` its own extension preamble, and a `Psid` its
+/// length. The vector is written from the X.696 rules, not from the encoder; the same
+/// layout is in the asn1tools corpus (`scms_coer_xcheck.txt` l.7007).
+///
+/// fault: `ra` encoded as mandatory (absent sent as 0) -> red.
+#[test]
+fn the_info_status_encodes_as_coer_with_ra_optional() {
+    let body = concat!(
+        "0101",
+        "00",
+        "0102030405060708",
+        "0001",
+        "0a0b0c0d", // crl: one CrlInfoStatus
+        "0101",
+        "00",
+        "0348000000000000",
+        "0005",
+        "01020304", // ctl: the US series, seq 5
+        "11223344", // caCcf
+        "0101",
+        "00",
+        "0101",
+        "0120",
+        "55667788", // ma: psids {0x20}
+    );
+    assert_eq!(
+        hex(&info_status_coer(&status(Some(0x99AA_BBCC))).unwrap()),
+        format!("40{body}99aabbcc"),
+        "sent by an RA: ra present"
+    );
+    assert_eq!(
+        hex(&info_status_coer(&status(None)).unwrap()),
+        format!("00{body}"),
+        "sent by a DC: ra absent"
+    );
+}
+
+/// The RA signs the status with its certificate attached; a device opens it only from the
+/// RA and only with the `ra` date an RA must send (l.337).
+#[test]
+fn an_info_status_is_signed_by_the_ra_and_opens_only_from_it() {
+    let pki = pki();
+    let s = status(Some(T));
+    let spdu = ra_info_status_spdu(&pki, &s).unwrap();
+    assert_eq!(open_info_status(&spdu, &pki).unwrap(), s);
+    let by_eca = signed(&cert_info_status(&s), &pki.eca.cert, &pki.eca.key).unwrap();
+    assert!(matches!(
+        open_info_status(&by_eca, &pki),
+        Err(PduError::Signer(_))
+    ));
+    let no_ra = ra_info_status_spdu(&pki, &status(None)).unwrap();
+    assert!(matches!(
+        open_info_status(&no_ra, &pki),
+        Err(PduError::Shape(_))
+    ));
+    let mut bad = spdu.clone();
+    let n = bad.len();
+    bad[n - 1] ^= 1;
+    assert!(
+        open_info_status(&bad, &pki).is_err(),
+        "a changed signature is refused"
+    );
+}
+
+/// A device downloads only what is strictly newer than what it holds: nothing when the
+/// dates match, the composite CRL for a newer CRL (or a CRACA it holds none of), the chain
+/// file for a CTL or chain-file change alone, and the MA or RA certificate when its date
+/// moved.
+///
+/// fault: the CRL date comparison `>=` (an equal date refetched) -> red.
+#[test]
+fn info_status_fetches_only_newer_lists() {
+    let s = status(Some(T));
+    let held = HeldStatus {
+        crl: s.crl.clone(),
+        ctl: s.ctl.clone(),
+        ca_ccf: s.ca_ccf,
+        ma_updated: 0x5566_7788,
+        ra: T,
+    };
+    assert_eq!(
+        status_fetch(&s, &held),
+        StatusFetch::default(),
+        "all current"
+    );
+    assert!(!status_fetch(&s, &held).any());
+    let mut newer = s.clone();
+    newer.crl[0].issue_date += 1;
+    let f = status_fetch(&newer, &held);
+    assert!(f.composite_crl && !f.chain_file && !f.ma_certificate && !f.ra_certificate);
+    let mut other_craca = s.clone();
+    other_craca.crl.push(CrlStatusLine {
+        craca_id8: [9; 8],
+        series: 1,
+        issue_date: 1,
+    });
+    assert!(
+        status_fetch(&other_craca, &held).composite_crl,
+        "a CRACA it holds no list of"
+    );
+    let mut ctl = s.clone();
+    ctl.ctl[0].sequence += 1;
+    let f = status_fetch(&ctl, &held);
+    assert!(f.chain_file && !f.composite_crl);
+    let mut ccf = s.clone();
+    ccf.ca_ccf += 1;
+    assert!(status_fetch(&ccf, &held).chain_file);
+    let mut ma = s.clone();
+    ma.ma[0].updated += 1;
+    assert_eq!(
+        status_fetch(&ma, &held),
+        StatusFetch {
+            ma_certificate: true,
+            ..StatusFetch::default()
+        }
+    );
+    let mut ra = s.clone();
+    ra.ra = Some(T + 1);
+    assert!(status_fetch(&ra, &held).ra_certificate);
+    let mut older = s;
+    older.crl[0].issue_date -= 1;
+    assert!(
+        !status_fetch(&older, &held).any(),
+        "an older date is not newer"
+    );
+}

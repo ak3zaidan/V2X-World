@@ -903,6 +903,23 @@ trustworthy or comparable; later waves add behaviours and radio features.
   golden moved; DSRC digests (`bsm_timing` 4, `phase2` 15) pass. Proposal for the owner:
   `align_generation: true` for LTE-V2X profiles (moves every LTE digest).
 
+**WP-35 The `infoStatus` SPDU (A16)** (M, 2 pieces). Plan: `wp25-plus-build-plans.md` §WP-35.
+- P35.1 (2026-10-28): done, nothing wired. `v2xw-proto` `pdu.rs`: `InfoStatus` (crl, ctl,
+  caCcf, ma, ra lines), `cert_info_status` (the `cert.infoStatus` `ScmsPdu`),
+  `ra_info_status_spdu` (signed psid 35 with the RA certificate attached, as every RA
+  response), `open_info_status` (refuses a non-RA signer and an RA status without `ra`,
+  l.337), and `status_fetch` (what a device downloads: only what is strictly newer; the
+  composite CRL for a CRL change, the chain file for a CTL or `caCcf` change alone, the
+  MA or RA certificate; US profile preferences, 03 §4.1). The RA endpoint
+  `ScmsRun::ra_info_status` logs the SPDU as `SpduKind::InfoStatus`
+  (`CertificateManagementInformationStatusSpdu`); `ra_status_lines` gives the RA's own
+  lines. The codec is the generated rasn type; the test pins its COER byte for byte to a
+  vector written from X.696 (the asn1tools corpus has the same layout). Oracle rule
+  `INFO-STAT` and mutation `info-no-ra` added to `tools/oracle/scms_oracle/records.py`;
+  not yet exercised on a recording (no run emits the SPDU before P35.2). The codec test
+  sits in `v2xw-proto`, not `v2xw-msg` as the plan had it: the builders of every other
+  1609.2.1 PDU are there.
+
 ## 3. Deferred and dropped
 
 **Deferred** (useful, but lower value per effort, or waiting on an input):

@@ -80,6 +80,13 @@ Rule ids (and sources):
               week before the row ("as often as possible but no later than once a week",
               [CAMP122] sec. 3 item 10; a receiver checks revocation against the current list,
               1609.2 5.1.3.4; [SMP] Table 1 series 1)
+  INFO-STAT   CertificateManagementInformationStatusSpdu (WP-35): Signed psid 35, headerInfo psid
+              only, SignerSingleCert by an RA certificate whose signature verifies; the ScmsPdu is
+              cert.infoStatus; `ra` is present ("shall be present ... if this structure is sent by
+              an RA"); every crl line's issueDate is the issueDate of a SecuredCrl issued for that
+              (cracaId, series) no later than the status is sent, and no such CRL issued before
+              the send is newer ([ASN-2.1] CertManagement CertificateManagementInfoStatus,
+              CrlInfoStatus; 03 sec. 3 l.111)
   OF-3-JOIN   the list a device fetches when it joins is its CRACA's newest at that instant
               (R-JOINCRL: "a joiner holds the newest list each CRACA published before it
               joined"); the same sources
@@ -396,7 +403,43 @@ def run_rules(R):
     rule_ctl(X, R)
     rule_block(X, R)
     rule_held_crls(X, R, crls)
+    rule_info_status(X, R, store, by_type, crls)
     return X
+
+
+def rule_info_status(X, R, store, by_type, crls):
+    """INFO-STAT over every information status the RA sent."""
+    issued = collections.defaultdict(list)   # (cracaId, series) -> [(issueDate)]
+    for c in crls:
+        cc = c['cc']
+        issued[(bytes(cc['crlCraca']), cc['crlSeries'])].append(cc['issueDate'])
+    for p, outer, _ in by_type['CertificateManagementInformationStatusSpdu']:
+        sd = signed(outer)
+        w = f'{p["id"]} to {p["to"]}'
+        if not X.check('INFO-STAT', sd is not None, w + ': not signedData'):
+            continue
+        hi = sd['tbsData']['headerInfo']
+        X.check('INFO-STAT', hi.get('psid') == SECMGMT_PSID and set(hi) == {'psid'}, w + f': headerInfo {sorted(hi)}')
+        sc, n = signer_cert(store, sd)
+        X.check('INFO-STAT', sc is not None and n == 1, w + ': signer is not SignerSingleCert')
+        role = mgmt_role(sc) if sc else None
+        X.check('INFO-STAT', role is not None and role[0] == 'ra', w + f': signer role {role and role[0]}')
+        if sc:
+            ok, why = verify_sd(store, sd, sc)
+            X.check('INFO-STAT', ok, w + ': ' + why)
+        body = dec('ScmsPdu', payload_bytes(sd))['content']
+        if not X.check('INFO-STAT', body[0] == 'cert' and body[1][0] == 'infoStatus', w + f': content {body[0]}'):
+            continue
+        st = body[1][1]
+        X.check('INFO-STAT', 'ra' in st, w + ': ra absent in an RA-sent status')
+        sent = t32(R, p['t'])
+        for line in st['crl']:
+            key = (bytes(line['cracaId']), line['series'])
+            before = [d for d in issued.get(key, []) if d <= sent]
+            if not before:
+                continue
+            X.check('INFO-STAT', line['issueDate'] in before and line['issueDate'] == max(before),
+                    w + f': crl {key[0].hex()}/{key[1]} issueDate {line["issueDate"]}, newest issued by then {max(before)}')
 
 
 PSEUDONYM_SERIES = 1
@@ -1253,6 +1296,15 @@ def _mut_cert_id(R):
     return False
 
 
+def _mut_info_no_ra(R):
+    def fn(d, p):
+        sd = d['content'][1]
+        pdu = coer.decode('ScmsPdu', payload_bytes(sd))
+        pdu['content'][1][1].pop('ra', None)
+        sd['tbsData']['payload']['data']['content'] = ('unsecuredData', coer.encode('ScmsPdu', pdu))
+    return _mut_pdu_inner(R, 'CertificateManagementInformationStatusSpdu', fn, field='hex')
+
+
 def _mut_ack_hash(R):
     def fn(d, p):
         sd = d['content'][1]
@@ -1493,6 +1545,7 @@ FAULTS = {
     'cert-craca': ('a pseudonym\'s cracaId changed', 'CRACA-CERT', _mut_cert(lambda t: t.update(cracaId=b'\x00\x00\x01'))),
     'cert-series': ('a pseudonym on crlSeries 4', 'CRACA-CERT', _mut_cert(lambda t: t.update(crlSeries=4))),
     'ack-hash': ('RaEeCertAck requestHash zeroed', 'DL-ACK', _mut_ack_hash),
+    'info-no-ra': ('an RA information status without its ra date', 'INFO-STAT', _mut_info_no_ra),
     'dl-sig': ('a Download-Req signature bit flipped', 'DL-SIGN', _mut_sig('EeRaDownloadRequestSpdu', 'opened')),
     'dl-other-enrolment': ('a device\'s Download-Req signed by another device', 'DL-SIGN', _mut_enrol_swap),
     'dl-time': ('Download-Req generationTime 10 s ahead', 'DL-TIME', _set_dl('generationTime', lambda v, p: v + 10)),

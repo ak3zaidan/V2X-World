@@ -49,11 +49,17 @@ use v2xw_msg::sec_types::ieee1609_dot2::{
     SequenceOfRecipientInfo, SignerIdentifier, SymmRecipientInfo, SymmetricCiphertext,
     ToBeSignedCertificate, VerificationKeyIndicator,
 };
+use v2xw_msg::sec_types::ieee1609_dot2_base_types::SequenceOfPsid;
 use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
     BasePublicEncryptionKey, CrlSeries, Duration as Ieee1609Duration, EccP256CurvePoint,
     EciesP256EncryptedKey, HashedId3, HashedId8, Hostname, IValue, Opaque, Psid, PsidSsp,
     PublicEncryptionKey, SequenceOfPsidSsp, ServiceSpecificPermissions, SymmAlgorithm,
     SymmetricEncryptionKey, Time32, Uint8, Uint16, Uint32, ValidityPeriod,
+};
+use v2xw_msg::sec_types::ieee1609_dot2_dot1_cert_management::{
+    CertManagementPdu, CertificateManagementInfoStatus, CrlInfoStatus, CtlInfoStatus,
+    CtlSequenceNumber, CtlSeriesId, MaInfoStatus, SequenceOfCrlInfoStatus, SequenceOfCtlInfoStatus,
+    SequenceOfMaInfoStatus,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_eca_ee_interface::{
     EcaEeCertResponse, EcaEeInterfacePdu, EeEcaCertRequest,
@@ -1631,6 +1637,247 @@ pub fn info_filename(request_hash: [u8; 8]) -> String {
 }
 
 // ---------------------------------------------------------------------------------------
+// Certificate management information status (A16, WP-35)
+// ---------------------------------------------------------------------------------------
+
+/// One CRL's line in an information status: `CrlInfoStatus` ([ASN-2.1]
+/// `Ieee1609Dot2Dot1CertManagement` l.380).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CrlStatusLine {
+    /// `cracaId`, the HashedId8 of the CRACA.
+    pub craca_id8: [u8; 8],
+    /// `series`.
+    pub series: u16,
+    /// `issueDate` of the newest CRL of that `(cracaId, series)`, Time32.
+    pub issue_date: u32,
+}
+
+/// One CTL's line: `CtlInfoStatus` (l.360).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CtlStatusLine {
+    /// `ctlSeriesId` (the US series is `v2xw_sec::ctl::US_CTL_SERIES_ID`).
+    pub series_id: [u8; 8],
+    /// `sequenceNumber`.
+    pub sequence: u16,
+    /// `lastUpdate`, Time32.
+    pub last_update: u32,
+}
+
+/// One MA certificate's line: `MaInfoStatus` (l.403).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaStatusLine {
+    /// `psids`: the PSIDs whose misbehaviour that MA takes.
+    pub psids: Vec<u64>,
+    /// `updated`: when its certificate last changed, Time32.
+    pub updated: u32,
+}
+
+/// `CertificateManagementInfoStatus` (l.341): what an EE polls to learn which of the RA's
+/// certificate-management files changed (1609.2.1 §6.3.5.14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoStatus {
+    /// `crl`.
+    pub crl: Vec<CrlStatusLine>,
+    /// `ctl`.
+    pub ctl: Vec<CtlStatusLine>,
+    /// `caCcf`: when the CA certificate chain file last changed, Time32.
+    pub ca_ccf: u32,
+    /// `ma`.
+    pub ma: Vec<MaStatusLine>,
+    /// `ra`: "shall be present and contain the time of last update of the RA's
+    /// certificate, if this structure is sent by an RA" (l.337).
+    pub ra: Option<u32>,
+}
+
+fn info_status_asn(s: &InfoStatus) -> CertificateManagementInfoStatus {
+    let t32 = |t: u32| Time32(Uint32(t));
+    CertificateManagementInfoStatus::new(
+        SequenceOfCrlInfoStatus(
+            s.crl
+                .iter()
+                .map(|c| {
+                    CrlInfoStatus::new(
+                        id8(c.craca_id8),
+                        CrlSeries(Uint16(c.series)),
+                        t32(c.issue_date),
+                    )
+                })
+                .collect(),
+        ),
+        SequenceOfCtlInfoStatus(
+            s.ctl
+                .iter()
+                .map(|c| {
+                    CtlInfoStatus::new(
+                        CtlSeriesId(FixedOctetString::from(c.series_id)),
+                        CtlSequenceNumber(c.sequence),
+                        t32(c.last_update),
+                    )
+                })
+                .collect(),
+        ),
+        t32(s.ca_ccf),
+        SequenceOfMaInfoStatus(
+            s.ma.iter()
+                .map(|m| {
+                    MaInfoStatus::new(
+                        SequenceOfPsid(m.psids.iter().map(|p| Psid(Integer::from(*p))).collect()),
+                        t32(m.updated),
+                    )
+                })
+                .collect(),
+        ),
+        s.ra.map(t32),
+    )
+}
+
+fn info_status_of(a: &CertificateManagementInfoStatus) -> Result<InfoStatus> {
+    let psid = |p: &Psid| u64::try_from(&p.0).map_err(|_| PduError::Shape("a PSID above 2^64"));
+    Ok(InfoStatus {
+        crl: a
+            .crl
+            .0
+            .iter()
+            .map(|c| CrlStatusLine {
+                craca_id8: hashedid::id8_bytes(&c.craca_id),
+                series: c.series.0.0,
+                issue_date: c.issue_date.0.0,
+            })
+            .collect(),
+        ctl: a
+            .ctl
+            .0
+            .iter()
+            .map(|c| {
+                let mut id = [0u8; 8];
+                id.copy_from_slice(&c.ctl_series_id.0[..]);
+                CtlStatusLine {
+                    series_id: id,
+                    sequence: c.sequence_number.0,
+                    last_update: c.last_update.0.0,
+                }
+            })
+            .collect(),
+        ca_ccf: a.ca_ccf.0.0,
+        ma: a
+            .ma
+            .0
+            .iter()
+            .map(|m| {
+                Ok(MaStatusLine {
+                    psids: m.psids.0.iter().map(psid).collect::<Result<Vec<_>>>()?,
+                    updated: m.updated.0.0,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        ra: a.ra.as_ref().map(|t| t.0.0),
+    })
+}
+
+/// `cert.infoStatus` (03 §3, l.111): the `ScmsPdu` an RA signs as a
+/// `CertificateManagementInformationStatusSpdu` (`Ieee1609Dot2Data-Signed`, psid 35).
+pub fn cert_info_status(s: &InfoStatus) -> ScmsPdu {
+    pdu(ScmsPduContent::cert(CertManagementPdu::infoStatus(
+        info_status_asn(s),
+    )))
+}
+
+/// The COER of the bare `CertificateManagementInfoStatus`, for a codec check.
+pub fn info_status_coer(s: &InfoStatus) -> Result<Vec<u8>> {
+    coer(&info_status_asn(s))
+}
+
+/// The RA's signed `CertificateManagementInformationStatusSpdu`: [`cert_info_status`]
+/// signed with the RA certificate attached ([`signed`]), as every RA response is.
+pub fn ra_info_status_spdu(pki: &ScmsPki, s: &InfoStatus) -> Result<Vec<u8>> {
+    signed(&cert_info_status(s), &pki.ra.cert, &pki.ra.key)
+}
+
+/// Device side: opens a `CertificateManagementInformationStatusSpdu`, requires the signer
+/// to be an RA certificate of the PKI (l.111: "RA (7.7.3.9) or DC (7.7.3.10)"; the
+/// devices here reach the RA) and the `ra` date present (l.337), and returns the status.
+pub fn open_info_status(bytes: &[u8], pki: &ScmsPki) -> Result<InfoStatus> {
+    let (p, signer) = open_signed_pdu(bytes, pki)?;
+    if !pki.is_role(&pki.ra, &cert_id8(&signer)) {
+        return Err(PduError::Signer(
+            "an information status is signed by the RA",
+        ));
+    }
+    let ScmsPduContent::cert(CertManagementPdu::infoStatus(a)) = p.content else {
+        return Err(PduError::Shape("expected cert.infoStatus"));
+    };
+    if a.ra.is_none() {
+        return Err(PduError::Shape("an RA's information status carries ra"));
+    }
+    info_status_of(&a)
+}
+
+/// What a device holds, by the dates the information status reports.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HeldStatus {
+    /// The `issueDate` of the CRL it holds for each `(cracaId, series)`.
+    pub crl: Vec<CrlStatusLine>,
+    /// The CTL sequence it installed, per series.
+    pub ctl: Vec<CtlStatusLine>,
+    /// The `caCcf` date of the chain file it holds.
+    pub ca_ccf: u32,
+    /// The `updated` date of the MA certificate it holds.
+    pub ma_updated: u32,
+    /// The `ra` date of the RA certificate it holds.
+    pub ra: u32,
+}
+
+/// What a device downloads after an information status: only what is strictly newer
+/// than what it holds (1609.2.1 §6.3.5.14; the US profile prefers the composite CRL,
+/// 6.3.5.8, over individual CRLs and the chain file, 6.3.5.7, over separate CTL and CA
+/// downloads, [SMP] §4.4 via 03 §4.1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StatusFetch {
+    /// A CRL is newer, or a CRACA is listed that the device holds no CRL of: fetch the
+    /// composite CRL (it carries the home CTL too).
+    pub composite_crl: bool,
+    /// The CTL or the chain file is newer: fetch the chain file (when the composite is
+    /// not fetched anyway, a CTL change alone).
+    pub chain_file: bool,
+    /// An MA certificate changed.
+    pub ma_certificate: bool,
+    /// The RA certificate changed.
+    pub ra_certificate: bool,
+}
+
+impl StatusFetch {
+    /// Whether anything is to be fetched.
+    #[must_use]
+    pub const fn any(&self) -> bool {
+        self.composite_crl || self.chain_file || self.ma_certificate || self.ra_certificate
+    }
+}
+
+/// [`StatusFetch`] for a status against what the device holds. A date equal to the held
+/// one is not newer: an equal date is the same file.
+#[must_use]
+pub fn status_fetch(status: &InfoStatus, held: &HeldStatus) -> StatusFetch {
+    let crl_newer = status.crl.iter().any(|c| {
+        held.crl
+            .iter()
+            .find(|h| h.craca_id8 == c.craca_id8 && h.series == c.series)
+            .is_none_or(|h| c.issue_date > h.issue_date)
+    });
+    let ctl_newer = status.ctl.iter().any(|c| {
+        held.ctl
+            .iter()
+            .find(|h| h.series_id == c.series_id)
+            .is_none_or(|h| c.sequence > h.sequence)
+    });
+    StatusFetch {
+        composite_crl: crl_newer,
+        chain_file: !crl_newer && (ctl_newer || status.ca_ccf > held.ca_ccf),
+        ma_certificate: status.ma.iter().any(|m| m.updated > held.ma_updated),
+        ra_certificate: status.ra.is_some_and(|t| t > held.ra),
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // Wrappers
 // ---------------------------------------------------------------------------------------
 
@@ -2230,6 +2477,9 @@ pub enum SpduKind {
     /// `SecuredMisbehaviorReport` ([SM-MBR] §3: signed by a pseudonym under psid 0x26,
     /// encrypted to the MA). WP-B4.
     SecuredMisbehaviorReport,
+    /// `CertificateManagementInformationStatusSpdu` (`cert.infoStatus`, signed psid 35 by
+    /// the RA certificate; 03 §3 l.111). WP-35.
+    InfoStatus,
 }
 
 impl SpduKind {
@@ -2252,6 +2502,7 @@ impl SpduKind {
             SpduKind::RaEeCertInfo => "RaEeCertInfoSpdu",
             SpduKind::SecuredCrl => "SecuredCrl",
             SpduKind::SecuredMisbehaviorReport => "SecuredMisbehaviorReport",
+            SpduKind::InfoStatus => "CertificateManagementInformationStatusSpdu",
         }
     }
 }
