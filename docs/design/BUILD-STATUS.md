@@ -4036,6 +4036,26 @@ Merged `--no-ff` onto `abed3f7` in order A3 (`c789875`), A4 (`9d158d6`), A5 (`df
 - **Still open:** the owner must decide whether the SCMS Manager artefacts ("All Rights Reserved") may be vendored; until then they are fetched by `tools/scms-artefacts/fetch.py`. Also open: no public 1609.2-profile ECQV vector; the oracle cannot resolve implicit issuers (needs extending by a separate agent); the unified/CUBK butterfly response key, the rekRecipInfo reading and the group jValue/ei relation are unconfirmed; the production chain file's homeCtl is provider-local, and the 2025-03 test CTL approves the Eviden root by SHA-256 (reported through `approved_by_sha256`). CRL/CTL, group linkage and the chain validator are not yet wired into the node or engine (B4/C2).
 - **Cleanup:** the worktrees and branches `worktree-wf_528eeff2-8e9-{5,6,7}` were removed, and so was `target/agents`.
 
+## 2026-10-28: adoption waves 7-8 integration (side, ev, nema, air: WP-19, 20, 23, 24)
+
+One integrator in the main checkout, one heavy command at a time. All four agents had committed their work and their worktrees were clean, so no wip snapshot was needed.
+
+- **Merged `--no-ff` onto `62ff8589`, in this order:** side (`5071e201`: P24.1 LuST licence and VeReMi-sub cut, P24.3 XGBoost/MLP baseline, P1-E4 device speed-scale analysis) -> `f19d27b7`; ev (`e6589d57`: kerbside junction-overlap fix, WP-20 P20.1-P20.3, P20.5, the CAM half of P20.4) -> `5508f153`; nema (`ce148f65`: concurrent NEMA foes never both protected, P23.1, P23.2) -> `324da502`; air (`b0f37241`: J2945/1 density counted at reception, WP-19 P19.1-P19.4) -> `e3e4aaa1`. No conflicts. Every item compiled; none was reverted.
+- **Goldens:** none moved and no branch declared a re-bless. `bsm_timing` (4 pass: i-s1-phase2-60s), `phase2` (15 pass, 1 ignored: phase2-path) and `trigger_ttc` (4 pass: ttc-triggered-brake) pass on the merged tree with the digests already on main. The air track's density-at-reception change moves J2945/1 event counts (credential-lifecycle MacTimer 152,543 -> 152,541) that no digest covers.
+- **Fixes after the merges:** none were needed. `cargo fmt --all` reformatted `crates/v2xw-node/src/lib.rs` (`be286845`, style only).
+- **Checks** (`build.rs` and `schema.rs` touched first):
+  - `cargo check --workspace --tests`: clean, known warnings only.
+  - **128 test binaries** (lib and every test binary of engine, mobility, node, radio, msg, world and trafficval, including the engine's publish (lib), scenario, sensitivity and regression tests), one heavy.sh call each, 30-minute cap: **2,147 pass, 0 fail, 32 ignored.** `scms_knobs_runs` hit the cap after 8 of its 20 tests; the other 12 ran in one more call and all passed (20/20).
+  - **The last known failure is gone:** `realism` kerbside passes (4/4), fixed by the ev track's `standing_foe_in_path`.
+  - Side track Python tests: `test_lust_cut` 5, `test_veremi_baseline` 5, `test_e4scalefit` 5, `test_e4stepfit` 11, `test_realdata` 35, all pass.
+- **Release:** `cargo build --release -j 2 -p v2xw-cli --bins` finished (10 m 53 s). `v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8758 --paused --speed 0` listened on 127.0.0.1:8758 and answered `/agent/status` with 200 within 4 s; it was stopped by PID.
+- **Still open:**
+  - air: the P19.5 `live-rsu.yaml` expectation rows (need release city runs); no WSA `MessageCodec` arm, no 10 Hz WSA default, no separate CCH for WSAs, no CAMP download resumption. Owner proposal: `net.rsu_ip.air: sch` once the rows are measured.
+  - ev: the BSM `EmergencyDetails` half of P20.4 (J2735 ASN.1 not on disk, D3) and the receivers-only test; the EV does not use the rescue-lane gap; an EV across a junction upstream is not seen; the VTL 1175 exemption. Owner proposal: `emergency_yield` on for US presets.
+  - nema: P23.3 not started (SUMO not installed). `invariants/nema-safety` is still red on 77 safety-class and 2 standstill rows at signalised lane drops (junctions 168, 207; fixed-time gives 355 and 2), a mobility defect for the mobility owner. NEMA stays off by default.
+  - side: the P1-E4 engine change (`OutputNoise.speed_scale` in `bsm_timing.rs`) is not built and still not a robust pass (point 0.094); the ICC 2020 numbers, the LuST ODbL origin [verify], P24.2 routes, PyDetector serving and P24.4-P24.5.
+- **Cleanup:** the worktrees and branches `worktree-wf_6212b431-de5-{1,2,3,4}` were removed after each head was checked to be an ancestor of main and each worktree clean (git-ignored `worlds/cache` links only).
+
 ## 2026-10-28: fix round 5 integration (scms, stamp, traffic)
 
 One integrator in the main checkout, one heavy command at a time. All three agents had committed their work and their worktrees were clean, so no wip snapshot was needed.
