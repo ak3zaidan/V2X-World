@@ -108,7 +108,8 @@ test("Vehicles: problems first, chips that filter, constant columns said once, a
 test("A vehicle whose enrolment certificate fails is never 'healthy': its row and its card say the same", async ({ page }) => {
   const tabs = JSON.parse(readFileSync(join(here, "../test/fixtures/pki/pki-tabs.json"), "utf8")) as { vehicles: { vehicles: { node: number; enrolment: string }[] } };
   const v = tabs.vehicles.vehicles.find((x) => x.node === 19)!;
-  // As `v2xw-server` answers for credential-lifecycle's enrolment certificates: a lifetime of zero hours, so the time check fails.
+  // A one-hour enrolment certificate whose hour ended an hour ago: the time check fails for a real
+  // reason. (A lifetime of zero, the engine's rounding, is a simulator limit: pki-round2.spec.ts.)
   const NOW = 731232071;
   const rules = ["well-formed", "chain-to-root", "root-on-ctl", "signatures", "issuer-permissions", "chain-length", "validity", "region", "crl"];
   const ec = {
@@ -119,7 +120,7 @@ test("A vehicle whose enrolment certificate fails is never 'healthy': its row an
     t_ns: 66e9,
     tolerated: [],
     trace: rules.map((rule) => ({ rule, status: rule === "validity" ? "fail" : "pass", detail: rule === "validity" ? ["cert 0: not valid at the policy time"] : [] })),
-    tree: { issuer: { self: "sha256" }, toBeSigned: { id: { name: "ee" }, validityPeriod: { duration: { hours: 0 }, start: NOW - 240 } }, type: "explicit", version: 3 },
+    tree: { issuer: { self: "sha256" }, toBeSigned: { id: { name: "ee" }, validityPeriod: { duration: { hours: 1 }, start: NOW - 7200 } }, type: "explicit", version: 3 },
   };
   await serve(page, studio.run, { [v.enrolment]: ec });
   await open(page, "vehicles");
@@ -129,7 +130,7 @@ test("A vehicle whose enrolment certificate fails is never 'healthy': its row an
   await row.click();
   await expect(panel.getByTestId("pki-vehicle-card-state")).toHaveAttribute("data-state", "ec-bad");
   await expect(row).toHaveAttribute("data-state", "ec-bad");
-  await expect(panel.getByTestId("pki-glance-ec-says")).toContainText("lifetime of zero");
+  await expect(panel.getByTestId("pki-glance-ec-says")).toContainText("a receiver reads it as expired");
   await expect(panel.getByTestId("pki-vehicle-card")).not.toContainText("healthy");
 });
 
@@ -237,5 +238,12 @@ test("Revocation: the schedule in one sentence per provider, and the table fits 
   const fit = await panel.locator(".pkir-table-wrap").first().evaluate((el) => el.scrollWidth - el.clientWidth);
   expect(fit).toBeLessThanOrEqual(1);
   // Dates carry the year: one format everywhere.
-  for (const d of await panel.getByTestId("pki-crl-table").locator("tbody td:nth-child(5)").allTextContents()) expect(d).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  const issued = await panel.getByTestId("pki-crl-table").locator(":scope > tbody > tr > td:nth-child(5)").allTextContents();
+  expect(issued.length).toBeGreaterThan(0);
+  for (const d of issued) expect(d).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  // An open row's versions are a table of their own, with their own headers, each column under its header.
+  const versions = panel.getByTestId("pki-crl-versions");
+  await expect(versions.locator("th").first()).toHaveText("Version");
+  for (const d of await versions.locator("tbody td:nth-child(2)").allTextContents()) expect(d).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  for (const d of await versions.locator("tbody td:nth-child(5)").allTextContents()) expect(d).toMatch(/^(full list|delta: changes only)$/);
 });

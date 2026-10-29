@@ -196,10 +196,14 @@ test("the trust chain: every provider's root to its authorities, each opening it
   const panel = page.getByTestId("pki-panel");
   const tc = panel.getByTestId("pki-trustchain");
   await expect(tc).toBeVisible();
+  // Folded to one line under the diagram (which already draws every authority); one click opens it.
+  await expect(tc.getByTestId("pki-trustchain-summary")).toContainText(`all ${trust.state.providers.length} roots trusted`);
+  await expect(tc.getByTestId(`pki-tc-provider-${trust.state.providers[0].label}`)).toHaveCount(0);
+  await tc.getByTestId("pki-trustchain-toggle").click();
   for (const p of trust.state.providers) await expect(tc.getByTestId(`pki-tc-provider-${p.label}`)).toBeVisible();
   await tc.getByTestId("pki-tc-provider-a/la1/0").click();
   await expect(panel.getByTestId("pki-card").getByTestId("pki-card-does")).toContainText("pre-linkage values");
   // The health strip says what each number means.
   await expect(panel.getByTestId("pki-health-pending")).toHaveAttribute("data-tone", /ok|info|warn/);
-  await expect(panel.getByTestId("pki-health-crl")).toContainText("last revocation list");
+  await expect(panel.getByTestId("pki-health-crl")).toContainText("newest revocation list");
 });

@@ -164,7 +164,9 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
                                 {v.entries}
                               </td>
                               <td>{v.delta ? "delta: changes only" : "full list"}</td>
-                              <td className="mono faint">{grouped(v.id8)}</td>
+                              <td className="mono faint" title={`HashedId8 ${grouped(v.id8)}`}>
+                                {grouped(v.id8).slice(0, 9)}…
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -192,7 +194,7 @@ function dateText(t: number): string {
 
 /** A list's kind in words. */
 function kindText(kind: string): string {
-  return kind === "linkage" ? "whole vehicles (linkage)" : kind === "hash" ? "single certificates (hash)" : kind;
+  return kind === "linkage" ? "whole vehicles" : kind === "hash" ? "single certificates" : kind;
 }
 
 /**
@@ -214,7 +216,7 @@ function NextList({ head, cadenceS, nowNs }: { readonly head: CrlHead; readonly 
     const left = Math.max(0, cadenceS - (since % cadenceS));
     return (
       <td data-testid="pki-crl-sla" data-basis="schedule" title={`The scenario publishes a list every ${slaText(cadenceS)}. ${deadline}`}>
-        <span className="mono">within {slaText(left)}</span> <span className="faint">(every {slaText(cadenceS)})</span>
+        <span className="mono">within {slaText(left)}</span> <span className="faint pki-nowrap">(every {slaText(cadenceS)})</span>
       </td>
     );
   }
