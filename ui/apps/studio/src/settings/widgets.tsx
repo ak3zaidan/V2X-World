@@ -122,11 +122,6 @@ export function ChoiceSelect({
         ))}
         {open ? <option value={CUSTOM}>Other…</option> : null}
       </select>
-      {shown?.us === false ? (
-        <span className="badge-not-us" data-testid="not-us" title="The deployed US system does not use this value">
-          not US
-        </span>
-      ) : null}
       {compact ? null : <OptionExplainer choices={choices} />}
       </span>
       {!compact && shown?.description ? (
