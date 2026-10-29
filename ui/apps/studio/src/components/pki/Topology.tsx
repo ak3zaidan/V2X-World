@@ -212,7 +212,9 @@ export function Topology({
                 key={l.key}
                 d={edgePath(topo, a, b)}
                 className={`pki-link${n > 0 ? " busy" : ""}${l.defined ? "" : " undeclared"}${off ? " off" : ""}`}
-                style={n > 0 ? { strokeWidth: Math.min(5, 1.5 + Math.log2(1 + n)) } : undefined}
+                // The bold stroke is kept for live traffic on the architecture's own links; a link it
+                // does not draw stays thin and grey however busy, so the eye goes to the regular paths.
+                style={n > 0 && l.defined ? { strokeWidth: Math.min(5, 1.5 + Math.log2(1 + n)) } : undefined}
                 data-link={l.key}
                 data-load={n}
               />
@@ -264,10 +266,18 @@ function TopoLegend(): React.JSX.Element {
       <span className="pki-key">
         <i className="pki-swatch ghost" /> not deployed
       </span>
-      <span className="pki-key">
-        <i className="pki-link-key" /> dashed line: a link the architecture does not define, seen in this run
+      <span className="pki-key" title="A solid line is a path the US SCMS architecture defines; it turns blue and thick while messages travel it">
+        <i className="pki-link-key solid" /> link, <i className="pki-link-key busy" /> busy
       </span>
-      <span className="pki-key faulted">outage</span>
+      <span
+        className="pki-key"
+        title="Messages this run sent along a path the base architecture does not draw: for example two providers' Misbehaviour Authorities sharing reports, which this scenario turns on"
+      >
+        <i className="pki-link-key" /> extra link this scenario adds
+      </span>
+      <span className="pki-key faulted" title="A component with an injected outage: red border, red corner dot">
+        <i className="pki-swatch outage" /> outage
+      </span>
     </p>
   );
 }
@@ -346,8 +356,11 @@ function DevicesNode({
       {d ? (
         <span className="dim pki-devices-line">
           <b>{d.devices}</b> devices · {d.enrolled} enrolled · {d.provisioned} with pseudonym certificates
-          {d.revoked > 0 ? <b className="bad"> · {d.revoked} revoked</b> : null}
-          {d.blocklisted > 0 ? <span title="Refused by the RA after a revocation: their enrolment certificate is on its blocklist"> · {d.blocklisted} blocked from new certificates</span> : ""}
+          {d.blocklisted > 0 ? (
+            <span title="Refused by the RA after a revocation: their enrolment certificate is on its blocklist. How many devices are revoked is in the strip above."> · {d.blocklisted} blocked from new certificates</span>
+          ) : (
+            ""
+          )}
         </span>
       ) : null}
     </button>

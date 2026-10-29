@@ -64,7 +64,10 @@ describe("a vehicle's state", () => {
   });
 
   it("names devices and components one way everywhere", () => {
-    expect(deviceName("ee/1000039")).toBe("Vehicle 1000039");
+    // The map's number (the simulation node) when known; the device id, said as such, until then.
+    expect(deviceName("ee/1000039")).toBe("Vehicle (device 1000039)");
+    expect(deviceName("ee/1000039", 39)).toBe("Vehicle 39");
+    expect(deviceName("rsu/3")).toBe("Roadside unit 3");
     expect(componentName("provider-b/aca/1", true)).toBe("Pseudonym CA (ACA) 2, provider-b");
     expect(componentName("scms-manager/elector/0")).toBe("Elector 1");
   });
@@ -89,7 +92,7 @@ describe("why a certificate fails", () => {
   ];
   it("puts the time check in terms of its window, a zero lifetime included", () => {
     expect(whySentence({ trace: trace("validity"), time32: 1000 }, { start: 760, end: 760, stated: "0 hours" })).toBe(
-      "It was issued with a lifetime of zero, so it was never valid: every receiver's time check fails (its window closed 4 min ago).",
+      "It was issued with a lifetime of zero, so it was never valid: every receiver's time check fails (its window closed 4 min ago). This is a limit of the simulator in this scenario, not of the vehicle: its compressed calendar asks for a lifetime under one hour, which the engine writes in whole hours, as zero.",
     );
     expect(whySentence({ trace: trace("validity"), time32: 1000 }, { start: 0, end: 940, stated: "15 min" })).toBe("Its validity ended 1 min ago; it lasted 15 min 40 s.");
     expect(whySentence({ trace: [], time32: 1000 }, null)).toBeNull();
@@ -116,7 +119,7 @@ describe("a case's story", () => {
   });
   it("puts evidence and what each party learns in words, without the spec's tuple", () => {
     expect(evidencePlain({ type_name: "1VInconsistent", subtypes: [{ name: "ConstantPosition" }], verified: false, shared: true })).toBe(
-      "one sender's messages contradict each other: same position while moving; the MA could NOT verify it; shared by the other provider's MA",
+      "one sender's messages contradict each other: same position while moving; evidence the MA could not check independently, so it relied on how many reports agreed; shared by the other provider's MA",
     );
     for (const what of Object.values(STEP_LEARNS)) expect(what).not.toMatch(/\b(LCI|iRev|la1Id|ls1)\b/);
   });

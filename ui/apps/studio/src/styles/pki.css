@@ -611,3 +611,28 @@
 .pki-newer { color: var(--accent); }
 .pki-tree-line { white-space: normal; }
 .pki-beats i { flex: none; width: 100%; }
+
+/* Round 2: one name per vehicle (its node, with the device id under it). */
+.pki-vname { display: inline-flex; flex-direction: column; line-height: 1.15; }
+.pki-vname-sub { font-size: 10px; }
+h3 .pki-vname { flex-direction: row; align-items: baseline; gap: 6px; }
+h3 .pki-vname-sub { font-size: 11px; font-weight: 400; }
+.pki-vfind { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; font-size: 12px; }
+.pki-vfind input { width: 200px; }
+/* A simulator limitation is neutral: neither a warning nor a pass. */
+.pki-tile.limit { border-style: dashed; }
+.pki-limit-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px dashed var(--border-strong); border-radius: 10px; font-size: 10.5px; color: var(--text-dim); white-space: nowrap; }
+.pki-tile.attn-bad { border-color: var(--err); }
+.pki-tile b .pki-glyph { vertical-align: -1px; margin-right: 2px; }
+.pki-tile .sub .linklike { font-size: inherit; padding: 0; }
+/* The diagram: links the architecture does not draw stay thin and grey even when busy. */
+.pki-link.undeclared, .pki-link.undeclared.busy { stroke: var(--text-faint); stroke-width: 1; stroke-dasharray: 4 3; opacity: 0.8; }
+.pki-link-key.solid { border-top-style: solid; border-top-color: var(--border-strong); }
+.pki-link-key.busy { border-top: 3px solid var(--accent); }
+.pki-swatch.outage { background: none; border: 1.5px solid var(--err); border-radius: 2px; }
+/* The corner activity dot never sits on the box's label. */
+.pki-node.pki-comp { padding: 0 11px; }
+/* The chain of trust, folded to one line until it is asked for. */
+.pki-tc-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 12px; }
+.pki-tc-toggle { font-weight: 600; }
+.pki-metrics-link { white-space: nowrap; }

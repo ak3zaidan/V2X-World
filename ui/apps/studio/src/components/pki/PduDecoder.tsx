@@ -33,12 +33,35 @@ export function JerTree({ jer, testId, explain = false }: { readonly jer: unknow
         return (
           <div key={l.path} className="pki-tree-line" style={{ paddingLeft: `${(l.depth - 1) * 12}px` }} data-path={l.path} data-leaf={l.value !== null ? "1" : undefined} title={gloss ?? undefined}>
             <span className="k">{l.key}</span>
-            {l.value !== null ? <span className="v">{l.value}</span> : <span className="faint">{l.children === 0 ? "{}" : ""}</span>}
+            {l.value !== null ? <LeafValue k={l.key} value={l.value} /> : <span className="faint">{l.children === 0 ? "{}" : ""}</span>}
             {gloss ? <span className="g">{gloss}</span> : null}
           </div>
         );
       })}
     </div>
+  );
+}
+
+/** Hex longer than this many bytes is folded to its size until asked for. */
+const FOLD_BYTES = 48;
+
+/**
+ * One leaf's value. A long run of bytes (a ciphertext, a signature blob) reads as its size and
+ * what it is, "694 B encrypted to its recipient", with the bytes one click away, never as a wall.
+ */
+function LeafValue({ k, value }: { readonly k: string; readonly value: string }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const m = /^"([0-9a-fA-F]+)"$/.exec(value);
+  const bytes = m ? m[1].length / 2 : 0;
+  if (!m || bytes <= FOLD_BYTES) return <span className="v">{value}</span>;
+  const what = /cipher/i.test(k) ? "encrypted: only its recipient can read it" : "of data";
+  return (
+    <span className="v" data-folded={open ? "0" : "1"}>
+      <button type="button" className="linklike pki-leaf-fold" onClick={() => setOpen((o) => !o)} aria-expanded={open} data-testid="pdu-leaf-fold">
+        {bytes.toLocaleString()} B {what} ({open ? "hide bytes" : "show bytes"})
+      </button>
+      {open ? <span className="pki-leaf-bytes">{value}</span> : null}
+    </span>
   );
 }
 

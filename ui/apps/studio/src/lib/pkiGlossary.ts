@@ -61,6 +61,15 @@ export const GLOSSARY: Readonly<Record<string, GlossaryEntry>> = {
     means:
       "The vehicle sends one seed key (the caterpillar); the RA expands it into many keys (cocoons) so the Pseudonym CA can sign a week of certificates without learning they belong to one vehicle.",
   },
+  jij: {
+    term: "J_ij (cocoon encryption key)",
+    means:
+      "A one-time public key the RA expands from the vehicle's caterpillar key, one per certificate (week i, number j). The Pseudonym CA encrypts each certificate to it, so only the vehicle can open its answer and the RA cannot read it.",
+  },
+  "la-aca-key": {
+    term: "LA-ACA key",
+    means: "The Pseudonym CA's encryption key the Linkage Authorities seal their pre-linkage values to, so only the Pseudonym CA can open them and the RA, which carries them, cannot.",
+  },
   shuffle: {
     term: "Shuffle",
     means: "The RA holds requests and reports for a while and mixes them before passing them on, so the next authority cannot tell which came from which vehicle.",
@@ -91,6 +100,45 @@ export const GLOSSARY: Readonly<Record<string, GlossaryEntry>> = {
     means: "One of the people or bodies who must endorse any change to the trust list (CTL); a change needs a quorum of them.",
   },
 };
+
+/** Where each glossary term is spelled in the engine's sentences. */
+const TERM_PATTERNS: readonly (readonly [RegExp, string])[] = [
+  [/\bJ_ij\b/, "jij"],
+  [/\bLA-ACA key\b/, "la-aca-key"],
+  [/\bcaterpillar and cocoon (?:public )?keys\b|\bcaterpillar key\b|\bcocoon keys?\b/, "butterfly"],
+  [/\bPLVs?\b/, "plv"],
+  [/\bLCIs?\b/, "lci"],
+  [/\biRev\b/, "irev"],
+  [/\bHashedId8\b/, "hashedid8"],
+  [/\bSPDUs?\b/, "spdu"],
+  [/\bCTL\b/, "ctl"],
+  [/\bCRLs?\b/, "crl"],
+  [/\bj-max\b|\bjmax\b/, "jmax"],
+];
+
+/**
+ * A sentence cut into plain text and glossary terms, in order: what `GlossText` draws. A term is
+ * matched where the engine spells it (`J_ij`, `PLVs`, `caterpillar and cocoon keys`).
+ */
+export function glossTerms(text: string): { readonly text: string; readonly term: string | null }[] {
+  const out: { text: string; term: string | null }[] = [];
+  let rest = text;
+  while (rest.length > 0) {
+    let best: { at: number; len: number; term: string } | null = null;
+    for (const [re, term] of TERM_PATTERNS) {
+      const m = re.exec(rest);
+      if (m && (best === null || m.index < best.at)) best = { at: m.index, len: m[0].length, term };
+    }
+    if (best === null) {
+      out.push({ text: rest, term: null });
+      break;
+    }
+    if (best.at > 0) out.push({ text: rest.slice(0, best.at), term: null });
+    out.push({ text: rest.slice(best.at, best.at + best.len), term: best.term });
+    rest = rest.slice(best.at + best.len);
+  }
+  return out;
+}
 
 /** The entry for a key (case and spaces ignored), or null. */
 export function glossary(key: string): GlossaryEntry | null {

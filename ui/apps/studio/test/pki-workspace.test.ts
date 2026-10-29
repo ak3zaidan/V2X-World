@@ -19,6 +19,7 @@ import {
   PROVIDER_ROLES,
   healthOf,
   layoutTopology,
+  sideBySideFrom,
   linkKey,
   linkLoad,
   messagePath,
@@ -41,7 +42,7 @@ const newest = trustOf(studio.run["inspect.trust"].newest)!;
 const overlap = (a: TopoNode, b: TopoNode): boolean => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 describe("the topology", () => {
-  for (const width of [1400, 1000, 600]) {
+  for (const width of [1400, 1240, 1000, 600]) {
     it(`places every component once, a ghost for each role not run and a client group per provider, without overlap at ${width} px`, () => {
       const t = layoutTopology(newest.state, width, messagesOf(newest));
       const comps = t.nodes.filter((n) => n.kind === "component");
@@ -59,8 +60,9 @@ describe("the topology", () => {
         expect(n.x + n.w).toBeLessThanOrEqual(t.width + 0.01);
         expect(n.y + n.h).toBeLessThanOrEqual(t.height + 0.01);
       }
-      // Regions sit side by side only when they fit.
-      expect(t.sideBySide).toBe(width >= 1400);
+      // Regions sit side by side only when they fit, and two providers fit at a 1280 px window (1240 px of panel).
+      expect(t.sideBySide).toBe(width >= sideBySideFrom(newest.state.providers.length));
+      if (newest.state.providers.length === 2) expect(t.sideBySide).toBe(width >= 1240);
     });
   }
 

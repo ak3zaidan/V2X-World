@@ -30,8 +30,10 @@ import { hasData, hudGroups, type HudField } from "../lib/telemetry.js";
 import { bearingDeg } from "../lib/feed.js";
 import { toGeodetic } from "../lib/geo.js";
 import { hasPkiPool, linkText, pseudonymLine, signingStatus } from "../lib/security.js";
-import { CertBadge } from "./pki/CertStatus.js";
-import { openVehicle } from "./pki-records/state.js";
+import { CertBadge, StatusGlyph } from "./pki/CertStatus.js";
+import { openVehicle, usePki } from "./pki-records/state.js";
+import { VEHICLE_STATE } from "../lib/pkiCert.js";
+import { CREDENTIAL_LABEL, GROUND_TRUTH, asVehicles, credentialState } from "../lib/pkiRecords.js";
 import { openPanel } from "../shell/route.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
 import { actorNoun } from "../lib/actorNoun.js";
@@ -109,9 +111,12 @@ export function ObuHud(): React.JSX.Element | null {
         <div className="hud-head">
           {selectedActor !== null ? (
             <>
-              <span className="id">{capitalise(actorNoun(selectedActor))} {selectedActor}</span>
+              {/* The node's number when it has a radio: the number the camera chip and every certificate view use. */}
+              <span className="id" data-testid="hud-identity-waiting">
+                {capitalise(actorNoun(selectedActor))} {selectedNode ?? selectedActor}
+              </span>
               <span className="dim">
-                {selectedNode !== null ? "Waiting for its first radio report." : "Carries no radio, so there is no radio to report on."}
+                {selectedNode !== null ? "No radio report yet: the radio reports once a simulated second while the run plays." : "Carries no radio, so there is no radio to report on."}
               </span>
             </>
           ) : (
@@ -121,6 +126,11 @@ export function ObuHud(): React.JSX.Element | null {
             </>
           )}
         </div>
+        {selectedNode !== null ? (
+          <div className="hud-body">
+            <HudCertificates node={selectedNode} />
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -135,7 +145,8 @@ export function ObuHud(): React.JSX.Element | null {
       : info?.kind === 1 || inspected?.kind === "vru-device"
         ? "Pedestrian device"
         : "Vehicle";
-  const name = info?.label || `node ${telemetryNode}`;
+  // A node with no label of its own is named by its number ("Vehicle 66"), as every certificate view names it.
+  const name = info?.label && !/^node \d+$/.test(info.label) ? info.label : String(telemetryNode);
   const profile = info?.profileId || inspected?.profile_id || "";
   const line = pseudonymLine(security, pseudonym);
 
@@ -161,7 +172,8 @@ export function ObuHud(): React.JSX.Element | null {
         {head}
         <div className="hud-body">
           {pose && hello ? <PoseRow pose={pose} origin={hello.origin} /> : null}
-          <div className="hud-row dim">Waiting for its first radio report…</div>
+          <div className="hud-row dim">No radio report yet: the radio reports once a simulated second while the run plays.</div>
+          {security ? null : <HudCertificates node={telemetryNode} />}
         </div>
       </div>
     );
@@ -220,9 +232,9 @@ export function ObuHud(): React.JSX.Element | null {
                   openPanel("backend");
                 }}
                 data-testid="hud-sec-pki"
-                title="Open its certificate pool in the PKI view"
+                title="Open its certificates in the certificate system view"
               >
-                <span className="v">pool ›</span>
+                <span className="v">certificates ›</span>
               </button>
             ) : null,
             cryptoText ? (
@@ -249,6 +261,53 @@ export function ObuHud(): React.JSX.Element | null {
           </span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The security row from the vehicle's last certificate record, for the moments with no radio
+ * report (a paused run, a vehicle just selected): its state in the certificates' shared language,
+ * its valid pseudonym certificates, whether a revocation list names it, and the door to its pool.
+ * Read from the PKI records (ground truth's vehicle list); nothing is drawn when the run has no
+ * certificate system or ground truth is locked off.
+ */
+function HudCertificates({ node }: { readonly node: number }): React.JSX.Element | null {
+  const locked = useStudio((s) => s.groundTruthLocked);
+  const list = asVehicles(usePki(locked ? null : { topic: "vehicles", view: GROUND_TRUTH }, 3000).data);
+  const row = list?.vehicles.find((v) => v.node === node) ?? null;
+  if (!list || !row) return null;
+  const st = credentialState(row, { nowNs: list.t_ns, offCtl: new Set(), crlOverdue: new Set(), groundTruth: true });
+  const v = VEHICLE_STATE[st];
+  const valid = typeof row.security?.pool_valid === "number" ? row.security.pool_valid : row.usable;
+  const t = row.security?.t ?? row.t;
+  return (
+    <div className="hud-row" data-testid="hud-row-security" data-source="pki">
+      <span className="hud-row-title">security</span>
+      <span className="hud-row-body">
+        <span className="hud-field plain" data-testid="hud-sec-state" data-state={st} title={v.meaning} style={{ color: v.color }}>
+          <StatusGlyph shape={v.shape} /> <span className="v">{CREDENTIAL_LABEL[st]}</span>
+        </span>
+        <Plain k={valid === 1 ? "valid certificate" : "valid certificates"} v={int(valid)} testId="hud-sec-pool" tone={valid === 0 && st !== "revoked" ? "warn" : undefined} />
+        <span className="hud-field plain">
+          <span className="v">{st === "revoked" ? "named on a revocation list" : "on no revocation list"}</span>
+        </span>
+        <button
+          type="button"
+          className="hud-field plain pkir-link"
+          onClick={() => {
+            openVehicle(node);
+            openPanel("backend");
+          }}
+          data-testid="hud-sec-pki"
+          title="Open its certificates in the certificate system view"
+        >
+          <span className="v">certificates ›</span>
+        </button>
+        <span className="hud-field plain dim" title="The vehicle publishes its certificate record when its certificates change">
+          as of {(t / 1e9).toFixed(1)} s
+        </span>
+      </span>
     </div>
   );
 }

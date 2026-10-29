@@ -36,7 +36,7 @@ import { int, radioBreakdown, radioSentence, shortDigest, simClock } from "../li
 import { SPARKLINE_SERIES, hasData, hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
 import { hasPkiPool, linkText, pseudonymLine, signingStatus, untilText } from "../lib/security.js";
 import { CertBadge } from "./pki/CertStatus.js";
-import { openVehicle } from "./pki-records/state.js";
+import { chooseTab, openVehicle } from "./pki-records/state.js";
 import { openPanel } from "../shell/route.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
 
@@ -158,6 +158,18 @@ function EmptyState(): React.JSX.Element {
               </>
             ) : null}
           </dl>
+          <button
+            type="button"
+            className="pkir-link"
+            onClick={() => {
+              chooseTab("vehicles");
+              openPanel("backend");
+            }}
+            data-testid="inspector-empty-certificates"
+            title="Every vehicle's certificates, the authorities that issue them, misbehaviour cases and revocation lists (needs a scenario with the US certificate system)"
+          >
+            Certificates of this run ›
+          </button>
         </div>
       ) : null}
     </div>

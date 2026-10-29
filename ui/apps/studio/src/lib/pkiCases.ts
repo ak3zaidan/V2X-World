@@ -104,8 +104,14 @@ function detailOf(c: CaseView, stage: string): string {
       const ev = Array.isArray(d.evidence) ? d.evidence.map(evidencePlain).join(" · ") : "";
       return ev ? `What they saw: ${ev}` : "";
     }
-    case "corroborated":
-      return d.reports !== undefined ? `${String(d.reports)} report${Number(d.reports) === 1 ? "" : "s"}` : "";
+    case "corroborated": {
+      if (d.reports === undefined) return "";
+      const n = Number(d.reports);
+      // The count the MA's rule acted on, beside how many reports came in for the case in all (ground truth).
+      const total = (c.truth?.reporters ?? []).reduce((s, r) => s + (r.reports ?? 0), 0);
+      const vehicles = c.truth?.reporters.length ?? 0;
+      return `${n} report${n === 1 ? " was" : "s were"} enough for the MA's rule to act${total > n ? `; more kept arriving: ${total} reports from ${vehicles} vehicle${vehicles === 1 ? "" : "s"} in all` : ""}`;
+    }
     case "decision":
       return d.mode === "manual-review" ? "an operator reviewed it" : d.mode !== undefined ? `${String(d.mode)} rule` : "";
     case "plv-lookup":
@@ -228,7 +234,12 @@ export function evidencePlain(e: unknown): string {
   if (typeof r.type_name === "string") {
     const subs = Array.isArray(r.subtypes) ? r.subtypes.map((s) => String((s as Record<string, unknown>).name)) : [];
     const what = evidenceWords([r.type_name, ...subs].join("/"));
-    const verified = r.verified === true ? "the MA verified it" : r.verified === false ? "the MA could NOT verify it" : "not verified";
+    const verified =
+      r.verified === true
+        ? "the MA checked it independently"
+        : r.verified === false
+          ? "evidence the MA could not check independently, so it relied on how many reports agreed"
+          : "not checked";
     return `${what}; ${verified}${r.shared === true ? "; shared by the other provider's MA" : ""}`;
   }
   if (typeof r.modelled === "string") {

@@ -32,6 +32,7 @@ import {
 import {
   ageText,
   componentName,
+  counterConcept,
   counterText,
   crlScheduleText,
   deploymentText,
@@ -48,10 +49,12 @@ import {
 } from "../../lib/pkiTopology.js";
 import { engine } from "../../state/engine.js";
 import { CloseIcon } from "../../shell/Icons.js";
+import { openPanel } from "../../shell/route.js";
 import { chooseTab, usePkiView } from "../pki-records/state.js";
 import { certErrorText, certFacts, certStatus, grouped, windowWords } from "../../lib/pkiCert.js";
 import { CertificateCard } from "./CertificateCard.js";
 import { CertBadge } from "./CertStatus.js";
+import { GlossText } from "./GlossText.js";
 import { useCert } from "./useCert.js";
 import { Topology } from "./Topology.js";
 import { TrustChain } from "./TrustChain.js";
@@ -74,7 +77,7 @@ function TrustList({ trust }: { readonly trust: TrustAnswer }): React.JSX.Elemen
       </p>
       <div className="pki-gov-row">
         <span className="pki-ctl mono" data-testid="pki-ctl" title="The certificate trust list (CTL): the roots every device trusts, signed by a quorum of electors">
-          CTL seq {ctl.sequence} · {ctl.roots} root{ctl.roots === 1 ? "" : "s"} · {s.ctl.bytes} B · effective {time32Date(s.ctl.effective)}
+          CTL version {ctl.sequence} · {ctl.roots} root{ctl.roots === 1 ? "" : "s"} · {s.ctl.bytes} B · in force since {time32Date(s.ctl.effective)}
         </span>
         <span className="dim" title="Elector endorsements a trust-list change needs, of the electors there are">
           quorum {ctl.quorum} · endorsed by {s.ctl.signers.length}
@@ -192,7 +195,9 @@ function DevicesCard({ provider, log, view, onClose }: { readonly provider: PkiP
           <dd className="mono">{d.enrolled}</dd>
           <dt title="Provisioned: have downloaded pseudonym certificates from the RA">With pseudonym certificates</dt>
           <dd className="mono">{d.provisioned}</dd>
-          <dt title="Named by a revocation list after a misbehaviour case">Revoked</dt>
+          <dt title="The provider's own revocation counter, as the engine reports it. The strip's “devices revoked” counts the devices a published revocation list names, which every other view uses; the two can differ while a revocation is on its way to the list.">
+            Revoked, by the provider's own counter
+          </dt>
           <dd className="mono">{d.revoked}</dd>
           <dt title="Blocklisted: the RA refuses their enrolment certificate after a revocation, so they get no new pseudonyms">Blocked from new certificates</dt>
           <dd className="mono">{d.blocklisted}</dd>
@@ -214,7 +219,18 @@ function DevicesCard({ provider, log, view, onClose }: { readonly provider: PkiP
 }
 
 /** What one entity holds, as `view` may see it. */
-export function KnowledgeCard({ entity, view, skip = [] }: { readonly entity: string; readonly view: string; readonly skip?: readonly string[] }): React.JSX.Element {
+export function KnowledgeCard({
+  entity,
+  view,
+  skip = [],
+  skipConcepts = [],
+}: {
+  readonly entity: string;
+  readonly view: string;
+  readonly skip?: readonly string[];
+  /** Concepts the card already counts (`counterConcept`): the record's second name for one is not repeated. */
+  readonly skipConcepts?: readonly string[];
+}): React.JSX.Element {
   const [k, setK] = useState<KnowledgeAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -232,8 +248,13 @@ export function KnowledgeCard({ entity, view, skip = [] }: { readonly entity: st
   // A count the component's card already lists (its "cases open" is the record's "open cases") is not repeated.
   const counts = k
     ? Object.entries(k.holds).filter(
-        ([key, v]) => key !== "knows" && (typeof v === "number" || typeof v === "string") && !skip.includes(sameWords(key.replace(/_/g, " "))) && !skip.includes(sameWords(counterText(key)?.label ?? "\u0000")),
-      )
+        ([key, v]) =>
+          key !== "knows" &&
+          (typeof v === "number" || typeof v === "string") &&
+          !skip.includes(sameWords(key.replace(/_/g, " "))) &&
+          !skip.includes(sameWords(counterText(key)?.label ?? "\u0000")) &&
+          !skipConcepts.includes(counterConcept(key)),
+      ).filter(([key], i, all) => all.findIndex(([other]) => counterConcept(other) === counterConcept(key)) === i)
     : [];
   return (
     <section className="pki-card-section pki-knowledge" data-testid="pki-knowledge">
@@ -247,7 +268,9 @@ export function KnowledgeCard({ entity, view, skip = [] }: { readonly entity: st
           {knows.length > 0 ? (
             <ul className="pki-knows">
               {knows.map((x) => (
-                <li key={x}>{plainNames(x)}</li>
+                <li key={x}>
+                  <GlossText text={plainNames(x)} />
+                </li>
               ))}
             </ul>
           ) : null}
@@ -264,7 +287,9 @@ export function KnowledgeCard({ entity, view, skip = [] }: { readonly entity: st
           <p className="dim">Cannot see:</p>
           <ul className="pki-cannot" data-testid="pki-cannot-see">
             {k.cannot_see.map((x) => (
-              <li key={x}>{plainNames(x)}</li>
+              <li key={x}>
+                <GlossText text={plainNames(x)} />
+              </li>
             ))}
           </ul>
           {k.truth ? (
@@ -312,9 +337,13 @@ function ComponentCard({
   const cadence = usePkiView((s) => s.crlCadence);
   const ops = Object.entries(c.ops);
   const counters = Object.entries(c.counters);
+  // One number per concept: a counter that repeats another under a second name stays raw only.
+  const shownConcepts = new Set<string>();
   const readable = counters.flatMap(([k, v]) => {
     const t = counterText(k);
-    return t ? [{ k, v, t }] : [];
+    if (!t || shownConcepts.has(counterConcept(k))) return [];
+    shownConcepts.add(counterConcept(k));
+    return [{ k, v, t }];
   });
   const mine = c.role === "crlg" ? state.crls.filter((h) => h.provider === c.provider) : [];
   const knows = view === GROUND_TRUTH || view === c.id;
@@ -370,7 +399,12 @@ function ComponentCard({
         {/* 3. What it knows, and what it cannot see. */}
         {ownsKnowledge ? (
           knows ? (
-            <KnowledgeCard entity={c.id} view={view} skip={readable.map((r) => sameWords(r.t.label)).concat(counters.map(([k]) => sameWords(k.replace(/_/g, " "))))} />
+            <KnowledgeCard
+              entity={c.id}
+              view={view}
+              skip={readable.map((r) => sameWords(r.t.label)).concat(counters.map(([k]) => sameWords(k.replace(/_/g, " "))))}
+              skipConcepts={[...shownConcepts]}
+            />
           ) : (
             <p className="faint" data-testid="pki-knowledge-withheld">
               What {componentName(c.id, true)} holds is its own: choose it, or everything (ground truth), in “Seen as” to see it.
@@ -575,7 +609,10 @@ export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; read
       <div className="pki-main">
         <p className="pki-lead" data-testid="pki-overview-lead">
           Who runs the certificate system and what is happening now. Each provider runs its own authorities; the dots are messages travelling
-          between them as the run goes. <b>Click any box</b> for what it does, its certificate and what it knows.
+          between them as the run goes. <b>Click any box</b> for what it does, its certificate and what it knows.{" "}
+          <button type="button" className="linklike pki-metrics-link" onClick={() => openPanel("metrics")} data-testid="pki-open-metrics" title="The same system's numbers over the whole run, as charts">
+            Its numbers over time are in Metrics ›
+          </button>
         </p>
         <p className="pki-context dim" data-testid="pki-time" title={`Snapshot at simulated t = ${(trust.t_ns / 1e9).toFixed(0)} s`}>
           <span title={`Deployment preset “${s.preset}”: which providers, policies and rules the run follows`}>
@@ -589,10 +626,14 @@ export function TrustDomain({ trust, view }: { readonly trust: TrustAnswer; read
         <Topology trust={trust} messages={fresh} view={view} selected={selected} onSelect={setSelected} />
         <TrustChain state={s} onSelect={setSelected} selected={selected} />
         <TrustList trust={trust} />
-        <p className="pki-devices dim" data-testid="pki-devices" title="Vehicles and roadside units, all providers: how many hold an enrolment certificate, how many have pseudonym certificates, how many are revoked, and how many enrolment certificates their RA refuses">
+        <p
+          className="pki-devices dim"
+          data-testid="pki-devices"
+          title="Vehicles and roadside units, all providers: how many hold an enrolment certificate, how many have pseudonym certificates, and how many enrolment certificates their RA refuses after a revocation. How many are revoked is the strip's “devices revoked”: the devices a published revocation list names."
+        >
           Vehicles and roadside units: <b>{total}</b> ({s.providers.map((p) => `${p.label} ${p.devices.devices}`).join(", ")}) · {s.providers.reduce((n, p) => n + p.devices.enrolled, 0)} enrolled ·{" "}
-          {s.providers.reduce((n, p) => n + p.devices.provisioned, 0)} with pseudonym certificates · {s.providers.reduce((n, p) => n + p.devices.revoked, 0)} revoked ·{" "}
-          {s.providers.reduce((n, p) => n + p.devices.blocklisted, 0)} blocked from new certificates
+          {s.providers.reduce((n, p) => n + p.devices.provisioned, 0)} with pseudonym certificates · {s.providers.reduce((n, p) => n + p.devices.blocklisted, 0)} blocked from new
+          certificates after a revocation
         </p>
         {view !== GROUND_TRUTH ? <KnowledgeCard entity={view} view={view} /> : null}
         <details className="pki-assumptions">

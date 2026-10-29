@@ -328,6 +328,42 @@ export function crlRows(a: Pick<CrlsAnswer, "crls">): CrlSeriesRow[] {
   return rows.sort((x, y) => x.provider.localeCompare(y.provider) || x.series - y.series || x.kind.localeCompare(y.kind));
 }
 
+/**
+ * Whose revocation list a vehicle installed. `node.security` gives only the version and the entry
+ * count, so the list is the one published head with both; when no provider's head, or more than
+ * one provider's, matches, the provider is not named (`provider: null`).
+ */
+export function installedList(sec: Pick<VehicleSecurity, "crl_version" | "crl_entries"> | null | undefined, heads: readonly CrlHead[] | null | undefined): { readonly provider: string | null; readonly version: number; readonly entries: number } | null {
+  if (sec?.crl_version === undefined) return null;
+  const entries = sec.crl_entries ?? 0;
+  const providers = new Set((heads ?? []).filter((h) => h.version === sec.crl_version && h.entries === entries).map((h) => h.provider));
+  return { provider: providers.size === 1 ? [...providers][0] : null, version: sec.crl_version, entries };
+}
+
+/** "provider-b v2", or "v2" when the provider cannot be named; "none" when no list is installed. */
+export function installedListText(l: ReturnType<typeof installedList>): string {
+  if (!l) return "none";
+  return l.provider ? `${l.provider} v${l.version}` : `v${l.version}`;
+}
+
+/**
+ * How a revoked vehicle is revoked, as the other vehicles see it: the published lists that name
+ * it (provider and version, first published first), its case and how many vehicles refuse it now.
+ * Ground truth (the list-to-vehicle join and the case's accused); null for a vehicle no list names.
+ */
+export function revocationStory(
+  device: string,
+  revokedBy: readonly string[] | null | undefined,
+  heads: readonly CrlHead[] | null | undefined,
+  cases: readonly CaseView[] | null | undefined,
+): { readonly lists: readonly CrlHead[]; readonly caseId: string | null; readonly refusing: { installed: number; of: number } | null } | null {
+  const ids = new Set((revokedBy ?? []).map((x) => x.toLowerCase()));
+  const lists = (heads ?? []).filter((h) => ids.has(h.id8.toLowerCase())).sort((a, b) => a.issued_at - b.issued_at);
+  const c = (cases ?? []).find((x) => (x.truth?.accused ?? []).some((a) => a.device === device)) ?? null;
+  if (lists.length === 0 && !c) return null;
+  return { lists, caseId: c?.case ?? null, refusing: c ? enforcement(c) : null };
+}
+
 /** Providers whose newest list of any series is past its `nextCrl` at the newest state. */
 export function overdueProviders(a: Pick<CrlsAnswer, "crls">): Set<string> {
   const out = new Set<string>();
@@ -531,16 +567,25 @@ export const MAP_MODE_LABEL: Readonly<Record<PkiMapMode, string>> = {
 /** Okabe–Ito hues, colour-blind safe, one per provider in label order. */
 export const PROVIDER_COLORS: readonly number[] = [0x0072b2, 0xe69f00, 0x009e73, 0xcc79a7, 0x56b4e9, 0xd55e00];
 
+/**
+ * The map's ring colours, the same hues as the state badges in the Vehicles chips and table
+ * (`pkiCert.VEHICLE_STATE`: ok, accent, warn, err and the untrusted pink of the page's tokens).
+ * Revoked and starving share the error colour as they share its severity; on the map revoked is
+ * also drawn as a double ring (`CREDENTIAL_EMPHASIS`), in the chips by its own shape.
+ */
 export const CREDENTIAL_COLORS: Readonly<Record<CredentialState, number>> = {
   healthy: 0x009e73,
   between: 0x8a8f98,
   left: 0x5f6368,
-  "topup-due": 0xe69f00,
+  "topup-due": 0x56b4e9,
   starving: 0xd55e00,
-  "crl-overdue": 0x56b4e9,
-  revoked: 0xcc79a7,
-  untrusted: 0x6b6b6b,
+  "crl-overdue": 0xe69f00,
+  revoked: 0xd55e00,
+  untrusted: 0xcc79a7,
 };
+
+/** States the map draws with a double ring, so they read apart from a state of the same colour. */
+export const CREDENTIAL_EMPHASIS: ReadonlySet<CredentialState> = new Set(["revoked"]);
 
 export const PARTY_COLORS = { reporter: 0x0072b2, accused: 0xd55e00 } as const;
 
@@ -582,7 +627,10 @@ export function mapTags(
   } else if (mode === "credential") {
     const offCtl = new Set((input.crls?.providers ?? []).filter((p) => !p.on_ctl).map((p) => p.label));
     const ctx: CredentialContext = { nowNs: input.nowNs, offCtl, crlOverdue: input.crls ? overdueProviders(input.crls) : new Set(), groundTruth: gt };
-    for (const v of input.vehicles) out.set(v.node, { color: CREDENTIAL_COLORS[credentialState(v, ctx)] });
+    for (const v of input.vehicles) {
+      const st = credentialState(v, ctx);
+      out.set(v.node, CREDENTIAL_EMPHASIS.has(st) ? { color: CREDENTIAL_COLORS[st], emphasis: true } : { color: CREDENTIAL_COLORS[st] });
+    }
   } else if (mode === "case" && gt) {
     const chosen = (input.cases ?? []).filter((c) => !input.selectedCase || c.case === input.selectedCase);
     for (const c of chosen) {

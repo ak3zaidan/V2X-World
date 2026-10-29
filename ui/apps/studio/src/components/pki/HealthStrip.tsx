@@ -14,8 +14,8 @@ import { useEffect, useRef, useState } from "react";
 import { GROUND_TRUTH, type TrustAnswer } from "../../lib/pki.js";
 import { growing, type StatusShape } from "../../lib/pkiCert.js";
 import { ageText, healthOf } from "../../lib/pkiTopology.js";
-import { asCases, asVehicles, leftRun } from "../../lib/pkiRecords.js";
-import { chooseTab, usePki, type PkiTab } from "../pki-records/state.js";
+import { asCases, asVehicles, leftRun, type VehicleRow } from "../../lib/pkiRecords.js";
+import { chooseTab, usePki, usePkiView, type PkiTab } from "../pki-records/state.js";
 import { StatusGlyph } from "./CertStatus.js";
 
 const POLL_MS = 4000;
@@ -39,10 +39,17 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
   const h = healthOf(trust, vehicles?.vehicles ?? null, cases?.cases ?? null);
   const dash = gt ? "…" : "–";
   const onlyGt = gt ? undefined : "Ground truth only: an entity cannot see every vehicle's pool or every MA's cases.";
+  const cadence = usePkiView((s) => s.crlCadence);
   // Only the vehicles still driving: one whose trip ended keeps its last pool, which is history.
   const inRun = vehicles ? vehicles.vehicles.filter((v) => !leftRun(v, vehicles.t_ns)) : null;
-  const certificates = inRun ? inRun.reduce((n, v) => n + v.usable, 0) : null;
+  // Valid now: what each vehicle can sign with this week, the definition Metrics' "valid pseudonym
+  // certificates held" uses. The weeks downloaded ahead are said beside it, never mixed in.
+  const validOf = (v: VehicleRow): number => (typeof v.security?.pool_valid === "number" ? v.security.pool_valid : v.usable);
+  const certificates = inRun ? inRun.reduce((n, v) => n + validOf(v), 0) : null;
+  const withAhead = inRun ? inRun.reduce((n, v) => n + Math.max(validOf(v), v.usable), 0) : null;
   const perVehicle = certificates !== null && inRun && inRun.length > 0 ? certificates / inRun.length : null;
+  const every = h.crlNewest ? (cadence[h.crlNewest.provider] ?? null) : null;
+  const nextIn = h.crlAgeS !== null && every !== null ? Math.max(0, every - h.crlAgeS) : null;
   // A revoked vehicle with nothing to sign with is revocation working, not a shortage.
   const starving = inRun ? inRun.filter((v) => v.enrolled && v.usable === 0 && v.revoked !== true && (v.truth?.revoked_certs ?? 0) === 0).length : 0;
   const jmax = inRun?.[0]?.jmax ?? null;
@@ -57,7 +64,7 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
     <div className="pki-health" role="group" aria-label="System health" data-testid="pki-health">
       <Stat
         tab="vehicles"
-        label="pseudonym certificates ready"
+        label="pseudonym certificates valid now"
         value={certificates === null ? dash : certificates.toLocaleString()}
         sub={
           certificates === null
@@ -65,12 +72,12 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
             : starving > 0
               ? `${starving} vehicle${starving === 1 ? " has" : "s have"} none left to sign with`
               : perVehicle !== null
-                ? `about ${perVehicle.toFixed(0)} per vehicle in the run`
+                ? `about ${perVehicle.toFixed(0)} per vehicle${withAhead !== null && withAhead > certificates ? ` · ${withAhead.toLocaleString()} incl. weeks ahead` : ""}`
                 : "no vehicle in the run has reported yet"
         }
         tip={
           onlyGt ??
-          `Usable pseudonym certificates (PCs) held by the ${inRun?.length ?? 0} vehicles still in the run: what is left of this week's batch${jmax !== null ? ` (${jmax} a week)` : ""} plus the weeks each has downloaded ahead. Vehicles that left the run are not counted.`
+          `Pseudonym certificates (PCs) the ${inRun?.length ?? 0} vehicles still in the run can sign with now: what is left of this week's batch${jmax !== null ? ` (${jmax} a week)` : ""}. The same count as Metrics' “valid pseudonym certificates held” (there as a per-vehicle mean). “Incl. weeks ahead” adds the batches already downloaded for later weeks. Vehicles that left the run are not counted.`
         }
         tone={certificates === null ? "idle" : starving > 0 ? "warn" : "ok"}
         testId="pki-health-certs"
@@ -95,20 +102,30 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
       />
       <Stat
         tab="crls"
-        label={h.crlAgeS === null ? "revocation list" : "last revocation list"}
+        label={h.crlAgeS === null ? "revocation list" : "newest revocation list"}
         value={h.crlAgeS === null ? "none yet" : `${ageText(h.crlAgeS)} ago`}
-        sub={h.crlDueS === null ? "no list published yet" : h.crlDueS < 0 ? `the next is overdue by ${ageText(-h.crlDueS)}` : `next one due within ${ageText(h.crlDueS)}`}
-        tip="Time since the newest certificate revocation list (CRL) was issued, the oldest across providers, and the deadline by which each list must be replaced (its nextCrl). Providers usually publish sooner, as soon as they revoke someone."
+        sub={
+          h.crlDueS === null
+            ? "no list published yet"
+            : h.crlDueS < 0
+              ? `the next is overdue by ${ageText(-h.crlDueS)}`
+              : `${h.crlNewest ? `${h.crlNewest.provider} v${h.crlNewest.version} · ` : ""}${nextIn !== null && every !== null ? `next within ${ageText(nextIn)} (every ${ageText(every)})` : `next due within ${ageText(h.crlDueS)}`}`
+        }
+        tip={`How long ago the newest certificate revocation list (CRL) of any provider was issued, and when the next one comes.${every !== null ? ` This scenario publishes a list every ${ageText(every)}.` : ""} Every list also prints a deadline by which it must be replaced (its nextCrl): the soonest is ${h.crlDueS === null ? "not set yet" : h.crlDueS < 0 ? `overdue by ${ageText(-h.crlDueS)}` : `in ${ageText(h.crlDueS)}`}.`}
         tone={h.crlOverdue ? "bad" : h.crlAgeS === null ? "idle" : "ok"}
         testId="pki-health-crl"
       />
       <Stat
         tab="vehicles"
         label="devices revoked"
-        value={`${h.revoked} of ${h.devices}`}
-        sub={h.revoked > 0 ? (h.revokedByList ? "named on a published list" : "revoked by their providers") : "no device revoked"}
-        tip={`${h.revokedByList ? "Devices a published revocation list names (ground truth: installed or not), of all devices." : "Devices the providers count as revoked, of all devices."} Revoking a misbehaving device is the system working; the engine does not publish which devices were honest, so this cannot tell a wrongful revocation apart.`}
-        tone={h.revoked > 0 ? "info" : "ok"}
+        value={gt ? `${h.revoked} of ${h.devices}` : dash}
+        sub={!gt ? "seen in ground truth only" : h.revoked > 0 ? "named on a published revocation list" : "no device on a published list"}
+        tip={
+          gt
+            ? `Devices a published revocation list names (installed by the others or not), of the ${h.devices} devices the providers have enrolled: vehicles and roadside units, so one more than the vehicles listed if the run has a roadside unit. Every view uses this one definition. Revoking a misbehaving device is the system working; the engine does not publish which devices were honest, so this cannot tell a wrongful revocation apart.`
+            : "Which devices a published list names is ground truth: no single authority sees it (the RA, for one, does not see revocations; it only blocks the enrolment certificate the MA points it to)."
+        }
+        tone={!gt ? "idle" : h.revoked > 0 ? "info" : "ok"}
         testId="pki-health-revoked"
       />
     </div>

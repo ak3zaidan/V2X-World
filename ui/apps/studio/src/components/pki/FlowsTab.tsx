@@ -25,6 +25,7 @@ import {
   stagesOf,
   type FlowDetail,
   type FlowRecord,
+  type FlowRow,
   type FlowsAnswer,
   type SeqRow,
   type TrustAnswer,
@@ -32,11 +33,13 @@ import {
 import { engine } from "../../state/engine.js";
 import { CloseIcon } from "../../shell/Icons.js";
 import { deviceName } from "../../lib/pkiCert.js";
+import { deviceForQuery } from "../../lib/pkiNames.js";
 import { pduText } from "../../lib/pkiPdu.js";
 import { entityLabel } from "../../lib/pkiRecords.js";
 import { flowInfo } from "../../lib/pkiTopology.js";
-import { arrowLabel, fitLabel, wordsOf } from "../../lib/pkiPdu.js";
+import { arrowLabel, fitLabel, piggyback, transportText, wordsOf } from "../../lib/pkiPdu.js";
 import { PduDecoder } from "./PduDecoder.js";
+import { Term } from "./Term.js";
 
 /** Characters of 11 px text that fit `px`, about. */
 const CHAR_PX = 6.4;
@@ -193,9 +196,20 @@ function MessageCard({
       <div className="pki-drawer-body">
         <p className="pki-pdu-what" data-testid="pki-msg-says">
           {entityLabel(record.from ?? "?")} sent this to {entityLabel(record.to ?? "?")} at {formatSimT(record.t)}: {formatBytes(record.bytes ?? 0)}
-          {record.transport ? ` over ${record.transport.replace(/-/g, " ")}` : ""}
-          {pdus.length > 0 ? `, carrying ${pdus.length} secured message${pdus.length === 1 ? "" : "s"} (SPDUs).` : "."}
+          {record.transport ? ` over ${transportText(record.transport)}` : ""}
+          {pdus.length > 0 ? (
+            <>
+              , carrying {pdus.length} secured message{pdus.length === 1 ? "" : "s"} (<Term k="spdu">SPDUs</Term>).
+            </>
+          ) : (
+            "."
+          )}
         </p>
+        {piggyback(record) ? (
+          <p className="dim" data-testid="pki-msg-piggyback">
+            {piggyback(record)}
+          </p>
+        ) : null}
         {pdus.length === 0 ? <p className="faint">It carried no SPDU of its own: a backend control message whose bytes the engine counts but does not encode.</p> : null}
         <ul className="pki-pdus">
           {pdus.map((p) => {
@@ -225,6 +239,50 @@ function MessageCard({
   );
 }
 
+/** The kinds of flow in the order a reader learns the system: what a vehicle gets, then how it is taken away. */
+const EXAMPLE_ORDER: readonly string[] = ["provisioning", "topup", "enrolment", "linkage-resolution", "crl-issuance", "reenrolment", "preload", "pregeneration", "report"];
+
+function exampleOrder(kinds: readonly string[]): string[] {
+  const rank = (k: string): number => {
+    const i = EXAMPLE_ORDER.indexOf(k);
+    return i < 0 ? EXAMPLE_ORDER.length - 1 : i;
+  };
+  return [...kinds].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+/** One flow in a list: its kind, number, provider, when, how many messages and whose. */
+function FlowItem({
+  i,
+  on,
+  pick,
+  example = false,
+  count = null,
+}: {
+  readonly i: FlowRow;
+  readonly on: boolean;
+  readonly pick: (instance: string) => void;
+  readonly example?: boolean;
+  /** For an example: how many flows of its kind there are. */
+  readonly count?: number | null;
+}): React.JSX.Element {
+  return (
+    <li>
+      <button type="button" className={on ? "pki-flow-row on" : "pki-flow-row"} onClick={() => pick(i.instance)} data-testid={example ? `pki-flow-example-${i.flow}` : `pki-flow-${i.instance}`}>
+        <span title={i.instance}>
+          <i className="pki-swatch" style={{ background: flowInfo(i.flow).color }} /> {flowInfo(i.flow).name} <span className="faint mono">#{i.instance.split("/").pop()}</span>
+          <span className="faint"> · {i.provider}</span>
+          {example && count !== null ? <span className="faint"> · {count.toLocaleString()} in all</span> : null}
+        </span>
+        <span className="dim">
+          {formatSimT(i.first_t)} · {i.messages} message{i.messages === 1 ? "" : "s"} · {formatBytes(i.bytes)}
+          {i.device_count > 0 ? ` · ${i.device_count === 1 ? deviceName(i.devices[0] ?? "") : `${i.device_count} vehicles`}` : ""}
+        </span>
+        {i.last_stage ? <span className="pill">{wordsOf(i.last_stage)}</span> : null}
+      </button>
+    </li>
+  );
+}
+
 /** The tab. */
 export function FlowsTab({ view }: { readonly view: string; readonly trust: TrustAnswer }): React.JSX.Element {
   const [flow, setFlow] = useState<string>("");
@@ -236,14 +294,28 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
   const [pdu, setPdu] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [examples, setExamples] = useState<readonly FlowRow[]>([]);
   const pollList = useCallback(async () => {
     try {
       const params: { flow?: string; device?: string; limit: number } = { limit: 300 };
       if (flow) params.flow = flow;
-      if (device.trim()) params.device = device.trim();
+      // "66" (the map's number) or a device id: the engine filters by device id.
+      if (device.trim()) params.device = deviceForQuery(device);
       const a = flowsOf(await engine.request("inspect.flows", params, { quiet: true, timeoutMs: 4000 }));
       setList(a);
       setError(null);
+      // With every flow listed, the newest of each kind too: single-message misbehaviour reports
+      // outnumber everything else, so the newest list alone rarely shows a top-up or a revocation.
+      if (!flow && a) {
+        const kinds = exampleOrder(Object.keys(a.flows));
+        const rows = await Promise.all(
+          kinds.map(async (f) => {
+            const one = flowsOf(await engine.request("inspect.flows", { ...params, flow: f, limit: 1 }, { quiet: true, timeoutMs: 4000 }));
+            return one?.instances[0] ?? null;
+          }),
+        );
+        setExamples(rows.filter((r): r is FlowRow => r !== null));
+      } else setExamples([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -255,7 +327,9 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
     return () => window.clearInterval(id);
   }, [pollList]);
 
-  const chosen = instance ?? list?.instances[0]?.instance ?? null;
+  // Opening on every flow, the first example of the most telling kind (a top-up, a revocation list,
+  // an investigation) rather than the newest message, which is nearly always a report.
+  const chosen = instance ?? (flow ? null : examples[0]?.instance) ?? list?.instances[0]?.instance ?? null;
 
   useEffect(() => {
     if (chosen === null) {
@@ -300,6 +374,16 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
   const newer = instance !== null && chosenRow ? (list?.instances ?? []).filter((i) => i.first_t > chosenRow.first_t).length : 0;
 
   const flowNames = Object.keys(list?.flows ?? {});
+  const pickRow = useCallback((id: string) => {
+    setInstance(id);
+    setMessage(null);
+    setPdu(null);
+  }, []);
+  // On every flow, reports are one line with their count; their own filter lists them all.
+  const others = (list?.instances ?? []).filter((i) => i.flow !== "report");
+  const foldReports = !flow && others.length > 0;
+  const shown = foldReports ? others : (list?.instances ?? []);
+  const folded = foldReports ? (list?.flows.report ?? 0) : 0;
   const stages = detail ? stagesOf(detail) : [];
   const drawer = pdu !== null || message !== null;
 
@@ -316,8 +400,20 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
                 </option>
               ))}
             </select>
-            <input value={device} onChange={(e) => setDevice(e.target.value)} placeholder="vehicle (device id)" aria-label="Vehicle" data-testid="pki-flow-device" />
+            <input
+              value={device}
+              onChange={(e) => setDevice(e.target.value)}
+              placeholder="vehicle: 66 or device id"
+              aria-label="Only the flows of one vehicle: its number on the map or its device id"
+              title="The number the map and the HUD show (Vehicle 66), or the SCMS device id the records use (1000066)"
+              data-testid="pki-flow-device"
+            />
           </div>
+          {device.trim() && deviceForQuery(device).startsWith("ee/") ? (
+            <p className="faint" data-testid="pki-flow-device-means">
+              {deviceName(deviceForQuery(device))} · device {deviceForQuery(device).slice(3)}
+            </p>
+          ) : null}
           {error ? <p className="faint">The engine said: {error}</p> : null}
           <p className="dim">
             {list
@@ -338,30 +434,25 @@ export function FlowsTab({ view }: { readonly view: string; readonly trust: Trus
               {newer} newer flow{newer === 1 ? "" : "s"} since this one · follow the newest
             </button>
           ) : null}
+          {examples.length > 0 ? (
+            <>
+              <h4 className="pki-flow-group">One of each kind, newest</h4>
+              <ul data-testid="pki-flow-examples">
+                {examples.map((i) => (
+                  <FlowItem key={i.instance} i={i} on={i.instance === chosen} pick={pickRow} example count={list?.flows[i.flow] ?? null} />
+                ))}
+              </ul>
+              <h4 className="pki-flow-group">Every flow, newest first</h4>
+            </>
+          ) : null}
+          {!flow && folded > 0 ? (
+            <button type="button" className="linklike pki-flow-folded" onClick={() => setFlow("report")} data-testid="pki-flow-reports-folded">
+              {folded.toLocaleString()} misbehaviour report{folded === 1 ? "" : "s"} (one message each) folded away · show only them
+            </button>
+          ) : null}
           <ul data-testid="pki-flow-instances">
-            {(list?.instances ?? []).map((i) => (
-              <li key={i.instance}>
-                <button
-                  type="button"
-                  className={i.instance === chosen ? "pki-flow-row on" : "pki-flow-row"}
-                  onClick={() => {
-                    setInstance(i.instance);
-                    setMessage(null);
-                    setPdu(null);
-                  }}
-                  data-testid={`pki-flow-${i.instance}`}
-                >
-                  <span title={i.instance}>
-                    <i className="pki-swatch" style={{ background: flowInfo(i.flow).color }} /> {flowInfo(i.flow).name} <span className="faint mono">#{i.instance.split("/").pop()}</span>
-                    <span className="faint"> · {i.provider}</span>
-                  </span>
-                  <span className="dim">
-                    {formatSimT(i.first_t)} · {i.messages} message{i.messages === 1 ? "" : "s"} · {formatBytes(i.bytes)}
-                    {i.device_count > 0 ? ` · ${i.device_count === 1 ? deviceName(i.devices[0] ?? "") : `${i.device_count} vehicles`}` : ""}
-                  </span>
-                  {i.last_stage ? <span className="pill">{wordsOf(i.last_stage)}</span> : null}
-                </button>
-              </li>
+            {shown.map((i) => (
+              <FlowItem key={i.instance} i={i} on={i.instance === chosen} pick={pickRow} />
             ))}
           </ul>
         </div>

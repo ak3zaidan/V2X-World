@@ -13,6 +13,7 @@ import { Fragment, useState } from "react";
 
 import {
   GROUND_TRUTH,
+  asCases,
   asCrl,
   asCrls,
   crlRows,
@@ -56,13 +57,13 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
               <th title="crlSeries (IEEE 1609.2 §7.3): which family of certificates the list covers">
                 <Term k="crl-series">Series</Term>
               </th>
-              <th title="Linkage entries revoke a vehicle's pseudonym certificates; hash entries revoke single certificates">Revokes</th>
+              <th title="Linkage entries revoke all of a vehicle's pseudonym certificates; hash entries revoke single certificates">Kind</th>
               <th>Version</th>
               <th title="issueDate">Issued</th>
-              <th title="nextCrl: the deadline by which a newer list must replace this one; the bar is how much of that window has gone">
-                <Term k="nextcrl">Replace by</Term>
+              <th title="When the next list is expected: the scenario's publishing schedule when it has one. The deadline every list prints (its nextCrl) is in the tooltip and in the list's card.">
+                Next list
               </th>
-              <th>Entries</th>
+              <th title="How many vehicles or certificates the newest list revokes; click to see which">Revokes</th>
             </tr>
           </thead>
           <tbody>
@@ -89,7 +90,7 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
                     {r.provider}
                   </td>
                   <td className="mono">{r.series}</td>
-                  <td>{r.kind === "linkage" ? "pseudonyms" : r.kind === "hash" ? "single certificates" : r.kind}</td>
+                  <td>{kindText(r.kind)}</td>
                   <td className="mono">
                     v{r.newest.version}
                     {r.newest.delta ? " Δ" : ""}{" "}
@@ -100,46 +101,77 @@ export function RevocationTab({ view }: { readonly view: string | null }): React
                   <td className="mono" title={time32Text(r.newest.issue_date)}>
                     {dateText(r.newest.issue_date)}
                   </td>
-                  <td className={`mono ${r.newest.sla_now_s < 0 ? "bad" : ""}`} data-testid="pki-crl-sla" title={`${time32Text(r.newest.next_crl)} · ${slaText(r.newest.sla_now_s)}`}>
-                    <SlaBar head={r.newest} />
-                    {r.newest.sla_now_s < 0 ? slaText(r.newest.sla_now_s) : `in ${slaText(r.newest.sla_now_s)}`}
-                  </td>
-                  <td className="mono" title={`${formatBytes(r.newest.bytes)} signed`}>
-                    {r.newest.entries}
+                  <NextList head={r.newest} cadenceS={cadence[r.provider] ?? null} nowNs={crls?.t_ns ?? 0} />
+                  <td title={`${formatBytes(r.newest.bytes)} signed`}>
+                    {r.newest.entries > 0 ? (
+                      <button
+                        type="button"
+                        className="linklike mono"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          set({ crl: r.newest.id8 });
+                        }}
+                        data-testid="pki-crl-entries-link"
+                        title="Open the newest list: who each entry revokes"
+                      >
+                        {r.newest.entries} {r.kind === "linkage" ? `vehicle${r.newest.entries === 1 ? "" : "s"}` : `certificate${r.newest.entries === 1 ? "" : "s"}`} ›
+                      </button>
+                    ) : (
+                      <span className="faint">nobody</span>
+                    )}
                   </td>
                 </tr>
-                {open === r.key
-                  ? r.versions.map((v) => (
-                      <tr
-                        key={`${r.key}/${v.id8}`}
-                        className={`sub${chosen === v.id8 ? " sel" : ""}`}
-                        onClick={() => set({ crl: v.id8 })}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            set({ crl: v.id8 });
-                          }
-                        }}
-                        tabIndex={0}
-                        data-testid="pki-crl-version"
-                        data-id8={v.id8}
-                      >
-                        <td className="mono" colSpan={2} title={`HashedId8 ${v.id8}`}>
-                          {grouped(v.id8)}
-                        </td>
-                        <td className="faint">issued at {secondsText(v.issued_at)}</td>
-                        <td className="mono">
-                          v{v.version}
-                          {v.delta ? " Δ delta" : " full"}
-                        </td>
-                        <td className="mono">{dateText(v.issue_date)}</td>
-                        <td className="mono">{dateText(v.next_crl)}</td>
-                        <td className="mono" title={`${formatBytes(v.bytes)} signed`}>
-                          {v.entries}
-                        </td>
-                      </tr>
-                    ))
-                  : null}
+                {open === r.key ? (
+                  <tr className="sub pki-crl-versions-row">
+                    <td colSpan={7}>
+                      <table className="pkir-table compact pki-crl-versions" data-testid="pki-crl-versions">
+                        <thead>
+                          <tr>
+                            <th>Version</th>
+                            <th title="issueDate, in the run's calendar">Issued</th>
+                            <th title="nextCrl: the deadline by which a newer list must replace this one">
+                              <Term k="nextcrl">Replace by</Term>
+                            </th>
+                            <th>Entries</th>
+                            <th title="A full list carries every entry; a delta list only the changes since the last full one">
+                              <Term k="delta">Type</Term>
+                            </th>
+                            <th title="HashedId8: how devices refer to this list">Id</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {r.versions.map((v) => (
+                            <tr
+                              key={`${r.key}/${v.id8}`}
+                              className={chosen === v.id8 ? "sel" : undefined}
+                              onClick={() => set({ crl: v.id8 })}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  set({ crl: v.id8 });
+                                }
+                              }}
+                              tabIndex={0}
+                              data-testid="pki-crl-version"
+                              data-id8={v.id8}
+                            >
+                              <td className="mono">v{v.version}</td>
+                              <td className="mono" title={`at ${secondsText(v.issued_at)} of the run`}>
+                                {dateText(v.issue_date)}
+                              </td>
+                              <td className="mono">{dateText(v.next_crl)}</td>
+                              <td className="mono" title={`${formatBytes(v.bytes)} signed`}>
+                                {v.entries}
+                              </td>
+                              <td>{v.delta ? "delta: changes only" : "full list"}</td>
+                              <td className="mono faint">{grouped(v.id8)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </td>
+                  </tr>
+                ) : null}
               </Fragment>
             ))}
           </tbody>
@@ -158,14 +190,38 @@ function dateText(t: number): string {
   return time32Text(t).slice(0, 16);
 }
 
-/** How much of the list's validity window (issueDate to nextCrl) has gone, as a bar. */
-function SlaBar({ head }: { readonly head: CrlHead }): React.JSX.Element {
-  const window = Math.max(1, head.next_crl - head.issue_date);
-  const gone = Math.min(1, Math.max(0, 1 - head.sla_now_s / window));
+/** A list's kind in words. */
+function kindText(kind: string): string {
+  return kind === "linkage" ? "whole vehicles (linkage)" : kind === "hash" ? "single certificates (hash)" : kind;
+}
+
+/**
+ * When the next list comes. With a scenario schedule (`cadence_s`) that is what a reader needs: "in
+ * 12 s (every 30 s)"; the deadline the list prints (nextCrl, often days away in a compressed run)
+ * goes to the tooltip. Without one, the deadline is the only promise, and it is shown. An overdue
+ * list is always said.
+ */
+function NextList({ head, cadenceS, nowNs }: { readonly head: CrlHead; readonly cadenceS: number | null; readonly nowNs: number }): React.JSX.Element {
+  const deadline = `Deadline printed on the list (nextCrl): ${time32Text(head.next_crl)}, ${head.sla_now_s < 0 ? slaText(head.sla_now_s) : `in ${slaText(head.sla_now_s)}`}.`;
+  if (head.sla_now_s < 0)
+    return (
+      <td className="mono bad" data-testid="pki-crl-sla" title={deadline}>
+        {slaText(head.sla_now_s)}
+      </td>
+    );
+  if (cadenceS !== null && cadenceS > 0) {
+    const since = Math.max(0, (nowNs - head.issued_at) / 1e9);
+    const left = Math.max(0, cadenceS - (since % cadenceS));
+    return (
+      <td data-testid="pki-crl-sla" data-basis="schedule" title={`The scenario publishes a list every ${slaText(cadenceS)}. ${deadline}`}>
+        <span className="mono">within {slaText(left)}</span> <span className="faint">(every {slaText(cadenceS)})</span>
+      </td>
+    );
+  }
   return (
-    <span className={`pkir-sla${head.sla_now_s < 0 ? " over" : gone > 0.8 ? " near" : ""}`} aria-hidden="true">
-      <i style={{ width: `${(gone * 100).toFixed(1)}%` }} />
-    </span>
+    <td className="mono" data-testid="pki-crl-sla" data-basis="deadline" title={deadline}>
+      by {dateText(head.next_crl)} <span className="faint">(in {slaText(head.sla_now_s)})</span>
+    </td>
   );
 }
 
@@ -173,6 +229,10 @@ function CrlCard({ id8, view, head }: { readonly id8: string; readonly view: str
   const set = usePkiView((s) => s.set);
   // A CRL is public; only the join onto the run's devices needs ground truth.
   const v = asCrl(usePki({ topic: "crl", hashedid8: id8, view: view ?? "public" }, 0).data);
+  // Which case put each vehicle on the list: the cases' accused, ground truth only.
+  const cases = asCases(usePki(view === GROUND_TRUTH ? { topic: "cases", view: GROUND_TRUTH } : null, 4000).data);
+  const caseOf = new Map<string, string>();
+  for (const c of cases?.cases ?? []) for (const a of c.truth?.accused ?? []) if (!caseOf.has(a.device)) caseOf.set(a.device, c.case);
   const close = (
     <button type="button" className="icon-button" onClick={() => set({ crl: null })} aria-label="Close the list" data-testid="pki-crl-close">
       <CloseIcon />
@@ -245,7 +305,9 @@ function CrlCard({ id8, view, head }: { readonly id8: string; readonly view: str
                   {e.ls1.slice(0, 8)}… {e.ls2.slice(0, 8)}…
                 </td>
                 {gt ? (
-                  <td data-testid="pki-crl-matches">{(e.matches ?? []).length === 0 ? "none recorded" : summarize((e.matches ?? []).map((m) => v.owners?.[m] ?? null))}</td>
+                  <td data-testid="pki-crl-matches">
+                    {(e.matches ?? []).length === 0 ? "none recorded" : <Owners owners={(e.matches ?? []).map((m) => v.owners?.[m] ?? null)} caseOf={caseOf} />}
+                  </td>
                 ) : null}
               </tr>
             ))}
@@ -271,16 +333,52 @@ function CrlCard({ id8, view, head }: { readonly id8: string; readonly view: str
   );
 }
 
-function summarize(owners: readonly ({ device: string; i: number | null; j: number | null; provider: string | null } | null)[]): string {
-  const by = new Map<string, number[]>();
+/** Who an entry revokes, each vehicle by name with its case one click away (ground truth). */
+function Owners({
+  owners,
+  caseOf,
+}: {
+  readonly owners: readonly ({ device: string; node?: number | null; i: number | null; j: number | null; provider: string | null } | null)[];
+  readonly caseOf: ReadonlyMap<string, string>;
+}): React.JSX.Element {
+  const devices = [...new Set(owners.filter((o) => o !== null).map((o) => o.device))];
+  return (
+    <>
+      {summarize(owners)}
+      {devices.map((d) => {
+        const c = caseOf.get(d);
+        return c ? (
+          <span key={d}>
+            {" · "}
+            <button
+              type="button"
+              className="linklike"
+              onClick={() => {
+                usePkiView.getState().set({ caseId: c });
+                chooseTab("cases");
+              }}
+              data-testid="pki-crl-case"
+              title="Open the misbehaviour case that put it on the list"
+            >
+              case {c.split("/").pop()} ›
+            </button>
+          </span>
+        ) : null;
+      })}
+    </>
+  );
+}
+
+function summarize(owners: readonly ({ device: string; node?: number | null; i: number | null; j: number | null; provider: string | null } | null)[]): string {
+  const by = new Map<string, { node: number | null; weeks: number[] }>();
   for (const o of owners) {
     if (!o) continue;
-    const list = by.get(o.device) ?? [];
-    if (o.i !== null) list.push(o.i);
-    by.set(o.device, list);
+    const e = by.get(o.device) ?? { node: o.node ?? null, weeks: [] };
+    if (o.i !== null) e.weeks.push(o.i);
+    by.set(o.device, e);
   }
   return [...by]
-    .map(([d, is]) => `${deviceName(d)}: ${is.length} certificate${is.length === 1 ? "" : "s"}${is.length ? ` (weeks ${Math.min(...is)}–${Math.max(...is)})` : ""}`)
+    .map(([d, { node, weeks: is }]) => `${deviceName(d, node)}: ${is.length} certificate${is.length === 1 ? "" : "s"}${is.length ? ` (weeks ${Math.min(...is)}–${Math.max(...is)})` : ""}`)
     .join("; ");
 }
 
@@ -294,6 +392,31 @@ function Providers({
   readonly nowRows: readonly { readonly provider: string; readonly newest: CrlHead }[];
   readonly cadence: Readonly<Record<string, number>>;
 }): React.JSX.Element {
+  const sentence = (label: string, publication: string): string => {
+    const mine = nowRows.filter((r) => r.provider === label);
+    const due = mine.length > 0 ? Math.min(...mine.map((r) => r.newest.sla_now_s)) : null;
+    return crlScheduleText({ cadenceS: cadence[label] ?? null, publication, dueS: due });
+  };
+  // Providers that publish the same way are said once ("Both providers: …"); the deadline is
+  // compared to the hour, so two lists a few seconds apart still read as one schedule.
+  const shape = (p: ProviderView): string =>
+    JSON.stringify([p.on_ctl, p.ma_mode, p.ma_review_s ?? null, p.crl_publication, cadence[p.label] ?? null, Math.round(Math.min(...nowRows.filter((r) => r.provider === p.label).map((r) => r.newest.sla_now_s)) / 3600)]);
+  if (providers.length > 1 && new Set(providers.map(shape)).size === 1) {
+    const p = providers[0];
+    return (
+      <>
+        <h4 className="pkir-pad">How the providers publish</h4>
+        <p className="pkir-pad pki-provider-rules" data-testid="pki-crl-providers" data-same="1">
+          <b>{providers.length === 2 ? "Both providers" : `All ${providers.length} providers`}</b>{" "}
+          <span className="dim">
+            ({providers.map((x) => `${x.label}${x.home ? ", home" : ""}`).join("; ")}) · {p.on_ctl ? "roots on the trust list" : "roots NOT on the trust list"} · {maModeText(p.ma_mode)}
+          </span>
+          <br />
+          <span data-testid="pki-crl-schedule">{sentence(p.label, p.crl_publication)}</span>
+        </p>
+      </>
+    );
+  }
   return (
     <>
       <h4 className="pkir-pad">How each provider publishes</h4>
