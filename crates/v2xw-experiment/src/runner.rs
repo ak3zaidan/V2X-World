@@ -327,6 +327,16 @@ pub fn run_experiment<E: RunExecutor + Sync>(
         crate::journal::JOURNAL_FILE.to_string(),
     ];
     files.extend(table.write_json(&options.out)?);
+    // A sweep over the MA policy writes its family report beside the table (08 §7).
+    if crate::ma_family::is_family_sweep(&plan) {
+        let done: std::collections::BTreeSet<String> = plan
+            .runs
+            .iter()
+            .filter(|r| journal.is_done(&r.run_id))
+            .map(|r| r.run_id.clone())
+            .collect();
+        files.extend(crate::ma_family::write(&plan, &done, &options.out)?);
+    }
 
     let runs_pending = plan
         .runs

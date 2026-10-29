@@ -24,6 +24,7 @@
 //! | [`path`] | writes a swept value into the scenario document at its dotted path |
 //! | [`runner`] | executes the plan through a [`runner::RunExecutor`], serially by default |
 //! | [`journal`] | records what finished, so a restart skips it |
+//! | [`ma_family`] | the MA policy family report of a sweep over `security.scms.ma_policy.preset` |
 //! | [`reduce`] | pools one run's `metric.sample` windows into one value per metric per bin |
 //! | [`aggregate`] | means and intervals across replications, Wilson for proportions |
 //! | [`table`] | the results table, written through the exporters `v2xw-record` already has |
@@ -92,6 +93,7 @@ pub mod figures;
 pub mod foundry;
 pub mod foundry_eval;
 pub mod journal;
+pub mod ma_family;
 pub mod path;
 pub mod plan;
 pub mod reduce;

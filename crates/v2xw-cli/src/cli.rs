@@ -79,6 +79,12 @@ pub enum Command {
 pub struct MaReplayArgs {
     /// The run directory (`recording.mcap`).
     pub dir: PathBuf,
+    /// Replay this scenario's MA policy family instead of the built-in rules: every
+    /// preset of `security.scms.ma_policy` and every named policy, or the names its
+    /// `experiment.sweep` over `security.scms.ma_policy.preset` lists
+    /// (ma-replay-policies.csv). A preview: an offline replay shows no feedback.
+    #[arg(long, value_name = "SCENARIO")]
+    pub policies: Option<PathBuf>,
 }
 
 /// `v2xw sensitivity`.

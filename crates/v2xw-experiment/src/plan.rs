@@ -289,6 +289,15 @@ impl ExperimentPlan {
             set_path(&mut document, path, value.clone())?;
         }
         let mut scenario = Scenario::from_document(document)?;
+        // An MA policy comparison reads every run's MA view (08-settings-ux-and-gaps §7):
+        // the sweep turns `report_records` on for every point, and its report says so.
+        if run.cell.values.contains_key(crate::ma_family::SWEEP_AXIS) {
+            scenario
+                .security
+                .scms
+                .get_or_insert_with(Default::default)
+                .report_records = Some(true);
+        }
         scenario.seed = run.seed;
         scenario.experiment = None;
         scenario.meta.name = format!("{}-{}", base.meta.name, run.run_id);

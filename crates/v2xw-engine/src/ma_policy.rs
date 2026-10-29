@@ -1087,6 +1087,59 @@ pub(crate) fn apply_decision(
     Ok(())
 }
 
+/// The sweep axis that compares MA policies (08 §7, "Sweep mode"): one full run per
+/// policy per seed.
+pub const SWEEP_AXIS: &str = "security.scms.ma_policy.preset";
+
+/// The MA policy family a scenario names, each policy resolved with the run's calendar:
+/// the names its `experiment.sweep` over [`SWEEP_AXIS`] lists, or else every preset and
+/// every policy of `security.scms.ma_policies`. `v2xw ma-replay --policies` replays them
+/// over one recorded run through the same evaluator the run hosts.
+///
+/// # Errors
+/// A refusal of the scenario's MA keys, or a name that is neither a preset nor a named
+/// policy.
+pub fn family_of(s: &Scenario) -> Result<Vec<(String, MaPolicy)>> {
+    if let Some(err) = refusals(s).into_iter().next() {
+        return Err(EngineError::Scenario(err));
+    }
+    let empty = BTreeMap::new();
+    let family = s.security.scms.as_ref().map_or(&empty, |x| &x.ma_policies);
+    let swept: Option<Vec<String>> = s
+        .experiment
+        .as_ref()
+        .and_then(|e| e.sweep.get(SWEEP_AXIS))
+        .map(|v| {
+            v.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        });
+    let names = swept.unwrap_or_else(|| {
+        PRESET_IDS
+            .iter()
+            .map(ToString::to_string)
+            .chain(family.keys().cloned())
+            .collect()
+    });
+    let at = format!("experiment.sweep.{SWEEP_AXIS}");
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let mut e = Vec::new();
+        let r = named(&name, &at, family, &mut e);
+        if let Some(err) = e.into_iter().next() {
+            return Err(EngineError::Scenario(err));
+        }
+        let Some(r) = r else {
+            return Err(EngineError::Scenario(ScenarioError::conflict(
+                &at,
+                format!("'{name}' does not resolve to a policy"),
+            )));
+        };
+        out.push((name, evaluator(r.params, s).inner));
+    }
+    Ok(out)
+}
+
 /// What the deciding MA learns about a report's subject beyond the report: the linkage
 /// authorities' device link, the issuing provider and the judged BSM's secMark phase.
 #[derive(Debug, Clone, Copy)]

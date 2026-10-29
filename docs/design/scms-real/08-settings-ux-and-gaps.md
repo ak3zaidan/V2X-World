@@ -718,6 +718,39 @@ every digest must stay the same.
   `revocation-latency` 300 s at 3,000 veh/h, 3 and 6), each red under its named fault.
   Not done here: guide rows (A5), presets and relevance (A3).
 * B3: the sweep report in v2xw-experiment, `ma-replay --policies`, and tests 2, 4 and 5.
+
+  **Status, B3 (2026-10-29): built.** `v2xw_engine::ma_policy::family_of` names the family
+  (the values of a sweep over `security.scms.ma_policy.preset`, else every preset and
+  every `ma_policies` name, each resolved with the run's calendar).
+  `v2xw ma-replay <run> --policies <scenario>` (`ma_replay::run_policies`, writing
+  `ma-replay-policies.csv`) replays it through `replay_policy`: the run's own evaluator,
+  one per deciding MA, over the `ma.received` rows **in the recording's order** (the
+  order the MA ingested them; `load_in_order`), each dated by its observation (the
+  report's generation time, which is the detection time the online MA dates by) and
+  carrying the LAs' link, issuer and secMark phase the online host passes. Its table
+  opens with what a replay cannot show (feedback, and which reporters are roadside units:
+  an `ma.received` row does not mark one, so a defence-on policy may distrust a unit the
+  run trusts). A sweep over the preset axis sets `report_records: true` on every point
+  (`ExperimentPlan::materialise`) and writes `ma-policy-family.csv` and `.md`
+  (`v2xw_experiment::ma_family`): per (policy, seed) attackers and honest devices revoked
+  (ground truth joined here only, through the device, never the pseudonym), honest
+  blocked per 10⁶ device-hours, attack start → MA decision → CRL published → first
+  receiver enforcing as median and p90, reports processed and peak open revocation cases
+  (decision to CRL entry issued); per policy a `mean` and a `ci95` row. Choice (§9 rule):
+  the interval is Student's t over the seeds (NIST/SEMATECH e-Handbook 1.3.6.7.2), not the
+  experiment table's normal 1.96, which with two seeds claims six times the precision.
+  The MA trait's `name` became `&str`, so a scenario's own policy names reach the CSV.
+  Out-of-column touch: `v2xw-cli` `cli.rs` and `main.rs` (the `--policies` flag).
+  Tests: `ma_replay::tests::every_policy_preset_is_blind` (test 4),
+  `ma_family::tests` (the device join, Student's interval) and
+  `crates/v2xw-cli/tests/ma_policy_family.rs`: test 2 runs each of the eight presets on
+  `credential-lifecycle` (200 s, no roadside unit, since a replay cannot know one) and
+  finds the run's first `ma.decision` about the replay's first decided pseudonym, stamped
+  at the backend step that processed its tipping report (within one 100 ms step after
+  it); test 5 sweeps three policies (`cv-pilot-manual`, `corroborated-auto` and a named
+  k = 1 policy) × two seeds over an honest-only fleet with benign GNSS outliers (0.2 Hz,
+  30 m) and finds 6 run rows, 3 means and 3 intervals, no attacker revoked and honest
+  revocations counted. Each is red under its named fault (commit message).
 * B4 (optional): `PyMaPolicy` and test 7.
 
 ---
