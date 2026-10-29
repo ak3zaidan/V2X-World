@@ -126,3 +126,9 @@
 - {setting: traffic.vehicle_dynamics.grade, change: true, metric: traffic.speed_mean_mps, expect: same, min_change: 0.0,
    source: "g sin(theta) is zero on a level road (SUMO KraussPS aMax - g sin(slope)); the freight road is flat, so the grade alone moves nothing"}
 
+# ---- A measured hill (WP-26 P26.2): world.terrain.drape on the hills family (downtown Portland on its 1 arc-second DEM, grade and power limit on in both runs) ----
+- {setting: world.terrain.drape, change: true, metric: traffic.speed_mean_mps, expect: down, min_change: 0.001,
+   source: "a vehicle's acceleration less g sin(theta) on the draped slopes (SUMO KraussPS) and the class power limit on the climbs (WP-22): uphill a car loses acceleration, while downhill the speed limit and the signals cap what it gains, so the network mean falls; 19.6 % of this map's road is steeper than 4 % (worlds/dem/portland-downtown.md)"}
+- {setting: world.terrain.drape, change: true, metric: prr, expect: changes, min_change: 0.001,
+   source: "undraped, the vehicles' antennas stand at z = 0 under a ground the terrain knife-edge term reads up to 115 m high (ITU-R P.526 diffraction over the DEM profile); draped they stand on it, so the terrain loss on each link changes. The direction is not predicted (wp25-plus-build-plans.md WP-26)"}
+

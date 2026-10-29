@@ -87,6 +87,14 @@ families:
           actors.vehicles.classes: {passenger: {fraction: 0.7}, trailer: {fraction: 0.3}},
           world.terrain: {dem: scenarios/sensitivity/grade-5pct.asc, drape: true},
           traffic.vehicle_dynamics: {grade: true}, metrics: [all]}
+  # Downtown Portland on its measured ground (WP-26 P26.2; real-world/portland-hills.yaml:
+  # a 1 arc-second DEM, worlds/dem/portland-downtown.md, 19.6 % of the road length above
+  # 4 %). The base is undraped and the grade and power-limit terms are on in both runs,
+  # so moving world.terrain.drape gives the lanes their measured slopes (and lifts the
+  # vehicles' antennas from z = 0 onto the ground the radio's terrain term already sees).
+  - name: hills
+    base: ../real-world/portland-hills.yaml
+    set: {time.duration_s: 120.0, world.terrain.drape: false, metrics: [all]}
   # A two-lane road through a 110 m wood (forest-road.osm.xml, self-written), its trees
   # imported as vegetation: where radio.channel_model.foliage has trees to charge.
   - name: forest
@@ -117,6 +125,8 @@ routes:
   # nothing.
   - {prefix: traffic.vehicle_dynamics.power_limit, families: [grade-truck, freight]}
   - {prefix: traffic.vehicle_dynamics, families: [freight]}
+  # A drape needs a DEM: the measured Portland hill (WP-26).
+  - {prefix: world.terrain.drape, families: [hills]}
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
   - {prefix: net, families: [gn, dsrc, security]}
