@@ -161,6 +161,7 @@ pub mod ctx;
 pub mod detect;
 pub mod ma;
 pub mod ma_corroborate;
+pub mod ma_policy;
 pub mod obs;
 pub mod poison;
 pub mod privacy;
@@ -189,6 +190,7 @@ pub use detect::{
 };
 pub use ma::{LegacyWindow, MaAction, MaParams, MaPipeline};
 pub use ma_corroborate::{CorroboratedMa, CorroborationParams, EvidenceSummary};
+pub use ma_policy::{MaPolicy, MaPolicyParams, PolicyDecision, PolicyEvidence};
 pub use obs::{
     DiscSensor, EnvelopeExtras, FrameExtras, LocalEnvironment, LocalPerception, NoMap,
     NoPerception, ObservedKind, ObservedMessage, OwnFootprint, PeerBelief, PerceivedObject,

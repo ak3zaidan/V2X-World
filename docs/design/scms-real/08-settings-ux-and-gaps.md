@@ -661,6 +661,33 @@ every digest must stay the same.
 
 * B1: `MaPolicy` in v2xw-threat with all presets, test 1 at the unit level, and
   `cv-pilot-manual` equal to `CorroboratedMa`.
+
+  **Status, B1 (2026-10-29): built.** `crates/v2xw-threat/src/ma_policy.rs`:
+  `MaPolicyParams` (every §7 field, resolved), `MaPolicyParams::preset` for the eight
+  presets, and `MaPolicy` (the `MaPipeline` evaluator). Every preset but `legacy-window`
+  runs one evaluator, `CorroboratedMa` generalised: a case is a pseudonym or a device
+  link; a report's score is the largest `evidence.rules` entry among its checks (a check's
+  own `detect/<id>` key before its SM-MBR subtype's; 0 means the report is not evidence);
+  CaTch weighting, `min_score` (each trusted reporter's best decayed score, summed, as
+  `ma-replay`'s `catch`), `min_reports`, decay and the cluster guard extend it.
+  `legacy-window` delegates to `LegacyWindow`, whose distinct-seconds gate has no §7 field;
+  the fields it cannot read are named by `MaPolicyParams::applies`. `LegacyWindow` and
+  `CorroboratedMa` gained `ingest_pair` (a pure refactor of `ingest_evidence`) so a
+  replayed row and the policy take the same arithmetic. Choices (§9 rule, no source fixes
+  them, each ASSUMPTION): the replay presets take the middle of `ma-replay`'s grid (k = 3,
+  w = 1 h, θ = 3, c = 3, m = 3), `pseudonym-k` keeps every reporter (30-day window, the
+  range top), the replay presets and `legacy-window` decide automatically (as their
+  sources had no operator), and `custom` starts from `cv-pilot-manual`'s values rather
+  than from nothing, so an unwritten field is never undefined. The daily multiplier reads
+  the host's Eastern calendar (DST-aware `scms::calendar` in the engine; fixed EST alone).
+  Checks: `cv_pilot_manual_is_the_corroborating_ma` (six seeded 1,500-report streams,
+  out-of-order evidence, an infrastructure reporter: same decisions, counted events and
+  peak as `CorroboratedMa` for `cv-pilot-manual`, `corroborated-auto` and `custom`),
+  `legacy_window_is_the_legacy_gate`, `replay_rules_count_reporters`,
+  `scores_accuracy_and_decay_move_the_decision`,
+  `the_daily_multiplier_counts_eastern_mornings`,
+  `the_cluster_guard_raises_the_bar_in_a_crowded_class` and `rule_keys_cover_every_check`,
+  each red under its named fault (commit message).
 * B2: engine wiring through the `MaHost::Policy` arm, `ma_policies`, per-provider policy,
   the decision mode, and tests 1, 3 and 6.
 * B3: the sweep report in v2xw-experiment, `ma-replay --policies`, and tests 2, 4 and 5.
