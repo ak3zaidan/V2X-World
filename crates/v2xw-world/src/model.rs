@@ -2525,6 +2525,71 @@ pub struct SignalHead {
     pub group: u16,
 }
 
+/// How an imported signal programme is run (WP-23): the controller its source file names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalProgrammeKind {
+    /// A fixed-time programme: the plan's phases as written.
+    Static,
+    /// A vehicle-actuated programme: each phase between its minimum and maximum, extended
+    /// by detector calls (SUMO `actuated`; `delay_based` is run as this, counted).
+    Actuated,
+    /// A NEMA dual-ring programme (SUMO `NEMA`): rings, barriers and per-phase timing
+    /// from its parameters.
+    Nema,
+}
+
+impl SignalProgrammeKind {
+    /// A stable code for the content hash.
+    pub const fn code(self) -> u8 {
+        match self {
+            SignalProgrammeKind::Static => 0,
+            SignalProgrammeKind::Actuated => 1,
+            SignalProgrammeKind::Nema => 2,
+        }
+    }
+}
+
+/// One phase of an imported programme, as its source file states it. `None` where the
+/// file is silent.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProgrammePhase {
+    /// SUMO `minDur`: the shortest the phase may run, seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_s: Option<f64>,
+    /// SUMO `maxDur`: the longest the phase may run, seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_s: Option<f64>,
+    /// SUMO `name`; under NEMA, the phase's NEMA number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// SUMO NEMA `vehext`: the passage time, seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehext_s: Option<f64>,
+    /// SUMO NEMA `yellow`, seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yellow_s: Option<f64>,
+    /// SUMO NEMA `red` (red clearance), seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_s: Option<f64>,
+}
+
+/// The controller an imported signal plan's source file gives it (WP-23): the
+/// `World::signal_programmes` side table. A plan without an entry is run as the
+/// scenario's `traffic.signals` says.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignalProgramme {
+    /// The plan it controls.
+    pub plan: SignalId,
+    /// The controller.
+    pub kind: SignalProgrammeKind,
+    /// One entry per phase of the plan, in the plan's order.
+    pub phases: Vec<ProgrammePhase>,
+    /// The programme's `<param key value>` pairs, as written.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, String>,
+}
+
 /// A fixed-time signal plan for one junction.
 ///
 /// 04-models.md §1.1 lists signal plans as first-class world data, and 04-models.md §1.2
@@ -3848,6 +3913,12 @@ pub struct World {
     /// every world without one keeps its content hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vegetation: Vec<VegetationArea>,
+    /// The controllers imported signal plans' source files give them (WP-23), ordered by
+    /// plan. Empty unless an importer read one (`SumoOptions::signal_programmes`); an
+    /// empty table is neither hashed nor written, so every world without one keeps its
+    /// content hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signal_programmes: Vec<SignalProgramme>,
     /// The propagation environment outside every land-use zone.
     pub default_env: EnvClass,
     /// The world's interned strings.
@@ -3879,6 +3950,7 @@ impl Clone for World {
             landuse: self.landuse.clone(),
             passages: self.passages.clone(),
             vegetation: self.vegetation.clone(),
+            signal_programmes: self.signal_programmes.clone(),
             default_env: self.default_env,
             symbols: self.symbols.clone(),
             provenance: self.provenance.clone(),
@@ -3902,6 +3974,7 @@ impl PartialEq for World {
             && self.landuse == other.landuse
             && self.passages == other.passages
             && self.vegetation == other.vegetation
+            && self.signal_programmes == other.signal_programmes
             && self.default_env == other.default_env
             && self.symbols == other.symbols
             && self.provenance == other.provenance
@@ -4068,6 +4141,31 @@ impl World {
         let lane_count = self.roads.lanes().len() as u32;
         let junction_count = self.roads.junctions().len() as u32;
         let edge_count = self.roads.edges().len() as u32;
+
+        for (k, prog) in self.signal_programmes.iter().enumerate() {
+            let Some(plan) = self.signals.get(prog.plan.as_usize()) else {
+                return Err(WorldError::DanglingReference {
+                    what: format!("signal programme {k}"),
+                    kind: "signal plan",
+                    id: prog.plan.index(),
+                });
+            };
+            if prog.phases.len() != plan.phases.len()
+                || self.signal_programmes[..k]
+                    .iter()
+                    .any(|q| q.plan == prog.plan)
+            {
+                return Err(WorldError::Invariant {
+                    invariant: "signal-programme",
+                    problem: format!(
+                        "signal programme {k} gives {} phases for plan {}'s {}, or repeats it",
+                        prog.phases.len(),
+                        prog.plan.index(),
+                        plan.phases.len()
+                    ),
+                });
+            }
+        }
 
         for p in &self.passages {
             if p.lane.index() >= lane_count {
@@ -4578,6 +4676,7 @@ pub struct WorldBuilder {
     landuse: Vec<LanduseZone>,
     passages: Vec<Passage>,
     vegetation: Vec<VegetationArea>,
+    signal_programmes: Vec<SignalProgramme>,
     default_env: EnvClass,
     symbols: SymbolTable,
     provenance: Option<WorldProvenance>,
@@ -4599,6 +4698,7 @@ impl WorldBuilder {
             landuse: Vec::new(),
             passages: Vec::new(),
             vegetation: Vec::new(),
+            signal_programmes: Vec::new(),
             default_env: EnvClass::Urban,
             symbols: SymbolTable::new(),
             provenance: None,
@@ -4655,6 +4755,14 @@ impl WorldBuilder {
     #[must_use]
     pub fn vegetation(mut self, vegetation: Vec<VegetationArea>) -> Self {
         self.vegetation = vegetation;
+        self
+    }
+
+    /// Sets the imported signal programmes (WP-23), sorted here by plan.
+    #[must_use]
+    pub fn signal_programmes(mut self, mut programmes: Vec<SignalProgramme>) -> Self {
+        programmes.sort_by_key(|p| p.plan);
+        self.signal_programmes = programmes;
         self
     }
 
@@ -4821,6 +4929,7 @@ impl WorldBuilder {
                 })
                 .collect(),
             vegetation: self.vegetation,
+            signal_programmes: self.signal_programmes,
             default_env: self.default_env,
             symbols: self.symbols,
             provenance: {
@@ -4909,6 +5018,8 @@ pub struct WorldParts {
     pub passages: Vec<Passage>,
     /// Areas of trees, in import order.
     pub vegetation: Vec<VegetationArea>,
+    /// Imported signal programmes, by plan.
+    pub signal_programmes: Vec<SignalProgramme>,
     /// The environment outside every zone.
     pub default_env: EnvClass,
     /// The interned strings.
@@ -4942,6 +5053,7 @@ impl World {
             landuse: parts.landuse,
             passages: parts.passages,
             vegetation: parts.vegetation,
+            signal_programmes: parts.signal_programmes,
             default_env: parts.default_env,
             symbols: parts.symbols,
             provenance: parts.provenance,
@@ -4977,6 +5089,7 @@ impl World {
             landuse: self.landuse.clone(),
             passages: self.passages.clone(),
             vegetation: self.vegetation.clone(),
+            signal_programmes: self.signal_programmes.clone(),
             default_env: self.default_env,
             symbols: self.symbols.clone(),
             provenance: self.provenance.clone(),

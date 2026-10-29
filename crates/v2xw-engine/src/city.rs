@@ -190,6 +190,7 @@ impl City {
             // (`v2xw_world::osm::OsmLayers::service`).
             service_roads: false,
             vegetation: keep.is_some_and(|w| w.vegetation),
+            sumo: Default::default(),
         })
     }
 

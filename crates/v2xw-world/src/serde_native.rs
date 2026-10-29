@@ -91,6 +91,9 @@ pub mod section {
     /// Vegetation areas (WP-18). Optional: written only when there are any, and a file
     /// without the section reads as a world with none.
     pub const VEGETATION: u16 = 15;
+    /// Imported signal programmes (WP-23), as UTF-8 JSON. Optional: written only when
+    /// there are any, and a file without the section reads as a world with none.
+    pub const SIGNAL_PROGRAMMES: u16 = 16;
 }
 
 // ---------------------------------------------------------------------------
@@ -663,6 +666,11 @@ pub fn to_bytes(world: &World) -> Result<Vec<u8>> {
         sections.push((section::VEGETATION, core::mem::take(&mut w.buf)));
     }
 
+    if !world.signal_programmes.is_empty() {
+        let programmes = serde_json::to_vec(&world.signal_programmes)?;
+        sections.push((section::SIGNAL_PROGRAMMES, programmes));
+    }
+
     let provenance = serde_json::to_vec(&world.provenance)?;
     sections.push((section::PROVENANCE, provenance));
 
@@ -1181,6 +1189,12 @@ pub fn from_bytes(bytes: &[u8]) -> Result<World> {
         }
     };
 
+    let signal_programmes: Vec<crate::model::SignalProgramme> =
+        match slice(section::SIGNAL_PROGRAMMES) {
+            None => Vec::new(),
+            Some(mut r) => serde_json::from_slice(r.take(r.bytes.len())?)?,
+        };
+
     let mut r = require(section::PROVENANCE, "provenance")?;
     let provenance: WorldProvenance = serde_json::from_slice(r.take(r.bytes.len())?)?;
 
@@ -1195,6 +1209,7 @@ pub fn from_bytes(bytes: &[u8]) -> Result<World> {
         landuse,
         passages,
         vegetation,
+        signal_programmes,
         default_env,
         symbols,
         provenance,

@@ -72,6 +72,45 @@ struct PlanInfo {
     last_call_s: f64,
     /// Whether this phase's max-out was counted.
     maxed: bool,
+    /// The bounds an imported actuated programme gives this plan (WP-23), or `None` for
+    /// `traffic.signals`' own.
+    bounds: Option<ProgrammeBounds>,
+}
+
+/// An imported actuated programme's timing (WP-23): each phase's `(min, max)` green,
+/// `None` for a phase that runs its stated duration (SUMO: `minDur` and `maxDur` default
+/// to `duration`, and a phase whose two are equal is not actuated), and the passage time.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct ProgrammeBounds {
+    phases: Vec<Option<(f64, f64)>>,
+    passage_s: f64,
+}
+
+/// SUMO's default `max-gap` for actuated programmes, seconds: a phase is extended while
+/// the gap between detections stays under it (SUMO documentation, "Traffic Lights",
+/// actuated parameters [verify: the default as recalled, 3.0 s]).
+pub const SUMO_MAX_GAP_S: f64 = 3.0;
+
+impl ProgrammeBounds {
+    fn of(plan: &SignalPlan, prog: &v2xw_world::SignalProgramme) -> Self {
+        let phases = plan
+            .phases
+            .iter()
+            .zip(&prog.phases)
+            .map(|(ph, b)| {
+                let lo = b.min_s.unwrap_or(ph.duration_s);
+                let hi = b.max_s.unwrap_or(ph.duration_s).max(lo);
+                ((hi - lo).abs() > 1e-9).then_some((lo, hi))
+            })
+            .collect();
+        let passage_s = prog
+            .params
+            .get("max-gap")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(SUMO_MAX_GAP_S);
+        ProgrammeBounds { phases, passage_s }
+    }
 }
 
 /// What the actuated controllers did over the run.
@@ -144,15 +183,28 @@ impl ActuatedControllers {
     /// Controllers for `control`, or inert ones for fixed-time control. Under
     /// `control: nema`, every plan that maps to the dual ring runs it and the rest keep
     /// this single-ring controller (counted in [`Self::nema_fallbacks`]).
+    ///
+    /// A plan whose source file gave it a programme (`World::signal_programmes`, WP-23)
+    /// runs that programme whatever `control.control` says: an actuated one on this
+    /// controller between its phases' `minDur` and `maxDur`, a NEMA one on the dual ring.
     pub fn new(control: &SignalControl, world: &World) -> Self {
-        if !matches!(
+        use v2xw_world::SignalProgrammeKind as Kind;
+        let global = matches!(
             control.control,
             SignalControlKind::Actuated | SignalControlKind::Nema
-        ) {
+        );
+        let programme = |i: usize| {
+            world
+                .signal_programmes
+                .iter()
+                .find(|p| p.plan.as_usize() == i)
+        };
+        if !global && world.signal_programmes.is_empty() {
             return Self::default();
         }
-        let nema = (control.control == SignalControlKind::Nema)
-            .then(|| crate::nema::control::NemaControllers::new(control, world));
+        let nema = (control.control == SignalControlKind::Nema
+            || world.signal_programmes.iter().any(|p| p.kind == Kind::Nema))
+        .then(|| crate::nema::control::NemaControllers::new(control, world));
         let mut approach_of: BTreeMap<LaneId, LaneId> = BTreeMap::new();
         for c in world.roads.connections() {
             if let Some(via) = c.via {
@@ -164,6 +216,13 @@ impl ActuatedControllers {
             if nema.as_ref().is_some_and(|n| n.controls(i)) {
                 continue;
             }
+            let prog = programme(i);
+            if !(global || prog.is_some_and(|p| p.kind != Kind::Static)) {
+                continue;
+            }
+            let bounds = prog
+                .filter(|p| p.kind != Kind::Static)
+                .map(|p| ProgrammeBounds::of(plan, p));
             let crossing: Vec<bool> = plan
                 .controlled
                 .iter()
@@ -191,6 +250,7 @@ impl ActuatedControllers {
                 PlanInfo {
                     approach,
                     crossing,
+                    bounds,
                     ..PlanInfo::default()
                 },
             );
@@ -264,14 +324,21 @@ impl ActuatedControllers {
         let walks = (0..plan.controlled.len()).any(|m| {
             st.crossing[m] && matches!(plan.phases[i].states.get(m), Some(SignalState::Green))
         });
+        let Some((min_green, max_green, _)) = st.limits(p, i) else {
+            return Some(ActuatedOutlook {
+                cut_s: 0.0,
+                extend_s: 0.0,
+                earliest_s: None,
+            });
+        };
         let min = if walks {
-            p.min_green_s.max(duration)
+            min_green.max(duration)
         } else {
-            p.min_green_s
+            min_green
         };
         Some(ActuatedOutlook {
             cut_s: (left - (min - elapsed).max(0.0)).clamp(0.0, left),
-            extend_s: (p.max_green_s - elapsed - left).max(0.0),
+            extend_s: (max_green - elapsed - left).max(0.0),
             earliest_s: None,
         })
     }
@@ -426,12 +493,15 @@ impl ActuatedControllers {
             let duration = plan.phases[i].duration_s;
             let elapsed = into + st.held_s;
             let walks = (0..plan.controlled.len()).any(|m| st.crossing[m] && green(i, m));
-            let min = if walks {
-                p.min_green_s.max(duration)
-            } else {
-                p.min_green_s
+            let Some((min_green, max_green, passage)) = st.limits(&p, i) else {
+                continue; // a fixed phase of an imported programme
             };
-            let gapped = now_s - st.last_call_s >= p.passage_s;
+            let min = if walks {
+                min_green.max(duration)
+            } else {
+                min_green
+            };
+            let gapped = now_s - st.last_call_s >= passage;
             let left = duration - into;
             let cycle = plan.cycle_s;
             let mut shift = 0.0;
@@ -443,7 +513,7 @@ impl ActuatedControllers {
             } else if left <= dt_s + 1e-9 {
                 if !waiting {
                     shift = dt_s; // rest in green
-                } else if !gapped && elapsed < p.max_green_s {
+                } else if !gapped && elapsed < max_green {
                     shift = dt_s; // extension
                     self.counters.extended_s += dt_s;
                 } else if !gapped && !st.maxed {
@@ -458,6 +528,22 @@ impl ActuatedControllers {
                 let plan = &mut world.signals[idx];
                 plan.offset_s = (plan.offset_s + shift).rem_euclid(cycle);
             }
+        }
+    }
+}
+
+impl PlanInfo {
+    /// Phase `i`'s `(min green, max green, passage)`: the imported programme's, or
+    /// `traffic.signals`'; `None` for a fixed phase of an imported programme.
+    fn limits(&self, p: &SignalControl, i: usize) -> Option<(f64, f64, f64)> {
+        match &self.bounds {
+            None => Some((p.min_green_s, p.max_green_s, p.passage_s)),
+            Some(b) => b
+                .phases
+                .get(i)
+                .copied()
+                .flatten()
+                .map(|(lo, hi)| (lo, hi, b.passage_s)),
         }
     }
 }
@@ -734,5 +820,180 @@ mod tests {
             (want - got).abs() < 1e-6 || (cycle - (want - got).abs()).abs() < 1e-6,
             "offset difference {got} s, travel time {want} s"
         );
+    }
+
+    /// `world` with plan 0 given an imported programme of `kind`: each vehicle-green phase
+    /// bounded `(min_s, max_s)`, the others fixed, and `params`.
+    fn with_programme(
+        mut world: World,
+        kind: v2xw_world::SignalProgrammeKind,
+        min_s: f64,
+        max_s: f64,
+        params: &[(&str, &str)],
+    ) -> World {
+        let plan = &world.signals[0];
+        let phases = plan
+            .phases
+            .iter()
+            .map(|ph| {
+                let green = ph
+                    .states
+                    .iter()
+                    .any(|s| matches!(s, SignalState::Green | SignalState::GreenYield));
+                v2xw_world::ProgrammePhase {
+                    min_s: green.then_some(min_s),
+                    max_s: green.then_some(max_s),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        world.signal_programmes = vec![v2xw_world::SignalProgramme {
+            plan: plan.id,
+            kind,
+            phases,
+            params: params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }];
+        world
+    }
+
+    /// WP-23 Accept: an imported actuated programme runs on its own bounds under the
+    /// default fixed-time `traffic.signals`: a quiet green gaps out at its `minDur`, a
+    /// busy one is extended to its `maxDur` (neither is `traffic.signals`' 7 s and
+    /// 45 s), and the plans without a programme keep their clocks.
+    #[test]
+    fn imported_programme_gaps_out() {
+        use v2xw_world::SignalProgrammeKind::Actuated;
+        let fixed = SignalControl::default();
+        let run = |world: &mut World, calls: &BTreeSet<LaneId>, ctl: &mut ActuatedControllers| {
+            let mut t = world.signals[0].offset_s;
+            let mut green_s = 0.0;
+            while world.signals[0].phase_at(t).map(|(i, _)| i) == Some(0) && green_s < 200.0 {
+                ctl.step(world, calls, t, 0.1);
+                t += 0.1;
+                green_s += 0.1;
+            }
+            green_s
+        };
+        // Quiet: one red approach waits.
+        let mut world = with_programme(grid(), Actuated, 3.0, 60.0, &[("max-gap", "2.0")]);
+        let others: Vec<f64> = world.signals[1..].iter().map(|p| p.offset_s).collect();
+        let mut ctl = ActuatedControllers::new(&fixed, &world);
+        assert!(ctl.is_active());
+        let (_, red) = approaches(&world, &ctl);
+        let waiting: BTreeSet<LaneId> = red.into_iter().take(1).collect();
+        let quiet = run(&mut world, &waiting, &mut ctl);
+        assert!(ctl.counters().gap_outs >= 1, "{:?}", ctl.counters());
+        assert!(
+            (3.0 - 0.2..fixed.min_green_s - 1.0).contains(&quiet),
+            "a quiet green ran {quiet} s; its minDur is 3 s"
+        );
+        let after: Vec<f64> = world.signals[1..].iter().map(|p| p.offset_s).collect();
+        assert_eq!(others, after, "plans without a programme stay fixed-time");
+        // Busy: every approach calls, so the green runs to its 60 s maxDur.
+        let mut world = with_programme(grid(), Actuated, 3.0, 60.0, &[("max-gap", "2.0")]);
+        let mut ctl = ActuatedControllers::new(&fixed, &world);
+        let all: BTreeSet<LaneId> = world.roads.lanes().iter().map(|l| l.id).collect();
+        let busy = run(&mut world, &all, &mut ctl);
+        assert!(
+            busy > fixed.max_green_s + 5.0 && busy <= 60.0 + 0.5,
+            "a busy green ran {busy} s; its maxDur is 60 s"
+        );
+        assert_eq!(ctl.counters().max_outs, 1);
+    }
+
+    /// WP-23 Accept: an imported NEMA programme runs the dual ring under the default
+    /// fixed-time `traffic.signals`, numbered and timed by its file: plan 0's phases are
+    /// rewritten as SUMO NEMA phases 2 and 4, each with a 12 s `minDur`.
+    #[test]
+    fn imported_nema_programme_runs_the_rings() {
+        use v2xw_world::SignalProgrammeKind::Nema;
+        let mut world = grid();
+        {
+            let plan = &mut world.signals[0];
+            let go = |s: &SignalState| matches!(s, SignalState::Green | SignalState::GreenYield);
+            let first: Vec<SignalState> = plan.phases[0].states.clone();
+            let second: Vec<SignalState> = first
+                .iter()
+                .map(|s| {
+                    if go(s) {
+                        SignalState::Red
+                    } else {
+                        SignalState::Green
+                    }
+                })
+                .collect();
+            plan.phases = vec![
+                v2xw_world::SignalPhase {
+                    duration_s: 30.0,
+                    states: first,
+                    name: None,
+                },
+                v2xw_world::SignalPhase {
+                    duration_s: 30.0,
+                    states: second,
+                    name: None,
+                },
+            ];
+            plan.cycle_s = 60.0;
+            plan.offset_s = 0.0;
+        }
+        let mut world = with_programme(
+            world,
+            Nema,
+            12.0,
+            30.0,
+            &[("ring1", "0,2,0,4"), ("ring2", "0,6,0,8")],
+        );
+        for (ph, name) in world.signal_programmes[0].phases.iter_mut().zip(["2", "4"]) {
+            ph.name = Some(name.into());
+        }
+        let fixed = SignalControl::default();
+        let mut ctl = ActuatedControllers::new(&fixed, &world);
+        assert!(ctl.is_nema(0), "{:?}", ctl.nema_fallbacks());
+        assert!(!ctl.is_nema(1));
+        // Only the second street calls, so the first green ends at its own minimum.
+        let mut from: BTreeMap<LaneId, LaneId> = BTreeMap::new();
+        for c in world.roads.connections() {
+            if let Some(v) = c.via {
+                from.entry(v).or_insert(c.from_lane);
+            }
+        }
+        let plan0 = world.signals[0].clone();
+        let all: BTreeSet<LaneId> = plan0
+            .controlled
+            .iter()
+            .zip(&plan0.phases[1].states)
+            .filter(|(_, s)| **s == SignalState::Green)
+            .filter_map(|(l, _)| from.get(l).copied())
+            .collect();
+        assert!(!all.is_empty());
+        let first_green = |w: &World, t: f64| {
+            w.signals[0]
+                .states_at(t)
+                .map(|s| s.iter().position(|x| *x == SignalState::Green))
+        };
+        // Both groups get a green, and the first green holds its 12 s minimum even with
+        // the other street calling.
+        let start = first_green(&world, 0.0);
+        let mut changed_at = None;
+        let mut seen: BTreeSet<Option<usize>> = BTreeSet::new();
+        for k in 0..1200 {
+            let t = f64::from(k) * 0.1;
+            ctl.step(&mut world, &all, t, 0.1);
+            let now = first_green(&world, t);
+            seen.insert(now.flatten());
+            if changed_at.is_none() && now != start {
+                changed_at = Some(t);
+            }
+        }
+        let changed = changed_at.expect("the rings change");
+        assert!(
+            (12.0 - 0.2..12.0 + 3.0).contains(&changed),
+            "the first green ended at {changed} s; its minDur is 12 s"
+        );
+        assert!(seen.len() >= 3, "{seen:?}");
     }
 }
