@@ -12,14 +12,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { snapshotOf, type BackendSnapshot } from "../lib/backend.js";
+import { counterText } from "../lib/pkiTopology.js";
 import { openPanel } from "../shell/route.js";
 import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
-import { fetchGroups } from "./data.js";
+import { fetchGroups, fetchSeries, metricPeriodNs } from "./data.js";
+import { RUN_MEAN_SERIES, SUMMARY_POINTS } from "./summaryModel.js";
 import { LevelMark } from "./HealthBadge.js";
 import { LIVE_REFRESH_MS, useRunKey, type Overview } from "./hooks.js";
-import { formatNumber, observedCount, type GroupRow, type MetricFamily, type Series } from "./model.js";
-import { coveredMetrics, hasCredentials, scmsOverview, POOLED, type FunnelStep, type MetricReader, type ScmsBars, type ScmsSection, type ScmsTile } from "./scmsModel.js";
+import { chooseBinNs, display, displayText, formatNumber, type GroupRow, type MetricFamily, type Series } from "./model.js";
+import { coveredMetrics, hasCredentials, meanOf, scmsOverview, sparkShape, POOLED, type FunnelStep, type MetricReader, type ScmsBars, type ScmsSection, type ScmsTile } from "./scmsModel.js";
 import type { HealthLevel } from "./health.js";
 
 /** The section's name: the dashboard's navigation uses the same words. */
@@ -40,6 +42,8 @@ export interface ScmsVerdict {
   readonly answer: string;
   readonly level: HealthLevel | null;
   readonly pending: boolean;
+  /** Why no verdict, when the question is not judged on purpose. */
+  readonly notJudged?: string;
 }
 
 /** How often a playing run's SCMS numbers refresh: the snapshot is once a simulated second. */
@@ -68,6 +72,8 @@ function writeFlag(key: string, v: boolean): void {
 interface Sources {
   readonly snapshot: BackendSnapshot | null;
   readonly pooled: ReadonlyMap<string, readonly GroupRow[]>;
+  /** Run means at the run summary's resolution (`RUN_MEAN_SERIES`). */
+  readonly means: ReadonlyMap<string, number>;
   readonly status: "loading" | "ready" | "error";
 }
 
@@ -80,13 +86,14 @@ function useScmsSources(families: readonly MetricFamily[], active: boolean): Sou
   const runKey = useRunKey();
   const tNs = useStudio((s) => s.run.tNs);
   const playing = useStudio((s) => s.run.state === "running" || s.run.state === "seeking");
-  const [state, setState] = useState<Sources>({ snapshot: null, pooled: new Map(), status: "loading" });
+  const [state, setState] = useState<Sources>({ snapshot: null, pooled: new Map(), means: new Map(), status: "loading" });
   const last = useRef({ key: "", wall: 0, tNs: -1 });
   const inFlight = useRef(false);
   const asks = useMemo(() => POOLED.filter((p) => families.some((f) => f.base === p.metric && f.breakdowns.includes(p.dim))), [families]);
-  const key = `${runKey}|${asks.map((a) => a.metric).join(",")}`;
+  const meanNames = useMemo(() => RUN_MEAN_SERIES.filter((n) => families.some((f) => f.base === n)), [families]);
+  const key = `${runKey}|${asks.map((a) => a.metric).join(",")}|${meanNames.join(",")}`;
 
-  useEffect(() => setState({ snapshot: null, pooled: new Map(), status: "loading" }), [runKey]);
+  useEffect(() => setState({ snapshot: null, pooled: new Map(), means: new Map(), status: "loading" }), [runKey]);
 
   useEffect(() => {
     if (!active || inFlight.current) return;
@@ -98,8 +105,12 @@ function useScmsSources(families: readonly MetricFamily[], active: boolean): Sou
     inFlight.current = true;
     const requested = key;
     void (async () => {
-      const [backend, ...groups] = await Promise.all([
+      const period = metricPeriodNs();
+      const [backend, fine, ...groups] = await Promise.all([
         engine.request("inspect.entity", { entity: "backend", limit: 4 }, { quiet: true, timeoutMs: 4000 }).catch(() => null),
+        meanNames.length > 0 && tNs > 0
+          ? fetchSeries(meanNames, { fromNs: 0, toNs: tNs, binNs: chooseBinNs(tNs / 1e9, period, SUMMARY_POINTS), limit: SUMMARY_POINTS * 2 + 4 }).catch(() => null)
+          : Promise.resolve(null),
         ...asks.map((a) =>
           fetchGroups(a.metric, a.dim, { fromNs: 0, toNs: tNs })
             .then((r) => [`${a.metric}/${a.dim}`, r.rows] as const)
@@ -110,9 +121,14 @@ function useScmsSources(families: readonly MetricFamily[], active: boolean): Sou
       if (last.current.key !== requested) return;
       const pooled = new Map<string, readonly GroupRow[]>();
       for (const g of groups) if (g !== null) pooled.set(g[0], g[1]);
-      setState({ snapshot: backend === null ? null : snapshotOf(backend), pooled, status: backend === null && pooled.size === 0 ? "error" : "ready" });
+      const means = new Map<string, number>();
+      for (const [n, s] of fine?.series ?? []) {
+        const v = meanOf(s);
+        if (v !== null) means.set(n, v);
+      }
+      setState({ snapshot: backend === null ? null : snapshotOf(backend), pooled, means, status: backend === null && pooled.size === 0 ? "error" : "ready" });
     })();
-  }, [active, key, tNs, playing, asks]);
+  }, [active, key, tNs, playing, asks, meanNames]);
   return state;
 }
 
@@ -129,38 +145,73 @@ export function PendingMark({ compact = false, title }: { compact?: boolean; tit
   );
 }
 
-/** A tile's trend: a line of the run so far, no axes; the card it opens has those. */
-function MiniSpark({ series, label }: { series: Series; label: string }): React.JSX.Element | null {
-  const d = useMemo(() => {
-    if (observedCount(series) < 2) return null;
-    let lo = Number.POSITIVE_INFINITY;
-    let hi = Number.NEGATIVE_INFINITY;
-    for (const v of series.v) {
-      if (Number.isNaN(v)) continue;
-      lo = Math.min(lo, v);
-      hi = Math.max(hi, v);
-    }
-    // Spaced by reported window, not by time: a fast-forwarded run reports in short radio windows
-    // days apart, and on a time axis its whole trend is a sliver at the end. The full chart keeps time.
-    const n = observedCount(series);
-    const flat = hi - lo < 1e-12;
-    let path = "";
-    let k = 0;
-    for (let i = 0; i < series.t.length; i++) {
-      const v = series.v[i]!;
-      if (Number.isNaN(v)) continue;
-      const x = (k / Math.max(1, n - 1)) * 120;
-      const y = flat ? 12 : 2 + (1 - (v - lo) / (hi - lo)) * 20;
-      path += `${k === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-      k++;
-    }
-    return { path, lo, hi };
-  }, [series]);
-  if (d === null) return null;
+/**
+ * No verdict, on purpose: no band or expectation judges this question. A flat dash and "Not judged"
+ * in the neutral colour, with the reason as its tooltip, so the reader sees a chip, never a blank.
+ */
+export function NotJudgedMark({ compact = false, title }: { compact?: boolean; title?: string }): React.JSX.Element {
   return (
-    <svg className="scms-spark" viewBox="0 0 120 24" preserveAspectRatio="none" role="img" aria-label={`${label}: trend over the windows that reported, ${formatNumber(d.lo)} to ${formatNumber(d.hi)}`}>
-      <path d={d.path} vectorEffect="non-scaling-stroke" />
-    </svg>
+    <span
+      className={`lmark none${compact ? " compact" : ""}`}
+      data-level="none"
+      title={title ?? "Not judged: no standard sets a threshold"}
+      tabIndex={compact ? undefined : 0}
+      role={compact ? "img" : undefined}
+      aria-label={compact ? `Not judged${title ? `: ${title}` : ""}` : undefined}
+    >
+      <span className="hdot none" aria-hidden="true" />
+      {compact ? null : "Not judged"}
+    </span>
+  );
+}
+
+/** A question's verdict mark: its level, pending, or not judged. */
+function SectionMark({ s, compact = false }: { s: ScmsSection; compact?: boolean }): React.JSX.Element | null {
+  const title = compact ? `${s.question} ${s.answer}` : undefined;
+  if (s.level) return <LevelMark level={s.level} compact={compact} title={title} />;
+  if (s.pending) return <PendingMark compact={compact} title={title} />;
+  if (s.notJudged) return <NotJudgedMark compact={compact} title={compact ? title : s.notJudged} />;
+  return null;
+}
+
+/** A sparkline's ends, in the tile's own unit: "4.9–5.0", "120–340 ms". */
+function rangeText(lo: number, hi: number, base: string | undefined, unit: string | undefined): string {
+  const a = display(base ?? "", lo, unit ?? "");
+  const b = display(base ?? "", hi, unit ?? "");
+  return a.unit === b.unit ? `${a.value}–${b.value}${b.unit ? ` ${b.unit}` : ""}` : `${displayText(base ?? "", lo, unit ?? "")}–${displayText(base ?? "", hi, unit ?? "")}`;
+}
+
+/**
+ * A tile's trend over the windows that reported: the range written at the left, a line (dots when
+ * there are one to three windows), or "steady" when it barely moved. The card it opens has the axes.
+ */
+function MiniSpark({ series, label, base, unit }: { series: Series; label: string; base?: string; unit?: string }): React.JSX.Element | null {
+  const shape = useMemo(() => sparkShape(series), [series]);
+  if (shape === null) return null;
+  if (shape.kind === "steady") {
+    return (
+      <span className="scms-spark-row steady" data-testid="scms-spark-steady">
+        <span className="scms-spark-range">
+          steady at {displayText(base ?? "", shape.value, unit ?? "")} over {shape.n} {shape.n === 1 ? "window" : "windows"}
+        </span>
+      </span>
+    );
+  }
+  const range = rangeText(shape.lo, shape.hi, base, unit);
+  return (
+    <span className="scms-spark-row" data-testid={`scms-spark-${shape.kind}`}>
+      <span className="scms-spark-range mono" title="Lowest and highest window so far">
+        {range}
+      </span>
+      <svg className="scms-spark" viewBox="0 0 120 24" preserveAspectRatio="none" role="img" aria-label={`${label}: ${shape.kind === "dots" ? `${shape.points.length} windows` : "trend over the windows that reported"}, ${range}`}>
+        <line className="scms-spark-base" x1="0" x2="120" y1="23" y2="23" vectorEffect="non-scaling-stroke" />
+        {shape.kind === "line" ? (
+          <path d={shape.path} vectorEffect="non-scaling-stroke" />
+        ) : (
+          shape.points.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r="2.2" vectorEffect="non-scaling-stroke" />)
+        )}
+      </svg>
+    </span>
   );
 }
 
@@ -194,7 +245,7 @@ function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen
           ))}
         </span>
       ) : null}
-      {spark ? <MiniSpark series={spark} label={t.title} /> : null}
+      {spark ? <MiniSpark series={spark} label={t.title} base={t.metric} unit={t.sparkUnit} /> : null}
     </>
   );
   const common = {
@@ -215,8 +266,9 @@ function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen
 }
 
 /**
- * Where the reports are, as a left-to-right flow: each step a box with its count, and between two
- * steps an arrow that says how many did not move on and why ("132 still on the vehicles").
+ * Where the reports are, as a left-to-right flow of steps that are each a subset of the one before:
+ * each step a box with its count, and between two steps an arrow that says how many did not move on
+ * and why ("45 not uploaded"), or what joined ("+378 beyond the uploads").
  */
 function Funnel({ steps }: { steps: readonly FunnelStep[] }): React.JSX.Element {
   return (
@@ -224,7 +276,7 @@ function Funnel({ steps }: { steps: readonly FunnelStep[] }): React.JSX.Element 
       <h5>Where the reports are</h5>
       <ol className="scms-flow" data-testid="scms-funnel" aria-label="Misbehaviour reports, from the vehicle to the Misbehaviour Authority">
         {steps.map((s, i) => (
-          <li key={s.id} className="scms-flow-item">
+          <li key={s.id} className={`scms-flow-item${i === 0 ? " first" : ""}`}>
             {i > 0 ? (
               <span className="scms-flow-arrow" aria-hidden={s.drop === undefined} data-testid={`scms-drop-${s.id}`}>
                 <span className="scms-flow-line" aria-hidden="true">
@@ -266,18 +318,46 @@ function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => vo
         </p>
       ) : (
         <>
+          {b.caveat ? (
+            <p className="scms-caveat" data-testid={`${testId}-caveat`}>
+              <span className="scms-hatch-key" aria-hidden="true" />
+              {b.caveat}
+            </p>
+          ) : null}
           <ul className="scms-bars">
             {b.rows.map((r) => (
-              <li key={r.key} className="scms-bar-row" title={r.hint ?? r.key} data-testid={`scms-bar-${r.key}`}>
-                <span className="scms-bar-label">{r.label}</span>
+              <li key={r.key} className={`scms-bar-row${r.hatched ? " hatched" : ""}`} title={r.hint ?? r.key} data-testid={`scms-bar-${r.key}`} data-width={barWidth(r.value, b.max).toFixed(1)}>
+                <span className="scms-bar-label">
+                  <span className="scms-bar-name">{r.label}</span>
+                  {r.tag ? (
+                    <span className="scms-bar-tag" data-testid={`scms-bar-tag-${r.key}`}>
+                      {r.tag}
+                    </span>
+                  ) : null}
+                </span>
                 <span className="scms-bar-track">
-                  <span className={`scms-bar${r.level ? ` ${r.level}` : ""}`} style={{ width: `${Math.max(1, Math.min(100, (r.value / Math.max(1e-12, b.max)) * 100))}%` }} />
+                  <span className={`scms-bar${r.level ? ` ${r.level}` : ""}${r.hatched ? " hatched" : ""}`} style={{ width: `${barWidth(r.value, b.max)}%` }} />
                   {b.limit ? <span className="scms-bar-limit" style={{ left: `${b.limit.at * 100}%` }} title={b.limit.label} /> : null}
                 </span>
                 <span className="scms-bar-val mono">{r.display}</span>
               </li>
             ))}
+            {b.axis ? (
+              <li className="scms-bar-row scms-bar-axis" aria-hidden="true" data-testid={`${testId}-axis`}>
+                <span />
+                <span className="scms-axis">
+                  <span>{b.axis.lo}</span>
+                  <span>{b.axis.hi}</span>
+                </span>
+                <span />
+              </li>
+            ) : null}
           </ul>
+          {b.total ? (
+            <p className="scms-total" data-testid={`${testId}-total`}>
+              {b.total}
+            </p>
+          ) : null}
           <p className="dim scms-note">
             {b.note}
             {b.limit ? ` The dashed line: ${b.limit.label}.` : ""}
@@ -288,13 +368,18 @@ function Bars({ b, onOpen, testId }: { b: ScmsBars; onOpen: (base: string) => vo
   );
 }
 
+/** A bar's width in % of its track: never past the track, never invisible. */
+function barWidth(v: number, max: number): number {
+  return Math.max(1, Math.min(100, (v / Math.max(1e-12, max)) * 100));
+}
+
 function Panel({ s, overview, onOpen }: { s: ScmsSection; overview: Overview; onOpen: (base: string) => void }): React.JSX.Element {
   return (
     <article className={`scms-panel${s.level ? ` ${s.level}` : s.pending ? " pending" : ""}`} id={`scms-${s.id}`} data-testid={`scms-section-${s.id}`} data-level={s.level ?? (s.pending ? "pending" : "none")} aria-labelledby={`scms-q-${s.id}`}>
       <header className="scms-panel-head">
         <h4 id={`scms-q-${s.id}`}>{s.question}</h4>
         <p className="scms-answer" data-testid={`scms-answer-${s.id}`}>
-          {s.level ? <LevelMark level={s.level} /> : s.pending ? <PendingMark /> : null}
+          <SectionMark s={s} />
           <span>{s.answer}</span>
         </p>
       </header>
@@ -308,6 +393,35 @@ function Panel({ s, overview, onOpen }: { s: ScmsSection; overview: Overview; on
       {s.funnel ? <Funnel steps={s.funnel} /> : null}
       {s.bars ? <Bars b={s.bars} onOpen={onOpen} testId={`scms-bars-${s.id}`} /> : null}
     </article>
+  );
+}
+
+/**
+ * Every question's answer on one row, before the detail: its topic, its verdict and a few words.
+ * Each opens its question below.
+ */
+function AnswerStrip({ sections }: { sections: readonly ScmsSection[] }): React.JSX.Element {
+  return (
+    <nav className="scms-strip" aria-label="Each question's answer, in brief" data-testid="scms-strip">
+      {sections.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          className={`scms-strip-item${s.level ? ` ${s.level}` : ""}`}
+          data-testid={`scms-strip-${s.id}`}
+          data-level={s.level ?? (s.pending ? "pending" : "none")}
+          title={`${s.question}\n${s.answer}${!s.level && !s.pending && s.notJudged ? `\n\n${s.notJudged}` : ""}`}
+          onClick={() => {
+            const el = document.getElementById(`scms-${s.id}`);
+            el?.scrollIntoView({ block: "start", behavior: "smooth" });
+          }}
+        >
+          <span className="scms-strip-topic">{s.topic}</span>
+          <SectionMark s={s} />
+          <span className="scms-strip-short">{s.short ?? ""}</span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -337,8 +451,9 @@ export function ScmsOverview({
       latest: (n) => overview.latest.get(n) ?? null,
       series: (n) => overview.series.get(n),
       pooled: (m, d) => src.pooled.get(`${m}/${d}`),
+      runMean: (n) => src.means.get(n) ?? null,
     }),
-    [families, overview, src.pooled],
+    [families, overview, src.pooled, src.means],
   );
   const has = hasCredentials(src.snapshot, reader);
   const o = has ? scmsOverview(src.snapshot, reader, { tNs: src.snapshot?.t ?? tNs, scenario, finished }) : null;
@@ -347,7 +462,7 @@ export function ScmsOverview({
   useEffect(() => {
     if (onReport === undefined) return;
     onReport({
-      verdicts: o === null ? [] : o.sections.map((x) => ({ id: x.id, question: x.question, answer: x.answer, level: x.level, pending: x.pending === true })),
+      verdicts: o === null ? [] : o.sections.map((x) => ({ id: x.id, question: x.question, answer: x.answer, level: x.level, pending: x.pending === true, ...(x.notJudged ? { notJudged: x.notJudged } : {}) })),
       covered,
     });
     // The key carries every verdict and metric; the sections themselves are rebuilt each render.
@@ -393,9 +508,9 @@ export function ScmsOverview({
         <span className="grow" />
         {!open ? (
           <span className="scms-mini" aria-label="Each question's verdict">
-            {o.sections.map((s) =>
-              s.level ? <LevelMark key={s.id} level={s.level} compact title={`${s.question} ${s.answer}`} /> : s.pending ? <PendingMark key={s.id} compact title={`${s.question} ${s.answer}`} /> : null,
-            )}
+            {o.sections.map((s) => (
+              <SectionMark key={s.id} s={s} compact />
+            ))}
           </span>
         ) : null}
         {src.snapshot !== null ? (
@@ -411,9 +526,9 @@ export function ScmsOverview({
                 if (!open) setOpen(true);
               }}
               data-testid="scms-raw-toggle"
-              title="Every authority's own counts, exactly as the engine reports them"
+              title="Every authority's own counters, as the engine reports them, for debugging"
             >
-              {raw ? "Hide raw counts" : "Raw counts ↓"}
+              {raw ? "Hide engine counters" : "Engine counters ↓"}
             </button>
             <button
               type="button"
@@ -434,6 +549,7 @@ export function ScmsOverview({
             chart to open it.
             {src.status === "loading" ? " Reading the authorities' counts…" : src.snapshot === null ? " The engine published no Backend snapshot, so only the catalogue's metrics appear." : ""}
           </p>
+          <AnswerStrip sections={o.sections} />
           <div className="scms-grid">
             {o.sections.map((s) => (
               <Panel key={s.id} s={s} overview={overview} onOpen={openBase} />
@@ -441,7 +557,8 @@ export function ScmsOverview({
           </div>
           {raw && o.raw.length > 0 ? (
             <div className="scms-raw" data-testid="scms-raw" ref={rawRef}>
-              <h4>Raw counts, as each authority reports them</h4>
+              <h4>Engine counters (for debugging)</h4>
+              <p className="dim scms-note">Each authority's own counters, as the engine reports them. Hover a name for the engine's key; the questions above already use the ones that matter.</p>
               <div className="scms-raw-grid">
                 {o.raw.map((e) => (
                   <dl key={e.id} className="scms-raw-entity">
@@ -449,12 +566,17 @@ export function ScmsOverview({
                       {e.name} <span className="mono dim">{e.id}</span>
                     </dt>
                     {e.counts.length === 0 ? <dd className="dim">No counts.</dd> : null}
-                    {e.counts.map(([k, v]) => (
-                      <dd key={k}>
-                        <span className="mono dim">{k}</span>
-                        <span className="mono">{v}</span>
-                      </dd>
-                    ))}
+                    {e.counts.map(([k, v]) => {
+                      const words = counterText(k);
+                      return (
+                        <dd key={k} title={`${k}${words?.means ? `: ${words.means}` : ""}`} data-testid={`scms-raw-${e.id}-${k}`}>
+                          <span className={words ? "scms-raw-key" : "scms-raw-key mono dim"}>{words?.label ?? k.replace(/_/g, " ")}</span>
+                          <span className="mono scms-raw-val" title={v}>
+                            {v}
+                          </span>
+                        </dd>
+                      );
+                    })}
                   </dl>
                 ))}
               </div>

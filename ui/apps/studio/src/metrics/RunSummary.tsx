@@ -31,7 +31,7 @@ import { classify, isCumulative, judge, judgedSeries, LEVEL_LABEL, noteOf, outOf
 import { BandTable, HealthDot, HealthLine } from "./HealthBadge.js";
 import { useRunKey } from "./hooks.js";
 import { chooseBinNs, clockText, displayText, familiesOf, formatNumber, worstFirst, type MetricFamily } from "./model.js";
-import { countOf, firstProvider, POOLED } from "./scmsModel.js";
+import { countOf, firstProvider, linkabilityReference, scenarioWindows, stageSpan, POOLED } from "./scmsModel.js";
 
 /** Metrics the credential overview pools over the run (no per-window value, but a run total). */
 const POOLED_IN_OVERVIEW: readonly string[] = POOLED.map((p) => p.metric);
@@ -49,6 +49,7 @@ import {
   stageName,
   ENTITY_UTILISATION_LIMIT,
   HEADLINES,
+  SUMMARY_POINTS,
   type CredentialRow,
   type EntityLoad,
 } from "./summaryModel.js";
@@ -56,8 +57,6 @@ import { closeRunSummary, useRunSummary } from "./summaryStore.js";
 import { openRunCompare, useCanComparePrevious } from "./RunCompare.js";
 import "./metrics.css";
 
-/** The most windows the summary asks for per series: full resolution for a run of ten minutes at 1 s. */
-const SUMMARY_POINTS = 600;
 
 interface SummaryData {
   readonly families: readonly MetricFamily[];
@@ -87,7 +86,8 @@ async function collect(tNs: number, scenario: unknown, finished = false): Promis
   const units = new Map(defs.map((d) => [d.name, d.unit] as const));
   const banded = families.filter((f) => f.health !== null && known.has(judgedSeries(f.base, f.health)));
   const headSeries = HEADLINES.flatMap((g) => g.items.map((i) => i.series)).filter((s) => known.has(s));
-  const names = [...new Set([...banded.map((f) => judgedSeries(f.base, f.health!)), ...headSeries])];
+  // time_to_decision is read as the overview reads it (the mean of the windows with a decision).
+  const names = [...new Set([...banded.map((f) => judgedSeries(f.base, f.health!)), ...headSeries, ...(known.has("time_to_decision") ? ["time_to_decision"] : [])])];
   const period = metricPeriodNs();
   const binNs = chooseBinNs(tNs / 1e9, period, SUMMARY_POINTS);
   const { series } = await fetchSeries(names, { fromNs: 0, toNs: tNs, binNs, limit: SUMMARY_POINTS * 2 + 4 });
@@ -135,13 +135,17 @@ async function collect(tNs: number, scenario: unknown, finished = false): Promis
       return null;
     }
   };
-  const [stageRows, causeRows, backend, accusations, recallRows] = await Promise.all([
+  const [stageRows, causeRows, backend, accusations, recallRows, revocationRows] = await Promise.all([
     families.some((f) => f.base === "latency_stage_share") ? optional(() => fetchGroups("latency_stage_share", "stage", { fromNs: 0, toNs: tNs })) : null,
     families.some((f) => f.base === "pdr_by_cause") ? optional(() => fetchGroups("pdr_by_cause", "cause", { fromNs: 0, toNs: tNs })) : null,
     optional(() => engine.request("inspect.entity", { entity: "backend", limit: 40 }, { quiet: true, timeoutMs: 4000 })),
     families.some((f) => f.base === "false_accusations" && f.breakdowns.includes("level")) ? optional(() => fetchGroups("false_accusations", "level", { fromNs: 0, toNs: tNs })) : null,
     families.some((f) => f.base === "det_recall" && f.breakdowns.includes("level")) ? optional(() => fetchGroups("det_recall", "level", { fromNs: 0, toNs: tNs })) : null,
+    families.some((f) => f.base === "revocation_latency_stage" && f.breakdowns.includes("stage")) ? optional(() => fetchGroups("revocation_latency_stage", "stage", { fromNs: 0, toNs: tNs })) : null,
   ]);
+  const decisionS = reduceSeries(series.get("time_to_decision") ?? { t: new Float64Array(0), v: new Float64Array(0) }, "mean");
+  const toListS = revocationRows ? stageSpan(revocationRows.rows, "decision", "published") : null;
+  const compressed = [...scenarioWindows(scenario).values()].some((x) => x.compressed);
   const snap = backend === null ? null : snapshotOf(backend);
   const stage = stageRows ? dominant(stageRows.rows) : null;
   const entities = snap ? entityLoads(snap, tNs) : [];
@@ -165,6 +169,8 @@ async function collect(tNs: number, scenario: unknown, finished = false): Promis
             atTimes: judgements.filter((j) => j.level === "healthy" && j.worstLevel !== "healthy").length,
             healthy: healthyThroughout,
             worstLabel: outs[0]?.label ?? null,
+            worstHow: outs[0] ? howText(outs[0]) : null,
+            worstNote: outs[0]?.base === "linkability" && linkabilityReference(scenario) !== null ? "expected without a silent period, as Wiedersheim et al. found at WONS 2010" : null,
           },
     delivery: { pdr: headline.get("pdr[100m]") ?? null, latencyMs: headline.get("e2e_latency") ?? null },
     credentials: {
@@ -187,6 +193,7 @@ async function collect(tNs: number, scenario: unknown, finished = false): Promis
         finished,
       }),
       recall: recallV,
+      decisionS,
     },
     bottleneck: { stage: stage ? stageName(stage.key) : null, stageShare: stage?.share ?? null, entity: entities[0]?.name ?? null, utilisation: entities[0]?.utilisation ?? null },
   });
@@ -212,6 +219,9 @@ async function collect(tNs: number, scenario: unknown, finished = false): Promis
       finished,
       recall: recallV,
       recallLevel: recallBand ? classify(recallBand, recallV) : null,
+      decisionS,
+      toListS,
+      compressed,
     }),
   };
 }
@@ -369,9 +379,14 @@ function SummaryDialog(): React.JSX.Element {
                 {judged.length === 0 ? (
                   <span>No metric with a published healthy range was measured in this run.</span>
                 ) : (
-                  <span>
-                    <strong>{verdictText(counts.unhealthy, counts.caution, atTimes, healthy.length)}</strong> — of {judged.length} metrics with a published healthy
-                    range, judged on the run's windows.
+                  <span className="rsum-verdict-text">
+                    <strong data-testid="run-summary-verdict-head">
+                      {verdictHead(counts.unhealthy, counts.caution, atTimes, judged.length)}
+                      {out[0] ? `. Weakest: ${out[0].label} (${howText(out[0])})` : ""}.
+                    </strong>
+                    <span className="rsum-verdict-counts dim" data-testid="run-summary-verdict-counts">
+                      Over the whole run, of {judged.length} metrics with a published healthy range: {verdictCounts(counts.unhealthy, counts.caution, atTimes, healthy.length)}.
+                    </span>
                   </span>
                 )}
               </div>
@@ -441,7 +456,7 @@ function SummaryDialog(): React.JSX.Element {
                           <div className="rsum-row-head">
                             <HealthDot level={worse(j)} />
                             <strong>{j.label}</strong>
-                            <span className="rsum-level">{j.level === "healthy" ? `${LEVEL_LABEL[j.worstLevel]} at times` : LEVEL_LABEL[j.level]}</span>
+                            <span className="rsum-level">{levelWords(j)}</span>
                             <span className="grow" />
                             <button type="button" className="linklike" onClick={() => setExpanded(open ? null : j.base)} aria-expanded={open}>
                               {open ? "Hide thresholds" : "Thresholds"}
@@ -450,7 +465,7 @@ function SummaryDialog(): React.JSX.Element {
                               Chart
                             </button>
                           </div>
-                          <HealthLine band={j.band} value={j.level === "healthy" ? j.worst : j.mean} unit={j.unit} />
+                          <HealthLine band={j.band} value={j.level === "healthy" ? j.worst : j.mean} unit={j.unit} bare />
                           <p className="dim rsum-when">
                             {j.cumulative
                               ? `Over the whole run ${displayText(j.base, j.mean, j.unit)}${j.level === "healthy" ? ", healthy" : ""}; `
@@ -507,15 +522,39 @@ function SummaryDialog(): React.JSX.Element {
   );
 }
 
-/** "1 unhealthy on average, 1 to watch, 2 out of range at times, 11 healthy throughout". */
-function verdictText(unhealthy: number, caution: number, atTimes: number, healthy: number): string {
-  if (unhealthy + caution + atTimes === 0) return `All ${healthy} healthy throughout`;
+/**
+ * The run's verdict in two or three words, over the whole run: "Healthy throughout", "Healthy on
+ * average, out of range at times", "Mostly healthy" (at most one in six judged metrics caution or
+ * unhealthy on average), "Several metrics out of range".
+ */
+function verdictHead(unhealthy: number, caution: number, atTimes: number, n: number): string {
+  if (unhealthy + caution + atTimes === 0) return "Healthy throughout";
+  if (unhealthy + caution === 0) return "Healthy on average, out of range at times";
+  if (unhealthy + caution <= Math.max(1, Math.floor(n / 6))) return "Mostly healthy";
+  return "Several metrics out of range";
+}
+
+/** The four categories in the words the health strip and the rows use: "1 unhealthy · 1 caution · 4 healthy, out of range at times · 12 healthy throughout". */
+function verdictCounts(unhealthy: number, caution: number, atTimes: number, healthy: number): string {
   const parts: string[] = [];
-  parts.push(unhealthy > 0 ? `${unhealthy} unhealthy on average` : "None unhealthy on average");
-  if (caution > 0) parts.push(`${caution} to watch`);
-  if (atTimes > 0) parts.push(`${atTimes} out of range at times`);
+  if (unhealthy > 0) parts.push(`${unhealthy} unhealthy`);
+  if (caution > 0) parts.push(`${caution} caution`);
+  if (atTimes > 0) parts.push(`${atTimes} healthy, out of range at times`);
   parts.push(`${healthy} healthy throughout`);
-  return parts.join(", ");
+  return parts.join(" · ");
+}
+
+/** A judged metric's level in words, its run mean first: "Caution on average, unhealthy at times", "Unhealthy all run". */
+function levelWords(j: Judgement): string {
+  if (j.level === "healthy") return `${LEVEL_LABEL[j.worstLevel]} at times`;
+  const all = j.level === "unhealthy" ? j.unhealthyShare >= 1 : j.cautionShare + j.unhealthyShare >= 1;
+  const base = `${LEVEL_LABEL[j.level]} ${all ? "all run" : "on average"}`;
+  return worseLevel(j.level, j.worstLevel) !== j.level ? `${base}, ${j.worstLevel} at times` : base;
+}
+
+/** "unhealthy all run, 90.9 %": how the weakest metric did, for the verdict and the brief. */
+function howText(j: Judgement): string {
+  return `${levelWords(j).toLowerCase()}, ${j.cumulative ? "" : j.level === "healthy" ? "worst " : "mean "}${displayText(j.base, j.level === "healthy" ? j.worst : j.mean, j.unit)}`;
 }
 
 /** A row's colour: the worse of the run mean's level and the worst window's. */

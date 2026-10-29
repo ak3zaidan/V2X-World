@@ -68,12 +68,15 @@ export function HealthLine({
   unit,
   testId,
   compact = false,
+  bare = false,
 }: {
   band: MetricHealthBand;
   value: number | null | undefined;
   unit: string;
   testId?: string;
   compact?: boolean;
+  /** Without its own mark and level word: the row above already carries them (one mark a row). */
+  bare?: boolean;
 }): React.JSX.Element | null {
   const level = classify(band, value);
   if (level === null || value === null || value === undefined) return null;
@@ -81,8 +84,8 @@ export function HealthLine({
   const title = `${thresholdsText(band, unit)}\n${BASIS_LABEL[band.basis]}: ${band.source}`;
   return (
     <div className={`hline ${level}${compact ? " compact" : ""}`} title={title} data-testid={testId} data-level={level}>
-      <HealthDot level={level} />
-      <span className="hline-level">{LEVEL_LABEL[level]}</span>
+      {bare ? null : <HealthDot level={level} />}
+      {bare ? null : <span className="hline-level">{LEVEL_LABEL[level]}</span>}
       <span className="hline-text">
         {stat !== "" ? <span className="dim">{stat} </span> : null}
         <strong className="mono">{bandValue(value, unit)}</strong> — {noteOf(band, level)}

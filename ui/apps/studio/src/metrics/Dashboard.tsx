@@ -283,6 +283,21 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
       </div>
       <div className="metrics-layout">
         <nav className="metrics-nav" aria-label="Metric groups">
+          <p className="metrics-nav-key" data-testid="metrics-nav-key" title="A group's mark is its worst metric's level in the newest window; the numbers are metrics measured out of those the run can measure.">
+            <span>
+              <HealthDot level="unhealthy" />
+              unhealthy
+            </span>
+            <span>
+              <HealthDot level="caution" />
+              caution
+            </span>
+            <span>
+              <HealthDot level="healthy" />
+              healthy
+            </span>
+            <span className="mono">n/m measured</span>
+          </p>
           {credentials && query === "" ? (
             <button
               type="button"
@@ -350,9 +365,10 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
             <>
               {query !== "" && filtered.length === 0 ? <p className="metrics-message dim">No metric matches “{query}”.</p> : null}
               {query === "" && health.length > 0 ? (
-                <section className="mhealth-strip" data-testid="metrics-health-strip" aria-label="Health at a glance">
+                <section className="mhealth-strip" data-testid="metrics-health-strip" aria-label="Health now, judged on the newest window">
                   <h3>
-                    Health at a glance
+                    Health now
+                    <span className="mhealth-when dim">newest window</span>
                     <span className="mhealth-counts dim" data-testid="metrics-health-counts">
                       {(["unhealthy", "caution", "healthy"] as const)
                         .map((l) => [l, health.filter((h) => h.level === l).length] as const)
@@ -363,7 +379,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
                     <span
                       className="mx-info"
                       tabIndex={0}
-                      title="Each metric with a published healthy range, judged on its newest window against the standard or study behind it. Open one to see the thresholds and their source."
+                      title="Each metric with a published healthy range, judged on its newest window against the standard or study behind it, so a metric that was out of range earlier can be healthy now; the run summary judges the whole run. Open one to see the thresholds and their source."
                     >
                       i
                     </span>

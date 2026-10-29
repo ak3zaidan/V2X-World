@@ -20,7 +20,14 @@ import {
   duration,
   firstProvider,
   hasCredentials,
+  linkabilityReference,
   meanOf,
+  pctText,
+  scenarioWindows,
+  shareAxis,
+  sparkShape,
+  stageSpan,
+  topupRefusals,
   providerOf,
   roleOf,
   scmsOverview,
@@ -157,7 +164,8 @@ describe("the five questions", () => {
     expect(o.providers).toEqual(["provider-a", "provider-b"]);
     expect(o.facts).toBe("2 providers: provider-a, provider-b · ECDSA P-256 signatures");
     // No privacy metric in this reader, so no privacy question: a question appears only with its data.
-    expect(o.sections.map((s) => s.id)).toEqual(["certs", "revocation", "misbehaviour", "cost", "backend"]);
+    // Misbehaviour before revocation: an attack is reported, then the MA decides, then the list carries it.
+    expect(o.sections.map((s) => s.id)).toEqual(["certs", "misbehaviour", "revocation", "cost", "backend"]);
   });
 
   it("answers whether devices get certificates, with the provider split", () => {
@@ -183,10 +191,11 @@ describe("the five questions", () => {
 
   it("follows a report from the vehicle to the MA", () => {
     const f = section("misbehaviour").funnel!;
+    // Only steps that are subsets of the one before: the RA's shuffle (the newest reports, held now)
+    // is said on the arrow into the MA, not drawn as a box.
     expect(f.map((x) => [x.id, x.value])).toEqual([
       ["filed", 195],
       ["sent", 150],
-      ["shuffle", 150],
       ["ma", 0],
       ["cases", 0],
       ["revoked", 0],
@@ -194,14 +203,19 @@ describe("the five questions", () => {
     expect(f[1]!.hint).toContain("74 over cellular, 76 relayed by roadside units; 2 waiting for coverage");
     // The reports between two steps are accounted for on the arrow, not left for the reader to subtract.
     expect(f[1]!.drop).toBe("45 not uploaded (2 wait for coverage)");
-    expect(f[3]!.drop).toBe("150 wait in the shuffle");
+    expect(f[2]!.drop).toBe("150 in the RA's shuffle now");
     expect(f[0]!.drop).toBeUndefined();
+    // No count is said twice (once as a box, once on an arrow).
+    expect(f.filter((x) => x.drop?.includes("150 in the RA's shuffle")).length).toBe(1);
     // When the RA and the MA hold more than the vehicles count as sent (shared reports), the gap is
     // not reports left behind: no arrow claims it, and the step's hint says why.
     const shared = { ...snap, entities: snap.entities.map((e) => (e.id === "ma" ? { ...e, state: { ...e.state, reports_received: 300 } } : e)) };
     const g = scmsOverview(shared, m, { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "misbehaviour")!.funnel!;
     expect(g[1]!.drop).toBeUndefined();
     expect(g[1]!.hint).toContain("not reports left behind");
+    // The MA's surplus over the uploads is said where it appears, so the funnel never silently grows.
+    expect(g[2]!.drop).toContain("+150 beyond the uploads");
+    expect(g[2]!.hint).toContain("other provider's MA shares");
   });
 
   it("calls a low recall pending, not a problem, while the reports wait in the RA's shuffle", () => {
@@ -256,7 +270,7 @@ describe("the five questions", () => {
 
   it("says nothing has been revoked, and that the CRL is still published", () => {
     expect(section("revocation").answer).toBe("Nothing has been revoked yet; the CRL is still published on schedule (2 so far).");
-    expect(tile("revocation", "crl-versions")!.meaning).toContain("every 24 h");
+    expect(tile("revocation", "crl-versions")!.meaning).toContain("at the next 24 h boundary after a revocation");
     expect(section("revocation").bars!.rows).toEqual([]);
   });
 
@@ -348,7 +362,8 @@ describe("the run in brief", () => {
     });
     expect(s.length).toBeGreaterThanOrEqual(3);
     expect(s.length).toBeLessThanOrEqual(5);
-    expect(s[0]).toBe("Of 11 metrics with a published healthy range, 9 stayed healthy, 1 was out of range at times and 1 was unhealthy on average; the worst is verification wait.");
+    // The finding first; the counts belong to the summary's verdict line above the brief.
+    expect(s[0]).toBe("The weakest result is verification wait.");
     expect(s[1]).toBe("Messages within 100 m were delivered 94 % of the time, in 3.2 ms end to end on average.");
     expect(s[2]).toBe("All 23 devices were enrolled and the vehicles' mean pool never fell below 38.5 valid pseudonym certificates; none ran out.");
     expect(s[3]).toBe("Vehicles filed 195 misbehaviour reports and 2 devices were revoked, none of them honest; the slowest revocation step took 24 h (p95).");
@@ -375,7 +390,7 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
 
   it("asks whether a vehicle can be tracked, and answers from linkability", () => {
     const o = scmsOverview(snap, reader({ cert_pool_valid: 38.5, linkability: 0.87, pseudonym_change_rate: 12.4 }, {}, privacyDefs), { tNs: snap.t, scenario: null });
-    expect(o.sections.map((s) => s.id)).toEqual(["certs", "revocation", "misbehaviour", "privacy", "cost", "backend"]);
+    expect(o.sections.map((s) => s.id)).toEqual(["certs", "misbehaviour", "revocation", "privacy", "cost", "backend"]);
     const p = o.sections.find((s) => s.id === "privacy")!;
     expect(p.question).toBe("Can a vehicle be tracked across pseudonym changes?");
     expect(p.level).toBe("unhealthy");
@@ -492,5 +507,150 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
     expect(j.level).toBe("caution");
     expect(j.cumulative).toBe(true);
     expect(judge("linkability", "ratio", band, s, "Linkability")!.level).toBe("unhealthy");
+  });
+});
+
+describe("round 2: honest cues, one story, numbers that cannot mislead", () => {
+  const withState = (patch: Record<string, Record<string, unknown>>) => ({
+    ...snap,
+    entities: snap.entities.map((e) => (patch[e.id] ? { ...e, state: { ...e.state, ...patch[e.id] } } : e)),
+  });
+  const cl = {
+    security: { protocol: { params: { certs_per_period: 5, i_period_s: 60, pool_periods: 2, report_shuffle_window_s: 30, crl_cadence_s: 30 } }, pseudonym_change: { strategy: "time" } },
+    time: { calendar: "compressed" },
+  };
+
+  it("does not flag top-ups the RA refused because their device was revoked", () => {
+    const blk = (n: number) => ({ total: n, byProvider: [["provider-a", n]] as [string, number][] });
+    const both = topupRefusals(2, blk(2), blk(0), 2);
+    expect(both.level).toBeNull();
+    expect(both.note).toBe("Both refusals were revoked devices asking for more (expected: the RA blocklists a revoked device).");
+    const other = topupRefusals(3, blk(2), blk(1), 2);
+    expect(other.level).toBe("caution");
+    expect(other.note).toContain("2 were revoked devices (expected) and 1 were refused for an expired enrolment or a policy");
+    // Without the RA's counts, a run that revokes devices is not judged on its refusals; one that revokes nobody is.
+    expect(topupRefusals(2, null, null, 3).level).toBeNull();
+    expect(topupRefusals(2, null, null, 0).level).toBe("caution");
+    expect(topupRefusals(0, blk(0), null, 0).level).toBeNull();
+    // In the overview: the snapshot's own counts decide it.
+    const s2 = withState({ ee: { topups_started: 121, topups_completed: 119, topups_refused: 2 }, ra: { refused_blocklisted: 2 }, ma: { revocations: 2 } });
+    const t = scmsOverview(s2, reader({}, {}, defs), { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "certs")!.tiles.find((x) => x.id === "topups")!;
+    expect(t.level).toBeNull();
+    expect(t.meaning).toContain("revoked devices asking for more (expected");
+  });
+
+  it("scales the pool band to the certificates a period the scenario issues, and says so on the tile", () => {
+    const b = expectedBand("cert_pool_valid", poolBand, cl);
+    expect(b.caution).toBeCloseTo(1.25);
+    expect(b.unhealthy).toBe(1);
+    expect(b.source).toContain("certs_per_period 5");
+    // 4.94 of 5 is a full pool here, not "down to a handful".
+    const fams = withExpectations(familiesOf([def("cert_pool_valid", "count", poolBand)]), cl);
+    const r: MetricReader = { family: (x) => fams.find((f) => f.base === x), latest: (x) => (x === "cert_pool_valid" ? 4.94 : null), series: () => undefined, pooled: () => undefined };
+    const tile = scmsOverview(snap, r, { tNs: snap.t, scenario: cl }).sections.find((x) => x.id === "certs")!.tiles.find((x) => x.id === "cert_pool_valid")!;
+    expect(tile.level).toBe("healthy");
+    expect(tile.unit).toBe("of 5 a period");
+    expect(tile.meaning).toContain("This scenario issues 5 per period (an i-period, 60 s here; a week in a deployment)");
+    expect(tile.meaning).toContain("next period's batch");
+    // A scenario on the deployment's calendar keeps the engine's band.
+    expect(expectedBand("cert_pool_valid", poolBand, { security: { protocol: { params: { certs_per_period: 20 } } } })).toBe(poolBand);
+  });
+
+  it("marks the revocation steps the scenario's compressed windows decide, and adds the steps up", () => {
+    const w = scenarioWindows(cl);
+    expect([...w.keys()]).toEqual(["report_sent->report_received", "issued->published"]);
+    expect(w.get("issued->published")!.tag).toBe("scenario window, 30 s (a deployment: daily)");
+    const stages = [
+      { key: "detect->report_sent", value: 0.009 },
+      { key: "report_sent->report_received", value: 12.4 },
+      { key: "report_received->decision", value: 12.6 },
+      { key: "issued->published", value: 21.4 },
+    ] as GroupRow[];
+    const m = reader({}, { "revocation_latency_stage/stage": stages }, defs);
+    const rev = scmsOverview(withState({ ma: { revocations: 2 } }), m, { tNs: snap.t, scenario: cl }).sections.find((x) => x.id === "revocation")!;
+    const bars = rev.bars!;
+    expect(bars.max).toBeCloseTo(46.409);
+    expect(bars.rows.filter((r) => r.hatched).map((r) => r.key)).toEqual(["report_sent->report_received", "issued->published"]);
+    expect(bars.rows.find((r) => r.key === "issued->published")!.display).toBe("21.4 s · 46 %");
+    expect(bars.total).toBe("All steps together: 46.4 s from detection to enforcement, on average.");
+    expect(bars.caveat).toContain("2 of 4 steps are scheduling windows the scenario sets and compresses");
+    expect(bars.caveat).toContain("one to two days");
+    expect(rev.answer).toContain("not a deployment's");
+    // No band judges the question: it says so, rather than leaving a blank.
+    expect(rev.level).toBeNull();
+    expect(rev.notJudged).toContain("No standard sets how fast a revocation must be");
+    expect(stageSpan(stages, "decision", "published")).toBeCloseTo(21.4);
+    expect(stageSpan(stages, "detect", "decision")).toBeCloseTo(25.009);
+  });
+
+  it("draws rejection shares on a stated axis with room past the largest bar", () => {
+    expect(shareAxis(0.009)).toBe(0.02);
+    expect(shareAxis(0.0003)).toBe(0.001);
+    expect(shareAxis(0.6)).toBe(1);
+    expect(pctText(0.02)).toBe("2 %");
+    const cost = scmsOverview(snap, reader({}, { "loss_rate/cause": [{ key: "revoked", value: 0.009 } as GroupRow] }, defs), { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "cost")!;
+    expect(cost.bars!.axis).toEqual({ lo: "0 %", hi: "2 %" });
+    expect(cost.bars!.max).toBe(0.02);
+  });
+
+  it("draws a sparkline that cannot mislead: steady in words, sparse as dots, narrow ranges small", () => {
+    const series = (v: number[]) => ({ t: new Float64Array(v.map((_, i) => i)), v: new Float64Array(v) });
+    expect(sparkShape(series([5, 5, 5.01, 5]))!.kind).toBe("steady");
+    expect(sparkShape(series([1, 3]))!.kind).toBe("dots");
+    const narrow = sparkShape(series([4.9, 5, 4.9, 5, 4.95]))!;
+    expect(narrow.kind).toBe("line");
+    // A 2 % wobble is drawn on a 10 % domain: it spans well under half the box, not all of it.
+    const ys = [...(narrow as { path: string }).path.matchAll(/,(\d+(?:\.\d+)?)/g)].map((x) => Number(x[1]));
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(10);
+    expect(sparkShape(series([]))).toBeNull();
+  });
+
+  it("gives linkability its reference point, and says the observer is a worst case", () => {
+    const linkBand: HealthBand = { ...poolBand, better: "lower", caution: 0.2, unhealthy: 0.5 };
+    const o = scmsOverview(snap, reader({ linkability: 0.909 }, {}, [...defs, def("linkability", "ratio", linkBand)]), { tNs: snap.t, scenario: cl });
+    const p = o.sections.find((x) => x.id === "privacy")!;
+    expect(p.tiles[0]!.meaning).toContain("hears every message on the map");
+    expect(p.tiles[0]!.meaning).toContain("Wiedersheim et al., WONS 2010");
+    expect(p.answer).toContain("Expected for a change on a timer (SAE J2945/1) with no silent period");
+    expect(linkabilityReference({ security: { pseudonym_change: { strategy: "mix-zone" } } })).toBeNull();
+  });
+
+  it("says a near-empty queue in words, never as a tiny decimal", () => {
+    const o = scmsOverview(snap, reader({ verify_queue_depth: 0.007 }, {}, [...defs, def("verify_queue_depth", "count")]), { tNs: snap.t, scenario: null });
+    const q = o.sections.find((x) => x.id === "cost")!.tiles.find((x) => x.id === "verify_queue_depth")!;
+    expect(q.value).toBe("< 0.01");
+    expect(q.meaning.startsWith("Almost always empty")).toBe(true);
+  });
+
+  it("gives every question a topic and a few words for the answer strip", () => {
+    const o = scmsOverview(snap, reader({ cert_pool_valid: 38.5 }, {}, defs), { tNs: snap.t, scenario: null });
+    for (const s of o.sections) {
+      expect(s.topic.length).toBeGreaterThan(0);
+      expect((s.short ?? "").length).toBeGreaterThan(0);
+    }
+    expect(o.sections.find((x) => x.id === "certs")!.short).toBe("38.5 valid each");
+  });
+
+  it("puts the revocation times in the summary's credential rows, and opens the brief with the finding", () => {
+    const rows = credentialRows({ revoked: 5, crlVersions: 5, filed: 10, inShuffle: 0, recall: 0.721, decisionS: 32.3, toListS: 26.7, compressed: true });
+    expect(rows.find((r) => r.id === "decision")!.value).toBe("32.3 s");
+    expect(rows.find((r) => r.id === "to-list")!.label).toBe("Decision → on a published list (compressed calendar)");
+    const brief = briefSentences({
+      judged: { unhealthy: 1, caution: 1, atTimes: 4, healthy: 12, worstLabel: "Linkability", worstHow: "unhealthy all run, 90.9 %", worstNote: "expected for a change on a timer" },
+      delivery: null,
+      credentials: null,
+      misbehaviour: { filed: 4087, revoked: 5, honestRevoked: 0, slowestStageS: null, recall: 0.721, decisionS: 32.3 },
+      bottleneck: null,
+    });
+    expect(brief[0]).toBe("The weakest result is linkability: unhealthy all run, 90.9 % (expected for a change on a timer).");
+    expect(brief[1]).toContain("decided 32.3 s after the attack began on average");
+  });
+});
+
+describe("round 2: no exponent anywhere a reader glances", () => {
+  it("writes a tiny average as a bound, never in scientific notation", () => {
+    const shown = display("mac_queue_depth", 1.4e-4, "count");
+    expect(shown.value).toBe("< 0.001");
+    expect(shown.value).not.toMatch(/e-/);
   });
 });

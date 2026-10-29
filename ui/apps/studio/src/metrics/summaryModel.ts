@@ -88,6 +88,15 @@ export function scenarioPurpose(scenario: unknown): string | null {
 }
 
 
+/**
+ * The most windows a run-wide figure is read over: full resolution for a run of ten minutes at 1 s.
+ * The run summary and the overview read a run mean at this resolution, so both show the same number.
+ */
+export const SUMMARY_POINTS = 600;
+
+/** Series the overview reads as a run mean at the summary's resolution, so the two pages agree. */
+export const RUN_MEAN_SERIES: readonly string[] = ["time_to_decision"];
+
 // ------------------------------------------------------------------------------------------------
 // The headline numbers
 // ------------------------------------------------------------------------------------------------
@@ -296,7 +305,17 @@ export function causeName(key: string): string {
 /** What the brief reads; each part `null` when the run did not measure it. */
 export interface BriefInput {
   /** Banded metrics: unhealthy on average, to watch, out of range at times, healthy throughout. */
-  readonly judged: { readonly unhealthy: number; readonly caution: number; readonly atTimes: number; readonly healthy: number; readonly worstLabel: string | null } | null;
+  readonly judged: {
+    readonly unhealthy: number;
+    readonly caution: number;
+    readonly atTimes: number;
+    readonly healthy: number;
+    readonly worstLabel: string | null;
+    /** How the worst did, in the summary's words: "unhealthy all run, 90.9 %". */
+    readonly worstHow?: string | null;
+    /** What to read it against, where a source gives a reference ("expected for …"). */
+    readonly worstNote?: string | null;
+  } | null;
   readonly delivery: { readonly pdr: number | null; readonly latencyMs: number | null } | null;
   readonly credentials: { readonly enrolled: number | null; readonly devices: number | null; readonly pool: number | null; readonly starved: number | null } | null;
   readonly misbehaviour: {
@@ -308,6 +327,8 @@ export interface BriefInput {
     readonly pending?: string | null;
     /** The share of attacking vehicles revoked so far (det_recall, level = vehicle), when judged. */
     readonly recall?: number | null;
+    /** Attack onset to the MA's decision, mean over the windows with one (time_to_decision). */
+    readonly decisionS?: number | null;
   } | null;
   readonly bottleneck: { readonly stage: string | null; readonly stageShare: number | null; readonly entity: string | null; readonly utilisation: number | null } | null;
 }
@@ -374,6 +395,12 @@ export interface CredentialRow {
  */
 export function credentialRows(c: {
   readonly revoked: number | null;
+  /** Attack onset to the MA's decision, in seconds (time_to_decision, as the overview reads it). */
+  readonly decisionS?: number | null;
+  /** The MA's decision to the revocation being on a published list, in seconds (the pooled stages between). */
+  readonly toListS?: number | null;
+  /** The scenario compresses the CRL schedule (`time.calendar: compressed`): the times are not a deployment's. */
+  readonly compressed?: boolean;
   /** The CRL Generators' entries, added over providers (the crl_entries metric follows only the list published last). */
   readonly crlEntries?: number | null;
   readonly crlVersions: number | null;
@@ -396,6 +423,9 @@ export function credentialRows(c: {
     out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: `pending: ${why}` });
   }
   else if (c.recall !== null) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: w(c.recall, "ratio"), level: c.recallLevel ?? null });
+  const note = c.compressed === true ? " (compressed calendar)" : "";
+  if (c.decisionS !== undefined && c.decisionS !== null) out.push({ id: "decision", label: "Attack → revocation decision", value: w(c.decisionS, "s") });
+  if (c.toListS !== undefined && c.toListS !== null) out.push({ id: "to-list", label: `Decision → on a published list${note}`, value: w(c.toListS, "s") });
   return out;
 }
 
@@ -404,14 +434,17 @@ export function briefSentences(b: BriefInput): string[] {
   const j = b.judged;
   const n = j === null ? 0 : j.unhealthy + j.caution + j.atTimes + j.healthy;
   if (j === null || n === 0) out.push("No metric with a published healthy range has been measured yet.");
-  else if (j.healthy === n) out.push(`All ${formatNumber(n)} metrics with a published healthy range stayed healthy throughout.`);
-  else {
+  else if (j.healthy === n) out.push(`Every metric with a published healthy range stayed healthy throughout.`);
+  else if (j.worstLabel) {
+    // The finding first; the counts are in the verdict above.
+    out.push(`The weakest result is ${lower(j.worstLabel)}${j.worstHow ? `: ${j.worstHow}` : ""}${j.worstNote ? ` (${j.worstNote})` : ""}.`);
+  } else {
     const parts = [`${formatNumber(j.healthy)} stayed healthy`];
     if (j.caution > 0) parts.push(`${formatNumber(j.caution)} needed watching`);
     if (j.atTimes > 0) parts.push(`${was(j.atTimes)} out of range at times`);
     if (j.unhealthy > 0) parts.push(`${was(j.unhealthy)} unhealthy on average`);
     const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
-    out.push(`Of ${formatNumber(n)} metrics with a published healthy range, ${list}${j.worstLabel ? `; the worst is ${lower(j.worstLabel)}` : ""}.`);
+    out.push(`Of ${formatNumber(n)} metrics with a published healthy range, ${list}.`);
   }
 
   const d = b.delivery;
@@ -439,6 +472,7 @@ export function briefSentences(b: BriefInput): string[] {
       s = s === "" ? cap(rv) : `${s} and ${rv}`;
       if (m.revoked > 0 && m.honestRevoked !== null) s += m.honestRevoked === 0 ? ", none of them honest" : `, ${formatNumber(m.honestRevoked)} of them honest`;
       if (m.revoked > 0 && m.recall !== undefined && m.recall !== null) s += ` (${w(m.recall, "ratio")} of the attackers)`;
+      if (m.revoked > 0 && m.decisionS !== undefined && m.decisionS !== null) s += `, decided ${w(m.decisionS, "s")} after the attack began on average`;
     }
     if (m.slowestStageS !== null) s += `; the slowest revocation step took ${w(m.slowestStageS, "s")} (p95)`;
     if ((m.revoked ?? 0) === 0 && m.pending != null) s += `; ${m.pending.split(";")[0]}, so detection is not judged yet`;

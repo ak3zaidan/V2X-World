@@ -21,7 +21,7 @@
  */
 
 import type { BackendEntity, BackendSnapshot } from "../lib/backend.js";
-import { cellularPenetration, classify, noteOf, type HealthBand, type HealthLevel } from "./health.js";
+import { cellularPenetration, classify, noteOf, pseudonymCalendar, scaledPool, type HealthBand, type HealthLevel } from "./health.js";
 import { display, formatNumber, glanceNumber, readable, type GroupRow, type MetricFamily, type Series } from "./model.js";
 
 import { detectionPending, entityLoads, ENTITY_UTILISATION_LIMIT } from "./summaryModel.js";
@@ -44,6 +44,8 @@ export interface MetricReader {
   series(series: string): Series | undefined;
   /** A metric pooled by the engine over the whole run, grouped by one dimension (`det_recall` by `level`). */
   pooled(metric: string, dim: string): readonly GroupRow[] | undefined;
+  /** A series' mean over the run at the run summary's resolution (`RUN_MEAN_SERIES`), so both pages show one number. */
+  runMean?(series: string): number | null;
 }
 
 /** The run-wide groupings the overview asks the engine for, when the run measures the metric. */
@@ -105,6 +107,8 @@ export interface ScmsTile {
   readonly metric?: string;
   /** The series its sparkline draws. */
   readonly spark?: string;
+  /** The unit of the sparkline's series, so its range reads in the same words as the number. */
+  readonly sparkUnit?: string;
   /** Where the number comes from, for the tooltip: a metric name or the authority and its count. */
   readonly source: string;
   /** The same count per provider, when more than one provider runs. */
@@ -134,6 +138,10 @@ export interface ScmsBar {
   readonly display: string;
   readonly level: HealthLevel | null;
   readonly hint?: string;
+  /** A note beside the label: "scenario window: 30 s". */
+  readonly tag?: string;
+  /** Drawn hatched: a scheduling window the scenario compressed, not work the system did. */
+  readonly hatched?: boolean;
 }
 
 export interface ScmsBars {
@@ -150,12 +158,20 @@ export interface ScmsBars {
   readonly empty: string;
   /** Said instead of the bars when every bar would be too small to read (every authority idle). */
   readonly idle?: string;
+  /** The axis the bars are drawn on, its two ends as shown ("0 %", "2 %"), so a short bar never reads as "most". */
+  readonly axis?: { readonly lo: string; readonly hi: string };
+  /** A line under the bars that adds them up ("All steps together: 36.8 s"). */
+  readonly total?: string;
+  /** A caveat a reader must see before quoting the bars (a compressed calendar). */
+  readonly caveat?: string;
 }
 
 export type SectionId = "certs" | "revocation" | "misbehaviour" | "privacy" | "cost" | "backend";
 
 export interface ScmsSection {
   readonly id: SectionId;
+  /** The question's topic in one word, for the answer strip: "Revocation". */
+  readonly topic: string;
   /** The question, as the heading. */
   readonly question: string;
   /** The answer, in one sentence. */
@@ -164,6 +180,10 @@ export interface ScmsSection {
   readonly level: HealthLevel | null;
   /** True when a tile could not be judged yet because its pipeline is still working (see `ScmsTile.pending`). */
   readonly pending?: boolean;
+  /** Why the question carries no verdict, when no band or expectation judges it ("no standard sets a revocation time"). */
+  readonly notJudged?: string;
+  /** Three or four words for the answer strip at the top ("5 revoked, 32 s"). */
+  readonly short?: string;
   readonly tiles: readonly ScmsTile[];
   readonly funnel?: readonly FunnelStep[];
   readonly bars?: ScmsBars;
@@ -294,6 +314,45 @@ export function topupOutcome(started: number, completed: number, inFlight: numbe
   return `${parts.join(", ")}.`;
 }
 
+/**
+ * Whether the RA's top-up refusals are a problem. A revoked device's enrolment is blocklisted, so
+ * the RA refuses its top-ups: that is revocation working, not a fault. Only refusals the RA's
+ * blocklist does not explain (an expired enrolment, a policy) raise a caution. Without the RA's
+ * counts, refusals in a run that revoked someone are not judged: which were the revoked devices'
+ * cannot be told (the vehicles' own `topups_refused_blocklisted` is not in the snapshot).
+ */
+export function topupRefusals(
+  refused: number,
+  raBlocklisted: Count | null,
+  raEnrolment: Count | null,
+  revoked: number | null,
+): { level: HealthLevel | null; note: string; cue: string } {
+  if (refused <= 0) return { level: null, note: "", cue: "" };
+  const n = formatNumber(refused);
+  if (raBlocklisted !== null) {
+    const fromRevoked = Math.min(refused, raBlocklisted.total);
+    const other = refused - fromRevoked;
+    if (other === 0)
+      return {
+        level: null,
+        note: `${refused === 1 ? "The refusal was" : refused === 2 ? "Both refusals were" : `All ${n} refusals were`} revoked devices asking for more (expected: the RA blocklists a revoked device).`,
+        cue: "",
+      };
+    return {
+      level: "caution",
+      note: `Of the ${n} refused, ${formatNumber(fromRevoked)} were revoked devices (expected) and ${formatNumber(other)} were refused for an expired enrolment or a policy${raEnrolment !== null && raEnrolment.total > 0 ? ` (the RA counts ${formatNumber(raEnrolment.total)} enrolment refusals)` : ""}.`,
+      cue: `${formatNumber(other)} top-up ${other === 1 ? "refusal is" : "refusals are"} not a revoked device: those vehicles did not get their next batch. The run expects the RA to refuse only revoked (blocklisted) devices.`,
+    };
+  }
+  if (revoked !== null && revoked > 0)
+    return { level: null, note: `This run revokes devices, and the RA refuses a revoked device's top-ups; the engine does not say which of the ${n} were theirs.`, cue: "" };
+  return {
+    level: "caution",
+    note: "",
+    cue: "The RA refused some top-ups (expired enrolment or policy): those devices did not get their next batch. Nothing is revoked, so the run expects none refused.",
+  };
+}
+
 /** "healthy from 5, unhealthy below 1 (an engineering choice …)", for a band's tooltip. */
 export function cueText(band: HealthBand, level: HealthLevel, unit: string): string {
   const t = (v: number): string => words(v, unit);
@@ -334,7 +393,7 @@ function metricTile(
   const series = spec.series ?? f.headline ?? base;
   // A bursty rate (backend bytes, verifications) is read as its mean over the windows that
   // reported: its newest window is often an idle one between bursts.
-  const v = spec.mean ? meanOf(m.series(series)) ?? m.latest(series) : m.latest(series);
+  const v = spec.mean ? (m.runMean?.(series) ?? meanOf(m.series(series)) ?? m.latest(series)) : m.latest(series);
   if (v === null) return null;
   const unit = f.unit;
   // The same words as the cards and the run summary: a share in %, a wait under 1 ms in µs, a
@@ -353,7 +412,7 @@ function metricTile(
     level,
     ...(level !== null && band ? { cue: cueText(band, level, unit) } : {}),
     metric: base,
-    ...(spec.spark === null ? {} : { spark: spec.spark ?? series }),
+    ...(spec.spark === null ? {} : { spark: spec.spark ?? series, sparkUnit: unit }),
     source: `Metric ${series}, ${spec.mean ? "mean of the windows that reported" : "newest window"}. ${f.definition}`.trim(),
   };
 }
@@ -496,6 +555,156 @@ export function stageLabel(key: string): string {
   return `${w(parts[0]!)} → ${w(parts[1]!)}`;
 }
 
+/**
+ * A share axis that leaves room past the largest bar, so a bar never fills its track and reads as
+ * "most": 0.9 % is drawn on a 0–2 % axis, with both ends written.
+ */
+export function shareAxis(max: number): number {
+  for (const step of [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1]) if (max * 1.25 <= step) return step;
+  return 1;
+}
+
+/** "2 %", "0.5 %", "100 %": an axis end as a reader writes it. */
+export function pctText(v: number): string {
+  const p = Math.round(v * 1000) / 10;
+  return `${p.toLocaleString("en-US", { maximumFractionDigits: 1 })} %`;
+}
+
+/** A tile's trend, drawn so it cannot mislead: a line with its range written, dots when sparse, words when flat. */
+export type SparkShape =
+  | { readonly kind: "steady"; readonly value: number; readonly n: number }
+  | { readonly kind: "dots"; readonly points: readonly { readonly x: number; readonly y: number }[]; readonly lo: number; readonly hi: number }
+  | { readonly kind: "line"; readonly path: string; readonly lo: number; readonly hi: number; readonly n: number };
+
+/**
+ * The shape of a sparkline over a series' reported windows, spaced by window (a fast-forwarded run
+ * reports in short radio windows days apart; the full chart keeps time). A range under 1 % of the
+ * value is "steady", not a line whose wiggle fills the box; a range under 10 % is drawn on a domain
+ * of 10 % of the value, so a narrow wobble looks narrow; one to three windows are dots, not a line.
+ */
+export function sparkShape(s: Series, w = 120, h = 24): SparkShape | null {
+  const vs: number[] = [];
+  for (const v of s.v) if (Number.isFinite(v)) vs.push(v);
+  const n = vs.length;
+  if (n === 0) return null;
+  const lo = Math.min(...vs);
+  const hi = Math.max(...vs);
+  const ref = Math.max(Math.abs(lo), Math.abs(hi));
+  if (hi - lo <= ref * 0.01) return { kind: "steady", value: vs[n - 1]!, n };
+  let dLo = lo;
+  let dHi = hi;
+  if (hi - lo < ref * 0.1) {
+    const mid = (hi + lo) / 2;
+    dLo = mid - ref * 0.05;
+    dHi = mid + ref * 0.05;
+  }
+  const y = (v: number): number => 2 + (1 - (v - dLo) / (dHi - dLo)) * (h - 4);
+  const x = (k: number): number => (n === 1 ? w / 2 : (k / (n - 1)) * w);
+  if (n <= 3) return { kind: "dots", points: vs.map((v, k) => ({ x: n === 1 ? w / 2 : 6 + (k / (n - 1)) * (w - 12), y: y(v) })), lo, hi };
+  const path = vs.map((v, k) => `${k === 0 ? "M" : "L"}${x(k).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  return { kind: "line", path, lo, hi, n };
+}
+
+/** A queue whose average is under 0.01 as words: "< 0.01 … almost always empty", never "0.007 messages". */
+function nearlyEmpty(t: ScmsTile | null, v: number | null): ScmsTile | null {
+  if (t === null || v === null || !(v < 0.01)) return t;
+  return { ...t, value: v === 0 ? "0" : "< 0.01", unit: "messages", meaning: `Almost always empty: a new message rarely finds another waiting. ${t.meaning}` };
+}
+
+/** Pseudonym-change strategies that change in plain sight: no silent period, no mix zone. */
+const PLAIN_SIGHT: Readonly<Record<string, string>> = {
+  time: "a change on a timer (SAE J2945/1)",
+  distance: "a change by distance",
+  "c2c-cc": "the C2C-CC changes",
+};
+
+/**
+ * What linkability to expect, where a source gives it: against changes made in plain sight, a global
+ * observer links nearly every one (Wiedersheim, Ma, Kargl and Papadimitratos, WONS 2010, whose
+ * tracker the engine's observer uses); a silent period or a mix zone is what lowers it.
+ */
+export function linkabilityReference(scenario: unknown): { tile: string; answer: string; source: string } | null {
+  const strategy = (scenario as { security?: { pseudonym_change?: { strategy?: unknown } } } | null)?.security?.pseudonym_change?.strategy;
+  if (typeof strategy !== "string") return null;
+  const how = PLAIN_SIGHT[strategy];
+  if (how === undefined) return null;
+  return {
+    tile: "Reference: nearly every change, without a silent period (Wiedersheim et al., WONS 2010).",
+    source: `Against ${how} with no silent period, a global observer links nearly every change: Wiedersheim, Ma, Kargl and Papadimitratos, "Privacy in inter-vehicular networks: why simple pseudonym change is not enough", WONS 2010, whose tracker the engine's observer uses. Silent periods or mix zones are what lower it.`,
+    answer: `Expected for ${how} with no silent period: a global observer links nearly every such change (Wiedersheim et al., WONS 2010).`,
+  };
+}
+
+/** Why the MAs hold more reports than the vehicles uploaded, for the funnel's tooltip. */
+function moreAtMa(atMa: Count, sent: number): string {
+  const extra = formatNumber(atMa.total - sent);
+  return atMa.byProvider.length > 1
+    ? `The MAs hold ${extra} more than the vehicles uploaded: each provider's MA also receives the reports the other provider's MA shares with it, and the engine does not split the two (nor count reports a vehicle dropped from a full queue), so the count is not a subset of the uploads`
+    : `The MA holds ${extra} more than the vehicles count as uploaded; the engine does not say where they came from`;
+}
+
+/** A revocation step that is a scheduling window the scenario sets, rather than work the system does. */
+export interface ScenarioWindow {
+  readonly name: string;
+  /** The window as the scenario sets it: "30 s". */
+  readonly here: string;
+  readonly tag: string;
+  readonly hint: string;
+  /** The scenario says its calendar is compressed (`time.calendar: compressed`). */
+  readonly compressed: boolean;
+}
+
+/**
+ * The revocation steps a scenario's own windows decide (`security.protocol.params`): the RA's report
+ * shuffle sets "report sent → report at the MA", the CRL cadence sets "on a signed CRL → CRL
+ * published". A compressed calendar shrinks both from about a day, and a reader must see that before
+ * quoting the times.
+ */
+export function scenarioWindows(scenario: unknown): Map<string, ScenarioWindow> {
+  const doc = scenario as { time?: { calendar?: unknown }; security?: { protocol?: { params?: Record<string, unknown> } } } | null;
+  const p = doc?.security?.protocol?.params ?? {};
+  const compressed = doc?.time?.calendar === "compressed";
+  const out = new Map<string, ScenarioWindow>();
+  const add = (key: string, param: string, name: string, real: string): void => {
+    const v = p[param];
+    if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return;
+    const here = words(v, "s");
+    out.set(key, {
+      name,
+      here,
+      tag: compressed ? `scenario window, ${here} (a deployment: ${real})` : `scenario window, ${here}`,
+      hint: `Mostly ${name}, which the scenario sets to ${here} (security.protocol.params ${param}).${compressed ? ` The calendar is compressed: a deployment's is ${real}.` : ""}`,
+      compressed,
+    });
+  };
+  add("report_sent->report_received", "report_shuffle_window_s", "the RA's report shuffle", "up to a day");
+  add("issued->published", "crl_cadence_s", "the CRL's publication cadence", "daily");
+  return out;
+}
+
+/**
+ * The mean time a revocation spends between two stages: the sum of the pooled `from->to` steps that
+ * lie within them ("decision" to "published": the MA's decision to the list going out). `null` when
+ * no step in that span reported.
+ */
+export function stageSpan(rows: readonly GroupRow[], from: string, to: string): number | null {
+  const a = STAGE_ORDER.indexOf(from);
+  const b = STAGE_ORDER.indexOf(to);
+  if (a < 0 || b < 0) return null;
+  let sum = 0;
+  let any = false;
+  for (const r of rows) {
+    if (r.value === null || !Number.isFinite(r.value)) continue;
+    const [f = "", t = ""] = r.key.split("->").map((x) => x.trim());
+    const fi = STAGE_ORDER.indexOf(f);
+    const ti = STAGE_ORDER.indexOf(t);
+    if (fi < a || ti < 0 || ti > b || fi < 0) continue;
+    sum += r.value;
+    any = true;
+  }
+  return any ? sum : null;
+}
+
 /** The tile with the worst cue, when any tile is worse than good. */
 export function worstTile(tiles: readonly ScmsTile[]): ScmsTile | null {
   let w: ScmsTile | null = null;
@@ -519,7 +728,7 @@ export function flaggedText(t: ScmsTile): string {
     case "enrolled":
       return `only ${t.value} devices are enrolled`;
     case "topups":
-      return "the RA refused some top-ups";
+      return "the RA refused top-ups from devices that are not revoked";
     default:
       return `${t.title.replace(/\s*\([^)]*\)\s*$/, "").replace(/^./, (c) => c.toLowerCase())}: ${t.value}${t.unit === "" ? "" : t.unit === "%" ? " %" : ` ${t.unit}`}`;
   }
@@ -534,7 +743,7 @@ function filesMeaning(files: Count | null): string {
     : base;
 }
 
-function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string): ScmsSection {
+function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string, scenario: unknown = null): ScmsSection {
   const ccms = s?.system === "ccms";
   const devices = countOf(s, ["ee"], ["devices", "stations"], first);
   const enrolled = countOf(s, ["ee"], ["enrolled"], first);
@@ -543,11 +752,23 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
   const completed = countOf(s, ["ee"], ["topups_completed"], first);
   const refused = countOf(s, ["ee"], ["topups_refused"], first);
   const inFlight = countOf(s, ["ee"], ["topups_in_flight"], first);
+  const leftArea = countOf(s, ["ee"], ["topups_left_area"], first);
+  // The RA's own refusals: a revoked device's enrolment is blocklisted, so its top-ups are refused
+  // by design (revocation working); only the rest (an expired enrolment, a policy) is a problem.
+  const raBlocklisted = countOf(s, ["ra"], ["refused_blocklisted"], first);
+  const raEnrolment = countOf(s, ["ra"], ["refused_enrolment"], first);
+  const revokedDevices = countOf(s, ["ma"], ["revocations"], first);
   const starved = countOf(s, ["ee"], ["vehicles_starved"], first);
   const unavailable = countOf(s, ["ee"], ["cert_unavailable_s"], first);
   const files = countOf(s, ["ra"], ["files_served"], first);
+  // The vehicles in the run now (the Certificates page's Vehicles tab counts these), beside every device enrolled so far.
+  const inRun = countOf(s, ["ee"], ["vehicles"], first);
   const topupMs = firstOf(s, ["ee"], "topup_latency_ms");
   const certName = ccms ? "authorisation tickets (ATs)" : "pseudonym certificates (PCs)";
+  const cal = pseudonymCalendar(scenario);
+  const scaled = scaledPool(scenario);
+  const periodWords = cal.periodS !== null ? `an i-period, ${words(cal.periodS, "s")} here; a week in a deployment` : "an i-period";
+  const refusal = topupRefusals(refused?.total ?? 0, raBlocklisted, raEnrolment, revokedDevices?.total ?? null);
 
   const allEnrolled = enrolled !== null && devices !== null && enrolled.total >= devices.total;
   const tiles = present([
@@ -557,7 +778,9 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
           title: ccms ? "Stations enrolled (enrolment credential)" : "Devices enrolled (enrolment certificate, EC)",
           value: `${formatNumber(enrolled.total)} of ${formatNumber(devices.total)}`,
           unit: "devices",
-          meaning: "Hold the long-term credential used to ask for pseudonym certificates.",
+          meaning: `Hold the long-term credential used to ask for pseudonym certificates. Every device the run has had${
+            enrolled.byProvider.length > 1 ? ", both providers" : ""
+          }, including vehicles that have left${inRun !== null ? `; ${formatNumber(inRun.total)} ${inRun.total === 1 ? "vehicle is" : "vehicles are"} in the run now` : ""}.`,
           level: allEnrolled ? "healthy" : "caution",
           cue: allEnrolled
             ? "Every device is enrolled, as the run expects: each is enrolled before it is deployed."
@@ -567,7 +790,12 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
       : null,
     metricTile(m, "cert_pool_valid", {
       title: `Valid ${certName} per vehicle`,
-      meaning: "Mean over vehicles, newest window: certificates a vehicle could sign with right now. It switches between them to stay unlinkable.",
+      ...(scaled !== null ? { unit: `of ${formatNumber(scaled)} a period` } : {}),
+      meaning: `Mean over vehicles, newest window: certificates a vehicle could sign with right now; it switches between them to stay unlinkable.${
+        scaled !== null
+          ? ` This scenario issues ${formatNumber(scaled)} per period (${periodWords}), so a full pool reads about ${formatNumber(scaled)}${cal.periodsHeld !== null && cal.periodsHeld > 1 ? `; each vehicle also holds the next ${cal.periodsHeld === 2 ? "period's" : `${formatNumber(cal.periodsHeld - 1)} periods'`} batch, not valid yet` : ""}.`
+          : ""
+      }`,
     }),
     starved !== null
       ? countTile(starved, {
@@ -599,10 +827,12 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
           title: "Certificate top-ups (pool refills)",
           value: formatNumber(started.total),
           unit: "requested",
-          meaning: `${topupOutcome(started.total, completed.total, inFlight?.total ?? 0, refused?.total ?? 0)} A vehicle asks the RA for its next batch when its pool runs low${topupMs !== null ? `; one takes ${words(topupMs, "ms")} on average` : ""}.`,
-          level: refused !== null && refused.total > 0 ? "caution" : null,
-          cue: "The RA refused some top-ups (blocklist, enrolment or policy): those devices did not get their next batch. The run expects none refused unless it revokes devices.",
-          source: "Devices (ee): topups_started, topups_completed, topups_in_flight, topups_refused, topup_latency_ms.",
+          meaning: `${topupOutcome(started.total, completed.total, inFlight?.total ?? 0, refused?.total ?? 0)}${refusal.note !== "" ? ` ${refusal.note}` : ""}${
+            leftArea !== null && leftArea.total > 0 ? ` ${formatNumber(leftArea.total)} left the area before theirs arrived.` : ""
+          } A vehicle asks the RA for its next batch when its pool runs low${topupMs !== null ? `; one takes ${words(topupMs, "ms")} on average` : ""}.`,
+          level: refusal.level,
+          ...(refusal.cue !== "" ? { cue: refusal.cue } : {}),
+          source: "Devices (ee): topups_started, topups_completed, topups_in_flight, topups_refused, topups_left_area, topup_latency_ms; RA: refused_blocklisted, refused_enrolment.",
         })
       : null,
     countTile(files, {
@@ -630,7 +860,15 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
       : flagged !== null
         ? `${lead}: ${parts[0]}.${parts.length > 1 ? ` Otherwise ${parts.slice(1).join(", ")}.` : ""}`
         : `${lead}: ${parts.join(", ")}.`;
-  return { id: "certs", question: "Are devices getting certificates?", answer, level, tiles };
+  const short =
+    starved !== null && starved.total > 0
+      ? `${formatNumber(starved.total)} ran out`
+      : pool !== null
+        ? `${glanceNumber(pool)} valid each`
+        : enrolled !== null && devices !== null
+          ? `${formatNumber(enrolled.total)} of ${formatNumber(devices.total)} enrolled`
+          : "no data yet";
+  return { id: "certs", topic: "Certificates", question: "Are devices getting certificates?", answer, level, short, tiles };
 }
 
 /**
@@ -651,7 +889,7 @@ function noInstallText(listed: number, downloads: Count | null, frames: Count | 
   return `No vehicle holds a revoked device's entry yet: ${why}.${rsu !== null && rsu.total > 0 ? ` Roadside units have installed ${formatNumber(rsu.total)} ${rsu.total === 1 ? "list" : "lists"}.` : ""}`;
 }
 
-function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: string): ScmsSection {
+function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: string, scenario: unknown = null): ScmsSection {
   const ccms = s?.system === "ccms";
   const revoked = countOf(s, ["ma"], ["revocations"], first);
   const versions = countOf(s, ccms ? ["ca"] : ["crlg"], ccms ? ["ca_crl_sequence"] : ["versions_signed"], first);
@@ -706,16 +944,19 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
           id: "crl-versions",
           title: "Revocation lists signed (CRL versions)",
           unit: versions.total === 1 ? "version" : "versions",
-          meaning: cadence !== null ? `The CRL Generator signs a new list every ${words(cadence, "s")}, revocations or not.` : "Signed versions of the revocation list so far.",
+          meaning:
+            cadence !== null && cadence > 0
+              ? `Each provider's CRL Generator signs a new list at the next ${words(cadence, "s")} boundary after a revocation, carrying every revocation since its last list; with nothing new, its list stands until the scheduled re-issue.`
+              : "Signed versions of each provider's revocation list so far; each new revocation goes out on the next one.",
           source: ccms ? "CA: ca_crl_sequence." : "CRL Generator: versions_signed and cadence_s, from the Backend snapshot.",
         })
       : null,
     installs !== null
       ? countTile(installs, {
           id: "crl-installs",
-          title: "Revoked-device entries installed by vehicles",
+          title: "CRL installs on vehicles",
           unit: installs.total === 1 ? "entry" : "entries",
-          meaning: installs.total === 0 ? noInstallText(listed?.total ?? m.latest("crl_entries") ?? 0, downloads, frames, skipped, rsuInstalls) : `Each counts one revoked device added to one vehicle's list. ${downloads !== null ? `From ${formatNumber(downloads.total)} downloads from the CRL store` : "From downloads"}${frames !== null ? ` and ${formatNumber(frames.total)} roadside broadcast frames` : ""}${fetchMs !== null ? `; a download takes ${glanceNumber(fetchMs)} ms on average` : ""}${skipped !== null && skipped.total > 0 ? `; ${formatNumber(skipped.total)} skipped because the vehicle could not verify them` : ""}${rsuInstalls !== null ? `; roadside units installed ${formatNumber(rsuInstalls.total)} ${rsuInstalls.total === 1 ? "list" : "lists"}` : ""}.`,
+          meaning: installs.total === 0 ? noInstallText(listed?.total ?? m.latest("crl_entries") ?? 0, downloads, frames, skipped, rsuInstalls) : `One entry is one revoked device added to one vehicle's list. Delivered by ${downloads !== null ? `${formatNumber(downloads.total)} ${downloads.total === 1 ? "download" : "downloads"} from the CRL store` : "downloads"}${frames !== null ? ` and ${formatNumber(frames.total)} roadside ${frames.total === 1 ? "broadcast" : "broadcasts"}` : ""}${fetchMs !== null ? `; a download takes ${glanceNumber(fetchMs)} ms on average` : ""}${skipped !== null && skipped.total > 0 ? `; ${formatNumber(skipped.total)} skipped because the vehicle could not verify them` : ""}${rsuInstalls !== null ? `; roadside units installed ${formatNumber(rsuInstalls.total)} ${rsuInstalls.total === 1 ? "list" : "lists"}` : ""}.`,
           level: rejected !== null && rejected.total > 0 ? "caution" : null,
           cue: `${rejected !== null ? formatNumber(rejected.total) : "Some"} CRLs were rejected by the vehicles that received them (a bad signature, an untrusted signer or an older version). The run expects every genuine CRL to install.`,
           source: "Devices (ee): crl_installs (revocation entries newly installed, summed over vehicles), crls_rejected, crls_skipped_unverifiable, crl_fetch_latency_ms; CRL store: downloads_served; CRL broadcast: rsu_frames; RSUs: crls_installed.",
@@ -732,7 +973,8 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
       : null,
     metricTile(m, "time_to_decision", {
       title: "Attack to revocation decision",
-      meaning: "Mean time from an attack starting to the MA deciding to revoke the attacker.",
+      meaning: "Mean time from an attack starting to the MA deciding to revoke the attacker, over the windows with a decision.",
+      mean: true,
     }),
     metricTile(m, "revocation_latency_stage", {
       id: "slowest-stage",
@@ -746,27 +988,48 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
     .filter((r) => r.value !== null && Number.isFinite(r.value))
     .sort((a, b) => stageRank(a.key) - stageRank(b.key) || a.key.localeCompare(b.key));
   const band = m.family("revocation_latency_stage")?.health ?? null;
-  const maxStage = Math.max(0, ...stageRows.map((r) => r.value as number));
+  const totalStage = stageRows.reduce((a, r) => a + Math.max(0, r.value as number), 0);
+  const windows = scenarioWindows(scenario);
+  const win = (k: string): ScenarioWindow | undefined => windows.get(k.replace(/\s+/g, ""));
+  const windowRows = stageRows.filter((r) => win(r.key) !== undefined);
   const bars: ScmsBars | undefined =
     m.family("revocation_latency_stage") !== undefined
       ? {
           title: "Where the revocation time goes",
-          note: "Mean time of each step, in the order a revocation goes through them, over the run so far.",
-          max: maxStage,
+          note: "Mean time of each step, in the order a revocation goes through them, over the run so far. Each bar is its step's share of all the steps together.",
+          max: totalStage,
           metric: "revocation_latency_stage",
           empty: "No revocation has gone through yet: the steps appear once the MA decides one.",
           rows: stageRows.map((r) => {
             const v = r.value as number;
-            return { key: r.key, label: stageLabel(r.key), value: v, display: words(v, "s"), level: null };
+            const w = win(r.key);
+            const share = totalStage > 0 ? Math.round((v / totalStage) * 100) : 0;
+            return {
+              key: r.key,
+              label: stageLabel(r.key),
+              value: v,
+              display: `${words(v, "s")}${totalStage > 0 && share >= 1 ? ` · ${share} %` : ""}`,
+              level: null,
+              ...(w ? { tag: w.tag, hatched: w.compressed, hint: w.hint } : {}),
+            };
           }),
-          ...(band && maxStage > 0 && band.caution <= maxStage
-            ? { limit: { at: band.caution / maxStage, label: `${words(band.caution, "s")}: ${band.healthy_note}` } }
+          ...(stageRows.length > 1 && totalStage > 0 ? { total: `All steps together: ${words(totalStage, "s")} from detection to enforcement, on average.` } : {}),
+          ...(windowRows.length > 0 && [...windows.values()].some((w) => w.compressed)
+            ? {
+                caveat: `${windowRows.length} of ${stageRows.length} steps are scheduling windows the scenario sets and compresses (hatched): ${windowRows
+                  .map((r) => `${win(r.key)!.name}, ${win(r.key)!.here} here`)
+                  .join("; ")}. A deployment waits up to about a day at each (the RA's shuffle: 10,000 reports or one day, CAMP-EE SCMS-765; the CRL: published daily, Brecht 2018 §VI-G), so a real revocation takes on the order of one to two days. Quote no total from this run without putting the real windows back.`,
+              }
+            : {}),
+          // The engine's per-step guide (a minute, an engineering choice), where a step could reach it.
+          ...(band && totalStage > 0 && band.caution <= totalStage
+            ? { limit: { at: band.caution / totalStage, label: `${words(band.caution, "s")} per step: ${band.healthy_note} (the engine's guide, an engineering choice)` } }
             : {}),
         }
       : undefined;
 
   const entries = listed?.total ?? m.latest("crl_entries");
-  const decide = m.latest("time_to_decision");
+  const decide = m.runMean?.("time_to_decision") ?? meanOf(m.series("time_to_decision")) ?? m.latest("time_to_decision");
   let answer: string;
   if (revoked === null && entries === null) answer = "The run has not reported any revocation activity yet.";
   else if ((revoked?.total ?? 0) === 0 && (entries ?? 0) === 0)
@@ -774,8 +1037,27 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
   else {
     const n = revoked?.total ?? entries ?? 0;
     answer = `${formatNumber(n)} ${n === 1 ? "device has" : "devices have"} been revoked${decide !== null ? `, ${words(decide, "s")} after the attack began on average` : ""}${enforced !== null && enforced.total > 0 ? `, and receivers have dropped ${formatNumber(enforced.total)} of their messages` : ""}.`;
+    if (windowRows.length > 0 && [...windows.values()].some((w) => w.compressed)) answer += " The scenario compresses the report shuffle and the CRL schedule, so these times are not a deployment's.";
   }
-  return { id: "revocation", question: "Is revocation working, and how fast?", answer, level: worst(tiles.map((t) => t.level)), tiles, ...(bars ? { bars } : {}) };
+  const level = worst(tiles.map((t) => t.level));
+  const nRevoked = revoked?.total ?? entries ?? 0;
+  const short = nRevoked === 0 ? "none revoked yet" : `${formatNumber(nRevoked)} revoked${decide !== null ? `, ${words(decide, "s")}` : ""}`;
+  return {
+    id: "revocation",
+    topic: "Revocation",
+    question: "Is revocation working, and how fast?",
+    answer,
+    level,
+    short,
+    ...(level === null
+      ? {
+          notJudged:
+            "No standard sets how fast a revocation must be: IEEE 1609.2.1 and ETSI TS 102 941 leave CRL timing to policy. The engine's one-minute-per-step guide (an engineering choice) judges the slowest step only when a window reports it.",
+        }
+      : {}),
+    tiles,
+    ...(bars ? { bars } : {}),
+  };
 }
 
 function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: string, finished = false): ScmsSection {
@@ -818,24 +1100,25 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
             : {}),
         }
       : null,
-    shuffle && {
-      id: "shuffle",
-      label: "Held in the RA's shuffle",
-      value: shuffle.total,
-      hint: `Held and mixed by the RA so the MA cannot tell who reported${shuffleS !== null ? `; released when the ${words(shuffleS, "s")} shuffle window closes` : "; released when the shuffle window closes"}. A count of reports there now, not a step every report has left.`,
-    },
+    // The RA's shuffle is not a step every report has left (it holds the newest reports now), so it is
+    // said on the arrow into the MA, not drawn as a box that would read as a subset of the uploads.
     atMa && {
       id: "ma",
       label: "Received by the MA",
       value: atMa.total,
-      hint: "Reports the Misbehaviour Authority has received.",
-      // More at the MAs than the vehicles uploaded: with several providers, an MA also receives the
-      // reports another provider's MA shares with it (the backend's report-shared messages).
-      ...(shuffle && shuffle.total > 0
-        ? { drop: `${formatNumber(shuffle.total)} wait in the shuffle` }
-        : sentTotal !== null && atMa.total > sentTotal && atMa.byProvider.length > 1
-          ? { drop: "more than uploaded: includes reports another provider's MA shared" }
-          : {}),
+      hint: `Reports the Misbehaviour Authority has received${
+        shuffle !== null
+          ? `. Before that, the RA holds and mixes them so the MA cannot tell who reported${shuffleS !== null ? `, releasing them when its ${words(shuffleS, "s")} shuffle window closes` : ""}`
+          : ""
+      }${sentTotal !== null && atMa.total > sentTotal ? `. ${moreAtMa(atMa, sentTotal)}` : ""}.`,
+      ...(() => {
+        const parts: string[] = [];
+        if (shuffle && shuffle.total > 0) parts.push(`${formatNumber(shuffle.total)} in the RA's shuffle now`);
+        // More at the MAs than the vehicles uploaded: with several providers, an MA also receives the
+        // reports another provider's MA shares with it (the backend's report-shared messages).
+        if (sentTotal !== null && atMa.total > sentTotal) parts.push(`+${formatNumber(atMa.total - sentTotal)} beyond the uploads`);
+        return parts.length > 0 ? { drop: parts.join(" · ") } : {};
+      })(),
     },
     cases && { id: "cases", label: "Suspects with a case", value: cases.total, hint: "Suspects the MA is collecting evidence on (counted per suspect, not per report)." },
     (decisions ?? revoked) && { id: "revoked", label: "Revoked", value: (revoked ?? decisions)!.total, hint: "Suspects the MA decided to revoke." },
@@ -895,7 +1178,9 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
               ? "Honest vehicles the system revoked by mistake."
               : honestReported === 0
                 ? "Honest vehicles revoked by mistake; no honest vehicle was even reported."
-                : `Honest vehicles revoked by mistake; ${formatNumber(honestReported)} were reported at least once.`,
+                : Number.isInteger(honestReported)
+                  ? `Honest vehicles revoked by mistake; ${formatNumber(honestReported)} ${honestReported === 1 ? "was" : "were"} reported at least once.`
+                  : "Honest vehicles revoked by mistake; some honest vehicles were reported, but a report alone revokes no one.",
           level: (honestRevoked > 0 ? "unhealthy" : "healthy") as HealthLevel,
           cue:
             honestRevoked > 0
@@ -941,7 +1226,25 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
     if (honestRevoked !== null) parts.push(honestRevoked === 0 ? "no honest vehicle revoked" : `${formatNumber(honestRevoked)} honest ${honestRevoked === 1 ? "vehicle" : "vehicles"} revoked`);
     answer = parts.length > 0 ? `${parts[0]![0]!.toUpperCase()}${parts.join("; ").slice(1)}.` : "No report has been filed yet.";
   }
-  return { id: "misbehaviour", question: "Is misbehaviour being caught, and are honest devices affected?", answer, level, ...(tiles.some((t) => t.pending !== undefined) ? { pending: true } : {}), tiles, ...(funnel.length > 0 ? { funnel } : {}) };
+  const rShort = recallVehicle ?? recallReport;
+  const short = anyPending
+    ? "pending: reports on the way"
+    : rShort !== null
+      ? `${words(rShort, "ratio")} of attackers ${recallVehicle !== null ? "revoked" : "reported"}${honestRevoked !== null && honestRevoked > 0 ? `, ${formatNumber(honestRevoked)} honest` : ""}`
+      : filed !== null
+        ? `${formatNumber(filed.total)} reports`
+        : "no data yet";
+  return {
+    id: "misbehaviour",
+    topic: "Misbehaviour",
+    question: "Is misbehaviour being caught, and are honest devices affected?",
+    answer,
+    level,
+    short,
+    ...(anyPending ? { pending: true } : {}),
+    tiles,
+    ...(funnel.length > 0 ? { funnel } : {}),
+  };
 }
 
 /**
@@ -949,12 +1252,14 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
  * a worst-case eavesdropper links back to the same vehicle (cumulative over the run); the change
  * rate is how often vehicles switch. `null` when the run measures neither.
  */
-function privacySection(m: MetricReader, s: BackendSnapshot | null, first: string): ScmsSection | null {
+function privacySection(m: MetricReader, s: BackendSnapshot | null, first: string, scenario: unknown = null): ScmsSection | null {
   const changes = countOf(s, ["ee"], ["pseudonym_changes"], first);
-  const link = metricTile(m, "linkability", {
+  const reference = linkabilityReference(scenario);
+  const linkBase = metricTile(m, "linkability", {
     title: "Pseudonym changes an eavesdropper links (linkability)",
-    meaning: "Share of pseudonym changes a worst-case roadside observer links back to the same vehicle, over the run so far. Lower is better.",
+    meaning: `Share of pseudonym changes an observer links back to the same vehicle, over the run so far; lower is better. A worst case: the observer hears every message on the map.${reference !== null ? ` ${reference.tile}` : ""}`,
   });
+  const link = linkBase !== null && reference !== null ? { ...linkBase, source: `${linkBase.source}\n\n${reference.source}` } : linkBase;
   const rate = metricTile(m, "pseudonym_change_rate", {
     title: "Pseudonym changes per vehicle-hour",
     meaning: "How often a vehicle switches to a new certificate, mean over the run. Changing often makes tracking harder; each change uses a certificate.",
@@ -991,9 +1296,11 @@ function privacySection(m: MetricReader, s: BackendSnapshot | null, first: strin
   const parts = present([lead, rateV]);
   return {
     id: "privacy",
+    topic: "Privacy",
     question: "Can a vehicle be tracked across pseudonym changes?",
-    answer: `${cap(parts.join("; "))}.`,
+    answer: `${cap(parts.join("; "))}.${reference !== null && (level === "unhealthy" || level === "caution") ? ` ${reference.answer}` : ""}`,
     level,
+    short: share !== null ? `${share} of changes linked` : rate !== null ? `${rate.value} changes per vehicle-hour` : "no data yet",
     tiles,
   };
 }
@@ -1018,11 +1325,14 @@ function costSection(m: MetricReader): ScmsSection {
       series: "verify_wait.p95",
       meaning: "95 % of messages waited less than this for the verifier (safety budget: 100 ms end to end).",
     }),
-    metricTile(m, "verify_queue_depth", {
-      title: "Messages queued for verification",
-      unit: "messages, on average",
-      meaning: "Queue length a new message finds; above one, the verifier is rarely idle.",
-    }),
+    nearlyEmpty(
+      metricTile(m, "verify_queue_depth", {
+        title: "Messages queued for verification",
+        unit: "messages, on average",
+        meaning: "Queue length a new message finds; above one, the verifier is rarely idle.",
+      }),
+      m.latest("verify_queue_depth"),
+    ),
     metricTile(m, "unverified_ratio", {
       title: "Delivered without being verified",
       meaning: "Messages passed to applications before their signature was checked.",
@@ -1046,13 +1356,14 @@ function costSection(m: MetricReader): ScmsSection {
   const rows = (m.pooled("loss_rate", "cause") ?? [])
     .filter((r) => r.key in SECURITY_CAUSES && r.value !== null && Number.isFinite(r.value) && (r.value as number) > 0)
     .sort((a, b) => (b.value as number) - (a.value as number));
-  const lossMax = Math.max(0, ...rows.map((r) => r.value as number));
+  const lossAxis = shareAxis(Math.max(0, ...rows.map((r) => r.value as number)));
   const bars: ScmsBars | undefined =
     m.family("loss_rate") !== undefined
       ? {
           title: "Messages rejected by security checks, by reason",
-          note: "Share of all reception attempts lost to each check, over the run so far. No standard sets an acceptable rate, so the bars carry no verdict; hover a reason for what it means.",
-          max: lossMax,
+          note: "Share of all reception attempts lost to each check, over the run so far, on the axis drawn below the bars. No standard sets an acceptable rate, so the bars carry no verdict; hover a reason for what it means.",
+          max: lossAxis,
+          axis: { lo: "0 %", hi: pctText(lossAxis) },
           metric: "loss_rate",
           empty: "No message was rejected by a security check.",
           rows: rows.map((r) => ({
@@ -1079,7 +1390,19 @@ function costSection(m: MetricReader): ScmsSection {
       `${sharePct(failed)} of receptions are rejected by a security check, a rate no standard judges${designed > 0 ? ` (another ${sharePct(designed)} are overheard reports meant for a roadside unit, dropped by design)` : ""}`,
     );
   const answer = parts.length > 0 ? `${parts[0]![0]!.toUpperCase()}${parts.join("; ").slice(1)}.` : "The run has not measured security's cost yet.";
-  return { id: "cost", question: "What does security cost the radio and the CPU?", answer, level, tiles, ...(bars ? { bars } : {}) };
+  return {
+    id: "cost",
+    topic: "Cost",
+    question: "What does security cost the radio and the CPU?",
+    answer,
+    level,
+    short: over !== null ? `${words(over, "ratio")} of bytes on air` : wait !== null ? `${words(wait, "ms")} wait (p95)` : "no data yet",
+    ...(level === null
+      ? { notJudged: "No standard sets an acceptable security overhead or rejection rate; a verdict appears only where a metric has a published band (the verification wait against the 100 ms safety budget)." }
+      : {}),
+    tiles,
+    ...(bars ? { bars } : {}),
+  };
 }
 
 /** A utilisation as a percentage: "12.5", "< 0.1" for a server that did a little work. */
@@ -1101,6 +1424,8 @@ function backendSection(m: MetricReader, s: BackendSnapshot | null, tNs: number,
     const lv = reach.level;
     return {
       id: "backend",
+      topic: "Backend",
+      short: `${reach.value} % can reach it`,
       question: "Can vehicles reach the backend, and is it keeping up?",
       answer: lv !== null && lv !== "healthy" ? `${cap(flaggedText(reach))}.` : `${reach.value} % of vehicles can reach the backend.`,
       level: lv,
@@ -1124,6 +1449,7 @@ function backendSection(m: MetricReader, s: BackendSnapshot | null, tNs: number,
     title: "Busiest authorities",
     note: "Share of the run each authority's servers were busy, with the mean wait of a request.",
     max: 1,
+    axis: { lo: "0 %", hi: "100 % busy" },
     limit: { at: ENTITY_UTILISATION_LIMIT, label: "80 %: the usual planning ceiling, past which queues grow without bound (an engineering choice)" },
     empty: "No authority has done queued work yet.",
     // Bars all under 1 % against an 80 % line say nothing; one sentence says it better.
@@ -1197,7 +1523,16 @@ function backendSection(m: MetricReader, s: BackendSnapshot | null, tNs: number,
   const answer = reachBad
     ? `${cap(flaggedText(reach))}; ${load}.`
     : `${sectionLevel === "healthy" ? "Yes: " : ""}${sectionLevel === "healthy" ? load : cap(load)}${reach !== null ? `; ${reach.value} % of vehicles can reach it` : ""}.`;
-  return { id: "backend", question: "Can vehicles reach the backend, and is it keeping up?", answer, level: sectionLevel, tiles, bars };
+  return {
+    id: "backend",
+    topic: "Backend",
+    question: "Can vehicles reach the backend, and is it keeping up?",
+    answer,
+    level: sectionLevel,
+    short: reachBad ? `${reach!.value} % can reach it` : top ? `busiest ${busyPct(top.utilisation)} % busy` : reach !== null ? `${reach.value} % can reach it` : "idle",
+    tiles,
+    bars,
+  };
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1250,13 +1585,19 @@ export function scmsOverview(
     .filter((x): x is string => x !== null)
     .join(" · ");
   const sections = present([
-    certsSection(m, s, first),
-    revocationSection(m, s, first),
+    certsSection(m, s, first, opts.scenario),
+    // The causal story: an attack is reported, the MA decides, then the list carries the decision.
     misbehaviourSection(m, s, first, opts.finished === true),
-    privacySection(m, s, first),
+    revocationSection(m, s, first, opts.scenario),
+    privacySection(m, s, first, opts.scenario),
     costSection(m),
     backendSection(m, s, opts.tNs, first, cellularPenetration(opts.scenario)),
-  ]);
+  ]).map((x) =>
+    // Every question carries a mark: a level, pending, or a stated reason for none — never a blank.
+    x.level === null && x.pending !== true && x.notJudged === undefined
+      ? { ...x, notJudged: "Nothing here has a published band or a run expectation to judge it against yet." }
+      : x,
+  );
   const raw =
     s === null
       ? []
@@ -1264,7 +1605,7 @@ export function scmsOverview(
           id: e.id,
           name: e.name,
           counts: Object.entries(e.state)
-            .filter(([, v]) => typeof v === "number" || typeof v === "boolean" || typeof v === "string")
+            .filter(([k, v]) => k !== "case_open" && (typeof v === "number" || typeof v === "boolean" || typeof v === "string"))
             .map(([k, v]) => [k, typeof v === "number" ? formatNumber(v) : String(v)] as const),
         }));
   return { system, facts, providers, sections, raw };
