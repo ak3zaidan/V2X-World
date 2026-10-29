@@ -301,6 +301,7 @@ function NodeButton({
 }): React.JSX.Element {
   const info = roleInfo(c.role);
   const cls = ["pki-node", "pki-comp", `status-${c.status}`, `role-${c.role}`];
+  if (n.w < 100) cls.push("narrow");
   if (busy) cls.push("busy");
   if (c.queue && c.queue.depth > 0) cls.push("queued");
   if (selected) cls.push("selected");

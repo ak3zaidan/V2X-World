@@ -645,6 +645,9 @@ h3 .pki-vname-sub { font-size: 11px; font-weight: 400; }
 .pki-crltable td:first-child, .pki-crl-versions td { white-space: nowrap; }
 .pki-nowrap { white-space: nowrap; }
 .pki-provider-rules-one { margin: 0; font-size: 12px; line-height: 1.5; }
+.pkir-truth .pki-vname { flex-direction: row; align-items: baseline; gap: 6px; }
+/* Boxes narrowed to fit two providers side by side keep "Pseudonym CA" whole. */
+.pki-node.narrow .nm { font-size: 10.5px; }
 /* The diagram's corner activity dot sits bottom right, clear of the box's name. */
 .pki-node.pki-comp { padding: 0 4px; }
 .pki-node.pki-comp .pki-dot { top: auto; bottom: 4px; }

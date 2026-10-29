@@ -101,14 +101,14 @@ export function HealthStrip({ trust, view }: { readonly trust: TrustAnswer; read
       />
       <Stat
         tab="crls"
-        label={h.crlAgeS === null ? "revocation list" : "newest revocation list"}
+        label={h.crlAgeS === null ? "revocation list" : "newest list"}
         value={h.crlAgeS === null ? "none yet" : `${ageText(h.crlAgeS)} ago`}
         sub={
           h.crlDueS === null
-            ? "no list published yet"
+            ? "no revocation list published yet"
             : h.crlDueS < 0
-              ? `the next is overdue by ${ageText(-h.crlDueS)}`
-              : `${h.crlNewest ? `${h.crlNewest.provider} v${h.crlNewest.version} · ` : ""}${every !== null ? `a revocation is listed within ${ageText(every)}` : `next due within ${ageText(h.crlDueS)}`}`
+              ? `revocation list overdue by ${ageText(-h.crlDueS)}`
+              : `revocation list ${h.crlNewest ? `${h.crlNewest.provider} v${h.crlNewest.version}` : ""} · ${every !== null ? `a revocation is listed within ${ageText(every)}` : `next due within ${ageText(h.crlDueS)}`}`
         }
         tip={`How long ago the newest certificate revocation list (CRL) of any provider was issued.${every !== null ? ` This scenario's CRL Generators gather new revocations and publish them every ${ageText(every)}; with nothing new, no list is published.` : ""} Every list also prints a deadline by which it must be replaced (its nextCrl): the soonest is ${h.crlDueS === null ? "not set yet" : h.crlDueS < 0 ? `overdue by ${ageText(-h.crlDueS)}` : `in ${ageText(h.crlDueS)}`}.`}
         tone={h.crlOverdue ? "bad" : h.crlAgeS === null ? "idle" : "ok"}
