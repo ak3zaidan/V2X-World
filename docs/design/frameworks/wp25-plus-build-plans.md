@@ -911,6 +911,63 @@ down at 300-500 m.
 - **P40.2** (3 h, gated): `PerTable` and its tests.
 - **P40.3** (3 h, gated): the PHY and engine wiring, the row and the faults.
 
+**Source note, 2026-10-28 (P40.1, sources track, no code).** **Verdict: no public source gives
+802.11p PER at more than one relative speed with the channel profile held fixed and the
+standard preamble-LS receiver. By rule 9, WP-40 is dropped (P40.2 and P40.3 leave their
+round) and the card lines at `phy.rs:1603` and `per.rs:530`/`:551` stay as they are.**
+Each check below names the copy that was read. Nothing was cached in the repo. "sha256" is
+the copy read, which was downloaded into scratch and then deleted.
+- *Anwar, Franchi, Fettweis, VTC2019-Fall* (doi 10.1109/VTCFall.2019.8891313). The author
+  preprint is at vodafone-chair.org (sha256 `c3378fed…1660`, 7 pp.). Fig. 1(a)-(b) give PER
+  vs SNR for 11p at 100 B and 1500 B, QPSK 1/2 and 64-QAM 2/3, in **one** profile only:
+  Urban NLOS from Kahn, IEEE 802.11-14/0259r0 (Table III and ref. [18]). There is no speed
+  axis. The text says only that 11p "suffers" from preamble-based estimation, and worse at
+  1500 B (p. 5). This gives a qualitative frame-length effect, not a table.
+- *IEEE 802.11 TGbd / NGV submissions* (11-18/0513 Zhang; "Doppler Impact on OFDM Numerology
+  for NGV", Cao et al., Sept. 2018; 11-19/0016; and Kahn 11-14/0259 for the profiles). These
+  are cited by Naik et al., arXiv 1903.08391, refs [20]-[25], and by the Anwar et al.
+  reliability paper, ref. "11-19/0016r0". **Not reachable**: mentor.ieee.org returns HTTP 418
+  "Request Rejected" to both the document list and direct `dcn/` links. The document numbers
+  of the Cao and Zhang decks stay unpinned. A later P40.1 retry with a browser could reopen
+  WP-40, because these decks are the likeliest multi-speed 11p source.
+- *Checked and rejected* (each read):
+  - Anwar et al., "On the Reliability of NR-V2X and IEEE 802.11bd" (vodafone-chair.org,
+    sha256 `db816c31…8739`): Dopplers of 250/500/1000 Hz, but for 11bd and NR only, no 11p;
+  - Nagalapur, Brännström, Ström, ICC 2014, arXiv 1501.04310 (sha256 `953dcee4…a287`): the
+    standard LT-LS receiver is shown at **100 km/h only** (Fig. 9). The 100/200 km/h curves of
+    Fig. 10 are its modified-frame receiver and perfect CSI, not a deployed receiver;
+  - Sattiraju et al., arXiv 2002.11450 (sha256 `58f34240…422b`):
+    11p BLER vs SNR, 300 B, QPSK 1/2 and 3/4, in the five Kahn/Tiger-team profiles of its
+    Table V (max Doppler 492, 492, 591, 886, 886 Hz, i.e. about 90-162 km/h at 5.9 GHz). Each
+    Doppler comes with its own delay profile, so speed cannot be separated from the profile;
+  - arXiv 1410.8039: BER, not PER, at 0/20/50 km/h with an unstated receiver;
+  - NGMN V2X white paper v1.0 (5gaa.org, sha256 `10c8e174…ab90`): system-level ranges at
+    15/60/70/140 km/h. Its link curves are not published;
+  - Wang et al., J. Commun. Inf. Netw. 2(2), 2017 (doi 10.1007/s41650-017-0022-x): 280 and
+    140 km/h are named in a search abstract, but Springer's cookie wall blocked the copy.
+    **Not read.** It should be retried before WP-40 is finally closed. It is LTE-vs-DSRC from a
+    C-V2X vendor group;
+  - Fernandez et al., IEEE TVT 61(1):3-14, 2012 (doi 10.1109/TVT.2011.2164428): paywalled, and
+    no author copy was found. It uses the Acosta-Marum profiles, where speed is again tied to
+    the profile.
+- *What does exist (profile-indexed, not speed-indexed).* ETSI TR 103 766 V1.1.1 (2021-09),
+  public (etsi.org/deliver, sha256 `f8b434ff…e919`), Figs. 7.13-7.14 p. 58-59: ITS-G5 MCS
+  0/2/4 PER vs SINR, 350 B, for the fast-highway scenario only (WINNER+ B1, fast fading per TR
+  36.843 A.2.1.2.1, Table 7.10). Its data source is ETSI ERM TG37(20)036003, "PHY performance
+  reference for TR103667 and TR103766 simulations" (Jan. 2020; member docbox, not read; per
+  Bazzi et al., arXiv 2003.09510, ref. [13], sha256 `37f7214e…148b`). The numeric tables ship
+  in WiLabV2Xsim (`PERcurves/G5-{HighwayLOS,HighwayNLOS,UrbanLOS,UrbanNLOS,CrossingNLOS}/
+  PER_11p_MCS{0,2,4}_{190,350,550}B.txt`, GPL-3.0, with 2-antenna RX per arXiv 2003.09510
+  §III). They give no speed per folder. Cross-check: `G5-HighwayLOS/PER_11p_MCS2_350B` falls
+  from 0.264 at 2 dB to 0.111 at 3 dB, so PER 0.1 sits near 3.1 dB, which matches "PER=0.1@
+  SINR=3.1dB" in arXiv 2003.09510 Table I.
+- *Choice left for the owner (not built).* A **profile-indexed** 11p PER table (MCS x length
+  x the five profiles above) is buildable from those tables. It would add the frame-length
+  and delay-spread effects the NIST curve lacks, but it is **not** Doppler-aware. The
+  2-antenna receive assumption also has to be undone before it can match the 1-antenna
+  default. It is recorded here as a candidate spare item, not as WP-40. Speed ties to profile
+  only through the scenario label.
+
 ---
 
 ## WP-41 Zipper merge (S-P10)
@@ -947,6 +1004,74 @@ lane drops).
 - **P41.1** (2 h, no cargo): the SUMO zipper page and the MnDOT reports, with figures.
 - **P41.2** (3 h): the conflict type and the import.
 - **P41.3** (3 h): closures and lane drops, the work-zone scenario and rows.
+
+**Source note, 2026-10-28 (P41.1, sources track, no code; `sumo.rs:1570` and `engine.rs:9`,
+`:98` re-checked at `0570929c`).** Each copy was read in scratch and then deleted. Nothing is
+cached in the repo.
+- *SUMO zipper behaviour (behaviour reference only; EPL-2.0 OR GPL-2.0-or-later, no code to
+  copy).*
+  - `sumo.dlr.de/docs/Networks/PlainXML.html`, read 2026-10-28. Node type `zipper`: "connects
+    edges where the number of lanes decreases and traffic needs to merge zipper-style (late
+    merging)". Both lanes "react symmetrically to each other". The connection attribute
+    `visibility`: "For 'zipper'-links, this attribute controls the point at which
+    zipper-merging behavior starts (default 100m)".
+  - `MSLink::getZipperSpeed` (sumo `main`, `src/microsim/MSLink.cpp`, read via raw view;
+    called from `MSVehicle.cpp:3895-3897`, copy sha256 `e39a0d41…6bc5`):
+    1. A foe is ignored unless the ego is within `max(visibility, brakeGap)`.
+    2. A foe counts as *ahead* unless it arrives later and the ego cannot brake for it, or
+       the foe can brake for the ego. A tie in arrival time and distance goes to the lower
+       lane index.
+    3. The ego follows each foe ahead with its car-following `followSpeed`, at a virtual gap
+       of `dist − foe.length − ego.minGap − foeDist`.
+    4. `vZipper = max(vFollow, v − decel·w, vSafeGap)`, where `w = min(1, te/10)` and the
+       target headway is `tf + headwayTime`.
+    5. The zipper link has a 16 s look-ahead (`myLookaheadTimeZipper`), against the default
+       1 s.
+
+    So SUMO's ABAB order *emerges* from arrival times. The order is not a forced token. Plan
+    decision 1 stands; the `zipper_alternates` test should allow a ±1 slip where arrivals
+    tie.
+- *Field data (the decision 2 source; MnDOT's own evaluation is a secondary source).*
+  - **MnDOT** "Late merge … the Zipper System" (dot.state.mn.us, 2 pp., undated, sha256
+    `2b583392…da25`): the backup is reduced "by up to 50% (40% is common)", and the system
+    "has no effect on travel time through the work zone". The underlying evaluation is URS,
+    *Evaluation of 2004 Dynamic Late Merge System* (for MnDOT, 2004). No copy was found. As
+    summarised by NCDOT FHWA/NC/2015-08 (Vaughan et al., 2018, p. 10, ref. 14, sha256
+    `55442d7d…fe31`), it reports on US 10: queue length down about **35%**, travel time not
+    significantly different but more variable, throughput "decreased slightly", and
+    compliance still rising when the deployment ended.
+  - **VTRC 05-R6** (Beacher, Fontaine, Garber, 2004; virginiadot.org, sha256
+    `bae44439…cb9b`), Tappahannock 2-to-1 field test. Closed-lane share is MUTCD **33.66%**
+    (sd 8.59, n 34) vs late merge **38.81%** (sd 8.64, n 100), p < 0.01 (Tables 36-37,
+    p. 48). Throughput is 255.7 vs 258.0 vph, p 0.54 (Tables 38-39). Simulation gave
+    +132 vph only for 3-to-1. For 2-to-1 the late merge helps only at 20% or more heavy
+    vehicles (pp. 53-54). HCM work-zone capacities quoted there (Table 2, p. 12):
+    2-to-1 **1,340 vphpl** (8 studies), 3-to-1 1,170, 3-to-2 1,490.
+  - **SWZDI TPF-5(438)**, Savolainen, Gates, Brown, Dec. 2024 (swzdi.intrans.iastate.edu,
+    183 pp., sha256 `49c0eac2…d72f`), Michigan 2-to-1 freeway zipper sites, video in 5-min
+    bins (Table 25, p. 87). Closed-lane utilisation:
+    - I-94: mean **28.9%** (sd 11.3; 1,447 veh/h);
+    - I-96: **48.6%** (sd 15.9; 530 veh/h but dense);
+    - M-53: **11%**.
+
+    A PCMS adds +2.3 to +5.1 points (p. 4 summary). Utilisation rises about 1 point per
+    10 veh/mi of open-lane density. Under Missouri I-44 *early* merge, 26.0% of traffic is
+    in the closed lane 700 ft before the taper (Table 24).
+  - **NCDOT 2015-08**, NC-58 permanent lane drop: dropped-lane share 31% before, 36% after
+    zipper signs (p < 0.001).
+- *Choice (most realistic, recorded here).*
+  - `traffic.merge.late_merge_share` is defined as **the closing-lane utilisation in the
+    queue**. That is the quantity every field study measures. Perfect zipper compliance is
+    50% at 2-to-1.
+  - The default is **0.29** (I-94, the saturated urban site), with sensitivity range
+    0.11-0.49 (SWZDI). The no-zipper baseline is about 0.26-0.34 (Missouri, VTRC MUTCD).
+  - The work-zone acceptance row:
+    - zipper on vs off: queue length −35% to −50% (URS via NCDOT; MnDOT);
+    - discharge not significantly different;
+    - 2-to-1 discharge against 1,340 vphpl. VTRC quotes only the HCM average, so P41.3
+      pins the tolerance from the HCM study spread or the SWZDI volumes, and does not
+      guess it.
+  - The "early-merge share 1.0" fault in the test table becomes "utilisation 0.0".
 
 ---
 
@@ -992,6 +1117,85 @@ lane drops).
   sources.
 - **P42.2** (3 h): areas and manoeuvres.
 - **P42.3** (3 h): the final leg, search, rows and faults.
+
+**Source note, 2026-10-28 (P42.1, sources track, no code; `l.N` = this file at `0570929c`).**
+- *What the importer reads today.* `section.rs:19` already parses both on-street schemes:
+  - the new (2022) `parking[:left|:right|:both]=lane|yes|half_on_kerb|street_side` with
+    `…:orientation`;
+  - the old `parking:lane[:side]=parallel|diagonal|perpendicular|marked`.
+
+  It reads no `…:capacity`. `amenity=parking` areas are not read at all.
+- *Tag counts on the shipped maps.* These are the 64 extracts in `worlds/cache` (`cities.yaml`: 63 US downtown boxes of about
+  1.5 km x 1.5 km, plus Berlin-Mitte), and the two test fixtures. They come from
+  `python3 -I` scripts with `ElementTree.iterparse`, kept in scratch and not committed.
+  - **On-street, the 63 US boxes.** Some parking tag is on 194.9 of 2,686 km of street
+    (primary..living_street), which is **7.3%**. 164 km (6.1%) have actual parking, i.e.
+    neither `no` nor `separate`. At least one tagged way: 48 of the 66 files. Leaders by
+    tagged way: Berlin 572, Milwaukee 354, Providence 304, Boston 166, Minneapolis 162.
+  - **Berlin** is 99.6% tagged; 44% of its street km have parking.
+  - **Values:**
+    - new scheme: `lane` 576, `no` 572, `yes` 447, `street_side` 64, `separate` 32,
+      `on_kerb` 14;
+    - old scheme: `parallel` 513, `no` 115, `diagonal` 67, `no_parking` 36, `marked` 16.
+  - **Capacity on street:** 160 ways carry `parking:lane:*:capacity`, and 4 the new
+    `parking:*:capacity`.
+  - **Off-street.** `amenity=parking` has 10,050 objects (9,748 ways, 258 nodes, 44
+    relations). **949 (9.4%) carry `capacity`** (sum 177,826). Kinds: `surface` 4,119,
+    untagged 3,551, `multi-storey` 1,353, `street_side` 668, `underground` 194, `lane` 148.
+    There are also 3,224 `parking_space` and 3,267 `parking_entrance` objects.
+  - **Area per space where capacity is tagged** (US closed ways, footprint / capacity):
+
+    | Kind | n | Median | IQR |
+    |---|---|---|---|
+    | `surface` | 550 | **27.8 m²** | 23.1-34.4 |
+    | `multi-storey` (footprint x levels) | 110 | **31.5 m²** | 27.0-35.6 |
+    | `street_side` | 102 | 17.7 m² | 15.2-19.9 |
+    | `underground` | 22 | 16.5 m² (no levels tag) | n/a |
+- *What follows for P42.2 (the choice, recorded here).*
+  - **An untagged US street is "unknown", not "no parking".** With 93% of street km
+    untagged, supply from tags alone would leave downtown kerbs empty. So
+    `traffic.parking.untagged_street` is an enum, default **`none`**, with an `assume_both`
+    option for sensitivity. The coverage share is reported in the import report. Nothing is
+    guessed onto the card.
+  - **Off-street capacity** is the tag where present. Otherwise it is area / 27.8 m²
+    (surface) or area x levels / 31.5 m² (multi-storey). Both are this repo's own
+    measurement on the shipped OSM (ODbL, attribution as in `cities.yaml`), and the IQR is
+    the sensitivity band.
+- *Manoeuvre time.*
+  - **HCM.** HCM 2000 parking adjustment `f_p = (N − 0.1 − 18·N_m/3600)/N`: each manoeuvre
+    is assumed to block the adjacent lane **18 s**, with a practical limit of 180
+    manoeuvres/h. This is from the NPTEL Module 7 course page (archive.nptel.ac.in, read
+    2026-10-28, secondary). FHWA HPMS Field Manual App. N (fhwa.dot.gov/ohim/hpmsmanl/
+    appn5.cfm, read) confirms the factor's HCM 2000 basis and the `N_m` defaults: 6 for
+    two-way with parking on one side, 12 for both sides or one-way one side, and 24 for
+    one-way both sides (HCM Exh. 10-20).
+  - **Field, car.** Jayaprakash et al., *Period. Polytech. Transp. Eng.* 54(4):470-480,
+    2026, doi 10.3311/PPtr.41230, CC BY (sha256 `32b77737…0974`), Table 2: **mean 10.25 s,
+    sd 2.98, range 4-20 s, positively skewed** (skew 1.12), at Indian signalised
+    approaches with mixed traffic, about 300 per class. LCV 12.81 s, sd 2.30.
+  - **Manchester.** Yousif & Purnawan, *Proc. ICE Transport* 157(3):189-194, 2004: 11.7 s
+    for parallel parking in, 5.6 s for out (search summaries only; the Salford repository
+    file returned HTTP 403). [verify]
+  - **Choice.** The draw is a **lognormal fitted to mean 10.25 s / sd 2.98 s**, truncated
+    to 4-20 s, for parking in, with LCVs scaled by 12.81/10.25. Parking out is
+    [verify]-gated on Yousif. Until that is read, out = in. The HCM 18 s is the **check
+    row**: lane saturation next to active parking must fall by about `18·N_m/3600` per lane
+    within the simulation spread. It is not the draw, because the field mean is about 57%
+    of 18 s.
+- *Search (behaviour reference: SUMO `Simulation/Rerouter.html` §parkingAreaReroute and
+  `Simulation/ParkingArea.html`, read 2026-10-28).*
+  - SUMO's scoring defaults: only `parking.distanceto.weight = 1` (the rest 0),
+    `parking.memory` 600 s, `parking.frustration` 100, `parking.knowledge` 0,
+    `parking.anywhere` −1 (off).
+  - Its default `maneuverAngleTimes` are `10 3 4, 80 1 11, 110 11 2, 170 8 3, 181 3 4`
+    (angle, in s, out s), doubled for trucks and coaches. These are lower than both field
+    sources, so they are not used.
+  - The engine picks the next area within `search_radius_m` by road distance (the SUMO
+    default weight), with a 600 s memory of full areas.
+  - Realism check (not a calibration target): Shoup, "Cruising for parking", *Transport
+    Policy* 13(6), 2006, abstract (RePEc, read). Across 1927-2001 downtown studies it found
+    3.5-14 min to find a kerb space and 8-74% of traffic cruising. The PDF on eScholarship
+    returned 403. [verify]
 
 ---
 
@@ -1039,6 +1243,83 @@ parameters from NCHRP 605.
 - **P43.3** (3 h): abort, sight distance and the occupancy rules.
 - **P43.4** (3 h): the scenario, G-TV checks, rows and faults.
 
+**Source note, 2026-10-28 (P43.1, sources track, no code; `lc2013.rs:40` re-checked; `osm.rs`
+reads no `overtaking` key today).** Nothing is cached in the repo. Each copy was read in
+scratch.
+- **NCHRP Report 605** (Harwood, Gilmore, Richard, Dunn, Sun, 2008, doi 10.17226/23278).
+  - The TRB URL now redirects to NAP, whose reader shows no body text. The text was read
+    from the public mirror at comt.ca (69 pp., sha256 `4c597b12…fa35`; its title page and
+    TRB 2008 front matter match). Page numbers are the printed ones (PDF page − 9).
+  - The field data are Missouri/Pennsylvania (60 detailed passes) plus a Texas study (105),
+    Table 24, p. 44:
+
+    | Measure | Combined (n 165) | Missouri/Pennsylvania (n 60) |
+    |---|---|---|
+    | Speed of passing vehicle at abreast position | 69.2 mph, sd 7.1 | 66.1 mph |
+    | Speed of passed vehicle | 55.8 mph, sd 6.9 | 50.7 mph |
+    | **Speed differential** | **13.4 mph, sd 5.1** (0.7-33.1) | 15.4 mph |
+    | **Left-lane time `t2`** | **9.9 s, sd 2.4** (5.0-19.0) | 10.0 s |
+    | Left-lane distance `d2` | 990 ft, sd 225 | 926 ft |
+
+    `t2` percentiles for design: 15th 7.5 s, mean 9.9 s, 85th 12.3 s. The data show no
+    dependence on speed (pp. 45-46, Table 26). The recommended speed differential is
+    **12 mph**, against AASHTO's 10 (Ch. 6 item 10, p. 78).
+  - **The abreast position** comes at 41% of `d2` (116 of 282 m). It is the commitment
+    point: "once the first 40 percent … is completed, the passing driver is committed to
+    complete the remaining 60 percent" (p. 46; p. 78 item 12).
+  - **Aborts:** 7 of 367 passes, i.e. **1.9%**. Left-lane occupancy is 7.1 s (4.1-9.5).
+    Aborts begin at about 36% of the manoeuvre, before abreast. The peak deceleration in 4
+    measured aborts is 0.17-5.27 m/s², "too limited" to choose a rate (p. 47).
+  - **Clearance** to the opposing vehicle is 0.3-5.8 s / 16-321 m (n 7). One is under 1 s.
+  - **Passing frequency** (Tables 27-29): short zones of 120-240 m have 0.4% of all
+    vehicles and 1.6% of those at headway 3 s or less. Long zones have 1.9% and 7.8%. 92%
+    of short-zone passes and 21% of long-zone passes end beyond the zone.
+  - **MUTCD marking PSD** (Table 3, p. 9; recommended for design too): 25/30/35/40/45/50/
+    55/60/65/70 mph -> 450/500/550/600/700/800/900/1,000/1,100/1,200 ft. The minimum
+    passing zone is 400 ft.
+  - **No accepted-gap distribution.** NCHRP 605 reports none, so the planned test
+    `accepted_gaps_match_nchrp_605` cannot be built from it. *Choice, recorded:* that test
+    becomes `passes_match_nchrp_605`. It checks `t2` and the speed differential against
+    Table 24, within the combined sd. The fault is "`t2` in minutes read as seconds".
+  - **Gap acceptance** (the opposing-gap judgement) is gated on Llorca et al., *TR Part C*
+    52:157-172, 2015 (UPV RiuNet open copy; the fetch was stopped by a bot check) and
+    Llorca & Farah, TRB 2016 (TU Delft repository; the connection was refused). [verify]
+    Until one of them is read, P43.2 uses the MUTCD PSD at the 85th-percentile speed as the
+    acceptance threshold. That is the deployed marking rule, so it is a sound fallback.
+- **DNPW: CAMP VSC-A Final Report, DOT HS 811 492A, Sept. 2011** (ROSA P dot/43933, 102 pp.,
+  sha256 `f94e91ca…0097`; the direct curl got 403, so it was fetched through the web
+  reader).
+  - The definition is on p. 6, §2.3: warn the host-vehicle driver "during a passing
+    maneuver attempt when a slower moving vehicle, ahead and in the same lane, cannot be
+    safely passed using a passing zone which is occupied by vehicles with the opposite
+    direction of travel". There is also an advisory when no pass is attempted.
+  - **DNPW needs Which-Lane relative positioning** (better than 1.5 m), against 5 m for
+    Which-Road (Table 7, p. 39). This drives the GNSS-error coupling: the warning must read
+    *believed* positions (rule 6).
+  - **Objective tests** (Table 5, p. 27):
+    - T1, pass with an oncoming RV in the adjacent lane, 25/35 mph, 10 runs: true
+      positive;
+    - T2, a stopped RV in the adjacent lane, 30/40 mph, 10 runs: true positive;
+    - T3, an oncoming RV *not* in the adjacent lane, 45 mph, 2 runs: no false positive.
+
+    These three become the DNPW expectation rows.
+  - The threat thresholds are in Appendix Vol. 1, DOT HS 811 492B, which NHTSA refused
+    (403). They are not read. [verify] before any DNPW timing goes on a card.
+- **OSM `overtaking=*`** (wiki Key:overtaking, read 2026-10-28; status "in use").
+  - Values are `yes` / `no` / `both` / `forward` / `backward` / `caution`, with
+    `overtaking:forward|backward` and `overtaking:hgv`. "Data consumers should not assume a
+    default", because untagged depends on the region.
+  - Worldwide (taginfo, 2026-10-28): `no` 107,728 (68%), `yes` 30,961, `forward` 7,720,
+    `backward` 7,212, `both` 3,183, `caution` 577.
+  - **Shipped maps:** 47 ways in total carry `overtaking*` (`no` 30, `forward` 8, `yes` 8,
+    `backward` 1), in 8 cities. **0 km** of two-way, two-lane, trunk-to-unclassified road has
+    `maxspeed` of 70 km/h or more. There are 165 km of slower such road and 331 km with no
+    maxspeed, all in downtown boxes.
+  - **No shipped map is a rural two-lane highway.** P43.4 must fetch one: a new
+    `cities.yaml`-style entry with its own provenance. Untagged US two-lane roads then take
+    the MUTCD rule: passing is allowed only where the sight distance from `los.rs` and the
+    DEM is at least the MUTCD PSD for the 85th-percentile speed.
+
 ---
 
 ## Sources to cache before the matching pieces
@@ -1063,12 +1344,12 @@ parameters from NCHRP 605.
 | WP-39 | Dingus et al. 2016, PNAS 113(10) | open access | no |
 | WP-39 | NHTSA visual-manual guidelines, 78 FR 24818 | public | no |
 | WP-39 | 100-Car Phase II, DOT HS 810 593 | public | read ([repo] honest-density.md) |
-| WP-40 | Anwar, Franchi, Fettweis, VTC2019-Fall | IEEE; author copy to find | no |
-| WP-40 | IEEE 802.11 TGbd link-level submissions | public (document server) | no |
+| WP-40 | Anwar, Franchi, Fettweis, VTC2019-Fall | author preprint (vodafone-chair.org) | read 2026-10-28 (P40.1 note): one profile, no speed axis |
+| WP-40 | IEEE 802.11 TGbd link-level submissions | public, but mentor.ieee.org rejected the fetch (HTTP 418) | not read (P40.1 note); WP-40 dropped |
 | WP-40 | 3GPP TR 37.885 | public | channel models summarised in R2c |
-| WP-41 | SUMO zipper documentation; MnDOT zipper-merge evaluations | public | no |
-| WP-42 | OSM wiki `parking:*`; a manoeuvre-time field study; SUMO parking reroute docs | public | no |
-| WP-43 | NCHRP Report 605 (2008); CAMP VSC-A DNPW report | public | no |
+| WP-41 | SUMO zipper documentation; MnDOT zipper-merge evaluations (+ VTRC 05-R6, SWZDI TPF-5(438), NCDOT 2015-08) | public | read 2026-10-28 (P41.1 note); URS 2004 MnDOT report not found |
+| WP-42 | OSM wiki `parking:*`; a manoeuvre-time field study; SUMO parking reroute docs | public | read 2026-10-28 (P42.1 note); tag counts measured; Yousif 2004 and Shoup 2006 PDFs refused (403) |
+| WP-43 | NCHRP Report 605 (2008); CAMP VSC-A DNPW report | public | read 2026-10-28 (P43.1 note); VSC-A App. Vol. 1 (811 492B) and the Llorca gap papers not reachable |
 | WP-33 | IEEE 1609.4-2016 | paywalled | no (constants UNVERIFIED) |
 
 ---
@@ -1138,7 +1419,9 @@ Notes on the schedule:
 8. **C6 metric and R10 polygons (WP-37).** Which reading of "2 km" the source means, and
    whether Natural Earth polygons may be vendored.
 9. **Distraction on for realistic presets (WP-39).** This moves G-TV.
-10. **Doppler PER default (WP-40), if its source is found.**
+10. **Doppler PER default (WP-40), if its source is found.** *2026-10-28: not found (P40.1
+    note), so WP-40 is dropped. The open choice is whether to build the profile-indexed 11p
+    PER table recorded there as a spare.*
 11. **The default stamp profile (WP-30)**: `tampa_chain`, `tampa_mixed`, or Wyoming.
 12. **Purchases** that would turn [verify] into [cached]: IEEE 1609.4-2016 (WP-33, WP-16),
     SAE J3161/1 (WP-34), IEEE 1609.2.1 body text (WP-35), AASHTO Green Book and HCM 7th ed.

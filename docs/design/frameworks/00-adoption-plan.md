@@ -971,11 +971,11 @@ trustworthy or comparable; later waves add behaviours and radio features.
 
 | Item | Why it waits |
 |---|---|
-| Zipper merge (S-P10), online calibrators (S-P11), parking (S-P12) | Real gains, but none fixes a failing check or feeds a deployed V2X application before the waves above. |
+| Zipper merge (S-P10), online calibrators (S-P11), parking (S-P12) | Real gains, but none fixes a failing check or feeds a deployed V2X application before the waves above. Sources for S-P10 and S-P12 read 2026-10-28 (WP-41 and WP-42 source notes in `wp25-plus-build-plans.md`). |
 | Driver distraction episodes (S-P15) | Best after WP-08, which gives it crashes to precede. |
-| Overtaking in the opposing lane (S-P13, L) | Needed only for Do-Not-Pass Warning studies. |
+| Overtaking in the opposing lane (S-P13, L) | Needed only for Do-Not-Pass Warning studies. NCHRP 605 and VSC-A read 2026-10-28 (WP-43 source note). No shipped map is rural. |
 | DCC_NET CBR sharing (O-P8) | EU stack only; the deployment target is US. |
-| Doppler-aware 802.11p PER tables (O-P12) | Beyond both frameworks, but the link-level source is not cached or checked yet. |
+| Doppler-aware 802.11p PER tables (O-P12) | Beyond both frameworks. **Checked 2026-10-28 (P40.1): no public source gives 11p PER at more than one speed in one profile, so WP-40 is dropped** (`wp25-plus-build-plans.md` WP-40 source note). The TGbd decks could not be fetched and could reopen it. |
 | Hardware-in-the-loop bridge (O-P10, L) | Needs an owner decision and a real OBU on the bench. |
 
 **Dropped** (not useful for this engine): Wiedemann 74 (S-P18, optional, no current user),
