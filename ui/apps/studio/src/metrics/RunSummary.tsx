@@ -40,6 +40,7 @@ import {
   briefSentences,
   causeName,
   credentialRows,
+  detectionPending,
   dominant,
   entityLoads,
   reduceSeries,
@@ -78,7 +79,7 @@ interface SummaryData {
 
 type Load = { status: "idle" | "loading" } | { status: "error"; error: string } | { status: "ready"; data: SummaryData };
 
-async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
+async function collect(tNs: number, scenario: unknown, finished = false): Promise<SummaryData> {
   const defs = await fetchCatalogue();
   // Judged against this run's own expectation, as the dashboard judges it (`health.ts` `expectedBand`).
   const families = withExpectations(familiesOf(defs), scenario);
@@ -177,7 +178,14 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
       revoked: count(["ma"], ["revocations"]),
       honestRevoked: honest,
       slowestStageS: headline.get("revocation_latency_stage.p95") ?? null,
-      pendingInShuffle: count(["ra"], ["reports_in_shuffle"]),
+      pending: detectionPending({
+        revoked: count(["ma"], ["revocations"]) ?? 0,
+        inShuffle: count(["ra"], ["reports_in_shuffle"]) ?? 0,
+        atMa: count(["ma"], ["reports_received"]) ?? 0,
+        filed: count(["ee"], ["reports_filed"]) ?? 0,
+        shuffleS: snap?.entities.find((e) => e.id.split("/").pop() === "ra")?.state["shuffle_window_s"] as number | undefined,
+        finished,
+      }),
       recall: recallV,
     },
     bottleneck: { stage: stage ? stageName(stage.key) : null, stageShare: stage?.share ?? null, entity: entities[0]?.name ?? null, utilisation: entities[0]?.utilisation ?? null },
@@ -200,6 +208,8 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
       crlVersions: count(["crlg"], ["versions_signed"]) ?? count(["ca"], ["ca_crl_sequence"]),
       filed: count(["ee"], ["reports_filed"]),
       inShuffle: count(["ra"], ["reports_in_shuffle"]),
+      atMa: count(["ma"], ["reports_received"]),
+      finished,
       recall: recallV,
       recallLevel: recallBand ? classify(recallBand, recallV) : null,
     }),
@@ -258,10 +268,12 @@ function SummaryDialog(): React.JSX.Element {
   tRef.current = tNs;
   const scenarioRef = useRef(scenario);
   scenarioRef.current = scenario;
+  const finishedRef = useRef(run.state === "finished");
+  finishedRef.current = run.state === "finished";
 
   const refresh = useCallback(() => {
     setLoad({ status: "loading" });
-    collect(tRef.current, scenarioRef.current)
+    collect(tRef.current, scenarioRef.current, finishedRef.current)
       .then((data) => setLoad({ status: "ready", data }))
       .catch((e: unknown) => setLoad({ status: "error", error: e instanceof Error ? e.message : String(e) }));
   }, []);

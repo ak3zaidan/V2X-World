@@ -330,6 +330,7 @@ export function ScmsOverview({
   const src = useScmsSources(families, active);
   const tNs = useStudio((s) => s.run.tNs);
   const scenario = useStudio((s) => s.scenario);
+  const finished = useStudio((s) => s.run.state === "finished");
   const reader = useMemo<MetricReader>(
     () => ({
       family: (b) => families.find((f) => f.base === b),
@@ -340,7 +341,7 @@ export function ScmsOverview({
     [families, overview, src.pooled],
   );
   const has = hasCredentials(src.snapshot, reader);
-  const o = has ? scmsOverview(src.snapshot, reader, { tNs: src.snapshot?.t ?? tNs, scenario }) : null;
+  const o = has ? scmsOverview(src.snapshot, reader, { tNs: src.snapshot?.t ?? tNs, scenario, finished }) : null;
   const covered = o === null ? [] : coveredMetrics(o);
   const reportKey = o === null ? "" : `${o.sections.map((x) => `${x.id}:${x.level ?? (x.pending ? "pending" : "none")}:${x.answer}`).join("|")}#${covered.join(",")}`;
   useEffect(() => {

@@ -24,7 +24,9 @@ import type { BackendEntity, BackendSnapshot } from "../lib/backend.js";
 import { classify, noteOf, type HealthBand, type HealthLevel } from "./health.js";
 import { display, formatNumber, glanceNumber, readable, type GroupRow, type MetricFamily, type Series } from "./model.js";
 
-import { entityLoads, ENTITY_UTILISATION_LIMIT } from "./summaryModel.js";
+import { detectionPending, entityLoads, ENTITY_UTILISATION_LIMIT } from "./summaryModel.js";
+
+export { detectionPending } from "./summaryModel.js";
 
 export { readable as shown, readableBytes as bytes, readableDuration as duration } from "./model.js";
 
@@ -776,7 +778,7 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
   return { id: "revocation", question: "Is revocation working, and how fast?", answer, level: worst(tiles.map((t) => t.level)), tiles, ...(bars ? { bars } : {}) };
 }
 
-function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: string): ScmsSection {
+function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: string, finished = false): ScmsSection {
   const filed = countOf(s, ["ee"], ["reports_filed"], first);
   const cell = countOf(s, ["ee"], ["reports_over_cellular"], first);
   const viaRsu = countOf(s, ["ee"], ["reports_via_rsu"], first);
@@ -827,17 +829,27 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
       label: "Received by the MA",
       value: atMa.total,
       hint: "Reports the Misbehaviour Authority has received.",
-      ...(shuffle && shuffle.total > 0 ? { drop: `${formatNumber(shuffle.total)} wait in the shuffle` } : {}),
+      // More at the MAs than the vehicles uploaded: with several providers, an MA also receives the
+      // reports another provider's MA shares with it (the backend's report-shared messages).
+      ...(shuffle && shuffle.total > 0
+        ? { drop: `${formatNumber(shuffle.total)} wait in the shuffle` }
+        : sentTotal !== null && atMa.total > sentTotal && atMa.byProvider.length > 1
+          ? { drop: "more than uploaded: includes reports another provider's MA shared" }
+          : {}),
     },
     cases && { id: "cases", label: "Suspects with a case", value: cases.total, hint: "Suspects the MA is collecting evidence on (counted per suspect, not per report)." },
     (decisions ?? revoked) && { id: "revoked", label: "Revoked", value: (revoked ?? decisions)!.total, hint: "Suspects the MA decided to revoke." },
   ]);
   // Reports wait in the RA's shuffle by design; until any reach the MA and it revokes someone, a low
   // recall is the pipeline still working, not detection failing.
-  const pendingText =
-    shuffle !== null && shuffle.total > 0 && (revoked?.total ?? decisions?.total ?? 0) === 0
-      ? `${formatNumber(shuffle.total)} ${shuffle.total === 1 ? "report waits" : "reports wait"} in the RA's shuffle${shuffleS !== null ? `, released every ${words(shuffleS, "s")}` : ""}; detection is judged once they reach the MA.`
-      : null;
+  const pendingText = detectionPending({
+    revoked: revoked?.total ?? decisions?.total ?? 0,
+    inShuffle: shuffle?.total ?? 0,
+    atMa: atMa?.total ?? 0,
+    filed: filed?.total ?? 0,
+    shuffleS,
+    finished,
+  });
 
   const recallVehicle = pooledValue(m, "det_recall", "level", "vehicle");
   const recallReport = pooledValue(m, "det_recall", "level", "report");
@@ -867,7 +879,7 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
   const tiles = present([
     // Only a would-be bad verdict (or a bare zero) is set aside: a good recall stands as judged.
     recallTile !== null && pendingText !== null && (recallTile.level === "caution" || recallTile.level === "unhealthy" || (recallTile.level === null && (recallVehicle ?? recallReport) === 0))
-      ? asPending(recallTile, pendingText)
+      ? asPending(recallTile, cap(pendingText))
       : recallTile !== null && shuffle !== null && shuffle.total > 0
         ? // Judged, but not final: say what is still on its way to the MA.
           { ...recallTile, meaning: `${recallTile.meaning} ${formatNumber(shuffle.total)} ${shuffle.total === 1 ? "report still waits" : "reports still wait"} in the RA's shuffle; more attackers may be revoked once they reach the MA.` }
@@ -912,7 +924,11 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
       : null,
   ]);
 
-  const level = worst(tiles.map((t) => t.level));
+  // While detection is pending, the question's own verdict is pending too: a "Healthy" from the
+  // honest-device tiles would read as "misbehaviour is being caught". A problem still shows.
+  const tileLevel = worst(tiles.map((t) => t.level));
+  const anyPending = tiles.some((t) => t.pending !== undefined);
+  const level = anyPending && (tileLevel === null || tileLevel === "healthy") ? null : tileLevel;
   let answer: string;
   if (filed === null && tiles.length === 0) answer = "The run has not reported misbehaviour detection yet.";
   else {
@@ -920,7 +936,7 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
     if (filed !== null) parts.push(`vehicles have filed ${formatNumber(filed.total)} misbehaviour ${filed.total === 1 ? "report" : "reports"}`);
     const r = recallVehicle ?? recallReport;
     const pending = tiles.some((t) => t.pending !== undefined);
-    if (pending && pendingText !== null) parts.push(pendingText.replace(/\.$/, "").replace("; detection is judged", ", so detection is judged"));
+    if (pending && pendingText !== null) parts.push(`${pendingText.split(";")[0]}, so detection is not judged yet`);
     else if (r !== null) parts.push(`${words(r, "ratio")} of attackers ${recallVehicle !== null ? "revoked" : "reported"}`);
     if (honestRevoked !== null) parts.push(honestRevoked === 0 ? "no honest vehicle revoked" : `${formatNumber(honestRevoked)} honest ${honestRevoked === 1 ? "vehicle" : "vehicles"} revoked`);
     answer = parts.length > 0 ? `${parts[0]![0]!.toUpperCase()}${parts.join("; ").slice(1)}.` : "No report has been filed yet.";
@@ -1212,7 +1228,11 @@ export function hasCredentials(s: BackendSnapshot | null, m: MetricReader): bool
 /** The metrics only a run with a credential system measures. */
 export const CREDENTIAL_METRICS: readonly string[] = ["cert_pool_valid", "crl_entries", "time_to_decision", "det_recall"];
 
-export function scmsOverview(s: BackendSnapshot | null, m: MetricReader, opts: { readonly tNs: number; readonly scenario: unknown }): ScmsOverview {
+export function scmsOverview(
+  s: BackendSnapshot | null,
+  m: MetricReader,
+  opts: { readonly tNs: number; readonly scenario: unknown; /** A finished run is judged, never pending. */ readonly finished?: boolean },
+): ScmsOverview {
   const first = firstProvider(opts.scenario, s);
   const providers = s === null ? [] : [...new Set(s.entities.filter((e) => roleOf(e.id) === "ee" || roleOf(e.id) === "ma").map((e) => providerOf(e, first)))];
   const system =
@@ -1230,7 +1250,7 @@ export function scmsOverview(s: BackendSnapshot | null, m: MetricReader, opts: {
   const sections = present([
     certsSection(m, s, first),
     revocationSection(m, s, first),
-    misbehaviourSection(m, s, first),
+    misbehaviourSection(m, s, first, opts.finished === true),
     privacySection(m, s, first),
     costSection(m),
     backendSection(m, s, opts.tNs, first),

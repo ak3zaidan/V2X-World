@@ -16,6 +16,7 @@ import {
   countOf,
   coveredMetrics,
   cueText,
+  detectionPending,
   duration,
   firstProvider,
   hasCredentials,
@@ -214,12 +215,25 @@ describe("the five questions", () => {
     expect(t.title).toBe("Attackers revoked (detection recall)");
     expect(mb.level).toBeNull();
     expect(mb.pending).toBe(true);
-    expect(mb.answer).toContain("150 reports wait in the RA's shuffle");
+    expect(mb.answer).toContain("150 reports wait in the RA's shuffle, released every 2 days, so detection is not judged yet");
+    // A healthy honest-device tile does not turn the pending question into "Healthy".
+    const withHonest = reader(
+      {},
+      { "det_recall/level": [{ key: "vehicle", value: 0 } as GroupRow], "false_accusations/level": [{ key: "vehicle", value: 0 } as GroupRow] },
+      [def("det_recall", "ratio", recallBand, ["t", "level"]), def("false_accusations", "count", null, ["t", "level"])],
+    );
+    const mb2 = scmsOverview(snap, withHonest, { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "misbehaviour")!;
+    expect(mb2.tiles.find((x) => x.id === "honest-revoked")!.level).toBe("healthy");
+    expect(mb2.level).toBeNull();
+    expect(mb2.pending).toBe(true);
     // Once the MA has revoked someone, the same recall is judged.
     const later = { ...snap, entities: snap.entities.map((e) => (e.id === "ma" ? { ...e, state: { ...e.state, revocations: 1 } } : e)) };
     const judged = scmsOverview(later, r, { tNs: snap.t, scenario: null }).sections.find((x) => x.id === "misbehaviour")!;
     expect(judged.tiles.find((x) => x.id === "recall")!.level).toBe("unhealthy");
     expect(judged.pending).toBeUndefined();
+    // A finished run is judged whatever is still in the pipeline.
+    const done = scmsOverview(snap, r, { tNs: snap.t, scenario: null, finished: true }).sections.find((x) => x.id === "misbehaviour")!;
+    expect(done.tiles.find((x) => x.id === "recall")!.level).toBe("unhealthy");
   });
 
   it("names recall by what it counts: revoked per vehicle, reported per report", () => {
@@ -445,6 +459,11 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
   });
 
   it("gives the summary's credential tile the authorities' counts, with detection pending by the overview's rule", () => {
+    // Reports at the MA, none in the shuffle, nobody revoked yet: still pending (its review takes hours), until the run ends.
+    expect(detectionPending({ revoked: 0, inShuffle: 0, atMa: 575, filed: 452 })).toBe("the MA has received 575 reports and not yet decided a revocation; detection is judged once it does.");
+    expect(detectionPending({ revoked: 0, inShuffle: 0, atMa: 575, filed: 452, finished: true })).toBeNull();
+    expect(detectionPending({ revoked: 1, inShuffle: 320, atMa: 575, filed: 452 })).toBeNull();
+    expect(credentialRows({ revoked: 0, crlVersions: null, filed: 452, inShuffle: 0, atMa: 575, recall: 0 }).find((r) => r.id === "detection")!.value).toBe("pending: 575 at the MA, undecided");
     const pending = credentialRows({ revoked: 0, crlVersions: 3, filed: 452, inShuffle: 320, recall: 0 });
     expect(pending.map((r) => r.id)).toEqual(["revoked", "crl-versions", "filed", "detection"]);
     expect(pending[3]!.value).toBe("pending: 320 in the RA's shuffle");
@@ -453,11 +472,11 @@ describe("the polish pass: one rule, one number format, the run's own expectatio
       judged: null,
       delivery: null,
       credentials: null,
-      misbehaviour: { filed: 452, revoked: 0, honestRevoked: null, slowestStageS: null, pendingInShuffle: 320 },
+      misbehaviour: { filed: 452, revoked: 0, honestRevoked: null, slowestStageS: null, pending: detectionPending({ revoked: 0, inShuffle: 320, atMa: 0, filed: 452 }) },
       bottleneck: null,
     });
     expect(brief[1]).toBe("Vehicles filed 452 misbehaviour reports and no device was revoked; 320 reports wait in the RA's shuffle, so detection is not judged yet.");
-    const judged = briefSentences({ judged: null, delivery: null, credentials: null, misbehaviour: { filed: 452, revoked: 2, honestRevoked: 0, slowestStageS: null, pendingInShuffle: 320, recall: 0.5 }, bottleneck: null });
+    const judged = briefSentences({ judged: null, delivery: null, credentials: null, misbehaviour: { filed: 452, revoked: 2, honestRevoked: 0, slowestStageS: null, pending: null, recall: 0.5 }, bottleneck: null });
     expect(judged[1]).toBe("Vehicles filed 452 misbehaviour reports and 2 devices were revoked, none of them honest (50 % of the attackers).");
     expect(credentialRows({ revoked: 2, crlVersions: null, filed: null, inShuffle: 0, recall: 0.5, recallLevel: "caution" })[1]!.level).toBe("caution");
   });

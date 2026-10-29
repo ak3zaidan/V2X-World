@@ -304,8 +304,8 @@ export interface BriefInput {
     readonly revoked: number | null;
     readonly honestRevoked: number | null;
     readonly slowestStageS: number | null;
-    /** Reports held in the RA's shuffle while nobody is revoked yet: detection is not judged (`scmsModel.ts`, the same rule). */
-    readonly pendingInShuffle?: number | null;
+    /** Why detection is not judged yet (`detectionPending`, the overview's rule), or null. */
+    readonly pending?: string | null;
     /** The share of attacking vehicles revoked so far (det_recall, level = vehicle), when judged. */
     readonly recall?: number | null;
   } | null;
@@ -335,6 +335,29 @@ function cap(s: string): string {
  * messages got through, whether devices had certificates, what misbehaviour and revocation did, and
  * the one bottleneck that stands out. A part the run did not measure is left out, never guessed.
  */
+/**
+ * Why detection cannot be judged yet, or `null` when it can. One rule for the overview and the run
+ * summary: while nobody has been revoked and reports are still on their way (held in the RA's
+ * shuffle by design, or at the MA awaiting its decision), a low recall is the pipeline working, not
+ * detection failing. A finished run is always judged.
+ */
+export function detectionPending(p: {
+  readonly revoked: number;
+  readonly inShuffle: number;
+  readonly atMa: number;
+  readonly filed: number;
+  readonly shuffleS?: number | null;
+  readonly finished?: boolean;
+}): string | null {
+  if (p.finished === true || p.revoked > 0) return null;
+  if (p.inShuffle > 0)
+    return `${formatNumber(p.inShuffle)} ${p.inShuffle === 1 ? "report waits" : "reports wait"} in the RA's shuffle${p.shuffleS != null ? `, released every ${w(p.shuffleS, "s")}` : ""}; detection is judged once they reach the MA.`;
+  if (p.atMa > 0)
+    return `the MA has received ${formatNumber(p.atMa)} ${p.atMa === 1 ? "report" : "reports"} and not yet decided a revocation; detection is judged once it does.`;
+  if (p.filed > 0) return `${formatNumber(p.filed)} ${p.filed === 1 ? "report is" : "reports are"} on the way to the MA; detection is judged once it decides.`;
+  return null;
+}
+
 /** One row of the run summary's credential tile, from the authorities' own counts. */
 export interface CredentialRow {
   readonly id: string;
@@ -356,6 +379,9 @@ export function credentialRows(c: {
   readonly crlVersions: number | null;
   readonly filed: number | null;
   readonly inShuffle: number | null;
+  /** Reports the MAs have received, and whether the run has finished: the pending rule's other inputs. */
+  readonly atMa?: number | null;
+  readonly finished?: boolean;
   readonly recall: number | null;
   readonly recallLevel?: "healthy" | "caution" | "unhealthy" | null;
 }): CredentialRow[] {
@@ -364,8 +390,11 @@ export function credentialRows(c: {
   if (c.crlEntries !== undefined && c.crlEntries !== null) out.push({ id: "crl-entries", label: "Entries on the revocation lists (CRLs), all providers", value: formatNumber(c.crlEntries) });
   if (c.crlVersions !== null) out.push({ id: "crl-versions", label: "Revocation lists signed (CRL versions)", value: formatNumber(c.crlVersions) });
   if (c.filed !== null) out.push({ id: "filed", label: "Misbehaviour reports filed", value: formatNumber(c.filed) });
-  const pending = (c.revoked ?? 0) === 0 && (c.inShuffle ?? 0) > 0;
-  if (pending) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: `pending: ${formatNumber(c.inShuffle!)} in the RA's shuffle` });
+  const pending = detectionPending({ revoked: c.revoked ?? 0, inShuffle: c.inShuffle ?? 0, atMa: c.atMa ?? 0, filed: c.filed ?? 0, finished: c.finished === true });
+  if (pending !== null) {
+    const why = (c.inShuffle ?? 0) > 0 ? `${formatNumber(c.inShuffle!)} in the RA's shuffle` : (c.atMa ?? 0) > 0 ? `${formatNumber(c.atMa!)} at the MA, undecided` : "reports on the way";
+    out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: `pending: ${why}` });
+  }
   else if (c.recall !== null) out.push({ id: "detection", label: "Attackers revoked (detection recall)", value: w(c.recall, "ratio"), level: c.recallLevel ?? null });
   return out;
 }
@@ -412,8 +441,7 @@ export function briefSentences(b: BriefInput): string[] {
       if (m.revoked > 0 && m.recall !== undefined && m.recall !== null) s += ` (${w(m.recall, "ratio")} of the attackers)`;
     }
     if (m.slowestStageS !== null) s += `; the slowest revocation step took ${w(m.slowestStageS, "s")} (p95)`;
-    if ((m.revoked ?? 0) === 0 && (m.pendingInShuffle ?? 0) > 0)
-      s += `; ${formatNumber(m.pendingInShuffle!)} ${m.pendingInShuffle === 1 ? "report waits" : "reports wait"} in the RA's shuffle, so detection is not judged yet`;
+    if ((m.revoked ?? 0) === 0 && m.pending != null) s += `; ${m.pending.split(";")[0]}, so detection is not judged yet`;
     out.push(`${s}.`);
   }
 
