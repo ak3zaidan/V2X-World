@@ -59,6 +59,9 @@ const SCMS_TLS: [&str; 2] = ["1.3", "1.2"];
 /// `security.scms.crl_overdue_scope`: the two readings of CAMP 1.2.2 Table 67's
 /// "rejecting all of them" (`v2xw_node::rxval::CrlOverdueScope`).
 const SCMS_CRL_OVERDUE_SCOPES: [&str; 2] = v2xw_node::rxval::CrlOverdueScope::NAMES;
+/// `security.scms.crl_poll` (WP-35): the conditional composite poll, or the information
+/// status first (IEEE 1609.2.1 §6.3.5.14).
+const SCMS_CRL_POLLS: [&str; 2] = ["conditional", "info-status"];
 /// The verification policies `v2xw-node` registers.
 const POLICIES: [&str; 3] = ["verify-all", "on-demand", "prioritized"];
 /// The codec tiers build decision D2 settled.
@@ -2187,6 +2190,7 @@ pub static CHOICES: &[Choices] = &[
     choices("security.envelope", &ENVELOPES),
     choices("security.scms.tls", &SCMS_TLS),
     choices("security.scms.crl_overdue_scope", &SCMS_CRL_OVERDUE_SCOPES),
+    choices("security.scms.crl_poll", &SCMS_CRL_POLLS),
     choices("security.verification_policy", &POLICIES),
     choices("security.pseudonym_change.strategy", &STRATEGIES),
     choices("scale.traffic.model", &crate::scale::TRAFFIC_MODELS),
@@ -3452,6 +3456,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "How long past a CRL's nextCrl every device keeps trusting the certificates it \
                governs (CAMP 1.2.2 Table 67 overdue_CRL_tolerance, two weeks unless set); \
                after it the device refuses them (rxval `crl-overdue`).",
+    },
+    KeyStatus {
+        path: "security.scms.crl_poll",
+        status: Status::Wired,
+        note: "WP-35: conditional (default) polls the composite CRL with If-Modified-Since; \
+               info-status polls the RA's signed CertificateManagementInformationStatusSpdu \
+               (1609.2.1 §6.3.5.14, If-Modified-Since per [SMP] §4.4) and fetches the \
+               composite only when the vehicle holds an older list. Report: \
+               phase2.info_status_polls, info_status_sent.",
     },
     KeyStatus {
         path: "security.scms.crl_overdue_scope",

@@ -127,6 +127,7 @@ pub use cpm_metrics::CpmTally;
 mod air_bytes;
 pub use air_bytes::{AirBytes, TypeAir};
 pub(crate) mod channels;
+mod info_status;
 pub mod jamming;
 mod link;
 mod off_channel;
@@ -9361,6 +9362,19 @@ impl Engine {
             .unwrap_or_default();
         for (node, _have, changed) in polls {
             let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            // WP-35: under `crl_poll: info-status` the RA's information status comes first,
+            // and only a vehicle holding an older list goes on to the composite.
+            let mut status_ns = 0u64;
+            if self
+                .phase2
+                .as_ref()
+                .is_some_and(|p| p.params().info_status_poll)
+            {
+                match self.info_status_exchange(recorder, node, pos, now, changed) {
+                    Some(d) => status_ns = d,
+                    None => continue,
+                }
+            }
             let (version, entries, req, size) = {
                 let Some(p) = self.phase2.as_mut() else { break };
                 let (v, e, _) = p.published_crl_for(node);
@@ -9427,7 +9441,10 @@ impl Engine {
                         .phase2
                         .as_ref()
                         .map_or(Duration::ZERO, |p| p.params().scms.backend_overhead);
-                    let at = service.after(t1).saturating_add(t2.saturating_sub(now));
+                    let at = service
+                        .after(t1)
+                        .saturating_add(t2.saturating_sub(now))
+                        .saturating_add(status_ns);
                     for (bucket, bytes) in [
                         (ByteBucket::CellularUl, u64::from(req)),
                         (ByteBucket::CellularDl, u64::from(size)),
