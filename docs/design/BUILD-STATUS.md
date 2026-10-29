@@ -17,6 +17,66 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-29 — UI round-2 polish merge (uimetrics, uicert)
+
+- Merged `--no-ff` in order uimetrics (0cfe11cb; b444c422 and 0cfe11cb were new, acbdadb1
+  came in with 50b210ee) and uicert (060cef1c, already on main through 13182bd8, so no
+  second merge). No conflicts. Neither polish agent died, so there was no wip commit.
+- uimetrics: refusals of revoked devices are marked expected; the pool band scales to
+  `certs_per_period`; every number says which view it uses (newest window / whole run);
+  the report funnel shows only nested steps, and the RA shuffle count appears once, on an
+  arrow; revocation always has a verdict chip; compressed scenario windows are hatched;
+  bars are drawn on axes or as shares; sparklines show their range. Removed: the "Held in
+  the RA's shuffle" box, the duplicate `case_open` counter, the repeated four-way count
+  sentence, and the second mark on summary rows. Open: caution and unhealthy colours are the
+  shared `--warn`/`--err` (not changed); the linkability verdict is kept as the engine gives
+  it; per-provider CRL versions need engine request 2; `revocation-latency.yaml`, Manhattan
+  scale and the `e2e-engine` specs were not run by the agent.
+- uicert: a vehicle has one name ("Vehicle 66", device 1000066 under it, `lib/pkiNames.ts`);
+  each number has one meaning (valid now, revoked = on a published list); the zero-lifetime
+  enrolment certificate shows as a simulator limit; columns that never differ become one
+  line; lists are named by provider; the picker moved to the Layers menu. Removed: the
+  provider counter's "0 revoked" in the footer, the countdown to the next list, and repeated
+  counters (now under "engine counters (raw)"). Open: OverlayMenu.tsx renders
+  MapModeLayerRow (an edit outside its area); checked only on credential-lifecycle; the
+  untrusted-certificate colour has not been seen live; two live driver steps timed out
+  (the specs cover them).
+
+Engine requests from the UI (not done):
+
+1. Enrolment certificates with a lifetime under 1 h are written as hours(0).
+2. `node.security`: the installed list's provider and id8 (the UI matches by version and
+   entry count).
+3. `pki.case` "corroborated": the rule's threshold and when the attack started.
+4. `inspect.pki` vehicles: `in_run` or `left_at_ns`, and the enrolment certificate's
+   `valid_until`.
+5. Metrics: a deep link to one series, so a health tile can link to its chart.
+6. An RSU's ee device id has no node ("Vehicle (device 1074741824)"): publish the device
+   kind or the RSU's node.
+7. Devices (ee) snapshot: `topups_refused_blocklisted` (in the run report only today).
+8. CRL Generator: each version's signing time and `next_crl_ns`.
+9. MA: split `reports_received` into own-RA and shared-by-the-other-MA reports.
+10. `time_to_decision`: a run-wide pooled value (a mean of windows depends on grouping).
+11. Catalogue: mark the revocation stages that are scheduling windows (RA shuffle, CRL
+    cadence).
+12. Catalogue: linkability's observer coverage and reference value as data.
+13. Devices (ee): vehicles in the run per provider (`vehicles` is set only on the home
+    provider).
+
+Checks on the merge (c0d5bc00), Studio, through heavy.sh:
+
+- `pnpm typecheck` clean. `vitest` 36 files, 417/417.
+- `pnpm lint`: 1 error, not from this merge: `e2e-engine/settings.spec.ts:40`
+  (`import()` type annotation, from da2c551e, the settings wave's file).
+- Playwright on the mock engine (5334/8834): 67 passed, 1 failed. The failure was
+  `camera-fuzz` (chase-mode flat frame, the known flake from 2026-10-24); it passed 1/1
+  when run again on its own.
+- `e2e-engine/metrics.spec.ts` against a copy of the release `v2xw-server` (8834): 0/1. The
+  run-summary popup that opens at the end of the run blocks the click on `metrics-button`.
+  The spec never closes the popup (compare-runs and live-studio do), and the popup dates from
+  135e80cb, so this merge did not cause it. Not fixed here. The rest of `e2e-engine` was
+  not run.
+
 ## 2026-10-11 — round-7 merge (speed, netfid, stalls)
 
 - Merged `--no-ff` in order speed (d6dc2f3), netfid (bbe32d1), stalls (4ccb9b9) onto
