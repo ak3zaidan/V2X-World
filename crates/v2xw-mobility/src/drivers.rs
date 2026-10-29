@@ -70,6 +70,21 @@
 //! `jmIgnoreFoeSpeed`; re-implemented from the documentation and the field data — SUMO was
 //! read for behaviour only and no code was copied. Every violation committed on purpose is
 //! tagged ([`crate::audit::intent`]) so the auditor tells it from a model defect.
+//!
+//! # 6. Eyes off the road
+//!
+//! [`AttentionParams`], off by default: each driver alternates between glances on the
+//! forward path and glances off it (mirrors, instruments, a phone, the roadside), each dwell
+//! drawn when it starts from the naturalistic fits of Morando, Victor & Dozza 2019 (*IEEE
+//! T-ITS* 20(8), Fig. 6, manual driving): on path an inverse Gaussian (μ 3.56 s,
+//! λ 1.50 s), off path a lognormal (μ −0.21, σ 0.50; mean 0.92 s, 3.5 % over 2 s). That is
+//! 804 glances an hour and 20.5 % of the time eyes off the road (Klauer et al. 2006, DOT HS
+//! 810 594, Figs. 6.1-6.2: about 15 % and 1.1 glances per 6 s in the 100-Car baseline).
+//! While the eyes are off, the vehicle ahead is seen as it was last seen
+//! ([`AttentionState::seen`]); a verified forward-collision or emergency-brake warning ends
+//! the glance ([`AttentionState::interrupt`]). The draws are keyed by the driver and the
+//! step a dwell starts ([`std_normal`] slots 2 and 3; perception uses 0 and 1).
+//! docs/design/research/driver-distraction.md.
 
 use std::collections::VecDeque;
 
@@ -224,6 +239,8 @@ pub struct HumanState {
     pub w_rate: f64,
     /// The car-following accelerations decided over the last `T'`, oldest first, m/s².
     pub decided: VecDeque<f64>,
+    /// Where the driver's eyes are ([`AttentionParams`]; untouched while it is off).
+    pub attention: AttentionState,
 }
 
 /// What one step of perception gives: the perceived leader and the next error states.
@@ -318,6 +335,139 @@ pub fn remember(s: &mut HumanState, reaction_s: f64, dt_s: f64, decided_now: f64
     s.decided.push_back(decided_now);
     while s.decided.len() > n {
         s.decided.pop_front();
+    }
+}
+
+/// The mean on-path dwell, s: Morando, Victor & Dozza 2019, Fig. 6a (manual driving),
+/// inverse Gaussian μ.
+pub const ON_PATH_MEAN_S: f64 = 3.56;
+/// The on-path dwell's inverse-Gaussian shape λ, s (the same figure).
+pub const ON_PATH_SHAPE_S: f64 = 1.50;
+/// The off-path glance's lognormal μ, ln s: Morando, Victor & Dozza 2019, Fig. 6b.
+pub const OFF_PATH_LN_MU: f64 = -0.21;
+/// The off-path glance's lognormal σ (the same figure).
+pub const OFF_PATH_LN_SIGMA: f64 = 0.50;
+
+/// Glances off the road (module §6). Off by default; the distributions default to the
+/// manual-driving fits of Morando, Victor & Dozza 2019.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AttentionParams {
+    /// Whether drivers look away from the road at all.
+    pub enabled: bool,
+    /// The on-path dwell's mean, s (inverse Gaussian μ).
+    pub on_path_mean_s: f64,
+    /// The on-path dwell's shape, s (inverse Gaussian λ).
+    pub on_path_shape_s: f64,
+    /// The off-path glance's log-mean, ln s (lognormal μ).
+    pub off_path_ln_mu: f64,
+    /// The off-path glance's log-standard deviation (lognormal σ).
+    pub off_path_ln_sigma: f64,
+}
+
+impl Default for AttentionParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            on_path_mean_s: ON_PATH_MEAN_S,
+            on_path_shape_s: ON_PATH_SHAPE_S,
+            off_path_ln_mu: OFF_PATH_LN_MU,
+            off_path_ln_sigma: OFF_PATH_LN_SIGMA,
+        }
+    }
+}
+
+/// A uniform on (0, 1) keyed by `(key, step, slot)`, independent of [`std_normal`]'s
+/// draws on the other slots.
+fn keyed_uniform(key: u64, step: u64, slot: u64) -> f64 {
+    let h = splitmix64(key ^ splitmix64(step.wrapping_mul(4).wrapping_add(slot)));
+    let h = splitmix64(h ^ 0x9E6C_63D0_676A_9A99);
+    ((h >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+}
+
+impl AttentionParams {
+    /// One on-path dwell, s, drawn for the dwell that starts at `step`: the inverse
+    /// Gaussian by Michael, Schucany & Haas (1976, *Am. Stat.* 30(2)), from a keyed normal
+    /// (slot 2) and a keyed uniform (slot 3).
+    pub fn on_path_s(&self, key: u64, step: u64) -> f64 {
+        let (mu, lambda) = (self.on_path_mean_s, self.on_path_shape_s);
+        let nu = std_normal(key, step, 2);
+        let y = nu * nu;
+        let x = mu + mu * mu * y / (2.0 * lambda)
+            - mu / (2.0 * lambda) * math::sqrt(4.0 * mu * lambda * y + mu * mu * y * y);
+        if keyed_uniform(key, step, 3) <= mu / (mu + x) {
+            x
+        } else {
+            mu * mu / x
+        }
+    }
+
+    /// One off-path glance, s, drawn for the glance that starts at `step`: a lognormal
+    /// from a keyed normal (slot 2).
+    pub fn off_path_s(&self, key: u64, step: u64) -> f64 {
+        math::exp(self.off_path_ln_mu + self.off_path_ln_sigma * std_normal(key, step, 2))
+    }
+}
+
+/// One driver's glance state.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AttentionState {
+    /// Whether the first dwell has been drawn.
+    pub started: bool,
+    /// Whether the eyes are off the forward path now.
+    pub eyes_off: bool,
+    /// What is left of the current dwell, s.
+    pub remaining_s: f64,
+    /// The vehicle ahead as last seen on path: its gap (m) and speed (m/s), or `None`
+    /// when none was seen.
+    pub seen: Option<(f64, f64)>,
+    /// How many glances off the road have started.
+    pub glances: u64,
+}
+
+impl AttentionState {
+    /// Advances the glance process to `step` (one step of `dt_s`) and returns whether the
+    /// eyes are on the forward path in it. A driver starts on path with a fresh on-path
+    /// dwell; a dwell that ends switches the eyes once per step, the next dwell drawn at
+    /// that step.
+    pub fn advance(&mut self, p: &AttentionParams, key: u64, step: u64, dt_s: f64) -> bool {
+        if !self.started {
+            self.started = true;
+            self.eyes_off = false;
+            self.remaining_s = p.on_path_s(key, step);
+            return true;
+        }
+        self.remaining_s -= dt_s;
+        if self.remaining_s <= 0.0 {
+            self.eyes_off = !self.eyes_off;
+            if self.eyes_off {
+                self.glances += 1;
+                self.remaining_s += p.off_path_s(key, step);
+            } else {
+                self.remaining_s += p.on_path_s(key, step);
+            }
+        }
+        !self.eyes_off
+    }
+
+    /// The vehicle ahead as the driver has it: the one in view while the eyes are on the
+    /// path (remembered), the one last seen while they are off.
+    pub fn look(&mut self, in_view: Option<(f64, f64)>) -> Option<(f64, f64)> {
+        if self.eyes_off {
+            self.seen
+        } else {
+            self.seen = in_view;
+            in_view
+        }
+    }
+
+    /// A warning the driver has received ends a glance off the road at once; the next
+    /// on-path dwell is drawn at `step`.
+    pub fn interrupt(&mut self, p: &AttentionParams, key: u64, step: u64) {
+        if self.started && self.eyes_off {
+            self.eyes_off = false;
+            self.remaining_s = p.on_path_s(key, step);
+        }
     }
 }
 
@@ -569,5 +719,120 @@ mod tests {
         assert!((delayed(&s, 0.8, 0.1, 2.0, 2.0) - 1.2).abs() < 1e-12);
         assert_eq!(delayed(&s, 0.8, 0.1, -5.0, 2.0), -5.0);
         assert_eq!(delayed(&s, 0.0, 0.1, 0.3, 2.0), 0.3);
+    }
+
+    /// The standard normal CDF (Abramowitz & Stegun 7.1.26 for erfc, |error| < 1.5e-7).
+    fn phi(x: f64) -> f64 {
+        let z = x.abs() / std::f64::consts::SQRT_2;
+        let t = 1.0 / (1.0 + 0.327_591_1 * z);
+        let poly = t
+            * (0.254_829_592
+                + t * (-0.284_496_736
+                    + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+        let erfc = poly * (-z * z).exp();
+        if x >= 0.0 {
+            1.0 - 0.5 * erfc
+        } else {
+            0.5 * erfc
+        }
+    }
+
+    /// The Kolmogorov-Smirnov distance of `x` from `cdf`.
+    fn ks(mut x: Vec<f64>, cdf: impl Fn(f64) -> f64) -> f64 {
+        x.sort_by(f64::total_cmp);
+        let n = x.len() as f64;
+        x.iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let f = cdf(v);
+                (f - i as f64 / n).abs().max((f - (i + 1) as f64 / n).abs())
+            })
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn glances_follow_the_cited_distribution() {
+        // Morando, Victor & Dozza 2019, Fig. 6 (manual driving): off path lognormal
+        // (−0.21, 0.50), on path inverse Gaussian (3.56 s, 1.50 s). 20,000 keyed draws
+        // each, against the cited CDFs at the 1 % level of the KS test (1.63/√n).
+        let p = AttentionParams::default();
+        let n = 20_000u64;
+        let off: Vec<f64> = (0..n).map(|i| p.off_path_s(splitmix64(i), i)).collect();
+        let on: Vec<f64> = (0..n).map(|i| p.on_path_s(splitmix64(i), i)).collect();
+        let crit = 1.63 / (n as f64).sqrt();
+        let d_off = ks(off.clone(), |x| {
+            phi((x.ln() - OFF_PATH_LN_MU) / OFF_PATH_LN_SIGMA)
+        });
+        let (mu, lam) = (ON_PATH_MEAN_S, ON_PATH_SHAPE_S);
+        let d_on = ks(on, |x| {
+            let r = (lam / x).sqrt();
+            phi(r * (x / mu - 1.0)) + (2.0 * lam / mu).exp() * phi(-r * (x / mu + 1.0))
+        });
+        assert!(d_off < crit, "off path: KS {d_off} > {crit}");
+        assert!(d_on < crit, "on path: KS {d_on} > {crit}");
+        // The share over 2 s, the NHTSA guideline's long glance: 3.5 % of glances.
+        let long = off.iter().filter(|g| **g > 2.0).count() as f64 / n as f64;
+        assert!((long - 0.0354).abs() < 0.005, "{long}");
+    }
+
+    #[test]
+    fn a_driver_looks_away_804_times_an_hour_for_a_fifth_of_the_time() {
+        // The renewal process at 10 ms: 20 drivers for 2,000 s each.
+        let p = AttentionParams {
+            enabled: true,
+            ..AttentionParams::default()
+        };
+        let dt = 0.01;
+        let (mut off_steps, mut glances, mut steps) = (0u64, 0u64, 0u64);
+        for d in 0..20u64 {
+            let key = splitmix64(d + 1);
+            let mut s = AttentionState::default();
+            for k in 0..200_000u64 {
+                if !s.advance(&p, key, k, dt) {
+                    off_steps += 1;
+                }
+                steps += 1;
+            }
+            glances += s.glances;
+        }
+        let share = off_steps as f64 / steps as f64;
+        let per_h = glances as f64 / (steps as f64 * dt / 3600.0);
+        // 0.918 / 4.478 and 3600 / 4.478 (driver-distraction.md).
+        assert!((share - 0.205).abs() < 0.01, "eyes-off share {share}");
+        assert!(
+            (per_h / 804.0 - 1.0).abs() < 0.04,
+            "{per_h} glances an hour"
+        );
+        // The same keys give the same glances.
+        let mut a = AttentionState::default();
+        let mut b = AttentionState::default();
+        for k in 0..5_000 {
+            assert_eq!(a.advance(&p, 9, k, 0.1), b.advance(&p, 9, k, 0.1));
+        }
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn eyes_off_the_road_see_the_leader_as_last_seen_until_a_warning() {
+        let p = AttentionParams {
+            enabled: true,
+            ..AttentionParams::default()
+        };
+        let mut s = AttentionState::default();
+        let mut k = 0;
+        // Look until the first glance away, watching a leader at 30 m.
+        while s.advance(&p, 3, k, 0.1) {
+            assert_eq!(s.look(Some((30.0, 20.0))), Some((30.0, 20.0)));
+            k += 1;
+        }
+        // Eyes off: the leader brakes and closes to 12 m, unseen.
+        assert_eq!(s.look(Some((12.0, 5.0))), Some((30.0, 20.0)));
+        // A warning ends the glance: the scene is seen as it is.
+        s.interrupt(&p, 3, k);
+        assert!(!s.eyes_off);
+        assert_eq!(s.look(Some((12.0, 5.0))), Some((12.0, 5.0)));
+        assert!(s.remaining_s > 0.0);
+        // Off by default.
+        assert!(!AttentionParams::default().enabled);
     }
 }

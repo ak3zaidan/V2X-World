@@ -904,6 +904,13 @@ trustworthy or comparable; later waves add behaviours and radio features.
     and the NHTSA 2 s/12 s guideline.
   - **The warning:** a verified FCW/EEBL ends a glance at receipt. No gaze-return latency
     was readable, so no constant is added.
+- P39.2 (2026-10-28): done; off by default and not wired yet.
+  - **The process:** `drivers.rs` has `AttentionParams` and `AttentionState`
+    (`advance`, `look`, `interrupt`). The inverse Gaussian is drawn by Michael, Schucany
+    & Haas (1976), and the lognormal is keyed on `std_normal` slots 2 and 3.
+  - **Tests:** the draws pass a KS test against both cited CDFs at the 1 % level, with
+    3.5 % of glances over 2 s. The renewal process gives 804 ± 4 % glances per hour and a
+    20.5 % eyes-off share. A frozen leader is released by a warning.
 
 ## 3. Deferred and dropped
 

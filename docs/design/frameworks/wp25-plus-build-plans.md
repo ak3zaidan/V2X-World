@@ -911,6 +911,13 @@ every LTE digest (owner).
   NHTSA refuses scripted access). So a verified FCW/EEBL ends the glance at receipt, and
   the driver's existing reaction time and alarm rule do the rest. No new constant.
 
+**P39.2 (2026-10-28, done).** The pure process is in `drivers.rs` (`AttentionParams`,
+`AttentionState`, module §6), with these tests:
+- `glances_follow_the_cited_distribution`: KS at 1 % against both CDFs.
+- `a_driver_looks_away_804_times_an_hour_for_a_fifth_of_the_time`: the process at 10 ms,
+  plus determinism.
+- `eyes_off_the_road_see_the_leader_as_last_seen_until_a_warning`.
+
 ---
 
 ## WP-40 Doppler-aware 802.11p PER (O-P12), gated on its source
