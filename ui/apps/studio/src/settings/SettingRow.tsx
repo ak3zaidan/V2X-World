@@ -253,6 +253,13 @@ function Prose({ text }: { text: string }): React.JSX.Element {
   );
 }
 
+/** An engine message without the dotted path it starts with ("security.scms.x: the …" → "The …"). */
+export function plainError(message: string): string {
+  const m = /^[a-z_][\w-]*(?:\.[\w*\-[\]]+)+:\s*(.+)$/s.exec(message.trim());
+  const t = m ? m[1] : message.trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
 /** A recommendation's first clause: "2 s (CAR 2 CAR …; the US …)" → "2 s". The rest is on hover. */
 export function shortRec(text: string): string {
   const t = text.trim();
@@ -318,6 +325,17 @@ function SettingRowImpl({
   const crumb = breadcrumbOf(f, sectionKey);
   const unsupported = isUnsupported(f);
   const invalid = errors !== undefined && errors.length > 0;
+  // A number outside the engine's bounds says so at once, before Check.
+  const outOfRange =
+    (f.kind === "number" || f.kind === "integer") && typeof value === "number"
+      ? f.min !== undefined && value < f.min
+        ? `At least ${f.min}${f.unit ? ` ${f.unit}` : ""}.`
+        : f.max !== undefined && value > f.max
+          ? `At most ${f.max}${f.unit ? ` ${f.unit}` : ""}.`
+          : f.kind === "integer" && !Number.isInteger(value)
+            ? "A whole number."
+            : undefined
+      : undefined;
   const [more, setMore] = useState(false);
   const line = oneLine(f.explain ?? f.help);
   const full = [f.explain, f.help].filter((t): t is string => !!t && t.trim() !== "").join("\n\n");
@@ -470,14 +488,22 @@ function SettingRowImpl({
             </span>
           ) : null}
         </div>
+        {!invalid && outOfRange ? (
+          <div className="setting-error" role="alert" data-testid="setting-range">
+            {outOfRange}
+          </div>
+        ) : null}
         {invalid ? (
           <div className="setting-error" role="alert" data-testid="setting-error">
-            {errors.map((e, i) => (
-              <div key={i}>
-                {e.message}
-                {e.hint ? <span className="faint"> ({e.hint})</span> : null}
-              </div>
-            ))}
+            {errors.map((e, i) => {
+              const text = plainError(e.message);
+              return (
+                <div key={i}>
+                  {text}
+                  {e.hint && !text.includes(e.hint.replace(/^allowed:\s*/i, "")) ? <span className="faint"> ({e.hint})</span> : null}
+                </div>
+              );
+            })}
           </div>
         ) : null}
       </div>
