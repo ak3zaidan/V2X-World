@@ -304,8 +304,8 @@ pub struct VehicleDynamicsSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade: Option<bool>,
     /// The power term: no more acceleration than the engine's power gives after rolling
-    /// and air resistance, for the classes with a sourced road-load row (passenger car
-    /// and tractor-trailer). Unset is off.
+    /// and air resistance, for the classes with a sourced road-load row (passenger car,
+    /// tractor-trailer, rigid truck, bus, coach and van). Unset is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power_limit: Option<bool>,
 }

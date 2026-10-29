@@ -220,6 +220,25 @@ expect: down, source: "<NCHRP 505 table> on a 5 % draped climb with 30 % rigid t
   which is close to a 25 m/s road's desired speed. Whether a held row can go red with the
   power term off is settled in P25.2.
 
+**P25.2 (2026-10-28, done; `power_limit` stays off by default, no golden moved).**
+- **Rows:** `VehicleClass::dynamics` gains Truck, Bus, Coach and Delivery, plus a
+  `c_rr_per_mps` speed term (eq. 20, the EPA B). It is zero on the old rows, so their bound
+  is bit-identical.
+- **Tests:**
+  - `classes::tests::heavy_rows_reproduce_their_sources`: the Altoona runs from rest, bus
+    +3 % and coach −9 % against a ±12 % band; Table 30's 82.94 lb/hp; the EPA road load at
+    50 mph.
+  - `v2xw-mobility/tests/vehicle_dynamics.rs::a_rigid_truck_outclimbs_the_design_trailer`:
+    22.96 against 12.94 m/s, 2 km into the 5 % climb.
+  - `calib::tests::twopas_reproduces_the_reports_own_example`: 41.9 mph.
+- **The check:** `calibration/truck-grade-crawl` now holds the rigid truck to its TWOPAS
+  crawl ±2 % (22.96 in [22.13, 23.03]). With the power term off it stays at 23.60, which
+  is red, so a held row can fail. It also reports TWOPAS for the trailer, at 12.04 m/s.
+- **Expectation row: not built.** A setting's rows run on the first family that accepts it
+  (`catalogue.yaml` routes), and `power_limit` is already judged on `grade-truck`, which has
+  no rigid trucks or buses. A second family needs a per-row family route, which the sweep
+  does not have.
+
 ---
 
 ## WP-26 A measured DEM and a real hill

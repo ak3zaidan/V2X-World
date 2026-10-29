@@ -842,7 +842,7 @@ const ADVANCED: &[Basic] = &[
     },
     Basic {
         path: "traffic.vehicle_dynamics.power_limit",
-        explain: "Whether an engine's power limits how fast a vehicle can speed up, so a loaded tractor-trailer crawls up a long climb at about 46 km/h on a 5% grade while a car keeps the limit. Applies to cars and tractor-trailers; rigid trucks, buses, vans and motorcycles have no sourced figures yet.",
+        explain: "Whether an engine's power limits how fast a vehicle can speed up, so a loaded tractor-trailer crawls up a long climb at about 46 km/h on a 5% grade while a car keeps the limit. Applies to cars, tractor-trailers, rigid trucks, buses, coaches and vans, from cited figures (FTA bus tests, EPA road loads, NCHRP 505); motorcycles have none yet.",
         recommended: "Off (today); on with grade for hilly maps and freight corridors.",
     },
     Basic {

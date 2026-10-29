@@ -1,6 +1,6 @@
 # Grade-aware, power-limited acceleration: the class road-load table (WP-22)
 
-Status: 2026-10-28, P22.1 table and P22.2 clamp built (`v2xw-mobility`). Plan:
+Status: 2026-10-28, P22.1 table and P22.2 clamp built (`v2xw-mobility`); WP-25 P25.2 added the rigid truck, bus, coach and van rows. Plan:
 `docs/design/frameworks/wp16-24-build-plans.md` §WP-22.
 
 ## The bound
@@ -28,7 +28,8 @@ vehicle's acceleration is held to
 |---|---|---|---|---|---|
 | passenger (1,500 kg) | 93 kW | 0.3113 × 2.16 = 0.672 m² | 0.009 | 0.9 | PHEMlight `PC_D_EU4` (SUMO `PC_D_EU4.PHEMLight.veh`), already in `v2xw-energy/src/phemlight.rs`; the test `classes::tests::passenger_road_load_is_phemlight_pc_d_eu4` reads it from there [repo]. |
 | trailer (36,287 kg loaded) | 302.4 kW = m / 120 (405 hp) | 5.95 m² | 0.0077 | 0.9 | see below |
-| every other class, the rigid truck included | none | | | | No sourced row: the grade term only. |
+| truck (rigid), bus, coach, delivery (van) | | | | | WP-25 rows: see "Sources for the rigid truck, bus, coach and van" below. |
+| emergency and two-wheelers | none | | | | No sourced row: the grade term only. |
 
 - **120 kg/kW.** The 2001 Green Book design truck for the critical length of grade, read
   through NCHRP Report 505 (2003, doi 10.17226/23379), App. D, pp. 153-159, which adds that
@@ -70,7 +71,8 @@ vehicle's acceleration is held to
 ## Where it is checked
 
 - `v2xw-mobility` unit tests: the table, the chord, the crawl, the downhill hold, the car.
-- `calibration/truck-grade-crawl` (`v2xw-trafficval`, fast list of `model_checks`).
+- `calibration/truck-grade-crawl` (`v2xw-trafficval`, fast list of `model_checks`): the trailer against the balance, the TWOPAS crawl reported beside it, and (WP-25) the rigid truck held to its TWOPAS crawl ±2 % (22.96 m/s against 22.58; 23.60 with the power off, red).
+- `classes::tests::heavy_rows_reproduce_their_sources`: the Altoona runs from rest (bus +3 %, coach −9 %, ±12 %), Table 30 and the EPA road load; `tests/vehicle_dynamics.rs` (mobility): the rigid truck outclimbs the design trailer (22.96 against 12.94 m/s 2 km in).
 - `crates/v2xw-engine/tests/vehicle_dynamics.rs`: grade-only flat identity, the power
   limit on a freeway, and the two `freight`-family rows of `expectations/traffic.yaml`.
 - **Not yet reachable from a scenario on a hill.** `world.terrain.dem` is attached
@@ -134,7 +136,7 @@ highest-volume US cargo van, so it is the van row's source.
 `PC_G_EU4` and `PC_D_EU4`, and `PHEMlight5` only `PC_EU4_D_MW` and `PC_EU4_G` (GitHub
 listing, 2026-10-28). The HDV, bus, coach and LCV vehicles need TU Graz's licence. Dropped.
 
-**What the rows will be (built in P25.2).**
+**The rows (built in P25.2, `VehicleClass::dynamics`).**
 
 | Class | Mass | Power | C_dA | c_rr | η | From |
 |---|---|---|---|---|---|---|

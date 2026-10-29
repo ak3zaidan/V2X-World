@@ -883,6 +883,16 @@ trustworthy or comparable; later waves add behaviours and radio features.
   PHEMlight HDV files are not open. The transit bus measures about half the acceleration
   that its rated power at η 0.9 gives, so the bus η values are fitted on the Altoona runs.
   The TWOPAS equations (App. E) give the design truck a 5 % crawl 7 % below the balance.
+- P25.2 (2026-10-28): done. `power_limit` is still off by default and no golden moved.
+  - **Rows:** `VehicleClass::dynamics` has rows for the truck (82.9 lb/hp), the bus
+    (XD40, η 0.54), the coach (X3-45, η 0.84) and the van (Transit, EPA road load). A
+    rolling speed term is zero on the old rows, so their bound is unchanged.
+  - **Checks:** the Altoona runs from rest are reproduced within ±12 % (bus +3 %, coach
+    −9 %). The rigid truck outclimbs the design trailer (22.96 against 12.94 m/s). It is
+    held in `calibration/truck-grade-crawl` to its TWOPAS crawl ±2 %, which goes red with
+    the power off.
+  - **Open:** an expectation row on a rigid-truck or bus family, which needs per-row family
+    routes in the sweep. Emergency vehicles and two-wheelers have no rows.
 
 ## 3. Deferred and dropped
 
