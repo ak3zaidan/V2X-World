@@ -589,3 +589,23 @@ fn every_enrolment_request_is_recorded_on_the_dcm_to_eca_hop() {
         }
     }
 }
+
+/// A second ACA on an ISS-pattern provider (provider-a, or any provider a `custom`
+/// deployment adds, which copies provider-a's form) builds: its certificate carries the
+/// same PSID-35 SSP as the core ACA in the protocol PKI. Fault (before): the extra ACA took
+/// the ISS chain-file version (1), which the 2022 `AcaSsp` type refuses at encode time, so
+/// a run with `components: {aca: 2}` on such a provider failed to start
+/// ("provider-b aca/1: COER: Value constraint not satisfied: expected: 2; actual: 1").
+#[test]
+fn a_second_aca_on_an_iss_pattern_provider_builds_and_signs() {
+    let mut d = Deployment::preset(Preset::UsProduction2025);
+    d.providers[0].components.insert("aca".to_string(), 2);
+    let home = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
+    let pki = home.pki.as_ref().unwrap();
+    let (a0, a1) = (&pki.aca, pki.aca_at(1));
+    assert_ne!(a0.id8(), a1.id8(), "aca/1 holds its own certificate");
+    assert_eq!(
+        a0.cert.0.to_be_signed.app_permissions, a1.cert.0.to_be_signed.app_permissions,
+        "the same permissions and SSP as the core ACA"
+    );
+}
