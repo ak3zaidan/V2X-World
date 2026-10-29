@@ -239,6 +239,8 @@ expect: down, source: "<NCHRP 505 table> on a 5 % draped climb with 30 % rigid t
   no rigid trucks or buses. A second family needs a per-row family route, which the sweep
   does not have.
 
+**Integration status (2026-10-28, adopt-8 merge):** merged on main with the veh track (P25.1 `9de7bfbe`, P25.2 `ff7204ef`). `power_limit` stays off by default; no golden moved. Open: the rigid-truck/bus expectation row (needs per-row family routes in the sweep), and the [verify] bus/coach engine-hp citations. The configuration-reference `power_limit` row now names the new classes.
+
 ---
 
 ## WP-26 A measured DEM and a real hill
@@ -291,6 +293,8 @@ expect: down, source: "<NCHRP 505 table> on a 5 % draped climb with 30 % rigid t
   the provenance file, and measure the grade histogram over the map's lanes.
 - **P26.2** (3 h): the scenario, the test, the rows and the faults.
 
+**Integration status (2026-10-28, adopt-8 merge):** merged on main with the chan track (P26.1 `01aaa13a`, P26.2 `766c4929`). The `hills` family and the two `world.terrain.drape` rows are on main; the catalogue entry sits beside the WP-20 `emergency_yield` entry (merge conflict, both kept). Open: the 3DEP 1/3" upgrade; the DEM card reads UNSTATED (no source key).
+
 ---
 
 ## WP-27 An R-tree for `DensityTerm`
@@ -328,6 +332,8 @@ That moves every channel-model digest.
 
 **Pieces.** **P27.1** (3 h): the index, the test, the fault, and a note on Manhattan wall time
 with `density_sigma` on, before and after.
+
+**Integration status (2026-10-28, adopt-8 merge):** merged on main with the chan track (P27.1 `afa0bdd0`); σ is bit-identical to the scan. Open: a full Manhattan wall-time before/after.
 
 ---
 
@@ -463,6 +469,8 @@ reflection on -> `prr` up; `report.loss_cause.shadowed` down.
 **Pieces.**
 - **P29.1** (3 h): the tracer and its unit tests.
 - **P29.2** (3 h): wiring, the key, the rows, `gemv2_off`, and the faults.
+
+**Integration status (2026-10-28, adopt-8 merge):** merged on main with the chan track (P29.1 `b46cfc7f`, P29.2 `2a35d093`); `radio.channel_model.reflection` off by default. It moves nothing on the procedural grid and is refused under the high-tier geometric law, so it acts only at medium tier on real maps. Open: no validate test of that refusal; the plan's `report.loss_cause.shadowed` metric does not exist (the row uses `rx_losses.below-sensitivity`).
 
 ---
 
@@ -664,6 +672,8 @@ every LTE digest (owner).
 - **P34.2** (3 h): engine wiring, report fields, `tests/sidelink_align.rs`, the matrix row
   re-run on `lte` under `runtiny.sh` (or the 1.2 GB slot), and the faults.
 
+**Integration status (2026-10-28, adopt-8 merge):** merged on main with the sps track (P34.1 `04a5f0b0`, P34.2 `699a7de2`); `radio.sidelink.align_generation` off by default, no golden moved. Open: the `lte-aligned-latency-budget`/`-down` matrix rows need a release lte/lte-aligned pair; `align_margin_ms` and the J3161/1 alignment text are unverified. Owner proposal: on for LTE-V2X (moves every LTE digest).
+
 ---
 
 ## WP-35 The `infoStatus` SPDU (A16)
@@ -716,6 +726,8 @@ every LTE digest (owner).
 - **P35.1** (3 h): the codec, the RA endpoint and the oracle rule.
 - **P35.2** (3 h): the device flow, the setting, the tests, and a run of base.yaml under
   `runtiny.sh` for the bytes row.
+
+**Integration status (2026-10-28, adopt-8 merge):** P35.1 (`f6d92ba0`) merged on main with the sps track. P35.2 (`security.scms.crl_poll`, the run hook, `tests/info_status.rs`) was NOT merged: it is uncommitted and unrun in worktree `wf_0343ab94-a4a-1`, which is kept; its verification script is `sps/verify35.sh` in the session scratchpad. The `INFO-STAT` rule and the `info-no-ra` mutation have not run on a recording (no run emits the SPDU yet).
 
 ---
 
@@ -940,6 +952,8 @@ every LTE digest (owner).
   distraction is on or off, so it cannot move. The plan's second row (`apps.fcw` under
   distraction) needs a list-valued sweep (WP-32), so it is a test.
 
+**Integration status (2026-10-28, adopt-8 merge):** merged on main with the veh track (P39.1 `2a40b5d4`, P39.2 `8093a4d7`, P39.3 `266aa781` + `f89dd73d`); `actors.vehicles.drivers.distraction` off by default, no golden moved. Open: the FCW on/off row (needs WP-32 list sweeps), the gaze-return latency after a warning. Owner proposal: on with `realism: human` on US presets (moves G-TV).
+
 ---
 
 ## WP-40 Doppler-aware 802.11p PER (O-P12), gated on its source
@@ -1052,6 +1066,8 @@ the copy read, which was downloaded into scratch and then deleted.
   default. It is recorded here as a candidate spare item, not as WP-40. Speed ties to profile
   only through the scenario label.
 
+**Integration status (2026-10-28, adopt-8 merge):** P40.1 (`280ae01d`, docs only) merged on main with the side8 track: WP-40 is dropped under rule 9. The TGbd decks (mentor.ieee.org HTTP 418) are unread and could reopen it.
+
 ---
 
 ## WP-41 Zipper merge (S-P10)
@@ -1156,6 +1172,8 @@ cached in the repo.
       pins the tolerance from the HCM study spread or the SWZDI volumes, and does not
       guess it.
   - The "early-merge share 1.0" fault in the test table becomes "utilisation 0.0".
+
+**Integration status (2026-10-28, adopt-8 merge):** P41.1 (`e6926ffb`, docs only) merged on main with the side8 track. Nothing built. `late_merge_share` default 0.29 chosen; the URS 2004 MnDOT report is still [verify].
 
 ---
 
@@ -1281,6 +1299,8 @@ cached in the repo.
     3.5-14 min to find a kerb space and 8-74% of traffic cruising. The PDF on eScholarship
     returned 403. [verify]
 
+**Integration status (2026-10-28, adopt-8 merge):** P42.1 (`17bff1a1`, docs only) merged on main with the side8 track. Nothing built. Several sources are still [verify] (Yousif & Purnawan 2004, Shoup 2006).
+
 ---
 
 ## WP-43 Overtaking in the opposing lane (S-P13)
@@ -1403,6 +1423,8 @@ scratch.
     `cities.yaml`-style entry with its own provenance. Untagged US two-lane roads then take
     the MUTCD rule: passing is allowed only where the sight distance from `los.rs` and the
     DEM is at least the MUTCD PSD for the 85th-percentile speed.
+
+**Integration status (2026-10-28, adopt-8 merge):** P43.1 (`b450ee72`, docs only) merged on main with the side8 track. Nothing built. P43.4 needs a new rural map extract; the VSC-A DNPW thresholds (811 492B) are [verify].
 
 ---
 
