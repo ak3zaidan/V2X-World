@@ -1,7 +1,8 @@
-//! Server capacity as settings (docs/design/scms-real/08-settings-ux-and-gaps.md §6, piece
-//! C2a): a queue limit turns a burst's surplus requests away as busy, each turned-away
-//! device retries under SCMS-522/523, and the settings that contradict each other are
-//! refused.
+//! Server capacity as settings (docs/design/scms-real/08-settings-ux-and-gaps.md §6, pieces
+//! C2a-C2b): a queue limit turns a burst's surplus requests away as busy, each turned-away
+//! device retries under SCMS-522/523, the workers serve as an M/M/c queue does, one
+//! provider's own capacity changes only its servers, and the settings that contradict
+//! each other are refused.
 
 use serde_json::{Value, json};
 use v2xw_core::ids::NodeId;
@@ -200,5 +201,123 @@ fn contradicting_capacity_settings_are_refused() {
             json!({"capacity": {"ra": {"workers": 8, "queue_limit": 100, "overhead_ms": 5.0}}})
         ))
         .is_empty()
+    );
+}
+
+/// Provider-a's run and provider-b's, both under the scenario's capacity.
+fn provider_runs(deployment: Value) -> Vec<ScmsRun> {
+    let s = scenario(deployment);
+    let d = deployment_of(&s, true).expect("builds");
+    let mut params = ScmsParams::default().quick();
+    params.pdu.enabled = false;
+    let home = ScmsRun::new_deployed(params, 0, d).expect("builds");
+    let peer = ScmsRun::new_peer(&home, 1).expect("provider-b's run builds");
+    let mut runs = vec![home, peer];
+    apply_capacity(&s, &mut runs).expect("applies");
+    runs
+}
+
+/// The Erlang-C mean sojourn of an M/M/c queue: `c` servers, arrivals at `lambda` and
+/// service at `mu` per second (Kleinrock, *Queueing Systems* I, §3.5).
+fn erlang_c_sojourn(c: u32, lambda: f64, mu: f64) -> f64 {
+    let a = lambda / mu;
+    let mut term = 1.0;
+    let mut sum = 0.0;
+    for k in 0..c {
+        if k > 0 {
+            term *= a / f64::from(k);
+        }
+        sum += term;
+    }
+    let last = term * a / f64::from(c) * f64::from(c) / (f64::from(c) - a);
+    let wait_prob = last / (sum + last);
+    wait_prob / (f64::from(c) * mu - lambda) + 1.0 / mu
+}
+
+/// Accept test 1: provider-b's RA with `workers: 1` and with `workers: 4` (overhead 0, so
+/// the service time is the work alone), fed one Poisson stream of 400,000 requests with
+/// exponential work (mean 10 ms, 50 requests a second): each mean sojourn is within 5 %
+/// of the Erlang-C figure for the measured arrival and service rates. Fault: `workers` is
+/// parsed and ignored.
+#[test]
+fn the_workers_serve_as_an_m_m_c_queue() {
+    const N: u32 = 400_000;
+    let (lambda, mean_work_s) = (50.0, 0.010);
+    let mut arrivals = Vec::with_capacity(N as usize);
+    let mut works = Vec::with_capacity(N as usize);
+    let mut t = 0.0;
+    for k in 0..N {
+        t += -(1.0 - keyed_uniform(2 * k)).ln() / lambda;
+        arrivals.push((t * 1e9) as u64);
+        works.push((-(1.0 - keyed_uniform(2 * k + 1)).ln() * mean_work_s * 1e9) as u64);
+    }
+    let span_s = (arrivals[N as usize - 1] - arrivals[0]) as f64 / 1e9;
+    let lambda_hat = f64::from(N - 1) / span_s;
+    let mu_hat = 1e9 * f64::from(N) / works.iter().map(|&w| w as f64).sum::<f64>();
+    for c in [1u32, 4] {
+        let runs = provider_runs(json!({"providers": [
+            {"name": "provider-b", "capacity": {"ra": {"workers": c, "overhead_ms": 0.0}}}
+        ]}));
+        let ra = runs[1].state.nodes.ra;
+        let spec = runs[1].kernel.queue(ra).expect("hosted").spec();
+        let mut q = v2xw_proto::ServiceQueue::new(&spec);
+        for (&at, &w) in arrivals.iter().zip(&works) {
+            q.admit(at, v2xw_core::time::Duration::from_nanos(w));
+        }
+        let sojourn = (q.waiting().as_nanos() + q.busy().as_nanos()) as f64 / 1e9 / f64::from(N);
+        let expected = erlang_c_sojourn(c, lambda_hat, mu_hat);
+        assert!(
+            (sojourn / expected - 1.0).abs() < 0.05,
+            "c = {c}: mean sojourn {sojourn:.5} s against Erlang-C {expected:.5} s \
+             (servers {}, lambda {lambda_hat:.3}/s, mu {mu_hat:.3}/s)",
+            spec.servers
+        );
+    }
+}
+
+/// Accept test 3: provider-b's `capacity.crlg.overhead_ms: 5000` slows only provider-b's
+/// CRL Generator, over the deployment's `workers: 2` for every provider: a CRL job at
+/// provider-b's takes 5 s longer, provider-a's keeps today's 1 ms. Fault: the override is
+/// applied to the home provider.
+#[test]
+fn one_providers_capacity_changes_only_its_servers() {
+    let runs = provider_runs(json!({
+        "capacity": {"crlg": {"workers": 2}},
+        "providers": [{"name": "provider-b", "capacity": {"crlg": {"overhead_ms": 5000.0}}}]
+    }));
+    let spec = |k: usize| {
+        let crlg = runs[k].state.nodes.crlg;
+        runs[k].kernel.queue(crlg).expect("hosted").spec()
+    };
+    let (a, b) = (spec(0), spec(1));
+    assert_eq!(
+        (a.servers, b.servers),
+        (2, 2),
+        "the deployment's block reaches both"
+    );
+    let ms = |d: v2xw_core::time::Duration| d.as_nanos() / 1_000_000;
+    assert_eq!(
+        (ms(a.fixed_overhead), ms(b.fixed_overhead)),
+        (1, 5_000),
+        "only provider-b's CRL Generator is slowed"
+    );
+    // One CRL job of no cryptographic work, at each.
+    let job = |k: usize| {
+        let crlg = runs[k].state.nodes.crlg;
+        let mut q = runs[k].kernel.queue(crlg).expect("hosted").clone();
+        q.admit(S, v2xw_core::time::Duration::ZERO) - S
+    };
+    assert_eq!((job(0), job(1)), (1_000_000, 5_000_000_000));
+    // And a provider's own role it does not run is refused at build.
+    let s = scenario(json!({"providers": [{"name": "provider-b",
+                                           "capacity": {"lop": {"workers": 2}}}]}));
+    let d = deployment_of(&s, true).expect("builds");
+    let home = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
+    let peer = ScmsRun::new_peer(&home, 1).expect("builds");
+    let got = apply_capacity(&s, &mut [home, peer]);
+    assert!(
+        got.as_ref()
+            .is_err_and(|e| e.to_string().contains("does not run")),
+        "{got:?}"
     );
 }

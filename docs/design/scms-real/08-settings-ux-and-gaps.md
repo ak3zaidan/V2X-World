@@ -563,6 +563,27 @@ devices, so the test jitters the start. A lockstep fleet (for example, every veh
 at one CRL or top-up boundary) would show this herd. Adding access-latency jitter to the run
 is a candidate for a later piece.
 
+**Status, C2b (2026-10-29): built.** `providers[].capacity.<role>` is live. For each
+provider's run, `apply_capacity` lays that provider's fields over the deployment's block,
+role by role, so only its own servers change, peers included. A role the provider does not
+run is refused at build. The `fifo-1`/`workers` and abstract-tier conflicts apply per
+provider. The `entities.*.service_model` conflict applies only to the home provider, the
+only one `actors.backend.entities` shapes.
+
+Test 1 (`the_workers_serve_as_an_m_m_c_queue`) takes provider-b's RA spec as the run
+built it, with `workers` 1 or 4 and `overhead_ms: 0`, so the service time is the work
+alone. It feeds that spec one keyed Poisson stream of 400,000 requests with exponential
+work (λ = 50/s, mean 10 ms). Each mean sojourn is within 5 % of the Erlang-C figure for
+the measured λ and μ (Kleinrock, *Queueing Systems* I, §3.5). Choice: the plan says "the
+RA sojourn in `backend.state` for the measured arrivals". A protocol run's RA service is
+the fixed crypto cost plus 1 ms, not exponential, so Erlang-C does not apply to it. The
+test therefore drives the RA's own queue model with exponential work.
+
+Test 3: provider-b's `crlg.overhead_ms: 5000`, over the deployment's `crlg.workers: 2`,
+makes a CRL job take 5 s at provider-b, while provider-a keeps 1 ms. Both run 2 workers.
+Test 5: `the_phase_2_path_reproduces_its_regression_digest` passes, so no golden moved.
+The form words are the `SERVICE_MENU` rows and the `WORDS` titles, units and steps.
+
 ---
 
 ## 7. Gap 3: a declarative, pluggable MA policy and a family sweep

@@ -114,9 +114,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: PROV_CAPACITY,
-        status: Status::Refused,
-        note: "Not built yet (08-settings-ux-and-gaps §6, piece C2b): a provider's own \
-               capacity is refused.",
+        status: Status::Wired,
+        note: "One provider's own server capacity per role, its fields over the \
+               deployment's (08 §6): only that provider's servers change.",
     },
     KeyStatus {
         path: LEVELS,
@@ -564,6 +564,7 @@ fn provider_refusals(p: &ProviderSpec, group: Group, e: &mut Vec<ScenarioError>)
                 format!("is custom: {ROLE_CUSTOM}"),
             ));
         } else if !(leaf.template == LEVELS && leaf.value == json!(US_ICA_LEVELS)
+            || group == Group::Capacity
             || [SITE, LAT, LON, SITES_EACH].contains(&leaf.template.as_str()))
         {
             e.push(module_keys::not_built(&leaf, piece, instead));
@@ -627,10 +628,21 @@ fn capacity_refusals(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
     }
     if !malformed {
-        capacity_conflicts(s, &d.capacity, CAPACITY, e);
+        capacity_conflicts(s, &d.capacity, CAPACITY, true, e);
     }
+    // `actors.backend.entities` shape the home provider's servers only, so only its own
+    // capacity can contradict them.
+    let home = crate::phase2::deployment_of(s, true)
+        .ok()
+        .and_then(|x| x.providers.first().map(|p| p.name.clone()));
     for p in &d.providers {
+        let before = e.len();
         provider_refusals(p, Group::Capacity, e);
+        if e.len() == before {
+            let at = format!("security.scms.deployment.providers.{}.capacity", p.name);
+            let is_home = home.as_deref() == Some(p.name.as_str());
+            capacity_conflicts(s, &p.capacity, &at, is_home, e);
+        }
     }
 }
 
@@ -647,6 +659,7 @@ fn capacity_conflicts(
     s: &Scenario,
     capacity: &std::collections::BTreeMap<String, crate::scenario::schema::CapacitySpec>,
     at: &str,
+    entities: bool,
     e: &mut Vec<ScenarioError>,
 ) {
     if !capacity.is_empty() && s.nodes.backend_tier == v2xw_core::card::Tier::Abstract {
@@ -667,7 +680,8 @@ fn capacity_conflicts(
             ));
         }
         let entity = entity_of(role);
-        if c.service.is_some()
+        if entities
+            && c.service.is_some()
             && s.actors
                 .backend
                 .entities
@@ -806,18 +820,31 @@ pub fn apply_capacity(s: &Scenario, runs: &mut [ScmsRun]) -> Result<()> {
     let Some(d) = s.security.scms.as_ref().and_then(|x| x.deployment.as_ref()) else {
         return Ok(());
     };
-    for (role, c) in &d.capacity {
-        let mut hosted = 0;
-        for (k, run) in runs.iter_mut().enumerate() {
-            let nodes: Vec<_> = run
-                .state
-                .deployment
-                .nodes(k)
-                .instances
-                .into_iter()
+    let mut hosted: std::collections::BTreeMap<String, usize> =
+        d.capacity.keys().map(|r| (r.clone(), 0)).collect();
+    for (k, run) in runs.iter_mut().enumerate() {
+        let name = run.state.deployment.providers[k].name.clone();
+        let own = d
+            .providers
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| &p.capacity);
+        // The deployment's block for each role, with this provider's own fields over it.
+        let mut blocks = d.capacity.clone();
+        for (role, c) in own.into_iter().flatten() {
+            let b = blocks.entry(role.clone()).or_default();
+            b.workers = c.workers.or(b.workers);
+            b.queue_limit = c.queue_limit.or(b.queue_limit);
+            b.overhead_ms = c.overhead_ms.or(b.overhead_ms);
+            b.service = c.service.clone().or_else(|| b.service.clone());
+        }
+        let instances = run.state.deployment.nodes(k).instances;
+        for (role, c) in &blocks {
+            let nodes = instances
+                .iter()
                 .filter(|(r, _, _)| r == role)
-                .map(|(_, _, n)| n)
-                .collect();
+                .map(|(_, _, n)| *n);
+            let mut here = 0;
             for node in nodes {
                 let Some(q) = run.kernel.queue(node) else {
                     continue;
@@ -825,15 +852,26 @@ pub fn apply_capacity(s: &Scenario, runs: &mut [ScmsRun]) -> Result<()> {
                 let spec = with_capacity(q.spec(), c);
                 let profile = run.kernel.profile_of(node);
                 run.kernel.host(node, &spec, profile);
-                hosted += 1;
+                here += 1;
+            }
+            if here == 0 && own.is_some_and(|o| o.contains_key(role)) {
+                return Err(EngineError::Scenario(ScenarioError::conflict(
+                    &format!("security.scms.deployment.providers.{name}.capacity.{role}"),
+                    format!("names a {role}, which {name} does not run as a server"),
+                )));
+            }
+            if let Some(n) = hosted.get_mut(role) {
+                *n += here;
             }
         }
-        if hosted == 0 && !runs.is_empty() {
-            return Err(EngineError::Scenario(ScenarioError::conflict(
-                &format!("{CAPACITY}.{role}"),
-                format!("names a {role}, which no provider runs as a server"),
-            )));
-        }
+    }
+    if !runs.is_empty()
+        && let Some((role, _)) = hosted.iter().find(|(_, n)| **n == 0)
+    {
+        return Err(EngineError::Scenario(ScenarioError::conflict(
+            &format!("{CAPACITY}.{role}"),
+            format!("names a {role}, which no provider runs as a server"),
+        )));
     }
     Ok(())
 }
@@ -877,6 +915,7 @@ mod tests {
         assert!(refused(provider(json!({"ica_levels": 1}))).is_empty());
         assert!(refused(json!({"capacity": {"ra": {}}})).is_empty());
         assert!(refused(json!({"capacity": {"ra": {"queue_limit": 10}}})).is_empty());
+        assert!(refused(provider(json!({"capacity": {"ra": {"workers": 4}}}))).is_empty());
         assert!(refused(json!({"capacity": {"crlg": {"service": "mmc"}}})).is_empty());
         let at = "security.scms.deployment.providers.provider-a";
         assert!(refused(provider(json!({"site": "gcp-us-west1"}))).is_empty());
@@ -887,16 +926,10 @@ mod tests {
             .is_empty()
         );
         assert!(refused(provider(json!({"sites": {"ma": "us-west"}}))).is_empty());
-        let cases = [
-            (
-                provider(json!({"capacity": {"ra": {"workers": 4}}})),
-                format!("{at}.capacity.ra.workers"),
-            ),
-            (
-                provider(json!({"ica_levels": 2})),
-                format!("{at}.ica_levels"),
-            ),
-        ];
+        let cases = [(
+            provider(json!({"ica_levels": 2})),
+            format!("{at}.ica_levels"),
+        )];
         for (deployment, path) in cases {
             let got = refused(deployment.clone());
             assert!(
@@ -964,7 +997,8 @@ mod tests {
             crate::phase2::deployment_of(&scenario(provider(json!({"ica_levels": 1}))), true)
                 .is_ok()
         );
-        let s = scenario(provider(json!({"capacity": {"ra": {"workers": 1}}})));
+        let s = scenario(provider(json!({"capacity": {"ra": {"service": "fifo-1",
+                                                               "workers": 2}}})));
         assert!(apply_capacity(&s, &mut []).is_err());
         assert!(apply_capacity(&scenario(json!({})), &mut []).is_ok());
     }
