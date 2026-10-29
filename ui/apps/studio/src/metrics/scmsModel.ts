@@ -288,12 +288,14 @@ function rank(l: HealthLevel): number {
 function metricTile(
   m: MetricReader,
   base: string,
-  spec: { id?: string; title: string; meaning: string; series?: string; spark?: string | null },
+  spec: { id?: string; title: string; meaning: string; series?: string; spark?: string | null; mean?: boolean },
 ): ScmsTile | null {
   const f = m.family(base);
   if (f === undefined) return null;
   const series = spec.series ?? f.headline ?? base;
-  const v = m.latest(series);
+  // A bursty rate (backend bytes, verifications) is read as its mean over the windows that
+  // reported: its newest window is often an idle one between bursts.
+  const v = spec.mean ? meanOf(m.series(series)) ?? m.latest(series) : m.latest(series);
   if (v === null) return null;
   const unit = f.unit;
   const s = readable(v, unit);
@@ -310,7 +312,7 @@ function metricTile(
     ...(level !== null && band ? { cue: cueText(band, level, unit) } : {}),
     metric: base,
     ...(spec.spark === null ? {} : { spark: spec.spark ?? series }),
-    source: `Metric ${series}, newest window. ${f.definition}`.trim(),
+    source: `Metric ${series}, ${spec.mean ? "mean of the windows that reported" : "newest window"}. ${f.definition}`.trim(),
   };
 }
 
@@ -331,6 +333,19 @@ function countTile(
     source: spec.source,
     ...(splitText(c) ? { split: splitText(c) } : {}),
   };
+}
+
+/** The mean of a series' observed windows, or `null`. */
+export function meanOf(s: Series | undefined): number | null {
+  if (s === undefined) return null;
+  let sum = 0;
+  let n = 0;
+  for (const v of s.v) {
+    if (!Number.isFinite(v)) continue;
+    sum += v;
+    n++;
+  }
+  return n === 0 ? null : sum / n;
 }
 
 function present<T>(xs: readonly (T | null | undefined)[]): T[] {
@@ -777,7 +792,8 @@ function costSection(m: MetricReader): ScmsSection {
     }),
     metricTile(m, "verify_rate", {
       title: "Verifications per second (all devices)",
-      meaning: "Signature checks completed across the fleet each second.",
+      meaning: "Signature checks completed across the fleet each second, mean over the run.",
+      mean: true,
     }),
     metricTile(m, "verify_cost", {
       title: "CPU time per verification",
@@ -785,7 +801,8 @@ function costSection(m: MetricReader): ScmsSection {
     }),
     metricTile(m, "bytes_backend", {
       title: "Credential traffic to and from the backend",
-      meaning: "Certificate requests, downloads, reports and CRLs on the backend links.",
+      meaning: "Certificate requests, downloads, reports and CRLs on the backend links, mean over the run.",
+      mean: true,
     }),
   ]);
 

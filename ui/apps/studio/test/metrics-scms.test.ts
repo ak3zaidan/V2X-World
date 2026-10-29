@@ -11,7 +11,7 @@ import { snapshotOf } from "../src/lib/backend.js";
 import type { HealthBand } from "../src/metrics/health.js";
 import { familiesOf, type GroupRow, type SeriesDef } from "../src/metrics/model.js";
 import { briefSentences } from "../src/metrics/summaryModel.js";
-import { countOf, cueText, duration, firstProvider, hasCredentials, providerOf, roleOf, scmsOverview, shown, stageLabel, stageRank, type MetricReader } from "../src/metrics/scmsModel.js";
+import { countOf, cueText, duration, firstProvider, hasCredentials, meanOf, providerOf, roleOf, scmsOverview, shown, stageLabel, stageRank, type MetricReader } from "../src/metrics/scmsModel.js";
 
 const snap = snapshotOf(JSON.parse(readFileSync(new URL("./fixtures/metrics/scms-backend.json", import.meta.url), "utf8")))!;
 
@@ -194,6 +194,15 @@ describe("the five questions", () => {
     expect(b.rows.map((r) => r.key)).toEqual(["unknown-signer", "signature-invalid"]);
     expect(b.rows[0]!.display).toBe("1 %");
     expect(section("cost").answer).toBe("Security takes 42 % of the bytes on air; 95 % of messages wait under 0.8 ms to be verified; 1.2 % of receptions are rejected by a security check.");
+  });
+
+  it("reads a bursty rate as its mean over the windows that reported, not its idle newest window", () => {
+    const series = { t: new Float64Array([1, 2, 3, 4]), v: new Float64Array([100, Number.NaN, 300, 0]) };
+    expect(meanOf(series)).toBeCloseTo(400 / 3);
+    const r: MetricReader = { ...reader({ bytes_backend: 0 }, {}, [def("bytes_backend", "B/s")]), series: () => series };
+    const t = scmsOverview(null, r, { tNs: 4e9, scenario: null }).sections.find((s) => s.id === "cost")!.tiles.find((x) => x.id === "bytes_backend")!;
+    expect(t.value).toBe("133");
+    expect(t.source).toContain("mean of the windows that reported");
   });
 
   it("names the busiest authority against the 80 % ceiling", () => {

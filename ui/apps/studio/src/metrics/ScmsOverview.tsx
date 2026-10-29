@@ -135,15 +135,13 @@ function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen
   const tip = [t.cue, t.source, t.metric ? "Click to open its full chart." : null].filter(Boolean).join("\n\n");
   const body = (
     <>
-      <span className="scms-tile-head">
-        <span className="scms-tile-title">{t.title}</span>
-        {t.level ? <LevelMark level={t.level} /> : null}
-      </span>
+      <span className="scms-tile-title">{t.title}</span>
       <span className="scms-tile-value">
         <span className="scms-num" data-testid={`scms-value-${t.id}`}>
           {t.value}
         </span>
         {t.unit !== "" ? <span className="scms-unit">{t.unit}</span> : null}
+        {t.level ? <LevelMark level={t.level} /> : null}
       </span>
       <span className="scms-tile-meaning">{t.meaning}</span>
       {t.level && t.level !== "healthy" && t.cue ? <span className={`scms-tile-cue ${t.level}`}>{t.cue.split(". Thresholds:")[0]}</span> : null}
