@@ -123,6 +123,16 @@ export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
     help: "Also attach it when a vehicle not heard before comes into range (the European rule).",
     defaultValue: false,
   },
+  "/security/scms/lifecycle/download_poll_interval_s": {
+    label: "Download retry wait",
+    help: "How long a vehicle waits before asking again for a batch that is not ready.",
+  },
+  "/security/scms/lifecycle/max_download_polls": {
+    label: "Download retries before giving up",
+    help: "Times a vehicle asks for a batch that is not ready before it gives up.",
+  },
+  "/security/scms/lifecycle/download_request_tolerance_s": { help: "How far a download request's time may be off the RA's clock before it is refused." },
+  "/security/scms/lifecycle/modelled_reports": { label: "File unbuildable reports by size only", help: "A detection with no real report format is still filed, as its size." },
   "/security/scms/lifecycle/root_rollover_at_s": { emptyText: "never" },
   "/security/scms/lifecycle/peer_root_removal_at_s": { emptyText: "never" },
   "/security/scms/lifecycle/crl_cadence_s": { emptyText: "each provider's rule" },
