@@ -35,10 +35,12 @@ function fieldId(field: Field): string {
   return `f${field.pointer.replace(/\W/g, "_")}`;
 }
 
+const COMMITTEE = "/security/threshold";
+
 function Widget({
-  field,
+  field: given,
   value,
-  onChange,
+  onChange: write,
   invalid,
 }: {
   field: Field;
@@ -46,6 +48,15 @@ function Widget({
   onChange: (v: unknown) => void;
   invalid: boolean;
 }): React.JSX.Element {
+  const doc = useContext(SettingsDocContext);
+  // The committee protocol: while the committee block exists an unset protocol is FROST (the
+  // engine's default), and "None" removes the whole block rather than leaving it in force.
+  const committeeOn = given.pointer === `${COMMITTEE}/protocol` && getPointer(doc, COMMITTEE) !== undefined;
+  const field: Field = committeeOn ? { ...given, nullable: true } : given;
+  const onChange = (v: unknown): void => {
+    if (given.pointer === `${COMMITTEE}/protocol` && v === undefined) write(undefined);
+    else write(v);
+  };
   const id = fieldId(field);
   const common = { id, "aria-invalid": invalid || undefined, "aria-describedby": `${id}-desc` } as const;
   if (field.kind === "boolean") {
@@ -96,7 +107,7 @@ function Widget({
         choices={field.choices}
         open={field.choicesOpen === true}
         nullable={field.nullable === true}
-        value={value}
+        value={committeeOn && value === undefined ? "frost-p256" : value}
         onChange={onChange}
         {...(field.hasDefault ? { defaultValue: field.defaultValue } : {})}
         {...(field.emptyText ? { unsetLabel: field.emptyText } : {})}
@@ -311,7 +322,12 @@ function SettingRowImpl({
   const line = oneLine(f.explain ?? f.help);
   const full = [f.explain, f.help].filter((t): t is string => !!t && t.trim() !== "").join("\n\n");
   const hasMore = full.replace(/[`*]/g, "").replace(/\s+/g, " ").trim() !== line || (f.status !== "wired" && !!f.statusNote);
-  const defaultWords = f.hasDefault ? (f.choices?.find((c) => String(c.value) === String(f.defaultValue))?.label ?? describeValue(f.defaultValue)) : "";
+  const labelOf = (v: unknown): string | undefined => f.choices?.find((c) => String(c.value) === String(v))?.label;
+  const defaultWords = !f.hasDefault
+    ? ""
+    : Array.isArray(f.defaultValue)
+      ? f.defaultValue.map((v) => labelOf(v) ?? String(v)).join(", ")
+      : (labelOf(f.defaultValue) ?? describeValue(f.defaultValue));
   const recRaw = f.recommended ? shortRec(f.recommended) : undefined;
   // A recommendation that is a menu value ("frost-p256") reads as the menu's words.
   const rec = recRaw === undefined ? undefined : (f.choices?.find((c) => String(c.value) === recRaw.replace(/\.$/, ""))?.label ?? recRaw);
@@ -320,8 +336,10 @@ function SettingRowImpl({
     ? [defaultWords, describeValue(f.defaultValue), f.defaultValue === true ? "on" : f.defaultValue === false ? "off" : ""].filter((t) => t !== "").map(flat)
     : [];
   const recFlat = rec === undefined ? "" : flat(rec).replace(/\.$/, "");
+  const current = labelOf(value);
   const recSame =
-    rec !== undefined && (/^unset$/i.test(recFlat) || defaultSpellings.some((d) => recFlat.startsWith(d) || d.startsWith(recFlat)));
+    rec !== undefined &&
+    (/^unset$/i.test(recFlat) || defaultSpellings.some((d) => recFlat.startsWith(d) || d.startsWith(recFlat)) || (current !== undefined && flat(current) === recFlat));
   if (f.pointer === PROVIDERS_POINTER && f.itemFields) {
     // The provider cards carry their own words; the sub-heading above them names them.
     return (
@@ -406,7 +424,7 @@ function SettingRowImpl({
             <Widget
               field={inherited !== undefined ? { ...f, hasDefault: true, defaultValue: inherited } : f}
               value={value}
-              onChange={(v) => onEdit(f.pointer, v)}
+              onChange={(v) => (f.pointer === `${COMMITTEE}/protocol` && v === undefined ? onEdit(COMMITTEE, undefined) : onEdit(f.pointer, v))}
               invalid={invalid}
             />
           )}

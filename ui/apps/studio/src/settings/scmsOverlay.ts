@@ -32,7 +32,7 @@ export interface Overlay {
 const strategy = "security.pseudonym_change.strategy";
 const latency = "security.scms.deployment.latency";
 const policy = "security.verification_policy";
-const committee = { path: "security.threshold.protocol", in: [], notIn: [null] };
+const committee = { path: "security.threshold", in: [], notIn: [null] };
 
 export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
   // Deployment.

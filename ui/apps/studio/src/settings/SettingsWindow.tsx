@@ -315,7 +315,8 @@ export function SettingsWindow({
    * hidden. A search shows everything.
    */
   const hiddenNow = (f: Field): boolean =>
-    !filtering && getPointer(draft, f.pointer) === undefined && !isEdited(f, edits) && irrelevantReason(f, draft, fields) !== undefined;
+    !filtering && !isEdited(f, edits) && !isModified(f, getPointer(draft, f.pointer)) &&
+    (getPointer(draft, f.pointer) === undefined || f.hasDefault === true) && irrelevantReason(f, draft, fields) !== undefined;
 
   /** One section's sub-headings with the fields `keep` allows. */
   const subsOf = (g: ResearchGroup, keep: (f: Field) => boolean): React.JSX.Element[] =>
