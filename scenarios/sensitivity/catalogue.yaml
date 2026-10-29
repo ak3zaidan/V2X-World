@@ -46,6 +46,12 @@ families:
   - name: osm
     base: ../portland-downtown.yaml
     set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1500.0}
+  # The same Portland at the medium tier, whose log-distance law leaves a building-blocked
+  # link to the Sommer term: where radio.channel_model.reflection adds a wall bounce.
+  - name: canyon
+    base: ../portland-downtown.yaml
+    set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1500.0,
+          radio.tiers.propagation: medium, metrics: [all]}
   # The same grid with pedestrians and crossings.
   - name: pedestrians
     base: ../vru-grid.yaml
@@ -87,6 +93,14 @@ families:
           actors.vehicles.classes: {passenger: {fraction: 0.7}, trailer: {fraction: 0.3}},
           world.terrain: {dem: scenarios/sensitivity/grade-5pct.asc, drape: true},
           traffic.vehicle_dynamics: {grade: true}, metrics: [all]}
+  # Downtown Portland on its measured ground (WP-26 P26.2; real-world/portland-hills.yaml:
+  # a 1 arc-second DEM, worlds/dem/portland-downtown.md, 19.6 % of the road length above
+  # 4 %). The base is undraped and the grade and power-limit terms are on in both runs,
+  # so moving world.terrain.drape gives the lanes their measured slopes (and lifts the
+  # vehicles' antennas from z = 0 onto the ground the radio's terrain term already sees).
+  - name: hills
+    base: ../real-world/portland-hills.yaml
+    set: {time.duration_s: 120.0, world.terrain.drape: false, metrics: [all]}
   # A two-lane road through a 110 m wood (forest-road.osm.xml, self-written), its trees
   # imported as vegetation: where radio.channel_model.foliage has trees to charge.
   - name: forest
@@ -126,6 +140,8 @@ routes:
   - {prefix: traffic.vehicle_dynamics.power_limit, families: [grade-truck, freight]}
   - {prefix: traffic.vehicle_dynamics, families: [freight]}
   - {prefix: traffic.emergency_yield, families: [emergency]}
+  # A drape needs a DEM: the measured Portland hill (WP-26).
+  - {prefix: world.terrain.drape, families: [hills]}
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
   - {prefix: net, families: [gn, dsrc, security]}
@@ -152,6 +168,10 @@ routes:
   - {prefix: radio.channel_model.vehicle_blockage, families: [traffic, dsrc]}
   - {prefix: radio.channel_model.foliage, families: [forest]}
   - {prefix: radio.channel_model.density_sigma, families: [traffic]}
+  # A wall reflection needs building-blocked links whose bounce is clear: real footprints
+  # (on the procedural grid's kerb-to-kerb blocks no single bounce turns a corner) under
+  # a law that leaves buildings to the Sommer term (WP-29).
+  - {prefix: radio.channel_model.reflection, families: [canyon]}
   - {prefix: radio.channel_model.building_loss_db_per_m, families: [traffic]}
   - {prefix: traffic.right_turn_on_red, families: [osm, traffic]}
   - {prefix: actors.vehicles.drivers.bicycle, families: [pedestrians]}

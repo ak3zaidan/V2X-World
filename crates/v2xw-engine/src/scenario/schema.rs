@@ -2657,6 +2657,12 @@ pub struct ChannelModelSettings {
     /// 5.2 dB downtown for line of sight). Unset keeps the preset's fixed σ.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub density_sigma: Option<bool>,
+    /// Whether a building-blocked link also receives the strongest single specular
+    /// reflection off a building wall, power-summed with the shadowed path (GEMV², Boban
+    /// et al. 2014 §IV-B.3, eqs. 6-8; ITU-R P.2040-3 Table 3 for the walls:
+    /// `obstacle/reflection/gemv2-single-bounce`). Needs buildings. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflection: Option<bool>,
 }
 
 impl ChannelModelSettings {

@@ -25,6 +25,8 @@
 //! as `v2xw-world`'s own index does, so an R-tree traversal order can never reach a loss
 //! value.
 
+pub mod reflection;
+
 use std::collections::BTreeMap;
 
 use rstar::{AABB, RTree, RTreeObject, SelectionFunction};

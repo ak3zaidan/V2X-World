@@ -2531,6 +2531,9 @@ pub struct ObstacleStack {
     pub foliage: Option<v2xw_radio::FoliageLoss>,
     /// GEMV²'s density-dependent shadowing σ (`radio.channel_model.density_sigma`).
     pub density: Option<DensityTerm>,
+    /// GEMV²'s single-bounce wall reflection (`radio.channel_model.reflection`), added by
+    /// power to a building-blocked path's shadowed one.
+    pub reflection: Option<v2xw_radio::obstacle::reflection::ReflectionTracer>,
     /// Whether the building model's *loss* is charged under the run's main law. Kept for
     /// callers that compose one law; the engine decides per link.
     pub building_loss: bool,
@@ -2742,6 +2745,21 @@ impl ObstacleStack {
         if let Some(terrain) = self.terrain.as_mut() {
             terms[2] = v2xw_radio::ObstacleModel::obstacle_loss_db(terrain, ctx, tx, rx, los, f_hz);
         }
+        // GEMV² §IV-B.3: a building-blocked link also receives the strongest single bounce
+        // off a wall; its power adds to the shadowed path's (`reflection`).
+        if terms[0] > 0.0
+            && los.class.has_building()
+            && let Some(tracer) = self.reflection.as_ref()
+            && let Some(ray) = tracer.best(
+                <crate::ctx::EngineCtx<'_> as v2xw_core::ctx::Ctx>::world(ctx),
+                tx.pos,
+                rx.pos,
+                f_hz,
+            )
+        {
+            terms[0] =
+                v2xw_radio::obstacle::reflection::power_sum_excess_db(terms[0], ray.excess_db);
+        }
         let total = v2xw_core::math::sum_ordered(terms);
         // Added on its own, so a run without foliage sums exactly the three terms it did.
         match self.foliage.as_ref() {
@@ -2768,6 +2786,9 @@ impl ObstacleStack {
         }
         if let Some(f) = &self.foliage {
             cards.push(f.card().clone());
+        }
+        if let Some(r) = &self.reflection {
+            cards.push(r.card().clone());
         }
         for card in cards {
             if !registry.contains(&card.id) {
@@ -2872,22 +2893,34 @@ pub fn build_obstacles(scenario: &Scenario, world: &World) -> ObstacleStack {
             .then(|| v2xw_radio::TerrainDiffraction::new(stack_tier)),
         foliage: (tuning.foliage == Some(true) && !world.vegetation.is_empty())
             .then(|| v2xw_radio::FoliageLoss::new(world, stack_tier)),
-        density: (tuning.density_sigma == Some(true)).then(|| DensityTerm::new(world)),
+        density: (tuning.density_sigma == Some(true)).then(|| {
+            let term = DensityTerm::new(world);
+            // GEMV² Table V: NLOSb σ_min is 0 dB when reflections are computed.
+            if tuning.reflection == Some(true) && buildings_on {
+                term.with_reflections()
+            } else {
+                term
+            }
+        }),
+        reflection: (tuning.reflection == Some(true) && buildings_on)
+            .then(|| v2xw_radio::obstacle::reflection::ReflectionTracer::build(world)),
     }
 }
 
 /// GEMV²'s density-dependent shadowing σ for one run (`radio.channel_model.density_sigma`,
 /// [`v2xw_radio::DensitySigma`]): the table, the world's building footprints as
-/// (centroid, area) behind a grid, and whether the world is urban (Table VI's LOS
-/// ellipse).
+/// (centroid, area) behind an R-tree of their centroids
+/// ([`v2xw_radio::prop::FootprintIndex`], WP-27), and whether the world is urban
+/// (Table VI's LOS ellipse).
 #[derive(Debug)]
 pub struct DensityTerm {
     /// GEMV²'s σ table and ellipse sizes.
     pub sigma: v2xw_radio::DensitySigma,
     /// Whether the LOS ellipse is the urban one (the world's default environment).
     pub urban: bool,
-    /// Every building footprint as (centroid, area m²), in building-id order.
-    statics: Vec<(v2xw_core::geom::Vec3, f64)>,
+    /// Every building footprint as (centroid, area m²), in building-id order, behind an
+    /// R-tree of the centroids.
+    statics: v2xw_radio::prop::FootprintIndex,
 }
 
 impl DensityTerm {
@@ -2909,6 +2942,7 @@ impl DensityTerm {
                 (v2xw_core::geom::Vec3::new(x / n, y / n, 0.0), area)
             })
             .collect();
+        let statics = v2xw_radio::prop::FootprintIndex::new(statics);
         Self {
             sigma: v2xw_radio::DensitySigma::default(),
             urban: !matches!(
@@ -2917,6 +2951,14 @@ impl DensityTerm {
             ),
             statics,
         }
+    }
+
+    /// The term with reflections computed: GEMV² Table V's NLOSb σ_min is then 0 dB
+    /// (Mangel et al.'s 4.1 dB is for paths priced without reflections).
+    #[must_use]
+    pub fn with_reflections(mut self) -> Self {
+        self.sigma.nlosb_db.0 = 0.0;
+        self
     }
 
     /// The link's σ, dB: the vehicles of `snapshot` (not pedestrians or riders) and the
@@ -2940,15 +2982,51 @@ impl DensityTerm {
             .filter_map(|a| snapshot.get(a))
             .filter(|e| !e.view.class.is_vru())
             .map(|e| e.kinematics.pos);
-        let density = self.sigma.link_density(
-            los.class,
+        let density = self.link_density(los.class, tx, rx, vehicles);
+        self.sigma.sigma_db(los.class, density)
+    }
+
+    /// The density around the link `tx → rx` of `class` with `vehicles` about: the
+    /// footprints come from the R-tree, in building-id order.
+    #[must_use]
+    pub fn link_density(
+        &self,
+        class: v2xw_radio::LosClass,
+        tx: v2xw_core::geom::Vec3,
+        rx: v2xw_core::geom::Vec3,
+        vehicles: impl IntoIterator<Item = v2xw_core::geom::Vec3>,
+    ) -> v2xw_radio::LinkDensity {
+        let r = self.sigma.major_axis_m(class, self.urban);
+        let near = self.statics.near_link(tx, rx, r);
+        self.sigma
+            .link_density(class, self.urban, tx, rx, vehicles, near)
+    }
+
+    /// [`Self::link_density`] by a scan of every footprint, as before the R-tree: the
+    /// reference the index is tested against (`gemv2_off.rs`).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn link_density_by_scan(
+        &self,
+        class: v2xw_radio::LosClass,
+        tx: v2xw_core::geom::Vec3,
+        rx: v2xw_core::geom::Vec3,
+        vehicles: impl IntoIterator<Item = v2xw_core::geom::Vec3>,
+    ) -> v2xw_radio::LinkDensity {
+        self.sigma.link_density(
+            class,
             self.urban,
             tx,
             rx,
             vehicles,
-            self.statics.iter().copied(),
-        );
-        self.sigma.sigma_db(los.class, density)
+            self.statics.all().iter().copied(),
+        )
+    }
+
+    /// How many footprints the term holds.
+    #[must_use]
+    pub fn footprints(&self) -> usize {
+        self.statics.all().len()
     }
 }
 

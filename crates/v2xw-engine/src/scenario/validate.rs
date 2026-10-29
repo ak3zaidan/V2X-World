@@ -2460,6 +2460,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                building footprints inside each link's ellipse (Table V bounds).",
     },
     KeyStatus {
+        path: "radio.channel_model.reflection",
+        status: Status::Wired,
+        note: "GEMV2 single-bounce building reflection: the strongest specular ray off a \
+               footprint wall with clear legs (free-space spreading plus the TE Fresnel \
+               loss, P.2040-3 Table 3 walls), power-summed with a building-blocked path.",
+    },
+    KeyStatus {
         path: "world.service_roads",
         status: Status::Wired,
         note: "Whether highway=service ways (alleys, driveways, parking aisles) become \
@@ -4993,6 +5000,7 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "radio.channel_model.density_sigma",
             c.density_sigma.is_some(),
         ),
+        ("radio.channel_model.reflection", c.reflection.is_some()),
     ] {
         if set && abstract_tier {
             e.push(conflict(
@@ -5008,6 +5016,26 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "would change nothing: world.vegetation is false, so the world has no trees"
                 .to_string(),
         ));
+    }
+    // The ray is power-summed with the building term's shadowed path, so it needs that
+    // term charged: buildings on, under a law that leaves them to the Sommer term.
+    if c.reflection == Some(true) && !abstract_tier {
+        let why = if !s.world.buildings.enabled {
+            Some("world.buildings.enabled is false, so there is no wall to reflect off".to_string())
+        } else if law.owns_buildings() {
+            Some(format!(
+                "{law_name} prices a building-blocked link with its own NLOS law, so there \
+                 is no shadowed path to add the reflection to"
+            ))
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            e.push(conflict(
+                "radio.channel_model.reflection",
+                format!("would change nothing: {why}"),
+            ));
+        }
     }
     if c.vehicle_blockage.is_some() && abstract_tier {
         e.push(conflict(

@@ -155,6 +155,22 @@ fn absolutise_world(s: &mut Scenario, scenario_path: &Path) {
                 break;
             }
         }
+        // A base named through `..` (`../real-world/x.yaml` from scenarios/sensitivity)
+        // pops back onto its own `..` lexically and never reaches the repository root in
+        // four steps; the same walk from the resolved directory does. Tried only after the
+        // lexical walk, so every path that resolved before resolves as before.
+        let Ok(mut d) = std::fs::canonicalize(dir) else {
+            return;
+        };
+        for _ in 0..4 {
+            if d.join(path.as_str()).exists() {
+                *path = d.join(path.as_str()).to_string_lossy().into_owned();
+                return;
+            }
+            if !d.pop() {
+                break;
+            }
+        }
     };
     if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source {
         resolve(path);

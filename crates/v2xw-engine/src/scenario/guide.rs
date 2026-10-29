@@ -675,6 +675,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "Off (today, a fixed spread); on for the measured dependence on surroundings.",
     },
     Basic {
+        path: "radio.channel_model.reflection",
+        explain: "Whether a signal blocked by a building can still arrive by bouncing once off another building's wall, as it does down a street canyon: the bounce costs its longer path and the wall's reflection loss.",
+        recommended: "Off (today); on for downtown maps, where reflections carry links round corners.",
+    },
+    Basic {
         path: "world.terrain.drape",
         explain: "Whether the roads, junctions and buildings follow the ground of the terrain file, so a road over a hill climbs and descends with it.",
         recommended: "Off for flat maps; on with a terrain file wherever grades matter (hills slow heavy trucks).",

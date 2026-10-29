@@ -17,3 +17,8 @@
    source: "a path through vegetation adds an excess attenuation growing with its depth, capped at the lowest-loss path around it (ITU-R P.833-10 s3.1 eq. 7; 0.79 f^0.61 dB/m, Boban et al. IEEE TVT 2014 eq. 4); forest family, a road through a 110 m wood"}
 - {setting: radio.channel_model.density_sigma, change: true, metric: prr, expect: changes, min_change: 0.001,
    source: "small-scale variation grows with the density of vehicles and objects around the link (Boban, Barros, Tonguz, IEEE TVT 63(9) 2014, eq. 10, Table V)"}
+# ---- GEMV² single-bounce building reflection (WP-29), on downtown Portland at the medium tier (family canyon) ----
+- {setting: radio.channel_model.reflection, change: true, metric: prr, expect: up, min_change: 0.001,
+   source: "a building-blocked link also receives its strongest single-interaction wall reflection (Boban, Barros, Tonguz, IEEE TVT 63(9) 2014, sec. IV-B.3 and eq. 6: single-bounce rays dominate in the absence of LOS, after Abbas et al.); its power adds to the shadowed path's, so no link loses and some street-canyon links gain"}
+- {setting: radio.channel_model.reflection, change: true, metric: report.rx_losses.below-sensitivity, expect: down, min_change: 0.001,
+   source: "the frames the reflected ray lifts above the receiver's sensitivity were lost below it (Boban et al. 2014 eqs. 6-9; the shadowed path alone is what the Sommer term leaves)"}

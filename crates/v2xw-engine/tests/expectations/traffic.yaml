@@ -129,3 +129,10 @@
 # ---- Traffic yields to emergency vehicles (WP-20; emergency family = connected-intersections.yaml, 120 s) ----
 - {setting: traffic.emergency_yield.enabled, change: true, metric: report.emergency_distance_m, expect: up, min_change: 0.02,
    source: "drivers pull to the right-hand edge and stop for an approaching emergency vehicle, and every other driver yields it the right of way (NY VTL 1144(a), re-read 2026-10-28; UVC 11-405); it passes a red after stopping (UVC 11-106(b)2): in a fixed window it drives further. The plan's report.emergency_travel_time_s was replaced: a completed-trip time over a 120 s window is biased (faster vehicles complete longer trips). SUMO bluelight device behaviour"}
+
+# ---- A measured hill (WP-26 P26.2): world.terrain.drape on the hills family (downtown Portland on its 1 arc-second DEM, grade and power limit on in both runs) ----
+- {setting: world.terrain.drape, change: true, metric: traffic.speed_mean_mps, expect: down, min_change: 0.001,
+   source: "a vehicle's acceleration less g sin(theta) on the draped slopes (SUMO KraussPS) and the class power limit on the climbs (WP-22): uphill a car loses acceleration, while downhill the speed limit and the signals cap what it gains, so the network mean falls; 19.6 % of this map's road is steeper than 4 % (worlds/dem/portland-downtown.md)"}
+- {setting: world.terrain.drape, change: true, metric: prr, expect: changes, min_change: 0.001,
+   source: "undraped, the vehicles' antennas stand at z = 0 under a ground the terrain knife-edge term reads up to 115 m high (ITU-R P.526 diffraction over the DEM profile); draped they stand on it, so the terrain loss on each link changes. The direction is not predicted (wp25-plus-build-plans.md WP-26)"}
+

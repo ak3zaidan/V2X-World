@@ -216,3 +216,207 @@ fn a_draped_ramp_tilts_the_lanes_and_undraped_nothing_moves() {
     }
     assert!(long >= 6, "only {long} long lanes");
 }
+
+/// The measured DEM (WP-26 P26.2): `worlds/dem/portland-downtown.asc`, read here directly
+/// as a lattice of posts (row 0 is the north edge, as the file stores it).
+struct Posts {
+    ncols: usize,
+    nrows: usize,
+    lon0: f64,
+    lat0: f64,
+    cell: f64,
+    z: Vec<f64>,
+}
+
+impl Posts {
+    fn read(path: &Path) -> Self {
+        let text = std::fs::read_to_string(path).expect("the DEM is in the repo");
+        let mut it = text.split_whitespace();
+        let mut head = |key: &str| {
+            assert_eq!(it.next(), Some(key));
+            it.next().unwrap().parse::<f64>().unwrap()
+        };
+        let (ncols, nrows) = (head("ncols") as usize, head("nrows") as usize);
+        let (lon0, lat0, cell) = (head("xllcenter"), head("yllcenter"), head("cellsize"));
+        let _nodata = head("nodata_value");
+        let z: Vec<f64> = it.map(|t| t.parse().unwrap()).collect();
+        assert_eq!(z.len(), ncols * nrows);
+        Self {
+            ncols,
+            nrows,
+            lon0,
+            lat0,
+            cell,
+            z,
+        }
+    }
+
+    /// The post `i` columns east and `j` rows north of the south-west post.
+    fn at(&self, i: usize, j: usize) -> f64 {
+        self.z[(self.nrows - 1 - j) * self.ncols + i]
+    }
+
+    /// The cell holding (lat, lon): its south-west post and the fractions into it.
+    fn cell_of(&self, lat: f64, lon: f64) -> (usize, usize, f64, f64) {
+        let (fx, fy) = ((lon - self.lon0) / self.cell, (lat - self.lat0) / self.cell);
+        let (i, j) = (fx.floor(), fy.floor());
+        assert!(i >= 1.0 && j >= 1.0, "outside the DEM");
+        let (i, j) = (i as usize, j as usize);
+        assert!(i + 2 < self.ncols && j + 2 < self.nrows, "outside the DEM");
+        (i, j, fx - i as f64, fy - j as f64)
+    }
+
+    fn bilinear(&self, lat: f64, lon: f64) -> f64 {
+        let (i, j, u, v) = self.cell_of(lat, lon);
+        let s = self.at(i, j) * (1.0 - u) + self.at(i + 1, j) * u;
+        let n = self.at(i, j + 1) * (1.0 - u) + self.at(i + 1, j + 1) * u;
+        s * (1.0 - v) + n * v
+    }
+
+    /// The highest minus the lowest of the four posts of the cell holding (lat, lon).
+    fn cell_relief(&self, lat: f64, lon: f64) -> f64 {
+        let (i, j, _, _) = self.cell_of(lat, lon);
+        let c = [
+            self.at(i, j),
+            self.at(i + 1, j),
+            self.at(i, j + 1),
+            self.at(i + 1, j + 1),
+        ];
+        c.iter().copied().fold(f64::MIN, f64::max) - c.iter().copied().fold(f64::MAX, f64::min)
+    }
+
+    /// The lowest and highest of the 4 x 4 posts round the cell holding (lat, lon).
+    fn hull(&self, lat: f64, lon: f64) -> (f64, f64) {
+        let (i, j, _, _) = self.cell_of(lat, lon);
+        let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+        for a in i - 1..=i + 2 {
+            for b in j - 1..=j + 2 {
+                lo = lo.min(self.at(a, b));
+                hi = hi.max(self.at(a, b));
+            }
+        }
+        (lo, hi)
+    }
+}
+
+/// `scenarios/real-world/portland-hills.yaml` (WP-26 P26.2) drapes its lanes on the
+/// measured DEM: 20 keyed lane points sit on the heights a direct bilinear read of the
+/// file gives, within one DEM cell's relief (the engine resamples the posts onto its own
+/// 30 m grid before it drapes, so the two interpolations can differ by up to that), and
+/// inside the hull of the posts round them. Heights are the rise over the undraped lane,
+/// so a bridge deck keeps its level above the ground.
+#[test]
+fn a_measured_dem_drapes_the_lanes_to_its_heights() {
+    let mut s = Scenario::load(root().join("scenarios/real-world/portland-hills.yaml"))
+        .expect("the scenario loads");
+    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source {
+        *path = root().join(path.as_str()).to_string_lossy().into_owned();
+    }
+    let dem = root().join(s.world.terrain.dem.clone().expect("a DEM"));
+    s.world.terrain.dem = Some(dem.to_string_lossy().into_owned());
+    assert!(s.world.terrain.drape, "the shipped scenario drapes");
+    s.validate().expect("the scenario validates");
+    let world = v2xw_engine::wiring::build_world(&s).expect("world");
+    // A bridge deck already stands a level above the zero plane before the drape
+    // (`osm.rs`: `TUNNEL_LEVEL_DEPTH_M` per `layer`), and the drape adds the ground to it
+    // (`dem::with_terrain`: z_new = z_old + dem), so the DEM is compared with the rise
+    // over the undraped world's z.
+    s.world.terrain.drape = false;
+    let flat = v2xw_engine::wiring::build_world(&s).expect("world");
+    let posts = Posts::read(&dem);
+    let proj = world.projection();
+    let lift = |w: &v2xw_world::World| -> Vec<v2xw_core::geom::Vec3> {
+        w.roads
+            .lanes()
+            .iter()
+            .flat_map(|l| l.centreline.iter().copied())
+            .collect()
+    };
+    let (draped, before) = (lift(&world), lift(&flat));
+    assert_eq!(
+        draped.len(),
+        before.len(),
+        "the drape changed the lane points"
+    );
+    let points: Vec<v2xw_core::geom::Vec3> = draped
+        .iter()
+        .zip(&before)
+        .map(|(d, b)| {
+            assert!((d.x - b.x).abs() < 1e-9 && (d.y - b.y).abs() < 1e-9);
+            v2xw_core::geom::Vec3::new(d.x, d.y, d.z - b.z)
+        })
+        .collect();
+    assert!(points.len() > 1_000, "{} lane points", points.len());
+    assert!(
+        before.iter().any(|p| p.z > 0.0),
+        "no bridge deck: the rise is not exercised"
+    );
+    let mut state = 0x0026_5EED_u64;
+    let mut next = || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (z ^ (z >> 31)) as usize
+    };
+    let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+    let mut bad = Vec::new();
+    for _ in 0..20 {
+        let p = points[next() % points.len()];
+        let (lat, lon) = proj.to_geodetic(p.x, p.y);
+        let want = posts.bilinear(lat, lon) - world.origin.alt_m;
+        let tol = posts.cell_relief(lat, lon) + 0.5;
+        let (h_lo, h_hi) = posts.hull(lat, lon);
+        let (h_lo, h_hi) = (h_lo - world.origin.alt_m, h_hi - world.origin.alt_m);
+        lo = lo.min(want);
+        hi = hi.max(want);
+        if (p.z - want).abs() > tol || p.z < h_lo - 0.1 || p.z > h_hi + 0.1 {
+            bad.push(format!(
+                "({lat:.5}, {lon:.5}): lane z {:.2} m, DEM {want:.2} +- {tol:.2} m, hull {h_lo}..{h_hi}",
+                p.z
+            ));
+        }
+    }
+    assert!(
+        hi - lo > 20.0,
+        "the points span only {:.1} m: the check would not bite",
+        hi - lo
+    );
+    assert!(
+        bad.is_empty(),
+        "{} of 20 lane points off the DEM: {bad:#?}",
+        bad.len()
+    );
+}
+
+/// The two `world.terrain.drape` rows of `tests/expectations/traffic.yaml` hold on the
+/// `hills` family (WP-26 P26.2): on downtown Portland's measured ground, with the grade
+/// and the power limit on, the drape lowers the mean speed and changes the PRR.
+#[test]
+fn the_hill_rows_hold() {
+    let path = root().join("scenarios/sensitivity/catalogue.yaml");
+    let fam = sweep::Families::load(&path).expect("families file loads");
+    let mut exp = sweep::load_expectations(&[root().join("crates/v2xw-engine/tests/expectations")])
+        .expect("rows parse");
+    exp.retain(|e| e.setting == "world.terrain.drape");
+    assert_eq!(exp.len(), 2, "the speed and the PRR rows");
+    let (settings, unplanned) = expect::expect_plan(&fam, &exp);
+    assert!(unplanned.is_empty(), "{unplanned:?}");
+    let bases = fam.bases(&path).expect("bases load");
+    let result =
+        sweep::run_cached(settings, vec![], &bases, &exp, 2, None, |_, _, _| {}).expect("runs");
+    for v in &result.verdicts {
+        eprintln!(
+            "hills: {} {}: {:?} -> {:?} pass {} ({})",
+            v.expectation.setting, v.expectation.metric, v.base, v.value, v.pass, v.note
+        );
+    }
+    let failed: Vec<&str> = result
+        .verdicts
+        .iter()
+        .filter(|v| !v.pass)
+        .map(|v| v.expectation.metric.as_str())
+        .collect();
+    assert_eq!(result.verdicts.len(), 2);
+    assert!(failed.is_empty(), "{failed:?}");
+}
