@@ -137,7 +137,7 @@ async function collect(tNs: number, scenario: unknown): Promise<SummaryData> {
   const entities = snap ? entityLoads(snap, tNs) : [];
 
   // The brief: the same judgements the dialog lists, the headline numbers, the authorities' counts.
-  const first = firstProvider(scenario);
+  const first = firstProvider(scenario, snap);
   const count = (roles: string[], keys: string[]): number | null => countOf(snap, roles, keys, first)?.total ?? null;
   const healthyThroughout = judgements.filter((j) => j.level === "healthy" && j.worstLevel === "healthy").length;
   const outs = outOfBand(judgements);

@@ -106,28 +106,25 @@ function MiniSpark({ series, label }: { series: Series; label: string }): React.
       lo = Math.min(lo, v);
       hi = Math.max(hi, v);
     }
-    const t0 = series.t[0] ?? 0;
-    const t1 = series.t[series.t.length - 1] ?? 1;
-    const span = Math.max(1e-9, t1 - t0);
+    // Spaced by reported window, not by time: a fast-forwarded run reports in short radio windows
+    // days apart, and on a time axis its whole trend is a sliver at the end. The full chart keeps time.
+    const n = observedCount(series);
     const flat = hi - lo < 1e-12;
     let path = "";
-    let pen = false;
+    let k = 0;
     for (let i = 0; i < series.t.length; i++) {
       const v = series.v[i]!;
-      if (Number.isNaN(v)) {
-        pen = false;
-        continue;
-      }
-      const x = ((series.t[i]! - t0) / span) * 120;
+      if (Number.isNaN(v)) continue;
+      const x = (k / Math.max(1, n - 1)) * 120;
       const y = flat ? 12 : 2 + (1 - (v - lo) / (hi - lo)) * 20;
-      path += `${pen ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
-      pen = true;
+      path += `${k === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+      k++;
     }
     return { path, lo, hi };
   }, [series]);
   if (d === null) return null;
   return (
-    <svg className="scms-spark" viewBox="0 0 120 24" preserveAspectRatio="none" role="img" aria-label={`${label}: trend over the run, ${formatNumber(d.lo)} to ${formatNumber(d.hi)}`}>
+    <svg className="scms-spark" viewBox="0 0 120 24" preserveAspectRatio="none" role="img" aria-label={`${label}: trend over the windows that reported, ${formatNumber(d.lo)} to ${formatNumber(d.hi)}`}>
       <path d={d.path} vectorEffect="non-scaling-stroke" />
     </svg>
   );
@@ -138,13 +135,15 @@ function Tile({ t, overview, onOpen }: { t: ScmsTile; overview: Overview; onOpen
   const tip = [t.cue, t.source, t.metric ? "Click to open its full chart." : null].filter(Boolean).join("\n\n");
   const body = (
     <>
-      <span className="scms-tile-title">{t.title}</span>
+      <span className="scms-tile-head">
+        <span className="scms-tile-title">{t.title}</span>
+        {t.level ? <LevelMark level={t.level} /> : null}
+      </span>
       <span className="scms-tile-value">
         <span className="scms-num" data-testid={`scms-value-${t.id}`}>
           {t.value}
         </span>
         {t.unit !== "" ? <span className="scms-unit">{t.unit}</span> : null}
-        {t.level ? <LevelMark level={t.level} /> : null}
       </span>
       <span className="scms-tile-meaning">{t.meaning}</span>
       {t.level && t.level !== "healthy" && t.cue ? <span className={`scms-tile-cue ${t.level}`}>{t.cue.split(". Thresholds:")[0]}</span> : null}
@@ -282,7 +281,7 @@ export function ScmsOverview({
       <header className="scms-head">
         <button
           type="button"
-          className="scms-toggle linklike"
+          className="scms-toggle"
           aria-expanded={open}
           aria-controls="scms-body"
           onClick={() => {

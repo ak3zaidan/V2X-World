@@ -184,13 +184,19 @@ export function providerOf(e: Pick<BackendEntity, "id" | "state">, first: string
 }
 
 /** The scenario's first provider's name, or "provider 1". */
-export function firstProvider(scenario: unknown): string {
+export function firstProvider(scenario: unknown, s: BackendSnapshot | null = null): string {
   const list = (scenario as { security?: { scms?: { deployment?: { providers?: unknown } } } } | null)?.security?.scms?.deployment?.providers;
   if (Array.isArray(list) && list.length > 0) {
     const n = (list[0] as { name?: unknown }).name;
     if (typeof n === "string" && n !== "") return n;
   }
-  return "provider 1";
+  // The engine names the other providers by prefix ("provider-b/ra"); the home one has none.
+  // Beside a "provider-b", the home provider is the deployment's "provider-a".
+  for (const e of s?.entities ?? []) {
+    const m = /^(.*)-b\//.exec(e.id);
+    if (m) return `${m[1]}-a`;
+  }
+  return "home provider";
 }
 
 function num(v: unknown): number | null {
@@ -374,6 +380,33 @@ const STAGE_WORDS: Readonly<Record<string, string>> = {
   installed: "installed",
 };
 
+/** The order of a revocation's stages (`v2xw_proto::stage::StageId`), for the bars. */
+const STAGE_ORDER: readonly string[] = [
+  "detect",
+  "report_sent",
+  "report_received",
+  "decision",
+  "resolved",
+  "blocklisted",
+  "issued",
+  "published",
+  "first_rsu_broadcast",
+  "downloaded",
+  "processed",
+  "installed",
+  "enforced",
+  "residual_harm",
+  "last_valid_credential_expiry",
+];
+
+/** Where a `from->to` transition sits in a revocation; unknown stages go last. */
+export function stageRank(key: string): number {
+  const [from = "", to = ""] = key.split("->");
+  const f = STAGE_ORDER.indexOf(from.trim());
+  const t = STAGE_ORDER.indexOf(to.trim());
+  return (f < 0 ? 99 : f) * 100 + (t < 0 ? 99 : t);
+}
+
 export function stageLabel(key: string): string {
   const parts = key.split("->");
   if (parts.length !== 2) return key.replace(/[_-]/g, " ");
@@ -404,7 +437,7 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
           title: ccms ? "Stations enrolled (enrolment credential)" : "Devices enrolled (enrolment certificate, EC)",
           value: `${formatNumber(enrolled.total)} of ${formatNumber(devices.total)}`,
           unit: "devices",
-          meaning: "Devices holding the long-term credential they use to ask for pseudonym certificates.",
+          meaning: "Hold the long-term credential used to ask for pseudonym certificates.",
           level: allEnrolled ? "healthy" : "caution",
           cue: allEnrolled
             ? "Every device is enrolled, as the run expects: each is enrolled before it is deployed."
@@ -414,7 +447,7 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
       : null,
     metricTile(m, "cert_pool_valid", {
       title: `Valid ${certName} per vehicle`,
-      meaning: "How many certificates each vehicle could sign with right now (mean over vehicles); it changes to a new one to stay unlinkable.",
+      meaning: "Certificates a vehicle could sign with right now (mean); it switches between them to stay unlinkable.",
     }),
     starved !== null
       ? countTile(starved, {
@@ -437,7 +470,7 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
       id: "issued",
       title: ccms ? "Authorisation tickets issued (by the AA)" : "Pseudonym certificates issued (by the PCA)",
       unit: "certificates",
-      meaning: ccms ? "Tickets the Authorisation Authority has signed so far." : "Certificates the Pseudonym CA has signed so far, in batches the RA assembles.",
+      meaning: ccms ? "Tickets the Authorisation Authority has signed so far." : "Signed so far by the Pseudonym CA, in batches the RA assembles.",
       source: ccms ? "AA: tickets_issued." : "PCA: certs_issued, from the Backend snapshot.",
     }),
     started !== null && completed !== null
@@ -456,12 +489,12 @@ function certsSection(m: MetricReader, s: BackendSnapshot | null, first: string)
       id: "downloads",
       title: "Certificate batches downloaded (from the RA)",
       unit: "files",
-      meaning: "Batch files devices fetched from the Registration Authority over cellular or a roadside unit.",
+      meaning: "Batch files fetched from the Registration Authority, by cellular or a roadside unit.",
       source: "RA: files_served, from the Backend snapshot.",
     }),
     metricTile(m, "backend_link_up", {
       title: "Vehicles that can reach the backend",
-      meaning: "Share of vehicles with usable cellular or roadside-unit access to the credential system, newest window.",
+      meaning: "Share with cellular or roadside-unit access to the credential system, newest window.",
     }),
   ]);
 
@@ -500,7 +533,7 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
       id: "revoked",
       title: "Devices revoked (by the MA)",
       unit: revoked?.total === 1 ? "device" : "devices",
-      meaning: "Devices the Misbehaviour Authority decided to revoke; each becomes an entry on the CRL.",
+      meaning: "Decided by the Misbehaviour Authority; each becomes an entry on the CRL.",
       source: "MA: revocations, from the Backend snapshot.",
     }),
     // With several providers each signs its own list: the CRL Generators' counts add up, while the
@@ -553,13 +586,13 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
           id: "enforced",
           title: "Messages from revoked devices dropped",
           unit: "messages",
-          meaning: "Receivers recognised the sender on their CRL and refused the message: revocation taking effect.",
+          meaning: "Refused because the sender is on the receiver's CRL: revocation taking effect.",
           source: "Devices (ee): revoked_receptions, from the Backend snapshot.",
         })
       : null,
     metricTile(m, "time_to_decision", {
       title: "Attack to revocation decision",
-      meaning: "Mean time from when an attacker started to when the MA decided to revoke it.",
+      meaning: "Mean time from an attack starting to the MA deciding to revoke the attacker.",
     }),
     metricTile(m, "revocation_latency_stage", {
       id: "slowest-stage",
@@ -569,14 +602,16 @@ function revocationSection(m: MetricReader, s: BackendSnapshot | null, first: st
     }),
   ]);
 
-  const stageRows = (m.pooled("revocation_latency_stage", "stage") ?? []).filter((r) => r.value !== null && Number.isFinite(r.value));
+  const stageRows = (m.pooled("revocation_latency_stage", "stage") ?? [])
+    .filter((r) => r.value !== null && Number.isFinite(r.value))
+    .sort((a, b) => stageRank(a.key) - stageRank(b.key) || a.key.localeCompare(b.key));
   const band = m.family("revocation_latency_stage")?.health ?? null;
   const maxStage = Math.max(0, ...stageRows.map((r) => r.value as number));
   const bars: ScmsBars | undefined =
     m.family("revocation_latency_stage") !== undefined
       ? {
           title: "Where the revocation time goes",
-          note: "Mean time of each step over the run so far, as the engine pooled it.",
+          note: "Mean time of each step, in the order a revocation goes through them, over the run so far.",
           max: maxStage,
           metric: "revocation_latency_stage",
           empty: "No revocation has gone through yet: the steps appear once the MA decides one.",
@@ -683,7 +718,7 @@ function misbehaviourSection(m: MetricReader, s: BackendSnapshot | null, first: 
     ratioTile("precision", "Revocations that were right (precision)", precVehicle, "Share of revoked vehicles that really were attackers.", null, "det_precision", "Metric det_precision, level = vehicle, pooled over the run by the engine."),
     metricTile(m, "time_to_detect", {
       title: "Attack to first report at the MA",
-      meaning: "Mean time from when an attacker started to the first correct report about it reaching the MA.",
+      meaning: "Mean time from an attack starting to the first correct report reaching the MA.",
     }),
     uuMs !== null || relayMs !== null
       ? {
@@ -716,7 +751,7 @@ function costSection(m: MetricReader): ScmsSection {
   const tiles = present([
     metricTile(m, "security_overhead", {
       title: "Security's share of the bytes on air",
-      meaning: "Header, certificate or digest, and signature, as a share of every frame's bytes.",
+      meaning: "Header, certificate or digest, and signature, as a share of each frame.",
     }) ??
       metricTile(m, "envelope_overhead", {
         title: "Security bytes per payload byte",
@@ -730,7 +765,7 @@ function costSection(m: MetricReader): ScmsSection {
       id: "verify-wait",
       title: "Wait before verification (p95)",
       series: "verify_wait.p95",
-      meaning: "95 % of received messages waited less than this for the verifier; the whole safety budget is 100 ms.",
+      meaning: "95 % of messages waited less than this for the verifier (safety budget: 100 ms end to end).",
     }),
     metricTile(m, "verify_queue_depth", {
       title: "Messages queued for verification",
@@ -775,7 +810,7 @@ function costSection(m: MetricReader): ScmsSection {
   const wait = m.latest("verify_wait.p95");
   const parts: string[] = [];
   if (over !== null) parts.push(`security takes ${words(over, "ratio")} of the bytes on air`);
-  if (wait !== null) parts.push(`95 % of messages wait under ${words(wait, "ms")} to be verified`);
+  if (wait !== null) parts.push(wait < 0.05 ? "messages barely wait to be verified" : `95 % of messages wait under ${words(wait, "ms")} to be verified`);
   if (rows.length > 0) parts.push(`${words(rows.reduce((a, r) => a + (r.value as number), 0), "ratio")} of receptions are rejected by a security check`);
   const answer = parts.length > 0 ? `${parts[0]![0]!.toUpperCase()}${parts.join("; ").slice(1)}.` : "The run has not measured security's cost yet.";
   return { id: "cost", question: "What does security cost the radio and the CPU?", answer, level, tiles, ...(bars ? { bars } : {}) };
@@ -881,7 +916,7 @@ export function hasCredentials(s: BackendSnapshot | null, m: MetricReader): bool
 export const CREDENTIAL_METRICS: readonly string[] = ["cert_pool_valid", "crl_entries", "time_to_decision", "det_recall"];
 
 export function scmsOverview(s: BackendSnapshot | null, m: MetricReader, opts: { readonly tNs: number; readonly scenario: unknown }): ScmsOverview {
-  const first = firstProvider(opts.scenario);
+  const first = firstProvider(opts.scenario, s);
   const providers = s === null ? [] : [...new Set(s.entities.filter((e) => roleOf(e.id) === "ee" || roleOf(e.id) === "ma").map((e) => providerOf(e, first)))];
   const system = s?.system === "ccms" ? "EU CCMS (ETSI TS 102 941)" : s?.system === "scms" || s === null ? "US SCMS (CAMP design, IEEE 1609.2.1)" : s.system.toUpperCase();
   const facts = [

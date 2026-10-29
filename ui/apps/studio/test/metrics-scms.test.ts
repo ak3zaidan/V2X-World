@@ -11,7 +11,7 @@ import { snapshotOf } from "../src/lib/backend.js";
 import type { HealthBand } from "../src/metrics/health.js";
 import { familiesOf, type GroupRow, type SeriesDef } from "../src/metrics/model.js";
 import { briefSentences } from "../src/metrics/summaryModel.js";
-import { countOf, cueText, duration, hasCredentials, providerOf, roleOf, scmsOverview, shown, stageLabel, type MetricReader } from "../src/metrics/scmsModel.js";
+import { countOf, cueText, duration, firstProvider, hasCredentials, providerOf, roleOf, scmsOverview, shown, stageLabel, stageRank, type MetricReader } from "../src/metrics/scmsModel.js";
 
 const snap = snapshotOf(JSON.parse(readFileSync(new URL("./fixtures/metrics/scms-backend.json", import.meta.url), "utf8")))!;
 
@@ -91,9 +91,23 @@ describe("numbers as a reader wants them", () => {
     expect(t).toContain("Whyte");
   });
 
-  it("words a revocation stage in plain English", () => {
+  it("words a revocation stage in plain English, and orders the steps as a revocation runs", () => {
     expect(stageLabel("decision->issued")).toBe("MA decides → on a signed CRL");
     expect(stageLabel("weird_one->other")).toBe("weird one → other");
+    const keys = ["issued->published", "detect->report_sent", "report_received->decision", "odd->thing", "published->downloaded"];
+    expect([...keys].sort((a, b) => stageRank(a) - stageRank(b))).toEqual([
+      "detect->report_sent",
+      "report_received->decision",
+      "issued->published",
+      "published->downloaded",
+      "odd->thing",
+    ]);
+  });
+
+  it("names the home provider from the scenario, else beside its sibling", () => {
+    expect(firstProvider({ security: { scms: { deployment: { providers: [{ name: "acme" }] } } } }, snap)).toBe("acme");
+    expect(firstProvider(null, snap)).toBe("provider-a");
+    expect(firstProvider(null, null)).toBe("home provider");
   });
 });
 
