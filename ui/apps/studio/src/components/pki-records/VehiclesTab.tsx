@@ -270,7 +270,7 @@ export function VehiclesTab({ view }: { readonly view: string | null }): React.J
                   {ctl.same ? null : <td className="mono">{r.ctl_sequence ?? "–"}</td>}
                   {crl.same ? null : (
                     <td title={crlTitle(r, heads)} data-testid="pki-vehicle-crl">
-                      {installedListText(lst)}
+                      {lst ? `${lst.entries} entr${lst.entries === 1 ? "y" : "ies"}` : "none"}
                     </td>
                   )}
                   <td className="mono">{r.pseudonym_changes + (r.active ? 1 : 0)}</td>
@@ -492,7 +492,7 @@ function AtAGlance({
           </b>
         )}
         <span className="sub" data-testid="pki-glance-own-list" title="As a receiver: the list it checks other vehicles' messages against">
-          {own ? `holds list ${installedListText(own)}` : "no list installed yet"}
+          {own ? `its list: ${own.entries} entr${own.entries === 1 ? "y" : "ies"} (${installedListText(own)})` : "no list installed yet"}
         </span>
       </div>
     </div>
