@@ -107,3 +107,16 @@ input.num::placeholder { color: var(--text-faint); }
 .json-collapsed summary { cursor: pointer; font-size: 12px; }
 .json-collapsed[open] summary { margin-bottom: 4px; }
 .settings-window .setting-move.top { margin: 0 0 10px; justify-content: space-between; border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* A list of plain values, a position and a backhaul's numbers. */
+.scalar-list, .position-boxes, .backhaul-params { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.scalar-list input { width: 100%; }
+.position-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.position-axis { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.position-axis input { width: 96px; }
+.backhaul-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 10px; }
+.backhaul-cell { display: flex; flex-direction: column; gap: 2px; font-size: 12px; min-width: 0; }
+.backhaul-cell input { width: 100%; }
+.list-cell .multi-check { padding-top: 2px; }
+.keyed-params, .keyed-rest { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.backhaul-cell.wide { grid-column: 1 / -1; }

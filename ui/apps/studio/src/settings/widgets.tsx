@@ -10,10 +10,13 @@
 
 import { useContext, useEffect, useState } from "react";
 
-import type { Choice, ItemField, NumberPreset } from "../lib/schema.js";
+import type { Choice, ItemField, NumberPreset, ScalarKind } from "../lib/schema.js";
 import { getPointer, joinComposed, presetIn, providersIn, setPointer, splitComposed } from "../lib/schema.js";
 import { SettingsDocContext } from "./docContext.js";
 import { durationWords } from "../lib/duration.js";
+import { engine } from "../state/engine.js";
+import { useStudio } from "../state/store.js";
+import { PARAM_SPECS, type ParamSpec } from "./paramSpecs.js";
 
 import "../styles/settings-widgets.css";
 
@@ -111,7 +114,7 @@ export function ChoiceSelect({
         }}
       >
         {unset || nullable || unsetLabel ? (
-          <option value={UNSET}>{unsetLabel ?? (fallback ? `${fallback.label} (default)` : nullable ? "Default" : "— choose —")}</option>
+          <option value={UNSET}>{unsetLabel ?? (fallback ? `${fallback.label} (default)` : "Default")}</option>
         ) : null}
         {!known && !unset ? <option value={String(value)}>{String(value)} (not in the list)</option> : null}
         {choices.map((c) => (
@@ -441,13 +444,33 @@ function ItemControl({
   field,
   value,
   onChange,
+  item,
+  listPointer,
 }: {
   id: string;
   field: ItemField;
   value: unknown;
   onChange: (v: unknown) => void;
+  /** The whole element, for a field whose control depends on a sibling (backhaul params on its backhaul). */
+  item?: unknown;
+  /** The list's own pointer, which names a parameter block's keys (`paramSpecs.ts`). */
+  listPointer?: string;
 }): React.JSX.Element {
   const common = { id, "aria-describedby": `${id}-desc` } as const;
+  const spec = listPointer ? PARAM_SPECS[`${listPointer}/-${field.key}`] : undefined;
+  if (spec) {
+    const model = listPointer === "/radio/adjacent_channel" ? "adjacent" : getPointer(item, "/id");
+    return <KeyedParams id={id} spec={spec} model={typeof model === "string" ? model : undefined} value={value} onChange={onChange} />;
+  }
+  if (field.kind === "multi" && field.choices) {
+    return <MultiCheck common={common} choices={field.choices} value={value} onChange={(v) => onChange(Array.isArray(v) && v.length === 0 ? undefined : v)} />;
+  }
+  if (field.kind === "scalars") {
+    return <ScalarList id={id} name={field.key} elemKind={field.elemKind ?? "string"} unit={field.unit} value={value} onChange={onChange} />;
+  }
+  if (field.key === "/backhaul_params") {
+    return <BackhaulParams id={id} medium={backhaulOf(getPointer(item, "/backhaul"))} value={value} onChange={onChange} />;
+  }
   if (field.compose && field.choices) {
     return <ProviderRolePicker id={id} field={field} compose={field.compose} value={value} onChange={onChange} />;
   }
@@ -658,7 +681,10 @@ export function ListEditor({
   value,
   onChange,
   noun,
+  pointer,
 }: {
+  /** The list's pointer, for the parameter blocks whose keys the window knows. */
+  pointer?: string;
   idBase: string;
   fields: readonly ItemField[];
   template: unknown;
@@ -667,8 +693,10 @@ export function ListEditor({
   noun: string;
 }): React.JSX.Element {
   const list = Array.isArray(value) ? (value as unknown[]) : [];
-  // The choice first (it is what the element *is*), then the rest in the engine's order.
-  const ordered = [...fields.filter((f) => f.choices), ...fields.filter((f) => !f.choices)];
+  // The choice first (it is what the element *is*), then the rest in the engine's order; a set of
+  // checkboxes (a unit's roles) last, where it has the room.
+  const menu = (f: ItemField): boolean => f.choices !== undefined && f.kind !== "multi";
+  const ordered = [...fields.filter(menu), ...fields.filter((f) => !menu(f) && f.kind !== "multi"), ...fields.filter((f) => f.kind === "multi")];
   const setItem = (i: number, key: string, v: unknown): void => {
     const next = list.slice();
     next[i] = prune(setPointer(next[i] ?? {}, key, v));
@@ -701,14 +729,25 @@ export function ListEditor({
           <div className="list-item-grid">
             {ordered.map((f) => {
               const id = `${idBase}-${i}-${f.key.replace(/\W/g, "_")}`;
+              // A control of several boxes is not one label's: its cell is a plain block.
+              const group =
+                f.kind === "multi" || f.kind === "scalars" || f.key === "/backhaul_params" || (pointer !== undefined && PARAM_SPECS[`${pointer}/-${f.key}`] !== undefined);
+              const Cell = group ? "div" : "label";
               return (
-                <label key={f.key} className={f.choices || f.kind === "map" ? "list-cell wide" : "list-cell"} htmlFor={id} title={f.help}>
+                <Cell
+                  key={f.key}
+                  className={f.choices || f.kind === "map" || group ? "list-cell wide" : "list-cell"}
+                  {...(group ? {} : { htmlFor: id })}
+                  title={f.help}
+                  data-testid="list-cell"
+                  data-key={f.key}
+                >
                   <span className="list-cell-label">
                     {f.label}
-                    {f.unit ? <span className="unit"> [{f.unit}]</span> : null}
+                    {f.unit && !group ? <span className="unit"> [{f.unit}]</span> : null}
                   </span>
-                  <ItemControl id={id} field={f} value={getPointer(item, f.key)} onChange={(v) => setItem(i, f.key, v)} />
-                </label>
+                  <ItemControl id={id} field={f} value={getPointer(item, f.key)} item={item} listPointer={pointer} onChange={(v) => setItem(i, f.key, v)} />
+                </Cell>
               );
             })}
             <OtherKeys idBase={`${idBase}-${i}`} item={item} fields={ordered} onChange={(next) => {
@@ -728,5 +767,300 @@ export function ListEditor({
         Add {noun.toLowerCase()}
       </button>
     </div>
+  );
+}
+
+/** The value a list holds, as a list. */
+function asList(value: unknown): unknown[] {
+  return Array.isArray(value) ? (value as unknown[]) : [];
+}
+
+/**
+ * A list of plain values. A position (`position_m`) is three labelled boxes, east, north and up,
+ * with "Pick on map" when the window has a map; any other list is one text box of comma-separated
+ * values ("a.rou.xml, b.rou.xml" or "0, 2"), each checked as it is typed.
+ */
+export function ScalarList({
+  id,
+  name,
+  elemKind,
+  unit,
+  value,
+  onChange,
+}: {
+  id: string;
+  /** The key or pointer of the list: a position is recognised by its name. */
+  name: string;
+  elemKind: ScalarKind;
+  unit?: string;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}): React.JSX.Element {
+  if (elemKind !== "string" && /position(_m)?$/.test(name)) return <PositionBoxes id={id} unit={unit} value={value} onChange={onChange} />;
+  return <CommaList id={id} elemKind={elemKind} unit={unit} value={value} onChange={onChange} />;
+}
+
+function CommaList({
+  id,
+  elemKind,
+  unit,
+  value,
+  onChange,
+}: {
+  id: string;
+  elemKind: ScalarKind;
+  unit?: string;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}): React.JSX.Element {
+  const serialised = asList(value).map(String).join(", ");
+  const [text, setText] = useState(serialised);
+  const [bad, setBad] = useState<string | null>(null);
+  useEffect(() => {
+    setText(serialised);
+    setBad(null);
+  }, [serialised]);
+  const numeric = elemKind !== "string";
+  return (
+    <span className="scalar-list" data-testid="scalar-list">
+      <span className="num-box">
+        <input
+          id={id}
+          type="text"
+          className={bad ? "bad" : undefined}
+          value={text}
+          placeholder={numeric ? "e.g. 0, 2" : "comma-separated"}
+          spellCheck={false}
+          onChange={(e) => {
+            setText(e.target.value);
+            const parts = e.target.value.split(",").map((t) => t.trim()).filter((t) => t !== "");
+            if (parts.length === 0) {
+              setBad(null);
+              onChange(undefined);
+              return;
+            }
+            if (!numeric) {
+              setBad(null);
+              onChange(parts);
+              return;
+            }
+            const nums = parts.map(Number);
+            const wrong = parts.find((_t, k) => !Number.isFinite(nums[k]) || (elemKind === "integer" && !Number.isInteger(nums[k])));
+            if (wrong !== undefined) {
+              setBad(`"${wrong}" is not ${elemKind === "integer" ? "a whole number" : "a number"}.`);
+              return;
+            }
+            setBad(null);
+            onChange(nums);
+          }}
+        />
+        {unit ? <span className="unit">{unit}</span> : null}
+      </span>
+      <span className={bad ? "help err-text" : "faint"}>{bad ?? "Separate values with commas."}</span>
+    </span>
+  );
+}
+
+const AXES = ["east", "north", "up"] as const;
+
+function PositionBoxes({ id, unit, value, onChange }: { id: string; unit?: string; value: unknown; onChange: (v: unknown) => void }): React.JSX.Element {
+  const xyz = asList(value);
+  const at = (k: number): number | "" => (typeof xyz[k] === "number" ? (xyz[k] as number) : "");
+  const [note, setNote] = useState<string | null>(null);
+  const write = (k: number, raw: string): void => {
+    const next = [0, 1, 2].map((j) => (typeof xyz[j] === "number" ? (xyz[j] as number) : 0));
+    next[k] = raw === "" ? 0 : Number(raw);
+    onChange(next);
+  };
+  // The studio's map answers one "pick a point" request; a detached settings window has no map.
+  const canPick = engine.viewer !== null && engine.viewer !== undefined;
+  return (
+    <span className="position-boxes" data-testid="position-boxes">
+      <span className="position-row">
+        {AXES.map((axis, k) => (
+          <label key={axis} className="position-axis">
+            <span className="faint">{axis}</span>
+            <input id={k === 0 ? id : `${id}-${axis}`} type="number" step="any" value={at(k)} placeholder="0" onChange={(e) => write(k, e.target.value)} />
+          </label>
+        ))}
+        {unit ? <span className="unit">{unit}</span> : null}
+        {canPick ? (
+          <button
+            type="button"
+            className="btn small"
+            data-testid="position-pick"
+            onClick={() => {
+              setNote("Click the map where the unit stands.");
+              useStudio.getState().setMapPick({
+                purpose: "position",
+                resolve: ({ x, y }) => {
+                  const z = typeof xyz[2] === "number" ? (xyz[2] as number) : 0;
+                  onChange([Math.round(x * 10) / 10, Math.round(y * 10) / 10, z]);
+                  setNote(null);
+                },
+              });
+            }}
+          >
+            Pick on map
+          </button>
+        ) : null}
+      </span>
+      <span className="faint">{note ?? "Metres east, north and up from the map's origin."}</span>
+    </span>
+  );
+}
+
+/**
+ * The numbers a backhaul medium reads (`v2xw-engine` `backend.rs` `backhaul_from`): each one a box
+ * with its unit, left empty for the medium's own value. Keys the medium does not read are kept and
+ * listed, never dropped. Which keys each medium reads is the engine's; change them there, then here.
+ */
+const BACKHAUL_KEYS: Readonly<Record<string, readonly { key: string; label: string; unit: string }[]>> = (() => {
+  const rate = { key: "rate_mbps", label: "Up", unit: "Mbit/s" };
+  const cap = { key: "capacity_mbps", label: "Up", unit: "Mbit/s" };
+  const down = { key: "down_mbps", label: "Down", unit: "Mbit/s" };
+  const lat = { key: "latency_ms", label: "Latency", unit: "ms" };
+  const loss = { key: "loss", label: "Packet loss", unit: "0 to 0.5" };
+  const wired = [rate, down, lat, { key: "distance_km", label: "Distance", unit: "km" }, { key: "hops", label: "Router hops", unit: "" }, loss];
+  return {
+    "backhaul/fixed": [cap, down, lat, loss],
+    "backhaul/fibre": wired,
+    "backhaul/dsl": wired,
+    "backhaul/microwave": wired,
+    "backhaul/cellular": [cap, lat, loss],
+    "backhaul/none": [],
+  };
+})();
+
+/** A backhaul id, or the engine's own default (`backhaul/fixed`) when none is set. */
+export function backhaulOf(v: unknown): string {
+  return typeof v === "string" && v !== "" ? v : "backhaul/fixed";
+}
+
+export function BackhaulParams({ id, medium, value, onChange }: { id: string; medium: string; value: unknown; onChange: (v: unknown) => void }): React.JSX.Element {
+  const obj = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const keys = BACKHAUL_KEYS[medium];
+  if (keys === undefined) return <ItemJson id={id} value={value} onChange={onChange} />;
+  const write = (k: string, raw: string): void => {
+    const next: Record<string, unknown> = { ...obj };
+    if (raw === "") delete next[k];
+    else next[k] = Number(raw);
+    onChange(Object.keys(next).length === 0 ? undefined : next);
+  };
+  const unread = Object.keys(obj).filter((k) => !keys.some((x) => x.key === k));
+  if (keys.length === 0 && unread.length === 0) return <span className="faint">No link: nothing to set.</span>;
+  return (
+    <span className="backhaul-params" data-testid="backhaul-params" data-medium={medium}>
+      <span className="backhaul-grid">
+        {keys.map((k, n) => (
+          <label key={k.key} className="backhaul-cell">
+            <span className="faint">
+              {k.label}
+              {k.unit ? ` (${k.unit})` : ""}
+            </span>
+            <input
+              id={n === 0 ? id : `${id}-${k.key}`}
+              type="number"
+              step="any"
+              min={0}
+              value={typeof obj[k.key] === "number" ? (obj[k.key] as number) : ""}
+              placeholder="medium's own"
+              data-key={k.key}
+              onChange={(e) => write(k.key, e.target.value)}
+            />
+          </label>
+        ))}
+      </span>
+      {unread.length > 0 ? (
+        <span className="help err-text">
+          Not read by this backhaul: {unread.join(", ")}.{" "}
+          <button type="button" className="linkbutton" onClick={() => onChange(Object.fromEntries(Object.entries(obj).filter(([k]) => !unread.includes(k))))}>
+            Remove
+          </button>
+        </span>
+      ) : (
+        <span className="faint">Leave a box empty for the medium's own value.</span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A parameter block the engine checks key by key (`paramSpecs.ts`), one box per key, with the
+ * model's own value when a box is left empty. Keys the table does not cover stay in a small JSON
+ * box, so nothing the block holds is hidden or lost.
+ */
+export function KeyedParams({
+  id,
+  spec,
+  model,
+  value,
+  onChange,
+}: {
+  id: string;
+  spec: readonly ParamSpec[];
+  model?: string;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}): React.JSX.Element {
+  const obj = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const shown = spec.filter((p) => !p.onlyFor || (model !== undefined && p.onlyFor.includes(model)) || obj[p.key] !== undefined);
+  const known = new Set(spec.map((p) => p.key));
+  const rest = Object.fromEntries(Object.entries(obj).filter(([k]) => !known.has(k)));
+  const write = (k: string, v: unknown): void => {
+    const next: Record<string, unknown> = { ...obj };
+    if (v === undefined) delete next[k];
+    else next[k] = v;
+    onChange(Object.keys(next).length === 0 ? undefined : next);
+  };
+  return (
+    <span className="keyed-params" data-testid="keyed-params">
+      <span className="backhaul-grid">
+        {shown.map((p, n) => {
+          const pid = n === 0 ? id : `${id}-${p.key}`;
+          if (p.kind === "position") {
+            return (
+              <span key={p.key} className="backhaul-cell wide">
+                <span className="faint">{p.label}</span>
+                <PositionBoxes id={pid} unit={p.unit} value={obj[p.key]} onChange={(v) => write(p.key, v)} />
+              </span>
+            );
+          }
+          if (p.kind === "choice") {
+            return (
+              <span key={p.key} className="backhaul-cell wide">
+                <span className="faint">{p.label}</span>
+                <ChoiceSelect common={{ id: pid, "aria-describedby": pid }} choices={p.choices ?? []} open={false} nullable value={obj[p.key]} onChange={(v) => write(p.key, v)} compact />
+              </span>
+            );
+          }
+          return (
+            <label key={p.key} className="backhaul-cell">
+              <span className="faint">
+                {p.label}
+                {p.unit ? ` (${p.unit})` : ""}
+              </span>
+              <input
+                id={pid}
+                type="number"
+                step={p.kind === "integer" ? 1 : "any"}
+                min={p.min}
+                max={p.max}
+                data-key={p.key}
+                placeholder="model's own"
+                value={typeof obj[p.key] === "number" ? (obj[p.key] as number) : ""}
+                onChange={(e) => write(p.key, e.target.value === "" ? undefined : Number(e.target.value))}
+              />
+            </label>
+          );
+        })}
+      </span>
+      {Object.keys(rest).length > 0 ? (
+        <span className="keyed-rest">
+          <span className="faint">Other keys</span>
+          <ItemJson id={`${id}-rest`} value={rest} onChange={(v) => onChange({ ...Object.fromEntries(Object.entries(obj).filter(([k]) => known.has(k))), ...(v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {}) })} />
+        </span>
+      ) : null}
+    </span>
   );
 }

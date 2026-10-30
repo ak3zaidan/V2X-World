@@ -9,7 +9,7 @@
  * choices, ranges and whether the engine acts on them stay the engine's.
  */
 
-import type { RelevantWhen } from "../lib/schema.js";
+import type { Choice, RelevantWhen } from "../lib/schema.js";
 
 export interface Overlay {
   readonly label?: string;
@@ -29,14 +29,90 @@ export interface Overlay {
   readonly noun?: string;
   /** Extra words a search finds the setting by. */
   readonly keywords?: string;
+  /** The values of a setting the engine documents only in words, as a menu (each quoted from its description). */
+  readonly choices?: readonly Choice[];
 }
+
+const MODEL = "Which model is used; the i button describes each one.";
 
 const strategy = "security.pseudonym_change.strategy";
 const latency = "security.scms.deployment.latency";
 const policy = "security.verification_policy";
 const committee = { path: "security.threshold", in: [], notIn: [null] };
 
+/** Plain names for a perception sensor's fields, on the vehicle's, each class's and the units' lists. */
+const SENSOR_WORDS: Readonly<Record<string, Overlay>> = {
+  id: { label: "Sensor id" },
+  kind: { label: "Sensor" },
+  range_m: { label: "Range" },
+  fov_deg: { label: "Field of view" },
+  azimuth_deg: { label: "Facing (azimuth)" },
+  mount: { label: "Mount" },
+  ahead_m: { label: "Mounted ahead of centre" },
+  left_m: { label: "Mounted left of centre" },
+  height_m: { label: "Mount height" },
+  pd_near: { label: "Detection chance, near" },
+  pd_far: { label: "Detection chance, far" },
+  sigma_base_m: { label: "Position error" },
+  sigma_range_fraction: { label: "Error growth with range" },
+};
+const SENSOR_OVERLAY: Record<string, Overlay> = Object.fromEntries(
+  ["/perception/vehicle", "/perception/rsu"].flatMap((list) => Object.entries(SENSOR_WORDS).map(([k, o]) => [`${list}/-/${k}`, o])),
+);
+
 export const SCMS_OVERLAY: Readonly<Record<string, Overlay>> = {
+  ...SENSOR_OVERLAY,
+  // Roadside units, traffic and the network models (not SCMS, but the same kind of words).
+  "/actors/rsus": { label: "Roadside units placed by hand", noun: "Roadside unit" },
+  "/actors/rsus/-/site": {
+    label: "Site id (instead of a position)",
+    help: "A site from the world's site table (procedural maps make one per junction). Give a site or a position, not both.",
+  },
+  "/actors/rsus/-/position_m": { help: "Where it stands; up is the ground height (the mast is added). Give a position or a site, not both." },
+  "/actors/rsus/-/backhaul_params": { label: "Backhaul numbers" },
+  "/actors/rsus/-/roles": { label: "What it does", help: "None ticked: it relays reports, broadcasts the revocation list and delivers top-ups." },
+  "/actors/rsu_placement/roles": {
+    label: "What each unit does",
+    help: "None ticked: each relays reports, broadcasts the revocation list and delivers top-ups.",
+  },
+  "/actors/rsu_placement/backhaul": { label: "Backhaul", help: "How each automatically placed unit reaches the backend." },
+  "/actors/rsu_placement/backhaul_params": { label: "Backhaul numbers", help: "This placement's own backhaul figures, over the medium's." },
+  "/net/backhaul/id": { label: "Model", help: "How roadside units reach the backend, unless a unit sets its own." },
+  "/net/backhaul/params": { label: "Numbers", help: "Figures over the backhaul model's own." },
+  "/net/uu/id": { label: "Model", help: "How vehicles' cellular modems reach the backend." },
+  "/net/backend_net/id": { label: "Model", help: "The network between the backend servers." },
+  "/threats/compromised_rsu_attack/id": { label: "Model", help: MODEL },
+  "/threats/eavesdropper/id": { label: "Model", help: MODEL },
+  "/threats/jammers/-/params": { label: "Where and when" },
+  "/radio/adjacent_channel/-/params": { label: "Where and when" },
+  "/threats/compromised_rsu_attack/params": { label: "Attack settings", help: "What a compromised unit does, how often and when." },
+  "/threats/compromised_rsus": { label: "Compromised roadside units", unit: "", help: "Units under an attacker's control, by their number in the hand-placed list (0 is the first)." },
+  "/mobility/provider": {
+    label: "Traffic engine",
+    help: "Which program moves the vehicles.",
+    defaultValue: "native",
+    choices: [
+      { value: "native", label: "Built in", description: "The simulator's own traffic model.", available: true },
+      { value: "sumo", label: "SUMO", description: "Eclipse SUMO drives the vehicles (needs SUMO installed).", available: true },
+    ],
+  },
+  "/traffic/reroute_source": {
+    defaultValue: "navigation",
+    choices: [
+      {
+        value: "navigation",
+        label: "Navigation app",
+        description: "Network-wide, on speeds smoothed over three minutes, and every closure.",
+        available: true,
+      },
+      {
+        value: "v2x",
+        label: "V2X warnings only",
+        description: "Only a DENM or TIM their own unit received and verified: local and belief-only.",
+        available: true,
+      },
+    ],
+  },
   // Deployment.
   "/security/protocol/id": { label: "Credential system", help: "Who issues vehicles' certificates: the US SCMS or the European CCMS." },
   "/actors/backend/protocol": { label: "Backend credential system", help: "The credential system the backend servers run; keep it the same as above." },

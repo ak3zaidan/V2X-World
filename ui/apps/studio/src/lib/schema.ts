@@ -113,11 +113,31 @@ export interface NumberPreset {
 }
 
 /** One field of a list element, for a list edited row by row (attackers, detectors, jammers). */
+/** What one element of a list of plain values is. */
+export type ScalarKind = "number" | "integer" | "string";
+
+/** The element kind of a row, when it is a plain number or string. */
+export function scalarKindOf(kind: string): ScalarKind | undefined {
+  return kind === "number" || kind === "integer" || kind === "string" ? kind : undefined;
+}
+
+/** A list's title without the `[]` the engine marks it with, and without a unit it repeats: "Position m[]" → "Position". */
+export function listLabel(title: string, unit: string | undefined): string {
+  const t = title.replace(/\[\]$/, "").trim();
+  return unit && t.endsWith(` ${unit}`) ? t.slice(0, -unit.length - 1) : t;
+}
+
 export interface ItemField {
   /** The pointer inside the element: `/id`, `/fraction`, `/schedule/from_s`. */
   readonly key: string;
   readonly label: string;
-  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "map";
+  /**
+   * `multi` is a list of values from a set (roles), edited as checkboxes; `scalars` a list of plain
+   * numbers or strings (a position, a list of names), edited as boxes.
+   */
+  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "map" | "multi" | "scalars";
+  /** For `scalars`: what one element is. */
+  readonly elemKind?: ScalarKind;
   readonly unit?: string;
   readonly help?: string;
   readonly min?: number;
@@ -148,7 +168,9 @@ export interface FormField {
    * `multi` is a list of strings from a closed set (message sets, applications), edited as
    * checkboxes; `list` is a list of objects edited element by element.
    */
-  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "multi" | "list" | "map" | "pair";
+  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "multi" | "list" | "map" | "pair" | "scalars";
+  /** For `scalars` (a list of plain numbers or strings): what one element is. */
+  readonly elemKind?: ScalarKind;
   readonly unit?: string;
   readonly help?: string;
   readonly options?: readonly string[];
@@ -631,6 +653,17 @@ export function fieldsFromPublished(
         // A map inside a list element (`providers[].components`): one level, leaf or struct values.
         const mapRel = rel.slice(0, deeper);
         const inner = rel.slice(deeper + 2);
+        // A list of plain values inside an element (a unit's `position_m`, its `roles`): checkboxes
+        // when the engine lists the values, boxes otherwise. It used to fall into "Other fields" JSON.
+        const elem = scalarKindOf(kindOfRow(row)) ?? (kindOfRow(row) === "enum" ? "string" : undefined);
+        if (rel.charAt(deeper + 1) === "-" && inner === "" && !mapRel.includes("/-") && elem !== undefined) {
+          const base = itemFieldOf(row, mapRel);
+          const label = listLabel(base.label, base.unit);
+          const list = items.get(root) ?? [];
+          list.push(base.choices ? { ...base, label, kind: "multi" } : { ...base, label, kind: "scalars", elemKind: elem });
+          items.set(root, list);
+          continue;
+        }
         if (rel.charAt(deeper + 1) === "*" && !/\/[-*](\/|$)/.test(inner)) {
           const byMap = nested.get(root) ?? new Map<string, ItemField[]>();
           const list = byMap.get(mapRel) ?? [];
@@ -699,6 +732,20 @@ export function fieldsFromPublished(
         ...(el && typeof el.minimum === "number" ? { min: el.minimum } : {}),
         ...(el && typeof el.maximum === "number" ? { max: el.maximum } : {}),
         ...(el && typeof el.unit === "string" && el.unit !== "" ? { unit: el.unit } : {}),
+      };
+      continue;
+    }
+    // A list of plain numbers or names (`mobility.route_files`, `threats.compromised_rsus`): one box
+    // per element rather than a JSON array.
+    const elRow = fields.find((r) => r["x-pointer"] === `${f.pointer}/-`);
+    const elKind = elRow ? scalarKindOf(kindOfRow(elRow)) : undefined;
+    if (elRow && elKind && !choicesOf(elRow) && !items.has(f.pointer)) {
+      out[i] = {
+        ...f,
+        kind: "scalars",
+        elemKind: elKind,
+        label: listLabel(f.label, f.unit),
+        ...(typeof elRow.unit === "string" && elRow.unit !== "" && f.unit === undefined ? { unit: elRow.unit } : {}),
       };
       continue;
     }

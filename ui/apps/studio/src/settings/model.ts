@@ -39,14 +39,20 @@ export function settingsFields(
   schema: unknown,
   doc: unknown,
 ): { readonly fields: readonly Field[]; readonly source: FieldSource } {
-  if (published.length > 0) return { fields: fieldsFromPublished(published, schema, doc).map(withOverlay), source: "published" };
+  if (published.length > 0) return { fields: withSharedChoices(fieldsFromPublished(published, schema, doc).map(withOverlay)), source: "published" };
   const generated = schema ? fieldsFromJsonSchema(schema) : [];
   if (generated.length > 0) return { fields: generated, source: "schema" };
   return { fields: PHASE1_FIELDS, source: "builtin" };
 }
 
 /** A field with the window's own words, default and relevance for it (`scmsOverlay.ts`). */
-export function withOverlay(f: Field): Field {
+export function withOverlay(given: Field): Field {
+  // A list element's fields take their words from the overlay too (`/actors/rsus/-/site`).
+  const items = given.itemFields?.map((i) => {
+    const io = overlayOf(`${given.pointer}/-${i.key}`);
+    return io ? { ...i, ...(io.label ? { label: io.label } : {}), ...(io.help ? { help: io.help } : {}) } : i;
+  });
+  const f: Field = items ? { ...given, itemFields: items } : given;
   const o = overlayOf(f.pointer);
   if (!o) return f;
   const engineDefault = f.hasDefault === true;
@@ -64,7 +70,33 @@ export function withOverlay(f: Field): Field {
     ...(o.emptyText ? { emptyText: o.emptyText } : {}),
     ...(o.noun ? { noun: o.noun } : {}),
     ...(o.keywords ? { help: `${f.help ?? ""} ${o.keywords}`.trim() } : {}),
+    // A value set the engine states only in words ("`navigation` or `v2x`") as a menu.
+    ...(o.choices && !f.choices && (f.kind === "json" || f.kind === "string")
+      ? { kind: "enum" as const, choices: o.choices, choicesOpen: false, options: o.choices.map((c) => String(c.value)), nullable: true }
+      : {}),
   };
+}
+
+/**
+ * Menus the engine publishes on one setting and not on its twin: automatic placement's backhaul and
+ * roles take the same values as a hand-placed unit's, so they get the same menus.
+ */
+const SAME_CHOICES: readonly { readonly to: string; readonly from: string; readonly item?: string }[] = [
+  { to: "/actors/rsu_placement/backhaul", from: "/net/backhaul/id" },
+  { to: "/actors/rsu_placement/roles", from: "/actors/rsus", item: "/roles" },
+];
+
+export function withSharedChoices(fields: readonly Field[]): Field[] {
+  return fields.map((f) => {
+    const rule = SAME_CHOICES.find((r) => r.to === f.pointer);
+    if (!rule || f.choices) return f;
+    const src = fields.find((x) => x.pointer === rule.from);
+    const choices = rule.item ? src?.itemFields?.find((i) => i.key === rule.item)?.choices : src?.choices;
+    if (!choices) return f;
+    if (f.kind === "string") return { ...f, kind: "enum", choices, choicesOpen: false, options: choices.map((c) => String(c.value)), nullable: true };
+    if (f.kind === "scalars" || f.kind === "json" || f.kind === "list") return { ...f, kind: "multi", choices, choicesOpen: false };
+    return f;
+  });
 }
 
 /** The dotted path a scenario file spells the field with. */
@@ -184,6 +216,10 @@ const SECTION_LABELS: Record<string, string> = {
   vru: "Pedestrians and cyclists",
   traffic: "Signals, rerouting and gridlock",
   rsus: "Roadside units",
+  rsu_placement: "Roadside units placed automatically",
+  uu: "Cellular",
+  backend_net: "Backend network",
+  perception: "Collective perception sensors",
   backend: "Backend (SCMS)",
   meta: "Description",
   seed: "Seed",
@@ -252,9 +288,10 @@ export function breadcrumbOf(f: Field, sectionKey: string): string {
   const parts = fieldPath(f).split(".");
   const at = parts.indexOf(sectionKey);
   const middle = at >= 0 ? parts.slice(at + 1, -1) : [];
+  // `traffic` is the signals section's key, but in `scale.traffic.*` it means the traffic itself.
   return middle
     .filter((p) => p !== "*" && p !== "-")
-    .map(humanise)
+    .map((p) => (p === "traffic" ? "Traffic" : humanise(p)))
     .join(" › ");
 }
 
@@ -447,13 +484,15 @@ export function researchSectionOf(f: Field): string | null {
     path.startsWith("detection.ma")
   )
     return "scms";
+  // Automatic roadside-unit placement sits with the units placed by hand, its backhaul included.
+  if (path.startsWith("actors.rsu_placement")) return "traffic";
   if (has("uu", "cellular", "backhaul", "tcp", "gnb", "enb") || path.startsWith("net.backend") || path.startsWith("actors.backend") || path.startsWith("nodes.backend"))
     return "backend";
   if (top === "meta" || top === "schema" || top === "seed" || top === "time" || top === "events" || top === "experiment") return "run";
   if (top === "actors" || top === "traffic" || top === "mobility" || top === "energy" || path.startsWith("scale.traffic")) return "traffic";
   if (top === "city" || top === "world" || top === "weather") return "world";
   if (top === "radio" || path.startsWith("scale.radio")) return "radio";
-  if (top === "messages" || top === "apps") return "messages";
+  if (top === "messages" || top === "apps" || top === "perception") return "messages";
   if (top === "net") return "net";
   if (top === "security" || top === "nodes" || top === "crypto_mode") return "security";
   if (top === "threats" || top === "detection") return "attackers";
@@ -617,6 +656,8 @@ export function controlKind(f: Field): string {
       return f.keyChoices ? "map" : "json";
     case "pair":
       return "pair";
+    case "scalars":
+      return "values";
     case "json":
       return "json";
     default:

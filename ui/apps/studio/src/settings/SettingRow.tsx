@@ -22,7 +22,17 @@ import { SettingsDocContext } from "./docContext.js";
 import { getPointer, type Choice, type ItemField } from "../lib/schema.js";
 import { PROVIDERS_POINTER } from "./scmsDeployment.js";
 import { PARAMS_POINTER } from "./legacyParams.js";
-import { ChoiceSelect, ListEditor, MapRows, MultiCheck, NumberWithPresets, RangePair } from "./widgets.js";
+import { PARAM_SPECS } from "./paramSpecs.js";
+import { BackhaulParams, ChoiceSelect, KeyedParams, ListEditor, MapRows, MultiCheck, NumberWithPresets, RangePair, ScalarList, backhaulOf } from "./widgets.js";
+
+/** The backhaul parameter blocks, each with the setting that names its medium. */
+const BACKHAUL_PARAMS: Readonly<Record<string, readonly string[]>> = {
+  "/net/backhaul/params": ["/net/backhaul/id"],
+  "/actors/rsu_placement/backhaul_params": ["/actors/rsu_placement/backhaul", "/net/backhaul/id"],
+};
+
+/** The class names the fleet mix offers; any other name may be typed (the engine takes any). */
+const VEHICLE_CLASSES = ["car", "van", "truck", "bus", "motorcycle", "moped"];
 
 /** What one element of a list is called, from the list's title: "Attackers" → "Attacker". */
 function nounOf(label: string): string {
@@ -79,6 +89,20 @@ function Widget({
       />
     );
   }
+  if (field.kind === "scalars") {
+    return <ScalarList id={id} name={field.pointer} elemKind={field.elemKind ?? "string"} unit={field.unit} value={value} onChange={onChange} />;
+  }
+  const backhaulFrom = BACKHAUL_PARAMS[field.pointer];
+  if (backhaulFrom) {
+    const medium = backhaulOf(backhaulFrom.map((p) => getPointer(doc, p)).find((v) => typeof v === "string" && v !== ""));
+    return <BackhaulParams id={id} medium={medium} value={value} onChange={onChange} />;
+  }
+  if (field.pointer === "/actors/vehicles/classes" && field.valueFields && field.valueFields.length > 0) {
+    const keyChoices: Choice[] = VEHICLE_CLASSES.map((k) => ({ value: k, label: k, available: true }));
+    return <MapRows idBase={id} keyChoices={keyChoices} keyOpen valueFields={field.valueFields} value={value} onChange={onChange} />;
+  }
+  const keyed = PARAM_SPECS[field.pointer];
+  if (keyed) return <KeyedParams id={id} spec={keyed} value={value} onChange={onChange} />;
   if (field.kind === "pair") {
     return <RangePair common={common} value={value} min={field.min} max={field.max} onChange={onChange} />;
   }
@@ -97,6 +121,7 @@ function Widget({
         value={value}
         onChange={onChange}
         noun={field.noun ?? nounOf(field.label)}
+        pointer={field.pointer}
       />
     );
   }
@@ -197,7 +222,7 @@ function JsonWidget({
   "aria-invalid"?: boolean;
   "aria-describedby": string;
 }): React.JSX.Element {
-  const serialised = value === undefined ? "" : JSON.stringify(value);
+  const serialised = value === undefined || value === null ? "" : JSON.stringify(value);
   const [text, setText] = useState(serialised);
   const [bad, setBad] = useState(false);
   useEffect(() => {
@@ -379,7 +404,8 @@ function SettingRowImpl({
       </div>
     );
   }
-  const wide = f.kind === "list" || f.kind === "multi" || f.kind === "json" || f.kind === "map" || f.pointer === "/events";
+  const wide =
+    f.kind === "list" || f.kind === "multi" || f.kind === "json" || f.kind === "map" || f.pointer === "/events" || BACKHAUL_PARAMS[f.pointer] !== undefined || f.pointer === "/actors/vehicles/classes" || PARAM_SPECS[f.pointer] !== undefined;
   return (
     <div
       className={`setting${unsupported || irrelevant ? " inactive" : ""}${edited ? " edited" : ""}${modified ? " modified" : ""}${invalid ? " invalid" : ""}${wide ? " wide" : ""}`}
