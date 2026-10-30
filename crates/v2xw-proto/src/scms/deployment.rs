@@ -862,7 +862,8 @@ impl Deployment {
     }
 
     /// Whether the run is the US system: 5 electors, quorum 3, the original butterfly,
-    /// every provider running every required role. Anything else is flagged non-US.
+    /// every provider running every required role under one intermediate CA (08 §8).
+    /// Anything else is flagged non-US.
     #[must_use]
     pub fn is_us(&self) -> bool {
         self.preset != Preset::CampReference
@@ -871,7 +872,7 @@ impl Deployment {
             && self
                 .providers
                 .iter()
-                .all(|p| US_REQUIRED_ROLES.iter().all(|r| p.count(r) >= 1))
+                .all(|p| p.ica_levels == 1 && US_REQUIRED_ROLES.iter().all(|r| p.count(r) >= 1))
     }
 
     /// Checks the deployment.
@@ -1204,6 +1205,16 @@ impl Deployment {
         out.push(
             "ASSUMPTION: the ICA is offline between certifications (01 §2.2, UNCONFIRMED)".into(),
         );
+        for p in self.providers.iter().filter(|p| p.ica_levels > 1) {
+            out.push(format!(
+                "NOT the US system: {} has {} ICA levels (the US hierarchy has one ICA under \
+                 each root; 08-settings-ux-and-gaps §8), so its chains are {} certificates \
+                 longer",
+                p.name,
+                p.ica_levels,
+                p.ica_levels - 1
+            ));
+        }
         out
     }
 }

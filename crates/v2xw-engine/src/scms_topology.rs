@@ -120,10 +120,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: LEVELS,
-        status: Status::Refused,
-        note: "Only 1, the US system's one intermediate CA under each root, loads. The \
-               governance issues 2 to 5 levels (piece C3a); the run waits for piece C3b \
-               (the chain file over P2PCD, the manifest's not-US flag).",
+        status: Status::Wired,
+        note: "Intermediate CA levels under the provider's root (08 §8): 1 is the US \
+               system; 2 to 5 issue ica-2 ... ica-n, each under the level above with exact \
+               chain permissions, every level in the chain files, and mark the run not \
+               US in its manifest.",
     },
 ];
 
@@ -467,10 +468,10 @@ fn levels_menu() -> Vec<Value> {
         out.push(json!({
             "value": n,
             "label": format!("{n} intermediate CAs (not US)"),
-            "description": "A deeper hierarchy, each level issued by the one above; the run \
-                            is then not the US system. Not built yet in the run (08 §8, \
-                            piece C3b).",
-            "available": false,
+            "description": "A deeper hierarchy, each level issued by the one above, every \
+                            level in the chain file; the run is then not the US system and \
+                            each chain is one certificate longer per level.",
+            "available": true,
         }));
     }
     out.push(json!({
@@ -565,7 +566,7 @@ fn provider_refusals(p: &ProviderSpec, group: Group, e: &mut Vec<ScenarioError>)
                 &leaf.at,
                 format!("is custom: {ROLE_CUSTOM}"),
             ));
-        } else if !(leaf.template == LEVELS && leaf.value == json!(US_ICA_LEVELS)
+        } else if !(leaf.template == LEVELS
             || group == Group::Capacity
             || [SITE, LAT, LON, SITES_EACH].contains(&leaf.template.as_str()))
         {
@@ -800,11 +801,15 @@ fn place_roles(p: &ProviderSpec, provider: &mut Provider) -> Result<()> {
 /// The default, unset or 1, is the US hierarchy.
 ///
 /// # Errors
-/// A level count other than 1.
-pub(crate) fn ica_levels(p: &ProviderSpec, _provider: &mut Provider) -> Result<()> {
+/// A level count outside 1 to 5 (the receiver's chain limit).
+pub(crate) fn ica_levels(p: &ProviderSpec, provider: &mut Provider) -> Result<()> {
     let mut e = Vec::new();
     provider_refusals(p, Group::Levels, &mut e);
-    first(e)
+    first(e)?;
+    if let Some(n) = p.ica_levels {
+        provider.ica_levels = n;
+    }
+    Ok(())
 }
 
 /// `security.scms.deployment.capacity` and `providers[].capacity` onto every provider's
@@ -909,37 +914,30 @@ mod tests {
         json!({"providers": [p]})
     }
 
-    /// Every topology key refuses any value but the default, naming its path, and the
-    /// defaults load with no refusal.
+    /// Every topology key is built (C1a-C3b): each well-formed value loads with no
+    /// refusal, and no key reports itself refused.
     #[test]
-    fn every_non_default_value_is_refused() {
-        assert!(refused(json!({})).is_empty());
-        assert!(refused(provider(json!({"ica_levels": 1}))).is_empty());
-        assert!(refused(json!({"capacity": {"ra": {}}})).is_empty());
-        assert!(refused(json!({"capacity": {"ra": {"queue_limit": 10}}})).is_empty());
-        assert!(refused(provider(json!({"capacity": {"ra": {"workers": 4}}}))).is_empty());
-        assert!(refused(json!({"capacity": {"crlg": {"service": "mmc"}}})).is_empty());
-        let at = "security.scms.deployment.providers.provider-a";
-        assert!(refused(provider(json!({"site": "gcp-us-west1"}))).is_empty());
-        assert!(
-            refused(provider(
-                json!({"site": "custom", "lat_deg": 40.0, "lon_deg": -100.0})
-            ))
-            .is_empty()
-        );
-        assert!(refused(provider(json!({"sites": {"ma": "us-west"}}))).is_empty());
-        let cases = [(
+    fn every_well_formed_value_loads() {
+        for deployment in [
+            json!({}),
+            provider(json!({"ica_levels": 1})),
+            json!({"capacity": {"ra": {}}}),
+            json!({"capacity": {"ra": {"queue_limit": 10}}}),
+            provider(json!({"capacity": {"ra": {"workers": 4}}})),
+            json!({"capacity": {"crlg": {"service": "mmc"}}}),
+            provider(json!({"site": "gcp-us-west1"})),
+            provider(json!({"site": "custom", "lat_deg": 40.0, "lon_deg": -100.0})),
+            provider(json!({"sites": {"ma": "us-west"}})),
             provider(json!({"ica_levels": 2})),
-            format!("{at}.ica_levels"),
-        )];
-        for (deployment, path) in cases {
+            provider(json!({"ica_levels": 5})),
+        ] {
             let got = refused(deployment.clone());
-            assert!(
-                got.iter()
-                    .any(|m| m.starts_with(&path) && m.contains("not built yet")),
-                "{deployment} must be refused at {path} as not built yet; got {got:#?}"
-            );
+            assert!(got.is_empty(), "{deployment} must load; got {got:#?}");
         }
+        assert!(
+            KEY_STATUS.iter().all(|k| k.status != Status::Refused),
+            "a topology key is still refused"
+        );
     }
 
     /// Each menu offers exactly its `_IDS` constant, in order, and the site ids are the
@@ -984,7 +982,7 @@ mod tests {
     #[test]
     fn the_build_refuses_without_the_loader() {
         for (fields, words) in [
-            (json!({"ica_levels": 3}), "not built yet"),
+            (json!({"ica_levels": 6}), "at most 8 certificates"),
             (json!({"sites": {"ma": "custom"}}), "is custom"),
             (json!({"sites": {"lop": "us-west"}}), "runs no lop"),
         ] {

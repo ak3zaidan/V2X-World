@@ -868,6 +868,42 @@ Tests (`tests/scms_hierarchy.rs`):
 Left for C3b: a run with `ica_levels > 1` (the loader still refuses it), P2PCD learning
 each level, `is_us` and the manifest, and failure-node names.
 
+**Status, C3b (2026-10-29): partly built.**
+
+What is live:
+
+* `providers[].ica_levels` 1 to 5 loads. `scms_topology::ica_levels` sets
+  `Provider::ica_levels`, and the `KEY_STATUS` row is `wired`. Every value in the menu is
+  available except "6 or more", which is disabled with the chain-limit reason.
+* `Deployment::is_us` is false when any provider has more than one level.
+  `Deployment::assumptions` prints "NOT the US system: provider-b has 3 ICA levels …".
+  The manifest's deployment line also says "NOT the US system".
+* The chain files carry every level (C3a). Under the default `all-providers` chain file a
+  node holds every level in its pool (`trust_bundle`, through `ScmsPki::extra`).
+* `provider_chain_files` (`home-provider`) gives each provider's own levels.
+
+Test 2 (`a_deeper_hierarchy_runs_and_is_flagged_not_us`) uses `connected-intersections`
+with provider-b at 3 levels:
+
+* the scenario loads;
+* `is_us` is false and the manifest names the level count;
+* both providers' ACAs validate through the nodes' pool;
+* the chains are 3 long (provider-a) and 5 long (provider-b).
+
+The scms_topology unit test `every_non_default_value_is_refused` became
+`every_well_formed_value_loads`, because no topology value is refused as unbuilt any more.
+It also checks that no `KEY_STATUS` row says `refused`.
+
+Not built:
+
+* Test 4: a device under `chain_file: home-provider` making n + 1 P2PCD exchanges for a
+  peer's levels. It needs a city run with P2PCD counting (`run.rs`, `hosted.rs`), which
+  this piece's budget did not cover.
+* The extra verification per level on a foreign chain's first sight.
+* `failures[].node` accepting `ica-2` … `ica-n`. The role list lives in
+  `crypto_config.rs`, which belongs to A.
+* The default phase-2 digest is unchanged.
+
 ---
 
 ## 9. Choices made under "most realistic" (the owner delegated these)

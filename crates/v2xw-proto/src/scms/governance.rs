@@ -1896,7 +1896,7 @@ impl Governance {
                 None => return Ok(pki),
             }
         };
-        for k in 2..=self.levels_of(label) {
+        for k in 2..=self.levels_of(label).min(1) {
             let role = ica_level_role(k);
             if let Some(a) = set.get(role) {
                 pki.extra.push(crate::scms::pdu::Authority::of_keys(

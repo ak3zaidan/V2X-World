@@ -198,3 +198,74 @@ fn one_level_is_todays_hierarchy_byte_for_byte() {
     assert_eq!(ica_level("ica"), Some(1));
     assert_eq!(ica_level("ica-6"), None);
 }
+
+/// The scenario `connected-intersections` on an SCMS backend with `deployment`, for two
+/// seconds (the setup of `tests/scms_deployment.rs`).
+fn scenario(deployment: serde_json::Value) -> v2xw_engine::Scenario {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut s = v2xw_engine::Scenario::load(root.join("scenarios/connected-intersections.yaml"))
+        .expect("loads");
+    s.time.duration_s = 2.0;
+    s.threats.attackers.clear();
+    s.security.protocol = Some(
+        serde_json::from_value(serde_json::json!({"id": "protocol/scms/camp"})).expect("choice"),
+    );
+    s.security.scms = Some(
+        serde_json::from_value(serde_json::json!({"deployment": deployment})).expect("a block"),
+    );
+    s
+}
+
+/// Accept test 2: a provider with 3 ICA levels makes the run not the US system, and the
+/// manifest names the level count; the scenario loads and every node validates both
+/// providers' ACAs through the chain-file certificates it installs. Fault: `is_us`
+/// ignores `ica_levels`.
+#[test]
+fn a_deeper_hierarchy_runs_and_is_flagged_not_us() {
+    let s = scenario(serde_json::json!({"providers": [
+        {"name": "provider-b", "ica_levels": 3}
+    ]}));
+    s.validate().expect("ica_levels 3 loads");
+    let d = v2xw_engine::phase2::deployment_of(&s, true).expect("builds");
+    assert_eq!(d.providers[1].ica_levels, 3);
+    assert!(!d.is_us(), "three ICA levels are not the US system");
+    let base =
+        v2xw_engine::phase2::deployment_of(&scenario(serde_json::json!({})), true).expect("builds");
+    assert!(base.is_us());
+
+    let engine = v2xw_engine::Engine::build(s, "").expect("builds");
+    let w = &engine.manifest().warnings;
+    assert!(
+        w.iter().any(|l| l.contains("NOT the US system"))
+            && w.iter().any(|l| l.contains("provider-b has 3 ICA levels")),
+        "{w:#?}"
+    );
+    let p2 = engine.phase2().expect("an SCMS run");
+    let (roots, cas) = p2.trust_bundle();
+    let anchors: BTreeSet<[u8; 32]> = roots
+        .iter()
+        .map(|r| v2xw_sec::cert::hashed_id32(r).expect("hashes"))
+        .collect();
+    let mut pool: Vec<Certificate> = cas.iter().map(|c| (**c).clone()).collect();
+    pool.extend(roots.iter().map(|c| (**c).clone()));
+    let acas = engine.credential_issuers();
+    assert_eq!(acas.len(), 2);
+    let lens: Vec<usize> = acas
+        .iter()
+        .map(|aca| {
+            let chain = path(aca, &pool);
+            let start = aca.0.to_be_signed.validity_period.start.0.0;
+            let got = validate(
+                &chain,
+                &ChainPolicy::us_device(anchors.clone(), start + 3_600),
+            );
+            assert!(got.is_ok(), "{:?}", got.err());
+            chain.len()
+        })
+        .collect();
+    assert_eq!(
+        lens,
+        vec![3, 5],
+        "provider-a: root, ICA, ACA; provider-b: two more levels"
+    );
+}
