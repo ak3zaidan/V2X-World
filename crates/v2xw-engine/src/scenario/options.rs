@@ -400,6 +400,15 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Messages without an encoder travel as payloads of their validated length; the rest are still encoded.",
         ),
         // --- security -------------------------------------------------------------
+        // WP-35
+        ("security.scms.crl_poll", "conditional") => w(
+            "Revocation list, if changed (one exchange)",
+            "The vehicle asks the RA for its composite revocation list with If-Modified-Since: the list when it changed, a short 412 when not.",
+        ),
+        ("security.scms.crl_poll", "info-status") => w(
+            "Status file first, then what changed",
+            "The vehicle first fetches the RA's signed status of its lists (IEEE 1609.2.1 6.3.5.14), then downloads the revocation list only if it holds an older one.",
+        ),
         ("security.envelope", "ieee1609.2") => w(
             "IEEE 1609.2 (US)",
             "The secured-message format of the US SCMS.",
@@ -2941,6 +2950,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "security.scms.tls" => "Vehicle-to-RA TLS version",
         "security.scms.crl_overdue_tolerance_s" => "Overdue revocation list tolerance",
         "security.scms.crl_overdue_scope" => "What an overdue revocation list refuses",
+        "security.scms.crl_poll" => "How vehicles poll for new revocation lists",
         "security.scms.rx_beacon_max_age_s" => "Oldest safety beacon accepted",
         "security.scms.rx_max_age_s" => "Oldest other message accepted",
         "security.scms.rx_max_future_s" => "Future time stamp accepted",

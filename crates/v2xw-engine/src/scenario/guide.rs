@@ -1913,6 +1913,12 @@ const ADVANCED: &[Basic] = &[
         explain: "What a vehicle refuses once a revocation list it holds is overdue past the tolerance. craca: only messages from certificates that list covers (the same certificate authority); all: every message, as CAMP SCMS release 1.2.2 Table 67 has the device \"rejecting all of them\" and warning the driver. The sources leave both readings open; they differ only after a root or CRACA changeover, when a vehicle holds an old authority's list that is no longer renewed.",
         recommended: "craca (default); all to study the strict reading.",
     },
+    // WP-35
+    Basic {
+        path: "security.scms.crl_poll",
+        explain: "How a cellular vehicle checks its RA for new revocation lists each hour. conditional: it asks for the whole composite list and gets a short 'not modified' when nothing changed. info-status: it first fetches the RA's signed status of its lists, CTL and authority certificates (IEEE 1609.2.1 6.3.5.14), and downloads the list only if it holds an older one, which costs a second exchange when something did change.",
+        recommended: "conditional (today's default); info-status for the two-step fetch IEEE 1609.2.1 defines.",
+    },
     Basic {
         path: "nodes.validated_cert_cache",
         explain: "How many already-checked certificates of other vehicles each device remembers, so a known sender costs only its signature check; a forgotten one is checked from scratch the next time it is heard. A small cache is what a certificate-flooding attack exhausts.",
