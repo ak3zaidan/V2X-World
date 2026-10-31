@@ -762,6 +762,11 @@ pub struct MaState {
     pub last_case: Option<FlowRun>,
     /// Devices it has concluded should be revoked, by request hash.
     pub decisions: Vec<[u8; 32]>,
+    /// The `[LA1, LA2]` linkage chain identifier pairs it has decided to revoke (SC-P3):
+    /// a later case whose chain the LAs name with a pair already here ends `linked`, with
+    /// no second blocklist request and no second seed release ([CAMP122] §5). The MA
+    /// knows a chain only by these identifiers, never by the device.
+    pub decided_chains: BTreeSet<([u8; CHAIN_ID_BYTES], [u8; CHAIN_ID_BYTES])>,
     /// Revocation requests waiting for the operator (manual-review mode), by the run
     /// the request was given: `(report index, i_rev, jmax, two-report partner)`.
     pub awaiting_review: BTreeMap<FlowRun, (usize, u32, u32, Option<usize>)>,
@@ -931,6 +936,10 @@ pub struct Case {
     pub jmax: u32,
     /// Whether the resolution succeeded.
     pub resolved: bool,
+    /// Whether the case ended because both LAs named a chain pair the MA had already
+    /// decided ([`MaState::decided_chains`], SC-P3): the device is already being revoked,
+    /// and this case adds evidence, not a second revocation.
+    pub linked: bool,
     /// A single-subject revocation: the MA's decision names one pseudonym certificate.
     /// The PCA lookup returns the request hash and the two sealed chain pointers, each LA
     /// names its chain (`chain-id-request`/`-response`, SC-P2; [CAMP122] §5, [BRECHT]
@@ -949,6 +958,47 @@ pub struct Case {
     /// manual review the operator's decision follows the review time later (realism.md
     /// R-CORR: the case board stamped `corroborated` at the decision).
     pub opened: SimTime,
+}
+
+/// How a case ended (SC-P3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaseOutcome {
+    /// The MA asked the RA to blocklist and the LAs to release seeds.
+    Revoked,
+    /// The LAs named a chain the MA had already decided: no second revocation.
+    Linked,
+    /// Refused somewhere on the path (an unknown linkage value, chain or request, or
+    /// "different devices").
+    Unresolved,
+}
+
+impl CaseOutcome {
+    /// The record label.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaseOutcome::Revoked => "revoked",
+            CaseOutcome::Linked => "linked",
+            CaseOutcome::Unresolved => "unresolved",
+        }
+    }
+}
+
+impl Case {
+    /// How the case ended, or `None` while it is in progress. A resolved case is
+    /// `revoked` from the moment the MA asked for the blocklist.
+    #[must_use]
+    pub fn outcome(&self) -> Option<CaseOutcome> {
+        if self.linked {
+            Some(CaseOutcome::Linked)
+        } else if self.resolved {
+            Some(CaseOutcome::Revoked)
+        } else if self.done {
+            Some(CaseOutcome::Unresolved)
+        } else {
+            None
+        }
+    }
 }
 
 /// The CRL Generator's and the CRL Store's state.

@@ -201,3 +201,142 @@ fn a_report_is_decided_without_the_engine_map() {
         );
     }
 }
+
+/// A small grid fleet on the compressed calendar with one `ConstPos` attacker among ten
+/// vehicles, a 20 s i-period (so the attacker moves to a new pseudonym inside the run)
+/// and a 30 s operator review, so a decision about its next pseudonym is taken while the
+/// first case is still in review and its entry not yet on the list.
+fn one_attacker_changes_pseudonym() -> Scenario {
+    use serde_json::json;
+    use v2xw_engine::scenario::ModelChoice;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut s = Scenario::load(root.join("scenarios/phase1-grid.yaml")).expect("loads");
+    s.time.duration_s = 90.0;
+    if let v2xw_world::WorldSourceSpec::Procedural { params, .. } = &mut s.world.source {
+        params["cols"] = json!(5);
+        params["rows"] = json!(8);
+    }
+    s.world.buildings.enabled = false;
+    s.actors.vehicles.demand.rate_veh_per_h = Some(3_600_000.0);
+    s.actors.vehicles.demand.params = json!({ "max_total_vehicles": 10 });
+    s.security.verification_policy = "verify-all".to_string();
+    let id = v2xw_engine::phase2::CAMP_SCMS.to_string();
+    s.actors.backend.protocol = Some(id.clone());
+    s.security.protocol = Some(ModelChoice {
+        id,
+        params: json!({
+            "i_period_s": 20,
+            "cert_lifetime_s": 21,
+            "certs_per_period": 3,
+            "pool_periods": 2,
+            "topup_below_periods": 1,
+            "cert_shuffle_window_s": 1,
+            "first_batch_delay_s": 1,
+            "download_poll_interval_s": 1,
+            "report_shuffle_window_s": 5,
+            "crl_cadence_s": 10,
+            "crl_fetch_interval_s": 30,
+            "ma_review_s": 30
+        }),
+    });
+    s.time.calendar = v2xw_engine::scenario::Calendar::Compressed;
+    s.net.uu = Some(ModelChoice {
+        id: "cellular/uu/fixed-latency".to_string(),
+        params: json!({"preset": "4g-east-coast"}),
+    });
+    s.threats.attackers = serde_json::from_value(json!([
+        {"id": "threat/attacker/legacy/ConstPos", "count": 1}
+    ]))
+    .expect("attackers");
+    s.detection = serde_json::from_value(json!({
+        "local": [{"id": "detect/legacy-12"}],
+        "ma": {"id": "threat/ma/corroborated"}
+    }))
+    .expect("detection");
+    s
+}
+
+/// One run of [`one_attacker_changes_pseudonym`]: the report, the CRL entries every
+/// provider's Generator holds, and the `linked` cases across the MAs.
+fn linked_run(forget_map: bool) -> (RunReport, usize, usize) {
+    let mut engine = Engine::build(one_attacker_changes_pseudonym(), "").expect("builds");
+    if forget_map {
+        engine
+            .phase2_mut()
+            .expect("an SCMS run")
+            .forget_digest_map_for_test();
+    }
+    let report = engine.run(&mut NullRecorder::new()).expect("runs");
+    let p2 = engine.phase2().expect("an SCMS run");
+    let entries = p2
+        .scms_runs()
+        .iter()
+        .map(|r| r.state.crlg.entries.len())
+        .sum();
+    let linked = p2
+        .scms_runs()
+        .iter()
+        .flat_map(|r| r.state.ma.cases.values())
+        .filter(|c| c.outcome() == Some(v2xw_proto::scms::run::CaseOutcome::Linked))
+        .count();
+    (report, entries, linked)
+}
+
+/// SC-P3 ([CAMP122] §5; Whyte et al., VNC 2013, §V): the MA de-duplicates its decisions
+/// by the linkage chain both LAs name, not by the engine's device. The attacker is
+/// decided under one pseudonym, then under the next while the first case is in review;
+/// the second case runs its PCA lookup and both LA calls, finds the chain pair already
+/// decided and ends `linked`: no second blocklist and no second entry (a decision after
+/// the entry is on the list is `decisions_already_covered`, as before). With the engine's
+/// digest map gone (SC-P1's hook) nothing changes, because the MA never read it. Fault:
+/// drop the `decided_chains` check in `run/revoke.rs` -> the second case revokes again
+/// (two entries, no linked case) and the test goes red.
+#[test]
+fn a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation() {
+    let (r, entries, linked) = linked_run(false);
+    let p = &r.phase2;
+    println!(
+        "decisions {} linked {} covered {} cases {} unresolved {} entries {} linked cases {} \
+         attackers revoked {} honest revoked {} repeated {}",
+        p.ma_revoke_decisions,
+        p.decisions_linked,
+        p.decisions_already_covered,
+        p.cases_opened,
+        p.cases_unresolved,
+        entries,
+        linked,
+        p.revoked_attackers,
+        p.revoked_honest,
+        p.revocations_repeated
+    );
+    // Every decision is accounted for once: the first revokes, the one taken while it is
+    // in review is linked by the chain, and any taken after its entry is on the
+    // Generator's list is covered by the list (`start_cases_of`; SC-P4 moves that check
+    // to the published list). Measured on 476ab68d+: 4 = 1 + 1 linked + 2 covered.
+    assert!(p.ma_revoke_decisions >= 2, "a second pseudonym was decided");
+    assert_eq!(p.decisions_linked, 1, "the second is linked to the first");
+    assert_eq!(
+        p.ma_revoke_decisions,
+        1 + p.decisions_linked + p.decisions_already_covered,
+        "one revoking decision; the rest linked or covered"
+    );
+    assert_eq!(p.cases_opened, 2, "the linked decision cost a case of its own");
+    assert_eq!(entries, 1, "one CRL entry for the device");
+    assert_eq!(linked, 1, "one case ends `linked`");
+    assert_eq!(p.revoked_attackers, 1);
+    assert_eq!(p.revocations_repeated, 0);
+    assert_eq!(p.cases_unresolved, 0, "a linked case is not unresolved");
+
+    let (h, h_entries, h_linked) = linked_run(true);
+    let q = &h.phase2;
+    assert_eq!(
+        (
+            q.ma_revoke_decisions,
+            q.decisions_linked,
+            h_entries,
+            h_linked
+        ),
+        (p.ma_revoke_decisions, p.decisions_linked, entries, linked),
+        "the engine's map plays no part in the linking"
+    );
+}

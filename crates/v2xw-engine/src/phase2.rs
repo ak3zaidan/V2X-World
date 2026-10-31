@@ -1434,6 +1434,9 @@ struct Case {
     /// Every vehicle that has installed the entry, in install order, with the instant
     /// (the PKI view's per-vehicle `enforced` stamps).
     enforcers: Vec<(NodeId, SimTime)>,
+    /// Whether the MA closed the case because both LAs named a chain it had already
+    /// decided (SC-P3): counted once in `decisions_linked`.
+    linked: bool,
 }
 
 /// An ETSI decision carried out as the EA's blocklist.
@@ -2005,9 +2008,10 @@ pub struct Phase2Report {
     pub revocations_repeated: u64,
     /// Decisions about a certificate the published list already revoked.
     pub decisions_already_covered: u64,
-    /// Revoke verdicts about a pseudonym of a device the authority had already decided:
-    /// the linkage authorities put both pseudonyms on one linkage chain, so the device is
-    /// revoked once and the verdict is not a second decision.
+    /// Cases the MA closed because the chain was already decided: both linkage
+    /// authorities named a chain pair a revoking case had already named, so the device is
+    /// revoked once (SC-P3). Under the ETSI model, verdicts about an already-decided
+    /// device by the engine's map (modelled).
     pub decisions_linked: u64,
     /// The most corroborated events any pseudonym the authority did not revoke reached
     /// (`threat/ma/corroborated` only): the margin an honest fleet leaves to the threshold.
@@ -2392,8 +2396,8 @@ pub struct Phase2 {
     /// device's `MbrQueue` counters leave with it, and the run report's
     /// `reports_evicted` / `reports_expired` sum the devices present plus these.
     retired_store_deletions: (u64, u64),
-    /// The devices the authority has decided to revoke, as the PCA and linkage
-    /// authorities resolve a reported pseudonym (joint 2): one decision per device.
+    /// The devices the ETSI model's authority has decided to block, by the engine's map
+    /// (modelled; the US MA links by chain identifiers, `MaState::decided_chains`).
     ma_decided_devices: BTreeSet<NodeId>,
     /// The positional accuracy each safety message stated on the air, as a 95 % radius in
     /// metres, by signer and generation time: `None` when the message said "unavailable".
@@ -6206,6 +6210,7 @@ impl Phase2 {
                         stamps_emitted: BTreeSet::new(),
                         enforced_first: None,
                         enforcers: Vec::new(),
+                        linked: false,
                     });
                 }
             }
@@ -6230,6 +6235,15 @@ impl Phase2 {
             };
             let run = &self.runs[case.provider];
             let log = &run.kernel.stages;
+            // The MA's own outcome (SC-P3): both LAs named a chain it had already decided.
+            if !case.linked
+                && run.state.ma.cases.get(&resolution).is_some_and(|c| {
+                    c.outcome() == Some(v2xw_proto::scms::run::CaseOutcome::Linked)
+                })
+            {
+                case.linked = true;
+                self.report.decisions_linked += 1;
+            }
             // The case's own entries: cases run concurrently (gap row 27), so the list's
             // last entry may be another case's appended on the same step. A case appends
             // one entry per chain pair in one issuance, its reported chain's first; the
@@ -6315,7 +6329,7 @@ impl Phase2 {
         let unresolved = self
             .cases
             .iter()
-            .filter(|c| c.runs.is_some() && c.entry.is_none())
+            .filter(|c| c.runs.is_some() && c.entry.is_none() && !c.linked)
             .count() as u64;
         if self.runs.iter().all(|r| !r.case_open()) {
             self.report.cases_unresolved = unresolved;
@@ -7388,7 +7402,13 @@ impl Phase2 {
                 // VNC 2013, §V); a second pseudonym on a chain already decided adds
                 // evidence, not a second revocation. It used to open one case per
                 // pseudonym: 22 decisions for 12 attackers in a 300 s run.
-                if let Some((device, _, _)) = self.truth_subject(&subject)
+                // Under the US SCMS the MA does exactly that inside the case: both LAs name
+                // the chain and a pair already decided ends the case `linked` (SC-P3,
+                // `MaState::decided_chains`), counted in `advance`'s case loop. Only the
+                // ETSI model (no linkage authorities) still de-duplicates here, by the
+                // engine's device (**modelled**: the EA knows the enrolment).
+                if self.etsi.is_some()
+                    && let Some((device, _, _)) = self.truth_subject(&subject)
                     && !self.ma_decided_devices.insert(device)
                 {
                     self.report.decisions_linked += 1;

@@ -844,7 +844,7 @@ fn the_revocations_move_the_crl_size() {
         let p = &m.report.phase2;
         println!(
             "ROW crl size {n}: revoked {} entries {:.0} bytes {:.0} versions {} downloads {} \
-             uu_dl {} decisions {} linked {} repeated {} attackers {}",
+             uu_dl {} decisions {} linked {} covered {} repeated {} attackers {}",
             p.revoked_attackers + p.revoked_honest,
             last(m, "crl_entries"),
             last(m, "crl_bytes"),
@@ -853,19 +853,25 @@ fn the_revocations_move_the_crl_size() {
             p.access.uu_dl_bytes,
             p.ma_revoke_decisions,
             p.decisions_linked,
+            p.decisions_already_covered,
             p.revocations_repeated,
             p.attackers,
         );
-        // One decision per device: the linkage authorities tie a device's pseudonyms to
-        // one chain, so no device is revoked twice and no device is decided twice.
+        // One revoking decision per device: the MA recognises a decided device's next
+        // pseudonym, by the chain both linkage authorities name while the first case is
+        // open (`decisions_linked`, SC-P3) or by the list once its entry is on it
+        // (`decisions_already_covered`), so no device is revoked twice and no device is
+        // revoked by two decisions. Before SC-P3 the engine dropped the second verdict
+        // by its own device map before the MA saw it, so it was never a decision.
         assert_eq!(p.revocations_repeated, 0, "a device was revoked twice");
         assert!(
-            p.ma_revoke_decisions <= p.attackers + p.decisions_honest,
-            "more decisions than devices"
+            p.ma_revoke_decisions - p.decisions_linked - p.decisions_already_covered
+                <= p.attackers + p.decisions_honest,
+            "more revoking decisions than devices"
         );
     }
     assert!(
-        many.report.phase2.decisions_linked > 0,
+        many.report.phase2.decisions_linked + many.report.phase2.decisions_already_covered > 0,
         "no second pseudonym was linked to a decided device"
     );
     assert!(

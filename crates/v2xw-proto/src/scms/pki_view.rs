@@ -1244,6 +1244,9 @@ pub fn drain_cases(
                     published,
                     json!({"crl_instance": format!("{label}/crl-issuance/{}", c.crl_run.0)}),
                 );
+            } else if c.linked {
+                // Both LAs named a chain the MA had already decided (SC-P3).
+                push(tracker, "linked", Some(now), json!({"outcome": "linked"}));
             } else if c.done {
                 push(
                     tracker,

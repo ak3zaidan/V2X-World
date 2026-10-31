@@ -195,6 +195,42 @@ Dated notes go under each id as its wave lands.
   `threshold` (18), `redteam_pki` (5), `pki_view` (12), `mbr` (12) pass. The UI's message
   card and case diagram name the two new steps. G-SCMS moves in the joint P2/P3 golden
   commit (see SC-P3). Protocol row G2 updated.
+- 2026-10-31 (P2/P3.2): engine suites pass on the joint change: `report_signing` (4),
+  `scms_providers` (3), `scms_deployment` (5), engine `pki_view` (9), `phase2` (16, the
+  re-blessed digest), `trigger_ttc` and `bsm_timing` golden checks, proto lib (84).
+
+### SC-P3
+
+- 2026-10-31 (wave C, P2/P3.2): **the MA de-duplicates decisions by linkage chain, not by
+  device.** Cause: `ingest_arrivals` dropped a second verdict by the engine's device
+  (`truth_subject` into `ma_decided_devices`, `phase2.rs:7391` on `f09d4e1d`), which the
+  MA cannot know. Now `MaState::decided_chains` holds every `[LA1, LA2]` chain-identifier
+  pair a case has decided; a case whose pair is already there ends `linked`
+  (`Case.linked`, `Case::outcome()` = `revoked` / `linked` / `unresolved`, the U12 labels)
+  with no blocklist request and no seed release ([CAMP122] §5). The engine counts
+  `decisions_linked` from the case outcome in `advance`'s case loop, and a linked case is
+  not `cases_unresolved`; the case board shows a `linked` stage instead of `refused`. Only
+  the ETSI model keeps the device-map de-duplication (no LAs; modelled). Every verdict is
+  now a decision (`ma_revoke_decisions`): a second pseudonym costs a case (a PCA lookup and
+  two LA calls) while the first is open, and after its entry is on the Generator's list it
+  is `decisions_already_covered` (`start_cases_of`; SC-P4 moves that to the published
+  list). Test: `report_signing::a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation`
+  (grid, one ConstPos attacker, 30 s review: decisions 4 = 1 + 1 linked + 2 covered, 1
+  entry, 1 linked case, 2 cases, 0 repeated; the same with the engine map cleared). Red
+  with the `decided_chains` check dropped: linked 0, 2 entries, 1 repeated. The spec's
+  "decisions = 2" did not count the decisions the list covers; the test asserts the
+  accounting instead. `sensitivity_security::the_revocations_move_the_crl_size` asserted
+  decisions <= devices and linked > 0 under the old engine-side drop; re-expressed as
+  revoking decisions (decisions - linked - covered) <= devices and linked + covered > 0
+  (0.1: 6 decisions = 3 revoked + 3 covered; 0.3: 15 = 8 + 7 covered; 0 linked, 0 repeated). `report.decisions_linked` catalogue
+  text: "cases the MA closed because the chain was already decided". G-SCMS:
+  `phase2-path` record digest `5a9b6eb7b4b6` -> `f159c9bab38b`, records 10,243,399 ->
+  10,243,407 (frames `736a1216` unchanged): the case's two chain-id requests and answers;
+  `i-s1-phase2-60s` and `ttc-triggered-brake` held. live-scms `LS.MA.linked-by-chain`
+  added, `verdict: open`. Still modelled: the Policy MA's ingest hint `la_link` is the
+  device's (it is read before any case runs, where no LA has answered), and a device's
+  second request's chain is not linked to its first (the LA knows chains, not devices;
+  B4 revokes both chains in the first case, and SC-P4's list check covers it after).
 
 ### SC-D1
 

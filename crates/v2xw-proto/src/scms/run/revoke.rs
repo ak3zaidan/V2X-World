@@ -124,6 +124,7 @@ impl ScmsRun {
                 i_rev,
                 jmax,
                 resolved: false,
+                linked: false,
                 direct,
                 done: false,
                 reports,
@@ -353,7 +354,15 @@ impl ScmsState {
                     return Ok(());
                 };
                 case.chain_ids[la.idx()] = Some(chain);
-                if case.chain_ids.iter().any(Option::is_none) {
+                let [Some(c1), Some(c2)] = case.chain_ids else {
+                    return Ok(());
+                };
+                // The MA links the case by the pair: a chain it has already decided is
+                // being revoked, so a second pseudonym on it adds evidence, not a second
+                // blocklist request or seed release ([CAMP122] §5; SC-P3).
+                if !self.ma.decided_chains.insert((c1, c2)) {
+                    case.linked = true;
+                    case.done = true;
                     return Ok(());
                 }
                 case.resolved = true;
