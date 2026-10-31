@@ -16,8 +16,9 @@ use v2xw_core::time::{NS_PER_S, WallClock};
 use v2xw_msg::MsgType;
 use v2xw_msg::sec_types::Certificate;
 use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
-    CircularRegion, GeographicRegion, HashedId3, Latitude, Longitude, NinetyDegreeInt,
-    OneEightyDegreeInt, TwoDLocation, Uint16,
+    CircularRegion, CountryAndRegions, GeographicRegion, HashedId3, IdentifiedRegion, Latitude,
+    Longitude, NinetyDegreeInt, OneEightyDegreeInt, SequenceOfIdentifiedRegion, SequenceOfUint8,
+    TwoDLocation, Uint8, Uint16, UnCountryId,
 };
 use v2xw_node::ctx::NodeRuntimeCtx;
 use v2xw_node::rxval::RxReject;
@@ -1649,4 +1650,165 @@ fn a_certificate_learned_from_a_relayed_report_resolves_the_senders_digest_bsm()
         Some(VerificationState::Verified),
         "the digest-signed BSM resolves against the report's certificate"
     );
+}
+
+// ---- SC-P11.2: identified regions against the location ----
+
+/// A generation location at (`lat`, `lon`) degrees.
+fn at_deg(lat: f64, lon: f64) -> GenerationLocation {
+    GenerationLocation {
+        lat_tenth_microdeg: (lat * 1e7).round() as i32,
+        lon_tenth_microdeg: (lon * 1e7).round() as i32,
+        elevation: 0,
+    }
+}
+
+const MANHATTAN: (f64, f64) = (40.758, -73.9855);
+const TORONTO: (f64, f64) = (43.65, -79.38);
+const HAVANA: (f64, f64) = (23.1136, -82.3666);
+const NEWARK: (f64, f64) = (40.7357, -74.1724);
+
+/// The pseudonym `seed` of `aca` re-issued by ECQV with `region` in its tbs (`CertSpec`
+/// has no region field).
+fn pseudonym_in(
+    pki: &ScmsPki,
+    aca: &Authority,
+    seed: u8,
+    region: Option<GeographicRegion>,
+) -> ImplicitKey {
+    let k = pseudonym(pki, aca, seed, |_| {});
+    let iss = ImplicitIssuer::new(aca.cert.clone(), aca.private.unwrap()).unwrap();
+    let mut tbs = k.certificate().0.to_be_signed.clone();
+    tbs.region = region;
+    let mut n = 0u8;
+    iss.issue(&tbs, &ec::scalar_from_be_mod_n(&[seed ^ 0x33; 32]), || {
+        n += 1;
+        ec::scalar_from_be_mod_n(&[n; 32])
+    })
+    .expect("issues")
+}
+
+fn identified(ids: Vec<IdentifiedRegion>) -> GeographicRegion {
+    GeographicRegion::identifiedRegion(SequenceOfIdentifiedRegion(ids))
+}
+
+fn country(n: u16) -> IdentifiedRegion {
+    IdentifiedRegion::countryOnly(UnCountryId(Uint16(n)))
+}
+
+/// One SPDU from `key` at each location, in order, through a fresh receiver: the verdicts,
+/// the receiver's `outside-region` refusals and unchecked regions, and every refusal.
+fn verdicts_at(
+    mode: CryptoMode,
+    pki: &ScmsPki,
+    key: &ImplicitKey,
+    places: &[(f64, f64)],
+) -> (Vec<SpduVerdict>, u64, u64, String) {
+    let mut rx = trusted(mode, pki);
+    let v = places
+        .iter()
+        .enumerate()
+        .map(|(i, &(lat, lon))| {
+            let t = 10 + 2 * i as u64;
+            receive(&mut rx, &bsm(mode, key, t, Some(at_deg(lat, lon))), t + 1)
+        })
+        .collect();
+    (
+        v,
+        refused(&rx, "outside-region"),
+        rx.trust().stats.region_unchecked,
+        format!("{:?}", rx.trust().stats.refused),
+    )
+}
+
+/// SC-P11 accept 1: a `countryOnly(840)` certificate is refused in Toronto and accepted
+/// in Manhattan. Fault: the identified arm returns `None` (Toronto passes, unchecked).
+#[test]
+fn a_us_country_certificate_is_refused_in_toronto() {
+    let pki = pki();
+    let key = pseudonym_in(&pki, &pki.aca, 61, Some(identified(vec![country(840)])));
+    for mode in MODES {
+        let (v, outside, unchecked, why) = verdicts_at(mode, &pki, &key, &[MANHATTAN, TORONTO]);
+        assert_eq!(
+            v,
+            [SpduVerdict::Valid, SpduVerdict::Refused],
+            "{mode:?} {why}"
+        );
+        assert_eq!((outside, unchecked), (1, 0), "{mode:?}");
+    }
+}
+
+/// SC-P11 accept 2: under the ISS profile the ACA carries identifiedRegion
+/// {124, 484, 840} and a pseudonym carries none, so it inherits the ACA's (1609.2
+/// `region`: "If it is omitted … the same validity region as the certificate that issued
+/// it"): accepted in Toronto, refused in Havana. Fault: ignore inheritance (Havana
+/// accepted).
+#[test]
+fn an_iss_pseudonym_inherits_its_icas_region() {
+    let base = pki();
+    let region = identified(vec![country(124), country(484), country(840)]);
+    // ISS's ICA (ica.preprod.v2x.isscms.com): 30 years and identifiedRegion
+    // {124, 484, 840}, re-signed by the root; the ISS components the profile issues
+    // under it carry the same region.
+    let mut ica = base.ica.cert.clone();
+    ica.0.to_be_signed.region = Some(region.clone());
+    ica.0.to_be_signed.validity_period.duration =
+        v2xw_msg::sec_types::Ieee1609Duration::years(Uint16(30));
+    let tbs = v2xw_sec::sig1609::cert_tbs_coer(&ica).expect("tbs");
+    let signer = v2xw_sec::sig1609::canonical_cert_coer(&base.root.cert).expect("root");
+    ica.0.signature = Some(base.root.key.sign_1609(&tbs, &signer));
+    assert!(v2xw_sec::sig1609::verify_explicit_cert(
+        &ica,
+        Some(&base.root.cert)
+    ));
+    let iss = ScmsPki::under_anchors_profiled(
+        "iss",
+        v2xw_proto::scms::governance::CertProfile::Iss,
+        11,
+        t0() - 31_556_952,
+        (&base.root.cert, &base.root.key),
+        (&ica, &base.ica.key),
+    )
+    .expect("ISS PKI");
+    assert_eq!(
+        iss.aca.cert.0.to_be_signed.region,
+        Some(region),
+        "the ISS ACA's region"
+    );
+    let key = pseudonym_in(&iss, &iss.aca, 62, None);
+    assert!(key.certificate().0.to_be_signed.region.is_none());
+    for mode in MODES {
+        let (v, outside, unchecked, why) = verdicts_at(mode, &iss, &key, &[TORONTO, HAVANA]);
+        assert_eq!(
+            v,
+            [SpduVerdict::Valid, SpduVerdict::Refused],
+            "{mode:?} {why}"
+        );
+        assert_eq!((outside, unchecked), (1, 0), "{mode:?}");
+    }
+}
+
+/// SC-P11 accept 3: `countryAndRegions(840, [36])` (New York, 2010 FIPS) is accepted in
+/// Manhattan and refused in Newark, NJ (34). Fault: the region code read as something
+/// other than a FIPS state code.
+#[test]
+fn a_fips_state_region_is_checked() {
+    let pki = pki();
+    let ny = identified(vec![IdentifiedRegion::countryAndRegions(
+        CountryAndRegions::new(UnCountryId(Uint16(840)), SequenceOfUint8(vec![Uint8(36)])),
+    )]);
+    let key = pseudonym_in(&pki, &pki.aca, 63, Some(ny));
+    for mode in MODES {
+        let (v, outside, unchecked, why) = verdicts_at(mode, &pki, &key, &[MANHATTAN, NEWARK]);
+        assert_eq!(
+            v,
+            [SpduVerdict::Valid, SpduVerdict::Refused],
+            "{mode:?} {why}"
+        );
+        assert_eq!((outside, unchecked), (1, 0), "{mode:?}");
+    }
+    // A country with no polygons is counted, not refused.
+    let fr = pseudonym_in(&pki, &pki.aca, 64, Some(identified(vec![country(250)])));
+    let (v, outside, unchecked, _) = verdicts_at(CryptoMode::Modeled, &pki, &fr, &[MANHATTAN]);
+    assert_eq!((v, outside, unchecked), (vec![SpduVerdict::Valid], 0, 1));
 }

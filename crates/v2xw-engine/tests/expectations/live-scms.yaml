@@ -1563,3 +1563,17 @@ rows:
   measured: 45055 -> 3035
   verdict: pass
   measured_on: 2026-10-27, f4982788 release (fixes 82533437 in)
+- id: LS.region-unchecked
+  base: L
+  variant: L
+  area: scms
+  measure: receiver_validation.region_unchecked
+  expect: eq
+  value: 0
+  source: 'SC-P11 (2026-10-31): identified regions are placed against Natural Earth 1:50m (124, 484) and
+    Census 1:20m states (840 = the states and DC, FIPS state codes), and a region-less pseudonym inherits
+    its ACA''s {124, 484, 840} under ISS (1609.2 region "omitted"); every US city box lies in 840 and its
+    state (tools/regions/build.py --check). US BSMs carry no generationLocation, so 0 is predicted'
+  note: RunReport leaf receiver_validation.region_unchecked (omitted from the report when the whole
+    receiver block is empty); the three G-SCMS digests reproduce on 2026-10-31
+  verdict: open

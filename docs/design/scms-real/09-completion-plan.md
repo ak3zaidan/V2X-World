@@ -540,3 +540,29 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   in `live-atk.yaml`: `P7.TSU.maxaccel-reads-accel-set` (RandomSpeed lies only in the speed
   field: predicted down from 14262 to under 1 %; supersedes `TSU.maxaccel`) and
   `P7.B0U.no-honest-brake-acceleration` (eq 0).
+
+### SC-P11
+
+- 2026-10-31 (wave C, C2, P11.1): `tools/regions/build.py` (stdlib, `python3 -I`) writes
+  `v2xw-node/data/regions.bin` from Natural Earth admin-0 1:50m v5.1.1 (124, 484) and the
+  Census `cb_2020_us_state_20m` states (2010 FIPS `STATEFP`), integer microdegree rings
+  plus a 0.25° inside/outside/border grid; sha256 and URLs in `vectors-provenance.md`
+  ("SC-P11"). `regions.rs` runs the integer crossing test in border cells over only the
+  edges of the point's 0.25° band. Two measured deviations from the spec: no
+  simplification (the 2,000-vertex budget needs a 0.107° Douglas-Peucker tolerance for
+  Canada, about 12 km; the band index bounds the cost instead), and 840 is the union of
+  the Census states and DC, because Natural Earth 1:50m puts corners of Manhattan, Miami,
+  San Francisco, Honolulu, Bridgeport and Portland ME in the sea (16 of 315 city-box
+  points; `--check worlds/cities.yaml` now passes all 315). Accept 4
+  `the_grid_equals_brute_force_point_in_polygon`.
+- 2026-10-31 (P11.2): `rxval::location_in` places `identifiedRegion` (a SEQUENCE is the
+  union; `countryAndSubregions` refuses outside the state and is otherwise unchecked;
+  unknown countries and unavailable coordinates are unchecked). A region-less end-entity
+  certificate inherits the first region up its validated path, held on `CaPath` (one per
+  path, so per end-entity in effect) rather than in `EeCache`; its own region is still
+  checked before the chain. Chain consistency (EE region inside the issuer's) was already
+  checked once per path by `v2xw_sec::chain` and keeps its `chain-region-not-contained`
+  reason rather than `outside-region`. Accept 1-3 in `rx_validation.rs`, each red under
+  its fault. G-SCMS does not move: phase2-path, i-s1-phase2-60s and ttc-triggered-brake
+  reproduce, since US BSMs carry no `generationLocation`. Records: veh R10 marked fixed in
+  06; `LS.region-unchecked` (eq 0, verdict open) in `live-scms.yaml`.

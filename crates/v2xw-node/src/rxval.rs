@@ -9,7 +9,7 @@
 //! | every certificate of the chain is current at the receiver's time (TAI) | §5.1.2.4a | `Chain(Expired)` |
 //! | the SPDU's PSID is in the signer's `appPermissions` | §5.2 | `PsidNotPermitted` |
 //! | `generationTime` lies inside the signer's validity period | §5.2, SDEE profile | `GenerationTimeOutsideValidity` |
-//! | `generationLocation` lies inside the signer's region, when it has one | §5.2, SDEE profile | `OutsideRegion` |
+//! | `generationLocation` lies inside the signer's effective region: its own, else the first one up its validated path (1609.2 `region`: "If it is omitted … the same validity region as the certificate that issued it"), worldwide when none has one | §5.2, SDEE profile | `OutsideRegion` |
 //! | no certificate of the chain is on a hash CRL (series 2, 3, 4, 256) whose `crlCraca` and `crlSeries` match it | §5.1.3; 03 §10 | `RevokedByHash`, `IssuerRevoked` |
 //! | the CRL of the signer's CRACA (any held series-1 CRL under `CrlOverdueScope::All`) is not more than `overdue_CRL_tolerance` (2 weeks) past its `nextCrl` | [CAMP122] Table 67 | `CrlOverdue` |
 //! | `generationTime` is not older than the message type's maximum age, nor later than the receiver's own time by more than the future tolerance (checked on every received SPDU, before the verification policy) | §5.2 relevance checks; values: C2C-CC BSP RS_BSP_168 (ASSUMPTION for the US) | `GenerationTimeTooOld`, `GenerationTimeInFuture` |
@@ -65,9 +65,13 @@
 //!
 //! # Where this does not reach yet
 //!
-//! Identified (country) regions are not checked against a location: the build has no
-//! country polygons, so they are counted in [`RxStats::region_unchecked`] rather than
-//! passed silently. Group linkage CRL entries are not installed.
+//! Identified regions are placed with [`crate::regions`]: `countryOnly` for the United
+//! States, Canada and Mexico, and `countryAndRegions(840, …)` by 2010 FIPS state code. A
+//! country outside those three, another country's regions, and the counties of
+//! `countryAndSubregions` (a point outside the named state is still refused) have no
+//! polygons; such an SPDU is counted in [`RxStats::region_unchecked`] rather than passed
+//! silently, as the ASN.1 lets a receiver do with a region it does not recognise. Group
+//! linkage CRL entries are not installed.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,7 +80,9 @@ use std::sync::Arc;
 use v2xw_msg::scms_types::WireEdition;
 use v2xw_msg::sec_types::Certificate;
 use v2xw_msg::sec_types::ieee1609_dot2::{CertificateType, IssuerIdentifier};
-use v2xw_msg::sec_types::ieee1609_dot2_base_types::{GeographicRegion, TwoDLocation};
+use v2xw_msg::sec_types::ieee1609_dot2_base_types::{
+    GeographicRegion, IdentifiedRegion, TwoDLocation,
+};
 use v2xw_sec::cert::{self, CertKey};
 use v2xw_sec::chain::{self, ChainErrorKind, ChainPolicy};
 use v2xw_sec::envelope::ParsedSecured;
@@ -369,6 +375,9 @@ struct CaPath {
     certs: Vec<Arc<Certificate>>,
     /// The verification key of `certs[0]` (the EE's issuer).
     issuer_key: CertKey,
+    /// The region a region-less end-entity certificate under this path inherits: the
+    /// first `region` from `certs[0]` up, `None` (worldwide) when none has one.
+    region: Option<Arc<GeographicRegion>>,
 }
 
 /// One validated end-entity certificate, with what a CRL is matched against.
@@ -656,8 +665,10 @@ fn deg(l: &TwoDLocation) -> (f64, f64) {
     )
 }
 
-/// `Some(inside)` when the region kind is one a location can be placed in.
-fn location_in(region: &GeographicRegion, lat: f64, lon: f64) -> Option<bool> {
+/// `Some(inside)` when the region kind is one a location can be placed in. `lat7` and
+/// `lon7` are the location in 1e-7 degree, `lat` and `lon` the same in degrees.
+fn location_in(region: &GeographicRegion, lat7: i32, lon7: i32) -> Option<bool> {
+    let (lat, lon) = (f64::from(lat7) / 1e7, f64::from(lon7) / 1e7);
     match region {
         GeographicRegion::circularRegion(c) => {
             let (clat, clon) = deg(&c.center);
@@ -674,8 +685,54 @@ fn location_in(region: &GeographicRegion, lat: f64, lon: f64) -> Option<bool> {
             let (s, e) = deg(&r.south_east);
             lat <= n && lat >= s && lon >= w && lon <= e
         })),
+        GeographicRegion::identifiedRegion(ids) => identified_in(&ids.0, lat7, lon7),
         _ => None,
     }
+}
+
+/// A SEQUENCE OF identified regions is their union: `Some(true)` when the point is in
+/// one of them, `Some(false)` when every one is decided and none holds it, `None` when
+/// none holds it and one has no polygon.
+fn identified_in(ids: &[IdentifiedRegion], lat: i32, lon: i32) -> Option<bool> {
+    // 1609.2 `NinetyDegreeInt` 900000001 and `OneEightyDegreeInt` 1800000001 are
+    // "unavailable": nothing to place.
+    if lat.unsigned_abs() > 900_000_000 || lon.unsigned_abs() > 1_800_000_000 {
+        return None;
+    }
+    let poly = crate::regions::regions();
+    let any = |vs: &mut dyn Iterator<Item = Option<bool>>| {
+        let mut unknown = false;
+        for v in vs {
+            match v {
+                Some(true) => return Some(true),
+                Some(false) => {}
+                None => unknown = true,
+            }
+        }
+        (!unknown).then_some(false)
+    };
+    any(&mut ids.iter().map(|id| match id {
+        IdentifiedRegion::countryOnly(c) => poly.in_country(c.0.0, lat, lon),
+        IdentifiedRegion::countryAndRegions(c) if !c.regions.0.is_empty() => {
+            let n = c.country_only.0.0;
+            any(&mut c
+                .regions
+                .0
+                .iter()
+                .map(|r| poly.in_region(n, u16::from(r.0), lat, lon)))
+        }
+        // Counties have no polygons: outside the state is outside, inside it is unknown.
+        IdentifiedRegion::countryAndSubregions(c) if !c.region_and_subregions.0.is_empty() => {
+            let n = c.country_only.0.0;
+            any(&mut c.region_and_subregions.0.iter().map(|rs| {
+                match poly.in_region(n, u16::from(rs.region.0), lat, lon) {
+                    Some(false) => Some(false),
+                    _ => None,
+                }
+            }))
+        }
+        _ => None,
+    }))
 }
 
 /// The node's receiver trust: installed roots, validated CA paths, hash revocations and
@@ -1037,9 +1094,14 @@ impl RxTrust {
         match memo {
             Memo::Ok { key, tolerated } => {
                 self.stats.tolerated += u64::from(tolerated);
+                let region = certs
+                    .iter()
+                    .find_map(|c| c.0.to_be_signed.region.clone())
+                    .map(Arc::new);
                 Ok(CaPath {
                     certs,
                     issuer_key: key,
+                    region,
                 })
             }
             Memo::Err(k) => Err(RxReject::Chain(k)),
@@ -1116,7 +1178,7 @@ impl RxTrust {
         let r = if self.overdue(craca3(ee), now32) {
             Err(RxReject::CrlOverdue)
         } else {
-            self.validate_certificate_inner(cas, ee, now32)
+            self.validate_certificate_inner(cas, ee, now32).map(|_| ())
         };
         match r {
             Err(RxReject::UnknownIssuer) | Ok(()) => r,
@@ -1145,27 +1207,44 @@ impl RxTrust {
                 return Err(RxReject::GenerationTimeOutsideValidity);
             }
         }
-        if let (Some(region), Some(loc)) = (&ee.0.to_be_signed.region, &parsed.generation_location)
-        {
-            let lat = f64::from(loc.lat_tenth_microdeg) / 1e7;
-            let lon = f64::from(loc.lon_tenth_microdeg) / 1e7;
-            match location_in(region, lat, lon) {
-                Some(true) => {}
-                Some(false) => return Err(RxReject::OutsideRegion),
-                None => self.stats.region_unchecked += 1,
-            }
+        let own = ee.0.to_be_signed.region.as_ref();
+        let loc = parsed.generation_location.as_ref();
+        // The signer's own region needs no chain: checked before it, at no cost.
+        if let (Some(region), Some(loc)) = (own, loc) {
+            self.check_location(region, loc)?;
         }
-        self.validate_certificate_inner(cas, ee, now32)
+        let inherited = self.validate_certificate_inner(cas, ee, now32)?;
+        // A region-less certificate has its issuer's (1609.2 `region` "omitted"), known
+        // once the path is: under ISS every pseudonym inherits {124, 484, 840}.
+        if let (None, Some(region), Some(loc)) = (own, inherited, loc) {
+            self.check_location(&region, loc)?;
+        }
+        Ok(())
+    }
+
+    /// `generationLocation` against the signer's effective `region`.
+    fn check_location(
+        &mut self,
+        region: &GeographicRegion,
+        loc: &v2xw_sec::envelope::GenerationLocation,
+    ) -> Result<(), RxReject> {
+        match location_in(region, loc.lat_tenth_microdeg, loc.lon_tenth_microdeg) {
+            Some(true) => {}
+            Some(false) => return Err(RxReject::OutsideRegion),
+            None => self.stats.region_unchecked += 1,
+        }
+        Ok(())
     }
 
     /// The certificate rules of [`RxTrust::validate_inner`], after the SPDU-level ones:
-    /// validity at `now32`, the chain, the end-entity link and hash revocation.
+    /// validity at `now32`, the chain, the end-entity link and hash revocation. `Ok`
+    /// carries the region a region-less `ee` inherits from its validated path.
     fn validate_certificate_inner(
         &mut self,
         cas: &BTreeMap<[u8; 8], Arc<Certificate>>,
         ee: &Certificate,
         now32: u32,
-    ) -> Result<(), RxReject> {
+    ) -> Result<Option<Arc<GeographicRegion>>, RxReject> {
         let (start, end) = v2xw_sec::ctl::validity(ee);
         let now = u64::from(now32);
         if now < start || now >= end {
@@ -1206,7 +1285,7 @@ impl RxTrust {
         if self.hash_revokes(ee) {
             return Err(RxReject::RevokedByHash);
         }
-        Ok(())
+        Ok(path.region)
     }
 
     fn check_ee_link(&mut self, ee: &Certificate, path: &CaPath) -> Result<(), RxReject> {

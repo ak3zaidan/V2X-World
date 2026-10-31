@@ -71,7 +71,8 @@ struct Region {
     cols: i64,
     /// Row-major cell classes.
     cells: Vec<u8>,
-    /// Rings as `(lat, lon)` in 1e-7 degree, not closed.
+    /// Rings as `(lat, lon)` in 1e-7 degree, not closed (the self-test's reference).
+    #[cfg(test)]
     rings: Vec<Vec<(i32, i32)>>,
     /// Per grid row, the edges whose latitude range meets the row's band.
     bands: Vec<Vec<Edge>>,
@@ -181,6 +182,7 @@ impl Regions {
                 rows,
                 cols,
                 cells,
+                #[cfg(test)]
                 rings,
                 bands,
             });
@@ -240,6 +242,7 @@ fn crossings(edges: impl Iterator<Item = Edge>, lat: i32, lon: i32) -> bool {
     c
 }
 
+#[cfg(test)]
 fn ring_edges(rings: &[Vec<(i32, i32)>]) -> impl Iterator<Item = Edge> + '_ {
     rings.iter().flat_map(|ring| {
         (0..ring.len()).map(move |i| {
@@ -269,6 +272,7 @@ impl Region {
     }
 
     /// Crossing number over every ring edge: the reference the grid must agree with.
+    #[cfg(test)]
     fn contains_brute(&self, lat: i32, lon: i32) -> bool {
         crossings(ring_edges(&self.rings), lat, lon)
     }

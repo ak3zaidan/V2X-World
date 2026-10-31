@@ -783,7 +783,7 @@ could never fail on the engine's capture, and the CRL faults could not reach the
 
 | Row | Difference | Impact |
 |---|---|---|
-| veh R10 | Country regions are not checked against a location; they are only counted | None for US pseudonyms, which carry no region (`region_unchecked` = 0) |
+| veh R10 | Country regions are not checked against a location; they are only counted. **Fixed 2026-10-31 (SC-P11):** `countryOnly` (840, 124, 484) and `countryAndRegions(840, FIPS)` are placed against compiled-in polygons (`v2xw-node/src/regions.rs`), and a region-less certificate inherits the first region up its path (1609.2 `region` "omitted"), so under ISS every pseudonym is held to {124, 484, 840} (`rx_validation::{a_us_country_certificate_is_refused_in_toronto, an_iss_pseudonym_inherits_its_icas_region, a_fips_state_region_is_checked}`) | US BSMs carry no `generationLocation`, so no BSM is refused; the G-SCMS digests reproduce |
 | veh R11 | Same as crypto #38 | Counted |
 | veh C6 | "2 km since the last change" is measured as distance travelled, not straight-line distance | On a winding route a change can come slightly early |
 | veh M11 | Relayed report uploads go on safety channel 172, not on a service channel advertised by WSA. **Fixed under `net.rsu_ip.air: sch` (2026-10-28, WP-19 P19.2/P19.4):** a vehicle relays only to a unit whose WSA it verified, and reports go on the `radio.channels` service channel (`foundations::relayed_reports_move_to_the_advertised_service_channel`); the default `constant` keeps 172 | Report airtime on 172 is an upper bound (0.21 % at full fleet in the first run). The radio has no per-channel MAC queues and no channel switch (07 §7 item 4) |
