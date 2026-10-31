@@ -1595,7 +1595,7 @@ impl Governance {
         for peer in gov.config.peers.clone() {
             gov.certify_peer(rng, &peer, issued);
         }
-        let ctl = gov.build_ctl(genesis, now32, None, &gov.approved_signers());
+        let ctl = gov.build_ctl(genesis, now32, None, None, &gov.approved_signers());
         gov.ctl = ctl.clone();
         gov.ctl_history.push(ctl);
         gov.counters.ctls_published += 1;
@@ -2179,13 +2179,18 @@ impl Governance {
     /// rootCaApprove is not valid even if it does not appear in rootCaRemove",
     /// `Ieee1609Dot2Dot1CertManagement`), and SCMS Manager's only published root removal
     /// (the 2025-07-17 test CTL, sequence 3, drops a root that sequence 2 approved and that
-    /// is valid until 2031) leaves `rootCaRemove` empty. A removed elector is listed in
-    /// `electorRemove` (no published US example either way).
+    /// is valid until 2031) leaves `rootCaRemove` empty. That same test CTL still carries
+    /// the dropped root's certificate in `unsigned` (gov C-11), so the CTL that removes a
+    /// root carries `removed_root` once beside the approved ones, and later CTLs drop it
+    /// (seen in the test CTL only; production practice unknown). A device keeps only the
+    /// roots `rootCaApprove` names, so the carried certificate grants no trust. A removed
+    /// elector is listed in `electorRemove` (no published US example either way).
     fn build_ctl(
         &self,
         sequence: u32,
         effective: u32,
         removed_elector: Option<[u8; 48]>,
+        removed_root: Option<&Certificate>,
         signers: &[u32],
     ) -> SignedCtl {
         let electors: Vec<[u8; 48]> = self
@@ -2223,6 +2228,7 @@ impl Governance {
         let root_certs = approved_roots
             .iter()
             .map(|r| r.authority.cert.clone())
+            .chain(removed_root.cloned())
             .collect();
         let m = ctl::build_ctl(&tbs, root_certs, &signing).expect("a CTL builds");
         SignedCtl {
@@ -2408,7 +2414,7 @@ impl Governance {
     /// tests a device must pass.
     #[must_use]
     pub fn ctl_endorsed_by(&self, electors: &[u32]) -> SignedCtl {
-        self.build_ctl(self.ctl.sequence, self.ctl.effective, None, electors)
+        self.build_ctl(self.ctl.sequence, self.ctl.effective, None, None, electors)
     }
 
     /// A CTL with the next sequence number, the current approvals, `quorum` for the CTL
@@ -2418,7 +2424,13 @@ impl Governance {
     pub fn forge_next_ctl(&self, quorum: u32, electors: &[u32]) -> SignedCtl {
         let mut g = self.shadow();
         g.quorum = quorum;
-        g.build_ctl(self.ctl.sequence + 1, self.ctl.effective, None, electors)
+        g.build_ctl(
+            self.ctl.sequence + 1,
+            self.ctl.effective,
+            None,
+            None,
+            electors,
+        )
     }
 
     fn shadow(&self) -> Governance {
@@ -2458,6 +2470,7 @@ impl Governance {
         decided_at: SimTime,
         signers: &[u32],
         removed_elector: Option<[u8; 48]>,
+        removed_root: Option<Certificate>,
         detail: String,
     ) -> SimTime {
         self.counters.manager_decisions += 1;
@@ -2467,7 +2480,13 @@ impl Governance {
         // 2025-08-13; the test sequences 1-3 were published 0-4 days after theirs.
         let effective = self.config.clock.time32(decided_at).unwrap_or(0);
         let seq = self.next_sequence();
-        let ctl = self.build_ctl(seq, effective, removed_elector, signers);
+        let ctl = self.build_ctl(
+            seq,
+            effective,
+            removed_elector,
+            removed_root.as_ref(),
+            signers,
+        );
         self.counters.elector_endorsements += u32::try_from(signers.len()).unwrap_or(0);
         self.log.push(GovernanceEvent {
             decided_at,
@@ -2512,6 +2531,7 @@ impl Governance {
             decided_at,
             &signers,
             None,
+            None,
             label.to_string(),
         );
         (id, at)
@@ -2526,9 +2546,17 @@ impl Governance {
             .find(|r| r.approved && cert_hashed_id32(&r.authority.cert).ok() == Some(root))?;
         slot.approved = false;
         let label = slot.label.clone();
+        let dropped = slot.authority.cert.clone();
         self.counters.roots_removed += 1;
         let signers = self.approved_signers();
-        Some(self.decide(CtlChangeKind::RemoveRoot, decided_at, &signers, None, label))
+        Some(self.decide(
+            CtlChangeKind::RemoveRoot,
+            decided_at,
+            &signers,
+            None,
+            Some(dropped),
+            label,
+        ))
     }
 
     /// Home-provider root rollover (key changeover, Provider Req. §3.5.4): a new root key
@@ -2573,6 +2601,7 @@ impl Governance {
             CtlChangeKind::AddRoot,
             decided_at,
             &signers,
+            None,
             None,
             format!("{label} rollover"),
         );
@@ -2658,6 +2687,7 @@ impl Governance {
             decided_at,
             &signers,
             Some(removed),
+            None,
             format!("slot {slot} -> slot {new_slot}"),
         );
         Some((new_slot, at))

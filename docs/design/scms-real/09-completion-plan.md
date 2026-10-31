@@ -825,3 +825,20 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   Left to D1 (R5): the scenario key `security.scms.lifecycle.ctl_genesis_sequence`
   (`auto` "By date, as the production series", `0`, `1`; "The sequence number of the
   run's first trust list") mapped to `ScmsParams::ctl_genesis_sequence`.
+
+### gov C-11
+
+- 2026-10-31 (wave D R2, agent D2): **a CTL that removes a root carries it once.**
+  `build_ctl` (`governance.rs`, was `:2205-2208`) put only the approved roots in
+  `unsigned`. It now takes `removed_root: Option<&Certificate>` and carries it after the
+  approved ones; `decide` threads `Option<Certificate>`, and only `remove_root` passes
+  `Some` (the dropped slot's certificate). `rootCaRemove` stays empty, as in the test CTL.
+  Labelled "seen in the test CTL only; production practice unknown" (`constants.md`
+  `ctl_removal_carries_root`). Test `governance::tests::a_removal_ctl_carries_the_dropped_root_once`
+  (approve entries + 1 certificates, the extra one the dropped root; a device still drops
+  it; the next CTL carries exactly the approved roots), red with no carry (left 1, right
+  2). G-SCMS unmoved (checked unblessed): no golden case removes a root. Cases that do:
+  `scenarios/edge/peer-root-removed.yaml` (E8.peer-root-removed) and any scenario setting
+  `root_removal_at_s` or `peer_root_removal_at_s`; their removal CTL, and the chain files
+  and composite CRL downloads that carry it, grow by one root certificate until the next
+  CTL. The E8 row's re-run is wave E (verdict open).

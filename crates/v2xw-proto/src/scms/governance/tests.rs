@@ -237,7 +237,7 @@ fn an_elector_replacement_is_installed_in_sequence() {
     assert_eq!(dec.elector_approve().len(), 5);
     assert_eq!(early.install_ctl(&c1), Ok(4));
     // CTL 2 signed by the new elector and two old ones.
-    let c2 = g.build_ctl(c1.sequence + 1, c1.effective, None, &[5, 1, 2]);
+    let c2 = g.build_ctl(c1.sequence + 1, c1.effective, None, None, &[5, 1, 2]);
     assert_eq!(early.install_ctl(&c2), Ok(3));
     assert_eq!(
         late.install_ctl(&c2),
@@ -251,7 +251,7 @@ fn an_elector_replacement_is_installed_in_sequence() {
     }
     assert_eq!(late.install_ctl(&c2), Ok(3));
     // The removed elector no longer counts.
-    let c3 = g.build_ctl(c1.sequence + 2, c1.effective, None, &[0, 1, 2]);
+    let c3 = g.build_ctl(c1.sequence + 2, c1.effective, None, None, &[0, 1, 2]);
     assert_eq!(
         early.install_ctl(&c3),
         Err(TrustError::CtlQuorum {
@@ -724,4 +724,52 @@ fn the_genesis_sequence_follows_the_production_series() {
     let published = g.remove_root(root, DAY).expect("approved");
     g.publish_due(published);
     assert_eq!(g.ctl.sequence, 2);
+}
+
+/// gov C-11: the CTL that removes a root carries the dropped root's certificate once in
+/// `unsigned` (the 2025-07-17 test CTL, sequence 3, still carries the root it stops
+/// approving), and the next CTL carries exactly the approved roots. A device trusts only
+/// the approved ones.
+#[test]
+fn a_removal_ctl_carries_the_dropped_root_once() {
+    let mut g = gov();
+    let mut t = bootstrapped(&g);
+    let (peer, at) = g.add_root(&rng(), "provider-b", 0);
+    g.publish_due(at);
+    assert_eq!(t.install_ctl(&g.ctl), Ok(5));
+    assert!(t.roots.contains_key(&peer));
+    // The removal: approve entries + 1 certificates, the extra one the dropped root.
+    let at = g.remove_root(peer, at + DAY).expect("approved");
+    g.publish_due(at);
+    let removal = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    let approved = removal.root_ca_approve();
+    assert_eq!(approved.len(), 1, "the home root only");
+    assert!(
+        removal.root_ca_remove().is_empty(),
+        "rootCaRemove stays empty"
+    );
+    assert_eq!(removal.certificates.len(), approved.len() + 1);
+    let carried: Vec<[u8; 32]> = removal
+        .certificates
+        .iter()
+        .map(|c| cert_hashed_id32(c).expect("encodes"))
+        .collect();
+    assert!(carried.contains(&peer), "the dropped root is carried");
+    assert!(approved.iter().all(|h| carried.contains(h)));
+    // A device installs it and drops the root all the same.
+    assert_eq!(t.install_ctl(&g.ctl), Ok(5));
+    assert!(!t.roots.contains_key(&peer), "carried is not approved");
+    assert_eq!(t.roots.len(), 1);
+    // The next CTL carries exactly the approved roots.
+    let (_, at) = g.add_root(&rng(), "provider-c", at + DAY);
+    g.publish_due(at);
+    let next = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    assert_eq!(next.root_ca_approve().len(), 2);
+    assert_eq!(next.certificates.len(), next.root_ca_approve().len());
+    assert!(
+        next.certificates
+            .iter()
+            .all(|c| cert_hashed_id32(c).expect("encodes") != peer),
+        "the dropped root is carried once only"
+    );
 }
