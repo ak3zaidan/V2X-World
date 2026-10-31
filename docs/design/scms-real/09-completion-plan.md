@@ -126,3 +126,14 @@ Dated notes go under each id as its wave lands.
   13 / 28; 186,368 BSMs discarded as in the future and 141,407 as too old. Fault (window
   opened to a year): reports about honest devices 13 -> 11,401. Row E2 in
   `scms/scms-edge-cases.yaml` updated.
+
+### SC-D7
+
+- **2026-10-30 (wave A): closed, already fixed (R-CCSIG, wave 3).** The certificate cycle
+  signs a node's messages with ECDSA and checks the PQ signature once per certificate it
+  learns, as the NDSS 2024 Partially-Hybrid design does (ccsig-memory §1, faults F1 and F2
+  red; test `cert_cycle_signature::hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid`).
+  The final-bench rows were never moved after the fix; they now point at the final-run
+  re-measurements: ML-DSA-44 cycle 0 -> 50,183 frames, MTU refusals 50,180 -> 2 (the
+  relayed reports), BSM PSDU 814 B; Falcon-512 cycle PSDU 1,045 -> 380 B (the NDSS
+  prediction); verify cost 0.630 ms against ECDSA's 0.628.
