@@ -62,7 +62,10 @@ fn a_profile_without_p384_scales_p256_by_the_reference_ratio_and_says_so() {
         assert!((k - want).abs() < 0.01, "{op}: ratio {k}, want {want}");
         let t = p.op_cost(op).expect("priced").0.as_nanos() as f64;
         let base = p.op_cost(p256).expect("priced").0.as_nanos() as f64;
-        assert!((t / base - k).abs() < 1e-6, "{op}: {t} ns against {base} ns");
+        assert!(
+            (t / base - k).abs() < 1e-6,
+            "{op}: {t} ns against {base} ns"
+        );
         let facts = p.op_cost_facts(op).expect("priced");
         assert!(
             facts

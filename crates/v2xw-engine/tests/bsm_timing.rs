@@ -145,7 +145,10 @@ fn the_settings_load_and_out_of_range_ones_are_refused() {
         assert!(validate(&us).is_empty(), "{c}: {:?}", validate(&us));
     }
     us.detection.local[0].params = serde_json::json!({"consecutive": "lost"});
-    assert!(!validate(&us).is_empty(), "an unknown consecutive was accepted");
+    assert!(
+        !validate(&us).is_empty(),
+        "an unknown consecutive was accepted"
+    );
 }
 
 /// `bsm_timing.stamp_chain` (P1-E4 stamp model, p1-realdata-baseline.md §7.2): the named

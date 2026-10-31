@@ -664,13 +664,25 @@ fn a_second_aca_on_an_iss_pattern_provider_builds_and_signs() {
     // ISS publishes no second PCA, so an extra ISS-pattern ACA takes the 2022 module's
     // version 2 (documented deviation; the bodies are identical).
     let ssp = |a: &v2xw_proto::scms::pdu::Authority| {
-        let perms = a.cert.0.to_be_signed.app_permissions.as_ref().expect("appPermissions");
+        let perms = a
+            .cert
+            .0
+            .to_be_signed
+            .app_permissions
+            .as_ref()
+            .expect("appPermissions");
         let p = &perms.0[0];
         let bytes = match p.ssp.as_ref().expect("an SSP") {
-            v2xw_msg::sec_types::ieee1609_dot2_base_types::ServiceSpecificPermissions::opaque(o) => o.to_vec(),
+            v2xw_msg::sec_types::ieee1609_dot2_base_types::ServiceSpecificPermissions::opaque(
+                o,
+            ) => o.to_vec(),
             other => panic!("not opaque: {other:?}"),
         };
         (p.psid.clone(), bytes[0], bytes.len())
     };
-    assert_eq!(ssp(a0), ssp(a1), "the same permission and SSP choice as the core ACA");
+    assert_eq!(
+        ssp(a0),
+        ssp(a1),
+        "the same permission and SSP choice as the core ACA"
+    );
 }

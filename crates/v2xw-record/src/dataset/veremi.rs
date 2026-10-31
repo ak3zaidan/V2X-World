@@ -1495,12 +1495,22 @@ mod tests {
         truth_at.insert((5, 10_000_000_000), rec(10_000_000_000, 101.0));
         let first = sender_truth(&truth_at, 5, 9_781_000_000).expect("joined forward");
         assert_eq!(first.t, 9_781_000_000);
-        assert!((first.x_m - (100.0 - 10.0 * 0.119)).abs() < 1e-9, "{}", first.x_m);
+        assert!(
+            (first.x_m - (100.0 - 10.0 * 0.119)).abs() < 1e-9,
+            "{}",
+            first.x_m
+        );
         assert_eq!(first.y_m, 50.0);
         let later = sender_truth(&truth_at, 5, 9_950_000_000).expect("at or before");
         assert_eq!(later.x_m, 100.0);
-        assert!(sender_truth(&truth_at, 5, 9_600_000_000).is_none(), "0.3 s early");
-        assert!(sender_truth(&truth_at, 6, 9_950_000_000).is_none(), "another actor");
+        assert!(
+            sender_truth(&truth_at, 5, 9_600_000_000).is_none(),
+            "0.3 s early"
+        );
+        assert!(
+            sender_truth(&truth_at, 6, 9_950_000_000).is_none(),
+            "another actor"
+        );
     }
 
     #[test]

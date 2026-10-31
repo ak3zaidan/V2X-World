@@ -1033,7 +1033,11 @@ impl HardwareProfile {
         self.crypto_anchors
             .iter()
             .map(String::as_str)
-            .chain(device.into_iter().flat_map(|d| d.anchors.iter().map(|x| x.profile)))
+            .chain(
+                device
+                    .into_iter()
+                    .flat_map(|d| d.anchors.iter().map(|x| x.profile)),
+            )
             .find_map(|r| {
                 let x = a.cost.row(r)?.duration(kind)?.as_nanos();
                 let y = b.cost.row(r)?.duration(base_kind)?.as_nanos();
