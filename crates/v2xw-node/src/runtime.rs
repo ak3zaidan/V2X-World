@@ -558,6 +558,11 @@ pub struct ObuRuntime {
     /// `drops` as `tx_overflow`; kept apart so a starving unit can be told from a full
     /// queue.
     tx_uncredentialed: u64,
+    /// SRMs due that the node did not send because it is a privileged vehicle (its
+    /// identification slot was filled) with no identification certificate valid at the
+    /// time: a pseudonym does not sign one in its place (SC-P9.2). Also in
+    /// `tx_uncredentialed` and in `drops` as `tx_overflow`.
+    srm_no_identification: u64,
     clock: ClockModel,
     belief: PositionEstimate,
     stores: Stores,
@@ -674,6 +679,7 @@ impl ObuRuntime {
             parse_starts: VecDeque::new(),
             drops: DropLedger::new(),
             tx_uncredentialed: 0,
+            srm_no_identification: 0,
             clock: ClockModel::new(0.0),
             belief: PositionEstimate::no_fix(at),
             stores,
@@ -824,9 +830,36 @@ impl ObuRuntime {
         Ok(())
     }
 
+    /// Installs one OBU identification certificate the SCMS issued (SC-P9.2) in the
+    /// identification signer slot, beside the pseudonym pool
+    /// ([`crate::secure::NodeSecurity::install_identification`]): from then on the node's
+    /// SRMs are signed under the certificate valid at the time, and never under a
+    /// pseudonym. The BSM stays on pseudonyms (ASSUMPTION: whether a US emergency vehicle
+    /// signs BSMs under its identification certificate in emergency mode is unpublished).
+    /// Returns the certificate's `HashedId8`.
+    ///
+    /// # Errors
+    /// The key does not reconstruct under its issuer, which a device refuses.
+    pub fn install_identification(
+        &mut self,
+        key: &v2xw_sec::credential::ImplicitKey,
+        valid_from: SimTime,
+        valid_until: SimTime,
+    ) -> Result<HashedId8, v2xw_sec::SecError> {
+        self.security
+            .install_identification(self.node, key, valid_from, valid_until)
+            .map(|s| s.digest().clone())
+    }
+
     /// Messages the node had due and did not send for want of a usable credential.
     pub fn tx_uncredentialed(&self) -> u64 {
         self.tx_uncredentialed
+    }
+
+    /// SRMs a privileged vehicle did not send because no identification certificate was
+    /// valid (SC-P9.2).
+    pub fn srm_no_identification(&self) -> u64 {
+        self.srm_no_identification
     }
 
     /// The node's stores, mutably, for the engine's provisioning and CRL paths.
@@ -1187,6 +1220,13 @@ impl ObuRuntime {
         self.stores.neighbors.age(believed);
         self.stores.heard.age(believed);
         self.stores.certs.travelled(distance_travelled_m);
+        // The change rule reads displacement from the last change point (veh C6), on the
+        // device's own fix: without one it knows no position.
+        if self.belief.fix.has_position() {
+            self.stores
+                .certs
+                .position(self.belief.pos.x, self.belief.pos.y);
+        }
         self.stores.certs.sweep(believed, &self.stores.crl);
         let changes_before = self.stores.certs.changes();
         let _ = self
@@ -2287,6 +2327,35 @@ impl ObuRuntime {
                 continue;
             };
             let r = (msg_type, at);
+            // SC-P9.2, [CAMP122] Table 1 row 44: a privileged vehicle signs its signal
+            // requests under its identification certificate. One that holds none valid
+            // now sends none: a pseudonym does not stand in.
+            if r.0 == MsgType::Srm && self.security.holds_identification() {
+                let ident = self.security.sign_identified(ctx, r.0, &payload, believed);
+                let Some(Ok((frame, pdu))) = ident else {
+                    if ident.is_none() {
+                        self.srm_no_identification += 1;
+                        self.tx_uncredentialed += 1;
+                    }
+                    self.drops.record(DropCause::TxOverflow);
+                    continue;
+                };
+                let signer = self
+                    .security
+                    .identification_signer(believed)
+                    .map_or_else(|| cred.digest.clone(), |s| s.digest().clone());
+                self.queue_signed(
+                    ctx,
+                    believed,
+                    r,
+                    (frame, &pdu),
+                    signer,
+                    None,
+                    bsm_fields,
+                    out,
+                );
+                continue;
+            }
             let sid = self.security.signer_id_for(r.0, believed);
             // TS 103 097 §7.1.2: a DENM's envelope carries its generation location, and the
             // ETSI profile refuses to sign one without it. The node's own belief.
@@ -2308,70 +2377,104 @@ impl ObuRuntime {
                 self.drops.record(DropCause::TxOverflow);
                 continue;
             };
-            // The cost is charged over the bytes actually signed, not over zero: a cost
-            // table that ever grows a per-byte term will then be read correctly without
-            // anyone having to remember to come back here.
-            let op = OpDescriptor::sign(self.config.sign_op, frame.payload_bytes());
-            let Some(cost) = self.service.service_time(ctx, &op) else {
-                // The profile costs no signature. Nothing is signed for free.
-                self.drops.record(DropCause::TxOverflow);
-                continue;
-            };
-            let at = believed.saturating_add(tx_delay);
-            let sched = match self.service.runs_on(&op) {
-                RunsOn::Hsm => self.hsm.submit(at, cost),
-                RunsOn::Accelerator => self.accel.submit(at, cost),
-                RunsOn::Cpu => self.cpu.submit(at, cost),
-            };
-            let full_certificate = pdu.signer_id == v2xw_sec::SignerIdChoice::Certificate;
-            let bytes = frame.bytes_on_wire();
-            let tx = Transmission {
+            let signer = cred.digest.clone();
+            self.queue_signed(
+                ctx,
+                believed,
+                r,
+                (frame, &pdu),
+                signer,
+                report.as_ref(),
+                bsm_fields,
+                out,
+            );
+        }
+    }
+
+    /// Charges one signed message's signature to the profile's server bank and queues it
+    /// for the air: the second half of [`ObuRuntime::generate`]'s loop, shared by the
+    /// pseudonym path and the identification slot (SC-P9.2). `signer` is the digest the
+    /// frame is signed under; `report` is the BSM timing model's, which moves the
+    /// generation time and the transmit instant.
+    #[allow(clippy::too_many_arguments)]
+    fn queue_signed(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        believed: SimTime,
+        r: (MsgType, SimTime),
+        signed: (SignedFrame, &v2xw_sec::envelope::SecuredPdu),
+        signer: HashedId8,
+        report: Option<&crate::bsm_timing::BsmReport>,
+        bsm_fields: crate::bsm_timing::BsmExtras,
+        out: &mut StepOutcome,
+    ) {
+        let (frame, pdu) = signed;
+        let tx_delay = report.map_or(0, |x| x.tx_delay_ns);
+        let jitter =
+            report.map_or(0, |x| x.header_jitter_ns) + i64::try_from(tx_delay).unwrap_or(i64::MAX);
+        // The cost is charged over the bytes actually signed, not over zero: a cost
+        // table that ever grows a per-byte term will then be read correctly without
+        // anyone having to remember to come back here.
+        let op = OpDescriptor::sign(self.config.sign_op, frame.payload_bytes());
+        let Some(cost) = self.service.service_time(ctx, &op) else {
+            // The profile costs no signature. Nothing is signed for free.
+            self.drops.record(DropCause::TxOverflow);
+            return;
+        };
+        let at = believed.saturating_add(tx_delay);
+        let sched = match self.service.runs_on(&op) {
+            RunsOn::Hsm => self.hsm.submit(at, cost),
+            RunsOn::Accelerator => self.accel.submit(at, cost),
+            RunsOn::Cpu => self.cpu.submit(at, cost),
+        };
+        let full_certificate = pdu.signer_id == v2xw_sec::SignerIdChoice::Certificate;
+        let bytes = frame.bytes_on_wire();
+        let tx = Transmission {
+            msg_type: r.0,
+            bytes,
+            signer: signer.clone(),
+            full_certificate,
+            ready_at: sched.finish,
+            generation_time: if jitter >= 0 {
+                r.1.saturating_add(jitter.unsigned_abs())
+            } else {
+                r.1.saturating_sub(jitter.unsigned_abs())
+            },
+            sign_start: sched.start,
+            signed: Some(frame),
+            claimed_pos: report.map(|x| x.pos),
+            bsm: bsm_fields,
+        };
+        if let Admission::Refused(_) = self.queues[3].push(Queued {
+            item: RxFrame {
+                signer: Some(signer),
                 msg_type: r.0,
                 bytes,
-                signer: cred.digest.clone(),
+                claimed_pos: Some(self.belief.pos),
+                claimed_speed_mps: self.belief.ground_speed_mps(),
+                claimed_heading_rad: self.belief.heading_rad,
+                claimed_generation_time: r.1,
                 full_certificate,
-                ready_at: sched.finish,
-                generation_time: if jitter >= 0 {
-                    r.1.saturating_add(jitter.unsigned_abs())
-                } else {
-                    r.1.saturating_sub(jitter.unsigned_abs())
-                },
-                sign_start: sched.start,
-                signed: Some(frame),
-                claimed_pos: report.map(|x| x.pos),
+                signature_valid: true,
+                signer_validity: None,
+                spdu: None,
+                signer_certificate: None,
                 bsm: bsm_fields,
-            };
-            if let Admission::Refused(_) = self.queues[3].push(Queued {
-                item: RxFrame {
-                    signer: Some(cred.digest.clone()),
-                    msg_type: r.0,
-                    bytes,
-                    claimed_pos: Some(self.belief.pos),
-                    claimed_speed_mps: self.belief.ground_speed_mps(),
-                    claimed_heading_rad: self.belief.heading_rad,
-                    claimed_generation_time: r.1,
-                    full_certificate,
-                    signature_valid: true,
-                    signer_validity: None,
-                    spdu: None,
-                    signer_certificate: None,
-                    bsm: bsm_fields,
-                },
-                enqueued_at: believed,
-            }) {
-                self.drops.record(DropCause::TxOverflow);
-                continue;
-            }
-            let _ = self.queues[3].pop();
-            if full_certificate {
-                self.security.note_certificate_attached(r.0, believed);
-            }
-            // Air time is the PHY's to compute; until a scenario wires one in, the node
-            // reports the byte count and leaves `airtime_ms_per_s` at zero contribution
-            // rather than inventing a data rate.
-            self.window.message_out(Duration::ZERO, tx.full_certificate);
-            out.transmissions.push(tx);
+            },
+            enqueued_at: believed,
+        }) {
+            self.drops.record(DropCause::TxOverflow);
+            return;
         }
+        let _ = self.queues[3].pop();
+        if full_certificate {
+            self.security.note_certificate_attached(r.0, believed);
+        }
+        // Air time is the PHY's to compute; until a scenario wires one in, the node
+        // reports the byte count and leaves `airtime_ms_per_s` at zero contribution
+        // rather than inventing a data rate.
+        self.window.message_out(Duration::ZERO, tx.full_certificate);
+        out.transmissions.push(tx);
     }
 
     /// The timing model's report for the BSM about to be built, drawing the device's

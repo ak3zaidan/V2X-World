@@ -2027,10 +2027,26 @@ pub fn inspect_cert(
     crl_hex: &BTreeMap<String, String>,
     time32: u32,
 ) -> Option<Value> {
+    inspect_cert_in(id8, &[store], roots, crls, crl_hex, time32)
+}
+
+/// [`inspect_cert`] over several certificate stores (HashedId8 → COER hex), searched in
+/// order: the server keeps the authority certificates apart from the bounded store of
+/// device certificates, so a long run's pseudonyms never evict a chain's root (U9).
+#[must_use]
+pub fn inspect_cert_in(
+    id8: &str,
+    stores: &[&BTreeMap<String, String>],
+    roots: &[String],
+    crls: &[CrlHead],
+    crl_hex: &BTreeMap<String, String>,
+    time32: u32,
+) -> Option<Value> {
     use v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier;
     let id8 = id8.to_ascii_lowercase();
     let decode = |h: &str| unhex(h).and_then(|b| exact::<Certificate>(&b));
-    let cert = decode(store.get(&id8)?)?;
+    let lookup = |k: &str| stores.iter().find_map(|s| s.get(k));
+    let cert = decode(lookup(&id8)?)?;
     let mut chain = vec![cert.clone()];
     let mut missing = None;
     while chain.len() < v2xw_sec::chain::MAX_CHAIN_LENGTH + 1 {
@@ -2041,7 +2057,7 @@ pub fn inspect_cert(
             }
             _ => break,
         };
-        match store.get(&issuer).and_then(|h| decode(h)) {
+        match lookup(&issuer).and_then(|h| decode(h)) {
             Some(c) => chain.push(c),
             None => {
                 missing = Some(issuer);
@@ -2209,6 +2225,38 @@ pub fn crl_entries(crl_hex: &str, certs: &[(&str, &str)]) -> Option<Value> {
         "linkage": linkage,
         "hash": hashes,
     }))
+}
+
+/// What a device's receiver files an installed CRL under (`node.security`'s `crls[]`,
+/// `v2xw_node::rxval::HeldCrl`): `(crlCraca hex, crlSeries, counter, issueDate)`, where the
+/// counter is `crlSerial` (a hash CRL) or `iRev · 256 + indexWithinI` (a linkage CRL).
+/// `None` for bytes that do not decode as a `SecuredCrl`.
+#[must_use]
+pub fn crl_key(crl_hex: &str) -> Option<(String, u16, u32, u32)> {
+    use v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents as T;
+    let opened = unhex(crl_hex).and_then(|b| v2xw_sec::crl::decode_crl(&b).ok())?;
+    let c = &opened.contents;
+    let counter = match &c.type_specific {
+        T::fullHashCrl(h) | T::deltaHashCrl(h) => h.crl_serial.0,
+        T::fullLinkedCrl(l) | T::deltaLinkedCrl(l) => {
+            u32::from(l.i_rev.0.0) * 256 + u32::from(l.index_within_i.0)
+        }
+        _ => 0,
+    };
+    Some((
+        hex(&c.crl_craca.0[..]),
+        c.crl_series.0.0,
+        counter,
+        c.issue_date.0.0,
+    ))
+}
+
+/// The `[start, end)` of a certificate's validity period, Time32 seconds, from its COER
+/// hex. `None` for bytes that do not decode as a certificate.
+#[must_use]
+pub fn cert_validity(cert_hex: &str) -> Option<(u64, u64)> {
+    let c = unhex(cert_hex).and_then(|b| exact::<Certificate>(&b))?;
+    Some(v2xw_sec::ctl::validity(&c))
 }
 
 /// The HashedId8s, among `certs` (HashedId8 → COER hex), of the certificates the CRL

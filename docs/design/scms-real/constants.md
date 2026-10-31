@@ -103,6 +103,8 @@ Source tags are those of 01 §Sources and 03 §0. Two sources are new in this fi
 | `availability.model` | `always-up` | - | ASSUMPTION | `service.rs` `AvailabilityModel`, `kernel.rs` `availability_windows` (SC-P12.1) | Off by default. `two-state`: up times exponential with mean MTBF, down times exponential with mean MTTR (06-node-models §4, `todo-calibrate`), each interval a keyed hash of (seed, entity, k, kind). Every entity starts up at 0. No provider publishes its availability; the values are for the sensitivity sweeps (09 §6) |
 | `availability.mtbf_h` | 720 | h | ASSUMPTION | `AvailabilityModel::mtbf` | Mean time between failures. Not published (06 §7.7). Menu 24, 168, 720, 8,760 h |
 | `availability.mttr_min` | 30 | min | ASSUMPTION | `AvailabilityModel::mttr` | Mean time to repair. Not published. Menu 5, 30, 60, 240 min. A drawn outage is an `offline` fault, so the backend retry (`BACKEND_RETRY`, SC-D4) and the EE timeout handle it as a `failures[]` window |
+| `service_time.model` | `deterministic` | - | ASSUMPTION | `service.rs` `ServiceTimeModel`, `ServiceQueue::admit` (SC-P12.2) | Off by default. `log-normal`: each request's `work + fixed_overhead` times `exp(σ·z)`, `μ = 0`, `σ = sqrt(ln(1 + cv²))`, so the median is the cost table's time; `z` is a Box-Muller normal from two keyed hashes of (seed, entity, request index, kind), integer ns after rounding. The shape is the 06-node-models §4 `high` tier's, not measured |
+| `service_time.cv` | 0.25 | - | ASSUMPTION | `ServiceTimeModel::LogNormal::cv_milli` (thousandths) | Spread of service times (coefficient of variation). Not published. Menu 0.1, 0.25, 0.5, 1.0 (range 0-3, step 0.05) |
 
 ### 1.7 Wire sizes
 

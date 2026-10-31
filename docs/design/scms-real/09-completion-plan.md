@@ -769,6 +769,30 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   so no golden moves. Not shown red: the enrolment-kept assert alone (the PSID fault fails
   the same test first).
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3; P9.1 only). Proto `appcert` passes on the merged tree. Still open: P9.2 (C2) and P9.3 (D1); the scratch kernel starts at 0 for a back-dated enrolment.
+- 2026-10-31 (wave C R5, P9.2, agent C2): **the identification signer slot.** Cause: a
+  node had one signer map, the pseudonym pool (`NodeSecurity::signers`, `secure.rs`), and
+  the transmit loop signed every message under the active pseudonym
+  (`ObuRuntime::generate`, `runtime.rs`, was `:2290-2306`), so an identification
+  certificate had nowhere to live and an SRM could only go out under a pseudonym. Now
+  `NodeSecurity` holds an identification slot beside the pool
+  (`install_identification`, `identification_signer`, `sign_identified`), filled through
+  `ObuRuntime::install_identification` and, from the engine, through
+  `wiring::install_identification_certs` (`IdentificationCred { valid_from, valid_until,
+  key }`, any `CredentialSink`). The slot is never rotated and `forget_credentials` keeps
+  it; a renewal is added beside the current certificate and the one valid at the node's
+  own time that opened last signs. Once the slot has been filled, an SRM is signed only
+  under it: the first SPDU under each identification certificate carries it whole, and
+  with none valid the SRM is not sent (`ObuRuntime::srm_no_identification`, also in
+  `tx_uncredentialed`), the source for P9.3's `srm_unsigned_no_ident`. The BSM stays on
+  pseudonyms (ASSUMPTION, unpublished for US emergency mode). A node never given one
+  signs SRMs under its pseudonym as before. The post-signature half of the loop moved,
+  unchanged, into `ObuRuntime::queue_signed`. Test
+  `runtime_behaviour::an_srm_is_signed_by_the_identification_slot` (red with
+  `sign_identified` signing under the active pseudonym: the SPDU's signer differs from the
+  identification digest). No golden moves: nothing in the engine fills the slot yet (P9.3,
+  D1: call `install_identification_certs` after `install_rsu_app_certs` for each
+  emergency-class vehicle's preloaded and renewed certificates; G-SCMS not re-run here).
+  Left: the SRM's requestor `VehicleID` is still the pseudonym-derived station id.
 
 ### SC-P12
 
@@ -794,6 +818,126 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `scms-knobs.yaml` rows. Note: the engine's `scms_topology.rs` `with_capacity` rebuilds
   the spec with `ServiceModelSpec::new`, which drops a model, so P12.3 must keep it there.
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3; P12.1 only). Proto `availability` passes on the merged tree. Still open: P12.2 not started; P12.3 (D1) wiring and the `scms_topology.rs` `with_capacity` drop of the model.
+- 2026-10-31 (wave C R5, P12.2, agent C3): **log-normal service times, off by default.**
+  Cause: `ServiceQueue::admit` (`service.rs`, was `:291-294`) served every request in
+  exactly `work + fixed_overhead`, and `ServiceModelSpec` had no field for anything else.
+  Now `ServiceModelSpec::service_time` is a `ServiceTimeModel` (`Deterministic`, the
+  default, or `LogNormal { cv_milli }`, set with `.varied(..)`, kept by
+  `ServiceQueue::spec`). Under the log-normal, `admit` multiplies the service time by
+  `exp(σ·z)`, `σ = sqrt(ln(1 + cv²))`, `μ = 0` (median 1), with `z` a Box-Muller normal
+  from two keyed hashes of `(seed, entity, served, kind)`, no stream position, rounded to
+  integer ns. `Kernel::host` keys each queue by its node index and
+  `Kernel::seed_service_times(seed)` sets the run seed (0 until called). The
+  deterministic path has no float and is unchanged. Also fixed: P12.1's exponential
+  interval called `f64::ln`, which `v2xw_core::math` forbids (platform libm); it now
+  calls `v2xw_core::math::ln` (off by default, so no golden). Parameters are rows in
+  `constants.md` §1.6 (ASSUMPTION). Tests `availability::service_times_are_lognormal_with_median_one`
+  (red with `σ = cv`: sample cv 1.318 against 1.0) and
+  `availability::the_same_seed_gives_the_same_service_times` (red with `Kernel::host`
+  keying every queue as entity 0: two entities shared draws). No golden moves: no entity
+  has a model. Left to P12.3 (D1): the `service_time.model` and `service_time.cv` keys
+  (menus in 10 §1 SC-P12), the `crypto_config.rs` mapping to `cv_milli`, the call
+  `kernel.seed_service_times(seed)` before the first dispatch, keeping the model in
+  `scms_topology.rs` `with_capacity` (it rebuilds the spec with `ServiceModelSpec::new`,
+  which drops both models), and the `scms-knobs.yaml` rows (`{service_time.cv, 0 -> 1,
+  report.topup_latency_p99_s, up}`, verdict: open).
+
+### veh C6
+
+- 2026-10-31 (wave D R1, agent D3): **the 2 km condition is the straight-line distance
+  from the last change point.** Cause: `CertStore::change_due` (`v2xw-node/src/stores.rs`,
+  was `:369`) passed `distance_since_change_m`, the distance driven that `travelled` adds
+  up, to `RotationPolicy::is_due`. [CVP-P2] item 25 and [PRIMER] pp.8-9 say "2 km from the
+  last change point". Now `CertStore::position(x, y)` records the device's own believed fix.
+  Both callers (`ObuRuntime::step_timed`, `VruRuntime::step_timed`) call it beside
+  `travelled` when the fix has a position. `change_point` is set at the two resets
+  (the first fix, a change) to the position last reported, or to the first one after a
+  change made without a fix. `is_due` reads `displacement_since_change_m`, and the driven
+  distance stays as a figure (`distance_since_change_m()`). Strategies `j2945-1`,
+  `nyc-pilot` and `distance` change; `time`, `c2c-cc` (the engine's own odometer),
+  `mix-zone` and `silent` do not. The three option descriptions in `scenario/options.rs`
+  now say "in a straight line from the last change point" (D1's file, text only). Test
+  `stores::tests::a_loop_back_to_the_change_point_is_not_far_enough` (2.5 km driven, 0.3 km
+  away: no change under `J2945_1`; 2.5 km straight: an age change). Red with the travelled
+  distance passed to `is_due`. `rotation_drains_the_pool_in_issue_order` now also reports
+  positions, since a store told only the distance driven knows no displacement. No golden
+  moves: all three G-SCMS scenarios use the `time` strategy (no distance condition), so
+  the check was not re-run. Row `LS.PT30.changes-c6` (`live-scms.yaml`, `le 150`, verdict:
+  open) is for wave E.
+
+### proto H10
+
+- 2026-10-31 (wave D R2, agent D3): **no two linkage CRLs share an `(iRev, indexWithinI)`.**
+  Cause: `issue_secured_crls`'s `next_index` (`v2xw-proto/src/scms/run/crl.rs`, was
+  `:628-633`) saturated the Uint8 at 255, so from the 256th publication at one `iRev`
+  every CRL carried 255. A device ordering lists by that counter (`CrlOrder`) saw
+  different lists under one counter. ASSUMPTION (labelled in `ScmsState::publish_crl`;
+  what happens at 256 is unpublished): a publication whose `iRev` has no index left
+  (`crl_indices_spent`: one for the full list, plus one for a delta when deltas are on)
+  is not issued. Each one is counted in `CrlState::index_exhausted`. The first arms one
+  `CrlPublishTimer` for the start of i-period `iRev + 1`. The coalesced CRL is issued
+  there with index 0 and carries every entry decided meanwhile. `crls_at_i` now counts in
+  `u16` (`run/mod.rs`, D1's file, additive). Under `business_day_sla` (about one
+  publication per business day) the ceiling is never reached. Publication on decision
+  needs 256 decisions in one i-period. The deferral delay then shows in each case's
+  `published` stamp. Test `crl_issuance::no_two_crls_share_an_index_within_a_period`:
+  300 identification revocations in one week give 256 CRLs at `iRev` 0, then one at
+  `(1, 0)` just after `period_start(1)`, with `index_exhausted` = 44. Red with the
+  deferral disabled (today's saturation). No golden moves (only past 255 publications in
+  one i-period). Left to D1: the RunReport leaf `crl_index_exhausted`, read from
+  `state.crlg.index_exhausted`.
+
+### proto B5
+
+- 2026-10-31 (wave D R3, agent D3): **the RA's 1 s acknowledgement is measured, never
+  enforced.** Cause: `ServiceQueue::admit` (`v2xw-proto/src/service.rs`) returned only
+  `done`, and `Kernel::dispatch` (`kernel.rs`) recorded no per-request delay. Now
+  `ServiceQueue::admit_request` records `done - arrival` (the wait for a server included)
+  in `AckDelays`: 17 fixed integer buckets (`ACK_BUCKETS_MS`, 1 ms to 300 s plus overflow),
+  `over_1s` ([CAMP122] §5.2.8.3 SCMS-521) and `p99_ms` (the bucket bound, capped by the
+  longest delay). `Kernel::dispatch_request` uses it, and `ScmsRun`'s delivery loop
+  (`run/mod.rs`, D1's file, additive) calls it for the same requests the queue limit can
+  turn away: from a device or the LOP to another entity. Internal messages and timers are
+  not measured. `Kernel::acks(node)` reads one entity's delays; the RA's are
+  `kernel.acks(nodes.ra)`. Nothing is refused, because no deployed RA figure exists. Test
+  `provisioning::an_overloaded_ra_misses_the_one_second_ack`: 1,024 devices enrol and
+  provision together on c = 1: 3,096 requests, 344 over 1 s, p99 1,498 ms. One device on
+  an idle RA misses none. Red with the delay taken from admission (count 0, p99 2 ms). No
+  golden moves (a counter only; no record carries it). Left to D1: the RunReport leaves
+  `ra_ack_over_1s` and `ra_ack_p99_ms`, read from `kernel.acks(nodes.ra)`.
+
+### UI U1, U4, U6, U9
+
+- 2026-10-31 (wave D R4, agent D3): **answered by the server's PKI store, with no record
+  change.** Cause: every PKI record (`pki.state`, `pki.flow`, `node.credentials`,
+  `node.security`) is in the G-SCMS record digest (`DigestRecorder` excludes nothing, and
+  `pki_view` is on by default), so a new record field would move G-SCMS, which §3 forbids.
+  The facts were already in the records; `v2xw-server/src/pki.rs` now joins them:
+  - **U1:** `node.security` `crls[]` is kept, and each held list gains `crl_id8` (the
+    published version with the same `(crlCraca, crlSeries, counter, issueDate)`, decoded
+    from its bytes by `pki_view::crl_key`) and `provider` (the component holding the
+    CRACA's certificate, else the version's CRL Generator). Both are null for a list
+    never published.
+  - **U4:** vehicle rows gain `in_run` and `left_at_ns` from the last `node.credentials`'
+    `departed` flag (the removal record that already exists), and
+    `enrolment_valid_until` (Time32) and `enrolment_valid_until_ns` from the enrolment
+    certificate's own `validityPeriod`.
+  - **U6:** `inspect.flows` rows and `inspect.flow` gain `device_kinds`: `ee/<n>` is
+    `{kind: rsu, node, rsu}` when `n - SCMS_DEVICE_BASE` is in the roadside range
+    (`ROADSIDE_ID_BASE + i`), else `{kind: vehicle, node}`. Vehicle rows and `owner_of`
+    gain `kind`.
+  - **U9:** `pki.state`'s authority certificates go in an unbounded `authority` map,
+    apart from the `CERT_CAP` device ring. `inspect.cert` searches both
+    (`pki_view::inspect_cert_in`).
+- **Not done (open):** electors stay unopenable. Their certificates are in no record
+  (`pki.state` gives an elector's `cert` as the first 8 bytes of its HashedId48), so
+  opening them needs `pki_state` to carry them, which moves G-SCMS. That needs a spec
+  decision and its own golden commit.
+- Tests: `v2xw-server/tests/pki_requests.rs`, five tests on the committed two-provider
+  fixture, each checked against the records' own bytes (CRLs decoded in the test, the
+  enrolment certificate's JER validity, `node.credentials.node`). Each went red under its
+  fault. The Studio fixtures `pki-tabs.json` and `pki-studio.json` were regenerated
+  (fields added only), and `tests/pki.rs` passes 13/13. No golden moves.
 
 ### gov C-9
 

@@ -101,7 +101,9 @@ pub use net::{BackendNet, Link, Transport};
 pub use overhead::{AirInterface, MessageOverhead, OverheadProfile, Payload};
 pub use pseudonym::{CertEvent, ChangeReason, ChangeTrigger, PseudonymStore, PseudonymStrategy};
 pub use scms::{CAMP_SCMS_ID, CampScms, ScmsNodes, ScmsParams, ScmsRun};
-pub use service::{AvailabilityModel, BatchPolicy, ServiceModelSpec, ServiceQueue};
+pub use service::{
+    ACK_BUCKETS_MS, ACK_SLA_NS, AckDelays, AvailabilityModel, BatchPolicy, ServiceModelSpec, ServiceQueue, ServiceTimeModel,
+};
 pub use sim::{
     Bootstrap, CredentialService, Drained, ProvisioningCost, Pseudonym, RevocationLatency,
 };

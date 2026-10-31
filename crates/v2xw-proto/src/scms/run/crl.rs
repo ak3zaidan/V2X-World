@@ -176,8 +176,9 @@ pub enum HashRefusal {
 /// is issued … without changing iRev"; `Ieee1609Dot2CrlBaseTypes`). A device that holds
 /// a CRL refuses another of the same series whose counter is not higher: a replay of the
 /// Generator's own earlier, validly signed list would otherwise roll a revocation back.
-/// `issueDate` breaks a tie, so a Generator whose `indexWithinI` has reached its Uint8
-/// ceiling within one i-period is still followed. What a real device does with a stale
+/// `issueDate` breaks a tie. A Generator never reuses an `(iRev, indexWithinI)`: once
+/// index 255 is spent at an `iRev`, further publications wait for the next i-period
+/// (proto H10, [`ScmsState::publish_crl`]). What a real device does with a stale
 /// CRL is not published; refusing it is the reading of the counters' purpose (recorded
 /// in docs/design/scms-real/validation/protocols.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -540,6 +541,28 @@ impl ScmsState {
         run: FlowRun,
     ) {
         let n = self.nodes;
+        // proto H10. `indexWithinI` is a Uint8 (`Ieee1609Dot2CrlBaseTypes`), and what a
+        // Generator does once it has issued 256 CRLs at one `iRev` is not published.
+        // ASSUMPTION (labelled): it issues no CRL that reuses an `(iRev, indexWithinI)`.
+        // Every publication that finds the indices spent is coalesced into one, issued at
+        // the start of the next i-period with index 0 and carrying every entry appended
+        // meanwhile; each is counted in `crl_index_exhausted`. Saturating at 255 instead
+        // gave a device two different lists with one counter.
+        if let Some(i_rev) = self.crl_indices_spent(at) {
+            self.crlg.index_exhausted = self.crlg.index_exhausted.saturating_add(1);
+            if !self.crlg.index_deferred {
+                self.crlg.index_deferred = true;
+                let next = self.params.period_start(i_rev.saturating_add(1));
+                out.start_timer(
+                    Duration::from_nanos(next.saturating_sub(at)),
+                    ScmsMsg::CrlPublishTimer,
+                    flow,
+                    run,
+                );
+            }
+            return;
+        }
+        self.crlg.index_deferred = false;
         self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
         self.crlg.versions += 1;
         let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
@@ -597,6 +620,31 @@ impl ScmsState {
         }
     }
 
+    /// The `iRev` a linkage CRL issued at `at` carries: the current i-period, or the
+    /// latest entry's when that is later.
+    fn crl_i_rev(&self, at: SimTime) -> u32 {
+        self.crlg
+            .entries
+            .iter()
+            .map(|e| e.i)
+            .max()
+            .unwrap_or(0)
+            .max(self.params.period_at(at))
+    }
+
+    /// `Some(iRev)` when a publication at `at` would need an `indexWithinI` past 255 at
+    /// its `iRev` (proto H10): the full linkage CRL takes one index, and its delta, when
+    /// deltas are on and a previous list exists, the next. `None` with the PDU layer off,
+    /// where no index is issued.
+    fn crl_indices_spent(&self, at: SimTime) -> Option<u32> {
+        self.pki.as_ref()?;
+        let i_rev = self.crl_i_rev(at);
+        let i_rev16 = u16::try_from(i_rev).unwrap_or(u16::MAX);
+        let used = self.crlg.crls_at_i.get(&i_rev16).copied().unwrap_or(0);
+        let needed = 1 + u16::from(self.params.crl.deltas && self.crlg.secured.is_some());
+        (used + needed > 256).then_some(i_rev)
+    }
+
     /// The real CRLs of one publication (02 §11; 03 §10): a full series-1 linkage CRL
     /// with `iRev` the current i-period (or the latest entry's), `indexWithinI` counting
     /// the CRLs at that `iRev`, `crlCraca` the ICA, signed by the CRL signer; a delta
@@ -606,15 +654,7 @@ impl ScmsState {
     /// the store and the RSUs distribute; `None` with the layer off.
     fn issue_secured_crls(&mut self, at: SimTime) -> Option<crate::scms::pdu::Pdu> {
         let pki = self.pki.clone()?;
-        let i_now = self.params.period_at(at);
-        let i_rev = self
-            .crlg
-            .entries
-            .iter()
-            .map(|e| e.i)
-            .max()
-            .unwrap_or(0)
-            .max(i_now);
+        let i_rev = self.crl_i_rev(at);
         let i_rev16 = u16::try_from(i_rev).unwrap_or(u16::MAX);
         let issue_date = self.time32(at);
         let next_crl = issue_date.saturating_add(
@@ -623,13 +663,13 @@ impl ScmsState {
         );
         // `indexWithinI` counts every full *and* delta CRL issued at this `iRev`
         // (`Ieee1609Dot2CrlBaseTypes`): the full takes the next value and a delta issued
-        // with it the one after. It is a Uint8; past 255 it stays at 255 and `issueDate`
-        // orders the lists ([`CrlOrder`]).
-        let next_index = |crls_at_i: &mut BTreeMap<u16, u8>| {
+        // with it the one after. It is a Uint8, and [`ScmsState::publish_crl`] issues
+        // nothing at an `iRev` whose 256 values are spent (proto H10).
+        let next_index = |crls_at_i: &mut BTreeMap<u16, u16>| {
             let n = crls_at_i.entry(i_rev16).or_insert(0);
             let k = *n;
             *n = n.saturating_add(1);
-            k
+            u8::try_from(k).unwrap_or(u8::MAX)
         };
         let index_within_i = next_index(&mut self.crlg.crls_at_i);
         let craca = pki.craca_id8();

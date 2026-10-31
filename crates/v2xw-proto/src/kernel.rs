@@ -359,6 +359,9 @@ pub struct Kernel<M> {
     heap: BinaryHeap<Reverse<Queued<M>>>,
     queues: BTreeMap<NodeId, ServiceQueue>,
     profiles: BTreeMap<NodeId, &'static str>,
+    /// The run seed every hosted queue's service-time draws are keyed by
+    /// ([`Kernel::seed_service_times`], SC-P12.2).
+    service_seed: u64,
     net: BackendNet,
     /// Every stage every flow stamped.
     pub stages: StageLog,
@@ -392,6 +395,7 @@ impl<M> Kernel<M> {
             heap: BinaryHeap::new(),
             queues: BTreeMap::new(),
             profiles: BTreeMap::new(),
+            service_seed: 0,
             net,
             stages: StageLog::new(),
             steps: Vec::new(),
@@ -473,9 +477,23 @@ impl<M> Kernel<M> {
             .sum()
     }
 
+    /// Keys every hosted entity's service-time draws ([`crate::service::ServiceTimeModel`],
+    /// SC-P12.2) by `seed`, and every entity hosted later too. Each entity's draws are
+    /// its own, keyed by its node index and its request count. Until called, the seed is
+    /// 0. Changes nothing for a deterministic entity.
+    pub fn seed_service_times(&mut self, seed: u64) {
+        self.service_seed = seed;
+        for q in self.queues.values_mut() {
+            q.set_seed(seed);
+        }
+    }
+
     /// Gives `node` a service model and a hardware profile.
     pub fn host(&mut self, node: NodeId, spec: &ServiceModelSpec, profile: &'static str) {
-        self.queues.insert(node, ServiceQueue::new(spec));
+        self.queues.insert(
+            node,
+            ServiceQueue::new(spec).keyed(self.service_seed, u64::from(node.index())),
+        );
         self.profiles.insert(node, profile);
     }
 
@@ -640,11 +658,46 @@ impl<M> Kernel<M> {
     /// defects: refusing is the point, since the alternative is a message that arrives for
     /// free and a measurement that means nothing.
     pub fn dispatch(&mut self, at: SimTime, node: NodeId, out: Outbox<M>) -> Result<SimTime> {
+        self.dispatch_admitted(at, node, out, false)
+    }
+
+    /// [`Kernel::dispatch`] for a request from outside the entity's provider (a device's,
+    /// or one the proxy relays), which is owed an acknowledgement within 1 s ([CAMP122]
+    /// §5.2.8.3 SCMS-521): its `done - arrival` is recorded in the entity's
+    /// [`ServiceQueue::acks`] (proto B5). Nothing is refused for a late answer.
+    ///
+    /// # Errors
+    /// As [`Kernel::dispatch`].
+    pub fn dispatch_request(
+        &mut self,
+        at: SimTime,
+        node: NodeId,
+        out: Outbox<M>,
+    ) -> Result<SimTime> {
+        self.dispatch_admitted(at, node, out, true)
+    }
+
+    /// How long `node` took to answer the requests [`Kernel::dispatch_request`] gave it.
+    pub fn acks(&self, node: NodeId) -> Option<&crate::service::AckDelays> {
+        self.queues.get(&node).map(ServiceQueue::acks)
+    }
+
+    fn dispatch_admitted(
+        &mut self,
+        at: SimTime,
+        node: NodeId,
+        out: Outbox<M>,
+        request: bool,
+    ) -> Result<SimTime> {
         let queue = self
             .queues
             .get_mut(&node)
             .ok_or(ProtoError::NoEntity { node })?;
-        let done = queue.admit(at, out.work);
+        let done = if request {
+            queue.admit_request(at, out.work)
+        } else {
+            queue.admit(at, out.work)
+        };
 
         for ((primitive, kind), count) in out.ops {
             *self.ops.entry((node, primitive, kind)).or_insert(0) += count;

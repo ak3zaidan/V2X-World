@@ -463,15 +463,15 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
         ),
         ("security.pseudonym_change.strategy", "distance") => w(
             "Every few kilometres (NYC pilot)",
-            "Change after distance_m of driving; the NYC Connected Vehicle Pilot used 2 km.",
+            "Change once the vehicle is distance_m in a straight line from the last change point; the NYC Connected Vehicle Pilot used 2 km.",
         ),
         ("security.pseudonym_change.strategy", "j2945-1") => w(
             "SAE J2945/1 CERTCHG (5 min and 2 km)",
-            "Change once 5 minutes have passed and at least 2 km have been driven since the last change.",
+            "Change once 5 minutes have passed and the vehicle is at least 2 km in a straight line from the last change point.",
         ),
         ("security.pseudonym_change.strategy", "nyc-pilot") => w(
             "NYC CV pilot (2 km or 5 min)",
-            "Change after 2 km of driving or 5 minutes, whichever comes first.",
+            "Change at 2 km in a straight line from the last change point or after 5 minutes, whichever comes first.",
         ),
         ("security.pseudonym_change.strategy", "c2c-cc") => w(
             "European car makers' rule (C2C-CC)",

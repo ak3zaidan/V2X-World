@@ -460,6 +460,15 @@ pub struct NodeSecurity {
     signers: BTreeMap<(u32, u32), SignerHandle>,
     /// Which pseudonym is signing now.
     active: Option<(u32, u32)>,
+    /// The identification signer slot (SC-P9.2): the OBU identification certificates a
+    /// privileged vehicle holds beside its pseudonyms, oldest validity first. [CAMP122]
+    /// Table 1 row 44: SRM preemption is signed under one of these, never under a
+    /// pseudonym. The slot is never rotated; a renewal adds the next certificate and the
+    /// one valid at the signing instant signs. Empty for every device the SCMS gave none.
+    identification: Vec<IdentificationCert>,
+    /// The identification certificate that signed last, so the first SPDU under a new one
+    /// carries the certificate (a receiver has never heard its digest).
+    identification_last: Option<HashedId8>,
     /// Public key handles for peers, keyed by certificate digest, so a repeat sender costs
     /// one import rather than one per message.
     peer_keys: BTreeMap<[u8; 8], PubHandle>,
@@ -489,6 +498,15 @@ pub struct NodeSecurity {
     /// which the runtime copies here on every step: what it signs is stamped, and what it
     /// receives is judged, on its own clock (edge-case package, item 2).
     clock_offset_ns: i64,
+}
+
+/// One OBU identification certificate in a node's identification slot, with the run-time
+/// window it is valid in (SC-P9.2).
+#[derive(Debug, Clone)]
+struct IdentificationCert {
+    signer: SignerHandle,
+    valid_from: SimTime,
+    valid_until: SimTime,
 }
 
 /// The RNG stream the P2PCD response back-off draws from.
@@ -551,6 +569,8 @@ impl NodeSecurity {
             issuers: BTreeMap::new(),
             signers: BTreeMap::new(),
             active: None,
+            identification: Vec::new(),
+            identification_last: None,
             peer_keys: BTreeMap::new(),
             last_certificate: BTreeMap::new(),
             // 05-protocols.md §2.4: J2945/1 attaches a full certificate every 450 ms, the
@@ -792,8 +812,96 @@ impl NodeSecurity {
         Ok(&self.signers[&(i_period, j_index)])
     }
 
+    /// Installs one OBU identification certificate in the identification slot (SC-P9.2),
+    /// valid from `valid_from` until `valid_until` (exclusive), run time.
+    ///
+    /// The key is imported after the same acceptance check as a pseudonym's
+    /// ([`NodeSecurity::install`]), and its ACA certificate joins the CA cache. A
+    /// certificate already in the slot is not imported twice. Certificates whose window
+    /// closed before the new one opens are dropped: a renewal replaces them, and the
+    /// overlap hour keeps the outgoing one until then.
+    ///
+    /// # Errors
+    /// The key does not reconstruct, or the certificate does not encode.
+    pub fn install_identification(
+        &mut self,
+        node: NodeId,
+        key: &ImplicitKey,
+        valid_from: SimTime,
+        valid_until: SimTime,
+    ) -> Result<&SignerHandle, SecError> {
+        let held = self
+            .identification
+            .iter()
+            .position(|c| c.signer.certificate.as_ref() == key.certificate().as_ref());
+        let at = if let Some(i) = held {
+            i
+        } else {
+            let handle = self.crypto.import_implicit(node, key)?;
+            self.learn_issuer(Arc::clone(key.issuer()));
+            let signer = SignerHandle::new(node, handle, Arc::clone(key.certificate()))?;
+            self.identification.retain(|c| c.valid_until > valid_from);
+            self.identification.push(IdentificationCert {
+                signer,
+                valid_from,
+                valid_until,
+            });
+            self.identification
+                .sort_by_key(|c| (c.valid_from, c.valid_until));
+            self.identification
+                .iter()
+                .position(|c| c.signer.certificate.as_ref() == key.certificate().as_ref())
+                .unwrap_or(0)
+        };
+        Ok(&self.identification[at].signer)
+    }
+
+    /// Whether the SCMS ever gave this node an identification certificate: a privileged
+    /// vehicle, whose SRMs are then signed only under one (SC-P9.2).
+    pub fn holds_identification(&self) -> bool {
+        !self.identification.is_empty()
+    }
+
+    /// The identification certificate that signs at `at` (the node's own clock): of those
+    /// whose window holds `at`, the one that opened last. `None` when none is valid.
+    pub fn identification_signer(&self, at: SimTime) -> Option<&SignerHandle> {
+        self.identification
+            .iter()
+            .rev()
+            .find(|c| c.valid_from <= at && at < c.valid_until)
+            .map(|c| &c.signer)
+    }
+
+    /// Signs `payload` under the identification certificate valid at `believed`
+    /// ([`NodeSecurity::identification_signer`]). The first SPDU under each certificate
+    /// carries it whole; after that the cadence of `msg_type` decides, as for a
+    /// pseudonym. `None` when no identification certificate is valid.
+    ///
+    /// # Errors
+    /// As [`NodeSecurity::sign`].
+    pub fn sign_identified(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        msg_type: MsgType,
+        payload: &[u8],
+        believed: SimTime,
+    ) -> Option<Result<(SignedFrame, SecuredPdu), SecError>> {
+        let signer = self.identification_signer(believed).cloned()?;
+        let sid = if self.identification_last.as_ref() == Some(signer.digest()) {
+            self.signer_id_for(msg_type, believed)
+        } else {
+            SignerIdChoice::Certificate
+        };
+        let r = self.sign_under(ctx, &signer, msg_type, payload, sid, None, 0);
+        if r.is_ok() {
+            self.identification_last = Some(signer.digest().clone());
+        }
+        Some(r)
+    }
+
     /// Forgets every installed credential (the signer handles and the active choice), as
-    /// a device does when a new batch replaces its pool. The CA cache is kept.
+    /// a device does when a new batch replaces its pool. The CA cache is kept, and so is
+    /// the identification slot: it is not part of the pseudonym pool.
     pub fn forget_credentials(&mut self) {
         self.signers.clear();
         self.active = None;
@@ -925,6 +1033,24 @@ impl NodeSecurity {
             field: "no credential has been provisioned; a node without one stops \
                     transmitting rather than sending unsigned [CAMP-EE §2.2.10.2]",
         })?;
+        self.sign_under(ctx, &signer, msg_type, payload, sid, location, extra_ns)
+    }
+
+    /// Signs `payload` under `signer`: the body of [`NodeSecurity::sign_with_extra_skew`]
+    /// for a pseudonym and of [`NodeSecurity::sign_identified`] for the identification
+    /// slot.
+    #[allow(clippy::too_many_arguments)]
+    fn sign_under(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        signer: &SignerHandle,
+        msg_type: MsgType,
+        payload: &[u8],
+        sid: SignerIdChoice,
+        location: Option<GenerationLocation>,
+        extra_ns: i64,
+    ) -> Result<(SignedFrame, SecuredPdu), SecError> {
+        let signer = signer.clone();
         let mut hdr = HeaderInfoSpec {
             psid: self.psid_for(msg_type),
             msg_type: Some(msg_type),
@@ -1425,7 +1551,10 @@ impl NodeSecurity {
     /// The provisioned signer whose certificate has digest `digest`, if any: the
     /// certificate a sized frame signed under it attaches.
     pub fn signer_by_digest(&self, digest: &HashedId8) -> Option<&SignerHandle> {
-        self.signers.values().find(|s| s.digest() == digest)
+        self.signers
+            .values()
+            .chain(self.identification.iter().map(|c| &c.signer))
+            .find(|s| s.digest() == digest)
     }
 
     /// The certificate a parsed SPDU attached, if it attached one.

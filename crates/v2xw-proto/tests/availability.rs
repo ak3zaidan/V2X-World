@@ -7,13 +7,19 @@
 //!   when another entity with a model is hosted beside it (keyed draws, no stream);
 //! * the drawn outages are `offline` faults: the entity is down inside each, up outside,
 //!   and its `outages` and `downtime_s` counters are the windows'.
+//!
+//! SC-P12.2: log-normal service times, off by default.
+//!
+//! * over 10⁵ admits the multiplier's median is within 1 % of 1 and its sample cv within
+//!   5 % of the setting; the deterministic model is the cost table's time exactly;
+//! * the same seed gives byte-identical service times, and an entity's draws are its own.
 
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::{Duration, SimTime};
 use v2xw_proto::fault::FaultPlan;
-use v2xw_proto::kernel::Kernel;
+use v2xw_proto::kernel::{Kernel, Outbox};
 use v2xw_proto::net::BackendNet;
-use v2xw_proto::service::{AvailabilityModel, ServiceModelSpec};
+use v2xw_proto::service::{AvailabilityModel, ServiceModelSpec, ServiceQueue, ServiceTimeModel};
 
 const HOUR: u64 = 3_600_000_000_000;
 
@@ -140,5 +146,132 @@ fn drawn_outages_are_offline_faults_and_counted() {
     assert!(
         !plan.offline(NodeId::new(4), w[0].0),
         "another entity stays up"
+    );
+}
+
+// -------------------------------------------------------------------------------------
+// SC-P12.2: log-normal service times
+// -------------------------------------------------------------------------------------
+
+/// The service times of `n` requests, each arriving at an idle single-server queue
+/// (1000 s apart, so none waits), with 9 ms of work and 1 ms of overhead under `model`.
+fn service_times(model: ServiceTimeModel, seed: u64, entity: u64, n: u64) -> Vec<u64> {
+    let spec = ServiceModelSpec::new(1, Duration::from_millis(1)).varied(model);
+    let mut q = ServiceQueue::new(&spec).keyed(seed, entity);
+    let gap = 1_000 * 1_000_000_000u64;
+    let out: Vec<u64> = (0..n)
+        .map(|i| {
+            let at = i * gap;
+            q.admit(at, Duration::from_millis(9)) - at
+        })
+        .collect();
+    assert_eq!(q.waiting(), Duration::ZERO, "no request waited");
+    out
+}
+
+/// `(median, coefficient of variation)` of the multipliers `t / 10 ms`.
+fn median_and_cv(times: &[u64]) -> (f64, f64) {
+    let mut m: Vec<f64> = times.iter().map(|&t| t as f64 / 1.0e7).collect();
+    let n = m.len() as f64;
+    let mean = m.iter().sum::<f64>() / n;
+    let var = m.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (n - 1.0);
+    m.sort_by(f64::total_cmp);
+    let median = m[m.len() / 2];
+    (median, var.sqrt() / mean)
+}
+
+/// Over 10⁵ admits the multiplier's median is within 1 % of 1 (the deterministic time is
+/// the median) and its sample coefficient of variation within 5 % of the setting, at
+/// cv 0.25 and 1.0; the deterministic model gives the cost table's time exactly.
+///
+/// Fault injected (and reverted): `σ = cv` instead of `sqrt(ln(1 + cv²))` fails the cv
+/// check at cv 1.0 (sample cv 1.31).
+#[test]
+fn service_times_are_lognormal_with_median_one() {
+    for cv_milli in [250u32, 1_000] {
+        let times = service_times(ServiceTimeModel::LogNormal { cv_milli }, 7, 3, 100_000);
+        let (median, cv) = median_and_cv(&times);
+        let want = f64::from(cv_milli) / 1000.0;
+        assert!(
+            (median - 1.0).abs() <= 0.01,
+            "cv {want}: median multiplier {median}"
+        );
+        assert!((cv / want - 1.0).abs() <= 0.05, "cv {want}: sample cv {cv}");
+    }
+    let fixed = service_times(ServiceTimeModel::Deterministic, 7, 3, 1_000);
+    assert!(
+        fixed.iter().all(|&t| t == 10_000_000),
+        "the cost table's time"
+    );
+    assert_eq!(ServiceTimeModel::default(), ServiceTimeModel::Deterministic);
+    assert_eq!(
+        ServiceModelSpec::new(1, Duration::ZERO).service_time,
+        ServiceTimeModel::Deterministic,
+        "off by default"
+    );
+}
+
+/// A kernel hosting `nodes`, each a two-server entity with 1 ms of overhead and cv 0.5,
+/// seeded with `seed` (before or after hosting), serving `n` requests each at 1 s
+/// intervals, interleaved in node order. Returns each node's finish instants.
+fn kernel_service(
+    nodes: &[u32],
+    seed: u64,
+    seed_first: bool,
+    n: u64,
+) -> std::collections::BTreeMap<u32, Vec<SimTime>> {
+    let mut k: Kernel<()> = Kernel::new(BackendNet::new());
+    if seed_first {
+        k.seed_service_times(seed);
+    }
+    let spec = ServiceModelSpec::new(2, Duration::from_millis(1))
+        .varied(ServiceTimeModel::LogNormal { cv_milli: 500 });
+    for &node in nodes {
+        k.host(NodeId::new(node), &spec, "test");
+    }
+    if !seed_first {
+        k.seed_service_times(seed);
+    }
+    let mut out = std::collections::BTreeMap::new();
+    for i in 0..n {
+        for &node in nodes {
+            let at = i * 1_000_000_000;
+            let done = k
+                .dispatch(at, NodeId::new(node), Outbox::new("test"))
+                .expect("hosted");
+            out.entry(node).or_insert_with(Vec::new).push(done);
+        }
+    }
+    out
+}
+
+/// The same seed gives byte-identical service times; a different seed different ones; an
+/// entity's draws are its own, unchanged when another entity is hosted and served beside
+/// it, and seeding before or after hosting is the same; two entities do not share draws.
+///
+/// Fault injected (and reverted): `Kernel::host` keying every queue as entity 0 fails the
+/// "two entities do not share draws" assert.
+#[test]
+fn the_same_seed_gives_the_same_service_times() {
+    let a = kernel_service(&[2, 5], 11, true, 200);
+    let b = kernel_service(&[2, 5], 11, true, 200);
+    assert_eq!(a, b, "byte-identical");
+    let other = kernel_service(&[2, 5], 12, true, 200);
+    assert_ne!(a[&5], other[&5], "the seed matters");
+    let alone = kernel_service(&[5], 11, false, 200);
+    assert_eq!(
+        alone[&5], a[&5],
+        "entity 5 did not move when entity 2 was added"
+    );
+    let spans = |v: &Vec<SimTime>| -> Vec<u64> {
+        v.iter()
+            .enumerate()
+            .map(|(i, &d)| d - i as u64 * 1_000_000_000)
+            .collect()
+    };
+    assert_ne!(
+        spans(&a[&2]),
+        spans(&a[&5]),
+        "two entities do not share draws"
     );
 }

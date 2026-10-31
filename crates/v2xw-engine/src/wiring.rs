@@ -4555,6 +4555,41 @@ pub fn install_rsu_app_certs<R: CredentialSink + ?Sized>(
         .count()
 }
 
+/// One OBU identification certificate the SCMS issued a privileged vehicle (SC-P9.2,
+/// [CAMP122] Table 1 row 44): the certificate, its issuing ACA and `d` from the vehicle's
+/// own download, and its validity window in run time.
+#[derive(Debug, Clone)]
+pub struct IdentificationCred {
+    /// The start of its validity, run time.
+    pub valid_from: SimTime,
+    /// Its end (exclusive), run time: 721 h after the start for the CAMP profile.
+    pub valid_until: SimTime,
+    /// The certificate, its issuing ACA and `d`.
+    pub key: std::sync::Arc<v2xw_sec::credential::ImplicitKey>,
+}
+
+/// Installs OBU identification certificates the SCMS issued (SC-P9.2) into a vehicle's
+/// identification signer slot, beside its pseudonym pool, which this leaves untouched.
+/// From the first install on, the vehicle signs its SRMs only under the certificate
+/// valid at the time ([`v2xw_node::NodeSecurity::install_identification`]); its BSMs stay
+/// on pseudonyms. Returns how many the node accepted (the import check
+/// `d·G = e·P_U + Q_ACA`).
+pub fn install_identification_certs<R: CredentialSink + ?Sized>(
+    runtime: &mut R,
+    node: NodeId,
+    creds: &[IdentificationCred],
+) -> usize {
+    creds
+        .iter()
+        .filter(|c| {
+            runtime
+                .sink_security()
+                .install_identification(node, &c.key, c.valid_from, c.valid_until)
+                .is_ok()
+        })
+        .count()
+}
+
 /// Adds provisioned certificates to a node's store (a completed top-up), each with its key
 /// as [`install_provisioned`] does. Returns how many were installed.
 pub fn add_provisioned<R: CredentialSink + ?Sized>(

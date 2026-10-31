@@ -118,7 +118,9 @@ pub enum ChangeReason {
 pub struct RotationPolicy {
     /// Minimum age of the active pseudonym before a change.
     pub min_age: Duration,
-    /// Minimum distance travelled since the last change, metres.
+    /// Minimum straight-line distance from the last change point, metres ([CVP-P2] item
+    /// 25; [PRIMER] pp.8-9: "2 km from the last change point"). Not the distance driven: a
+    /// route that loops back to where the pseudonym changed has not gone far enough.
     pub min_distance_m: f64,
     /// Whether both conditions must hold, or either.
     pub require_both: bool,
@@ -139,7 +141,8 @@ impl RotationPolicy {
         require_both: false,
     };
 
-    /// Whether a change is due.
+    /// Whether a change is due, given the active pseudonym's age and the straight-line
+    /// displacement from the point where it became active.
     pub fn is_due(&self, age: Duration, distance_m: f64) -> bool {
         let old_enough = age >= self.min_age;
         let far_enough = distance_m >= self.min_distance_m;
@@ -165,7 +168,15 @@ pub struct CertStore {
     /// ([`CertStore::rotate_in_use`]): the first pseudonym's age and distance count from
     /// here, not from the run's start.
     in_use_since: Option<SimTime>,
+    /// Distance driven since the last change. A reported figure only: the rule reads
+    /// [`CertStore::displacement_since_change_m`] (veh C6).
     distance_since_change_m: f64,
+    /// Where the active pseudonym became active, world-local ENU metres: the position
+    /// last reported ([`CertStore::position`]) when the change happened, or the first one
+    /// reported after it when the device had no fix then. `None` until a position is known.
+    change_point: Option<(f64, f64)>,
+    /// The position last reported, world-local ENU metres.
+    last_position: Option<(f64, f64)>,
     changes: u32,
     policy: Option<RotationPolicy>,
     /// How many times each credential, keyed by `(i_period, j_index, valid_from)`, has been
@@ -246,6 +257,36 @@ impl CertStore {
         }
     }
 
+    /// Records the device's own position (its believed fix, world-local ENU metres), so the
+    /// distance condition can be read as displacement from the last change point (veh C6).
+    /// The first position after a change with no fix becomes that change's point.
+    pub fn position(&mut self, x: f64, y: f64) {
+        if !(x.is_finite() && y.is_finite()) {
+            return;
+        }
+        self.last_position = Some((x, y));
+        if self.change_point.is_none() {
+            self.change_point = Some((x, y));
+        }
+    }
+
+    /// Distance driven since the last change, metres (reported only).
+    pub fn distance_since_change_m(&self) -> f64 {
+        self.distance_since_change_m
+    }
+
+    /// Straight-line distance from the last change point to the position last reported,
+    /// metres; zero while either is unknown. This is what the rotation rule reads.
+    pub fn displacement_since_change_m(&self) -> f64 {
+        match (self.change_point, self.last_position) {
+            (Some((x0, y0)), Some((x1, y1))) => {
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                (dx * dx + dy * dy).sqrt()
+            }
+            _ => 0.0,
+        }
+    }
+
     /// Marks every credential whose window has closed, and every one the CRL revokes.
     ///
     /// Returns the number of credentials whose state changed, so a caller can tell an
@@ -294,6 +335,7 @@ impl CertStore {
         if has_fix && self.in_use_since.is_none() {
             self.in_use_since = Some(now);
             self.distance_since_change_m = 0.0;
+            self.change_point = self.last_position;
         }
         let policy_applies = self.in_use_since.is_some() || self.last_change.is_some();
         self.rotate_when(now, policy_applies)
@@ -346,6 +388,7 @@ impl CertStore {
         *self.activations.entry(key(&self.creds[0])).or_insert(0) += 1;
         self.last_change = Some(now);
         self.distance_since_change_m = 0.0;
+        self.change_point = self.last_position;
         self.changes = self.changes.saturating_add(1);
         self.last_reason = Some(reason);
         Some(reason)
@@ -366,7 +409,7 @@ impl CertStore {
                 let policy = self.policy?;
                 let since = self.last_change.or(self.in_use_since).unwrap_or(0);
                 let age = Duration::between(since, now);
-                if !policy.is_due(age, self.distance_since_change_m) {
+                if !policy.is_due(age, self.displacement_since_change_m()) {
                     return None;
                 }
                 Some(if age >= policy.min_age {
@@ -1309,8 +1352,10 @@ mod tests {
         assert_eq!(s.active().unwrap().j_index, 5);
 
         // Not due: no distance yet.
+        s.position(0.0, 0.0);
         assert_eq!(s.rotate(400 * NS_PER_S), None);
         s.travelled(2500.0);
+        s.position(2500.0, 0.0);
         assert_eq!(s.rotate(400 * NS_PER_S), Some(ChangeReason::Age));
         assert_eq!(s.active().unwrap().j_index, 1, "the oldest usable one");
         assert_eq!(s.changes(), 1);
@@ -1318,8 +1363,57 @@ mod tests {
         // The distance counter reset with the change.
         assert_eq!(s.rotate(800 * NS_PER_S), None);
         s.travelled(2500.0);
+        s.position(5000.0, 0.0);
         assert_eq!(s.rotate(800 * NS_PER_S), Some(ChangeReason::Age));
         assert_eq!(s.active().unwrap().j_index, 3);
+    }
+
+    /// veh C6: the distance condition is "2 km from the last change point" ([CVP-P2] item
+    /// 25; [PRIMER] pp.8-9), a straight-line displacement. A winding route of 2.5 km that
+    /// ends 0.3 km from where the pseudonym changed is not far enough under `J2945_1`, though
+    /// the distance driven is; the same route ending 2.5 km away is.
+    #[test]
+    fn a_loop_back_to_the_change_point_is_not_far_enough() {
+        let route = |s: &mut CertStore, end: (f64, f64)| {
+            // Ten 250 m legs: out along x, then back toward the end point.
+            s.position(0.0, 0.0);
+            for k in 1..=10 {
+                s.travelled(250.0);
+                let f = f64::from(k) / 10.0;
+                let (x, y) = if k <= 5 {
+                    (1250.0 * f * 2.0, 0.0)
+                } else {
+                    let g = f64::from(k - 5) / 5.0;
+                    (1250.0 + (end.0 - 1250.0) * g, end.1 * g)
+                };
+                s.position(x, y);
+            }
+        };
+        let fresh = || {
+            let mut s = CertStore::new().with_policy(RotationPolicy::J2945_1);
+            for j in 0..3 {
+                s.insert(cred(10, j, 0, 10_000 * NS_PER_S));
+            }
+            s
+        };
+        let mut looped = fresh();
+        route(&mut looped, (300.0, 0.0));
+        assert_eq!(looped.distance_since_change_m(), 2500.0);
+        assert!((looped.displacement_since_change_m() - 300.0).abs() < 1e-9);
+        assert_eq!(
+            looped.rotate(600 * NS_PER_S),
+            None,
+            "a change came 0.3 km from the last change point"
+        );
+        assert_eq!(looped.changes(), 0);
+
+        let mut straight = fresh();
+        straight.position(0.0, 0.0);
+        straight.travelled(2500.0);
+        straight.position(2500.0, 0.0);
+        assert_eq!(straight.rotate(600 * NS_PER_S), Some(ChangeReason::Age));
+        // The new change point is where the change happened.
+        assert_eq!(straight.displacement_since_change_m(), 0.0);
     }
 
     /// audit-db1-3 O-4: a device that joins at 290 s under a 30 s time rule does not
