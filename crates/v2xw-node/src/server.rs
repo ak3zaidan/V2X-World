@@ -200,8 +200,11 @@ impl ProfileServiceModel {
                     .flatten()
                     .filter(|_| self.profile.hsm.kind != crate::profile::HsmKind::None)
                     .and_then(crate::profile::HsmOp::range_us);
+                // A P-384 operation charged on its P-256 sibling's range is scaled by the
+                // curve ratio (SC-D8; 1 for every other operation).
+                let k = self.profile.curve_ratio(op.op);
                 match ranged {
-                    Some([_, hi]) => Some(Duration::from_nanos((hi * 1e3) as u64)),
+                    Some([_, hi]) => Some(Duration::from_nanos((hi * k * 1e3) as u64)),
                     None => self.profile.op_cost(op.op).map(|(d, _)| d),
                 }
             }
@@ -232,6 +235,7 @@ impl ServiceModel for ProfileServiceModel {
                     .flatten()
                     .filter(|_| self.profile.hsm.kind != crate::profile::HsmKind::None)
                     .and_then(crate::profile::HsmOp::range_us);
+                let k = self.profile.curve_ratio(op.op);
                 match (ranged, self.node) {
                     (Some([lo, hi]), Some(node)) => {
                         let us = ctx
@@ -240,10 +244,10 @@ impl ServiceModel for ProfileServiceModel {
                                 v2xw_core::rng::EntityRef::Node(node),
                             )
                             .uniform(lo, hi);
-                        Some(Duration::from_nanos((us * 1e3) as u64))
+                        Some(Duration::from_nanos((us * k * 1e3) as u64))
                     }
                     (Some([lo, hi]), None) => {
-                        Some(Duration::from_nanos((0.5 * (lo + hi) * 1e3) as u64))
+                        Some(Duration::from_nanos((0.5 * (lo + hi) * k * 1e3) as u64))
                     }
                     (None, _) => self.profile.op_cost(op.op).map(|(d, _)| d),
                 }

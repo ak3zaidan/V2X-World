@@ -418,7 +418,7 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
         ),
         ("security.signature", "ecdsa-p384") => w(
             "ECDSA P-384",
-            "A longer curve: 32 more octets per signature.",
+            "A longer curve: 32 more octets per signature; costs the device's P-384 figure, or its P-256 one times the published P-384 / P-256 ratio.",
         ),
         ("security.signature", "hybrid-falcon512-ecdsa-p256") => w(
             "Post-quantum hybrid: Falcon-512 + P-256",

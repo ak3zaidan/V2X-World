@@ -993,10 +993,53 @@ impl HardwareProfile {
     }
 
     /// Whether `op` is charged as another curve's operation on this profile: a P-384
-    /// operation the profile does not price, charged as P-256.
+    /// operation the profile does not price, charged as P-256 scaled by
+    /// [`HardwareProfile::curve_ratio`].
     #[must_use]
     pub fn op_cost_is_curve_proxy(&self, op: &str) -> bool {
         self.priced_op(op) != op
+    }
+
+    /// The factor a P-384 operation this profile does not price is charged at over its
+    /// P-256 sibling (SC-D8): the two primitives' published costs on the first catalogue
+    /// reference that publishes both for the operation, the profile's `crypto_anchors`
+    /// first and then the catalogue's anchors for this device
+    /// (`v2xw_sec::primitive::anchors::for_node_profile`). That is the catalogue's
+    /// [`v2xw_sec::primitive::CostRatio`] rule (04-models.md §9.4): a sibling's published
+    /// cost on this profile, scaled by the cycle ratio on a reference that publishes both.
+    /// On the CRATON2 (Pi 3B anchor) verify is 8.24x and sign 4.55x. `1.0` for every other
+    /// operation, for a P-384 operation the profile prices itself, and when no reference
+    /// publishes both (P-384 key generation): before SC-D8 every such operation cost
+    /// exactly its P-256 sibling (live-scms LS.S384.verify).
+    #[must_use]
+    pub fn curve_ratio(&self, op: &str) -> f64 {
+        let Some(base) = curve_fallback(op) else {
+            return 1.0;
+        };
+        if self.publishes_op(op) {
+            return 1.0;
+        }
+        let (Some((p384, kind)), Some((p256, base_kind))) = (
+            v2xw_sec::scheme::primitive_of_op(op),
+            v2xw_sec::scheme::primitive_of_op(base),
+        ) else {
+            return 1.0;
+        };
+        let c = v2xw_sec::primitive::PrimitiveCatalogue::standard();
+        let (Some(a), Some(b)) = (c.get(p384), c.get(p256)) else {
+            return 1.0;
+        };
+        let device = v2xw_sec::primitive::anchors::for_node_profile(&self.id);
+        self.crypto_anchors
+            .iter()
+            .map(String::as_str)
+            .chain(device.into_iter().flat_map(|d| d.anchors.iter().map(|x| x.profile)))
+            .find_map(|r| {
+                let x = a.cost.row(r)?.duration(kind)?.as_nanos();
+                let y = b.cost.row(r)?.duration(base_kind)?.as_nanos();
+                (x > 0 && y > 0).then(|| x as f64 / y as f64)
+            })
+            .unwrap_or(1.0)
     }
 
     /// The service time this profile gives one cryptographic operation, and where it runs.
@@ -1012,6 +1055,16 @@ impl HardwareProfile {
     /// node using it can run — deliberately, because the alternative is an invented number
     /// that would silently set the load of every run.
     pub fn op_cost(&self, op: &str) -> Option<(Duration, RunsOn)> {
+        let ratio = self.curve_ratio(op);
+        let cost = self.op_cost_unscaled(op)?;
+        if ratio == 1.0 {
+            return Some(cost);
+        }
+        Some((scale_duration(cost.0, ratio), cost.1))
+    }
+
+    /// [`HardwareProfile::op_cost`] before the P-384 curve ratio.
+    fn op_cost_unscaled(&self, op: &str) -> Option<(Duration, RunsOn)> {
         let op = self.priced_op(op);
         // A hybrid signature is both signatures, made or checked one after the other: its
         // cost is the sum of the components' costs, and it needs every one. It runs where
@@ -1111,6 +1164,7 @@ impl HardwareProfile {
     pub fn op_cost_facts(&self, op: &str) -> Option<OpCostFacts> {
         let (t, runs_on) = self.op_cost(op)?;
         let curve_proxy = self.op_cost_is_curve_proxy(op);
+        let ratio = self.curve_ratio(op);
         let charged = self.priced_op(op);
         let us = t.as_nanos() as f64 / 1e3;
         let mut facts = OpCostFacts {
@@ -1130,7 +1184,7 @@ impl HardwareProfile {
             && let Some(basis) = spec.basis()
         {
             facts.basis = basis;
-            facts.range_us = spec.range_us();
+            facts.range_us = spec.range_us().map(|[lo, hi]| [lo * ratio, hi * ratio]);
             if let Some([lo, hi]) = facts.range_us {
                 facts.service_us = 0.5 * (lo + hi);
             }
@@ -1140,7 +1194,7 @@ impl HardwareProfile {
                 .clone()
                 .or_else(|| spec.throughput_per_s.source.clone());
             if curve_proxy {
-                facts.source = Some(curve_proxy_note(op, facts.source.as_deref()));
+                facts.source = Some(curve_proxy_note(op, ratio, facts.source.as_deref()));
             }
             return Some(facts);
         }
@@ -1151,7 +1205,7 @@ impl HardwareProfile {
                 CostBasis::SoftwareBenchmark
             };
             facts.source = if curve_proxy {
-                Some(curve_proxy_note(op, c.source.as_deref()))
+                Some(curve_proxy_note(op, ratio, c.source.as_deref()))
             } else {
                 c.source.clone()
             };
@@ -1236,7 +1290,7 @@ impl HardwareProfile {
                 .get(op)
                 .and_then(CostUs::service_time)
                 .is_some();
-        !published && self.anchored_cost(op).is_some()
+        !published && (self.anchored_cost(op).is_some() || self.curve_ratio(op) != 1.0)
     }
 
     /// The profile's model card (03-interfaces.md §12, family `hardware-profile`).
@@ -1479,9 +1533,16 @@ fn curve_fallback(op: &str) -> Option<&'static str> {
     }
 }
 
-fn curve_proxy_note(op: &str, source: Option<&str>) -> String {
+fn curve_proxy_note(op: &str, ratio: f64, source: Option<&str>) -> String {
     format!(
-        "{op} charged as P-256: this profile publishes no P-384 figure ({})",
+        "{op} charged as P-256 x {ratio:.3} (derived: the P-384 / P-256 cycle ratio on a \
+         catalogue reference that publishes both, HardwareProfile::curve_ratio): this \
+         profile publishes no P-384 figure ({})",
         source.unwrap_or("no source")
     )
+}
+
+/// `d` scaled by `k`, nanosecond-rounded.
+fn scale_duration(d: Duration, k: f64) -> Duration {
+    Duration::from_nanos((d.as_nanos() as f64 * k).round() as u64)
 }

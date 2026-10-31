@@ -137,3 +137,25 @@ Dated notes go under each id as its wave lands.
   re-measurements: ML-DSA-44 cycle 0 -> 50,183 frames, MTU refusals 50,180 -> 2 (the
   relayed reports), BSM PSDU 814 B; Falcon-512 cycle PSDU 1,045 -> 380 B (the NDSS
   prediction); verify cost 0.630 ms against ECDSA's 0.628.
+
+### SC-D8
+
+- **2026-10-30 (wave A): fixed.** Cause: `HardwareProfile::priced_op`
+  (`crates/v2xw-node/src/profile.rs`) charged a P-384 operation that the profile does not
+  price as its P-256 sibling, at exactly P-256's cost, on every profile but
+  `obu/generic-automotive-soc-no-hsm` (live-scms LS.S384.verify 0.422132 -> 0.422136 ms).
+  The real system: US end entities sign BSMs with P-256; P-384 is the electors' curve
+  (Elector Technical Specification §2.3) and an option 1609.2 allows per certificate, so a
+  P-384 BSM run is a research variant, but it must not cost what P-256 costs. Fix: such an operation is now
+  the profile's own P-256 figure times the P-384 / P-256 cost ratio on the first catalogue
+  reference that publishes both (the profile's `crypto_anchors`, then the catalogue's
+  device anchors), the catalogue's own `CostRatio` rule (04-models.md §9.4):
+  `HardwareProfile::curve_ratio`, applied in `op_cost`, the HSM range draws
+  (`server.rs`) and the cost facts, flagged derived. CRATON2 (Pi 3B Cortex-A53 anchor):
+  verify x8.24, sign x4.55. Key generation has no P-384 reference row and stays at P-256
+  (flagged). Test `curve_pricing::a_profile_without_p384_scales_p256_by_the_reference_ratio_and_says_so`
+  replaces the test that pinned the P-256 cost; fault `curve_ratio` -> 1.0 turns it red.
+  No golden moves: no pinned run signs with P-384. Recorded, not modelled: an HSM's own
+  P-384 / P-256 ratio is unpublished for V2X parts (Thales T-2000 1.5, T-5000 1.0, OpenSSL
+  on Cortex-A 4.5-8.9), so the software ratio of the device's own anchor is an ASSUMPTION
+  and likely pessimistic for a hardware accelerator.
