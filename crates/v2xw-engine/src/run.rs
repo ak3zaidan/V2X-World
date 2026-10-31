@@ -2077,6 +2077,24 @@ impl Engine {
         &self.manifest
     }
 
+    /// Hands the deployment's MA decisions to a rule the host program supplies
+    /// ([`crate::ma_hook`], 08-settings-ux-and-gaps §7 B4), before [`Engine::run`], and
+    /// pins it in the manifest.
+    ///
+    /// # Errors
+    /// As [`crate::ma_hook`] says: no SCMS MA, or a scenario that already chooses the rule.
+    pub fn attach_ma_policy(
+        &mut self,
+        hook: Box<dyn crate::ma_hook::MaPolicyHook>,
+    ) -> Result<crate::ma_hook::MaHookStatus> {
+        crate::ma_hook::attach(
+            &self.scenario,
+            self.phase2.as_mut(),
+            &mut self.manifest,
+            hook,
+        )
+    }
+
     /// Sets the cadence and profile the binary snapshot stream is produced at.
     ///
     /// **A caller recording into a container must call this with the same

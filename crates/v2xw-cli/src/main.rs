@@ -296,7 +296,10 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
             }
         }
         Command::Sensitivity(args) => sensitivity(args),
-        Command::MaReplay(args) => v2xw_cli::ma_replay::run(&args.dir),
+        Command::MaReplay(args) => match &args.policies {
+            Some(scenario) => v2xw_cli::ma_replay::run_policies(&args.dir, scenario),
+            None => v2xw_cli::ma_replay::run(&args.dir),
+        },
         Command::Cities(args) => Ok(cities(args.filter.as_deref(), args.json)),
         Command::Run(args) => {
             let outcome = run::run(&args.to_options())?;

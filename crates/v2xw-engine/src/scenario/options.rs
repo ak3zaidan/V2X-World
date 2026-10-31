@@ -1698,17 +1698,32 @@ pub fn key_values(path: &str) -> Option<(Vec<Value>, bool)> {
         "actors.backend.entities" => Some((rows_of(path, &crate::phase2::SCMS_ENTITIES), true)),
         "security.scms.ma_policy.evidence.rules" | "security.scms.ma_policies.*.evidence.rules" => {
             Some((
-                crate::ma_policy::RULE_SUBTYPE_IDS
+                crate::ma_policy::RULE_KEY_IDS
                     .iter()
-                    .map(|v| {
-                        json!({
+                    .map(|v| match v.strip_prefix("detect/") {
+                        // An engine check: its own score wins over its subtype's.
+                        Some(check) => json!({
+                            "value": v,
+                            "label": format!("Check: {}", humanise_camel(check)),
+                            "description": match v2xw_threat::ma_policy::sm_mbr_subtype(check) {
+                                Some(sub) => format!(
+                                    "The engine's {check} check (files as SM-MBR {sub}); \
+                                     its score wins over the subtype's."
+                                ),
+                                None => format!(
+                                    "The engine's {check} check (no SM-MBR v1.0 subtype)."
+                                ),
+                            },
+                            "available": true,
+                        }),
+                        None => json!({
                             "value": v,
                             "label": humanise_camel(v),
                             "description": format!(
                                 "The SM-MBR v1.0 {v} report subtype the US device files."
                             ),
                             "available": true,
-                        })
+                        }),
                     })
                     .collect(),
                 true,

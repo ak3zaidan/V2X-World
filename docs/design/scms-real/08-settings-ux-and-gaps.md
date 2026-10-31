@@ -661,10 +661,127 @@ every digest must stay the same.
 
 * B1: `MaPolicy` in v2xw-threat with all presets, test 1 at the unit level, and
   `cv-pilot-manual` equal to `CorroboratedMa`.
+
+  **Status, B1 (2026-10-29): built.** `crates/v2xw-threat/src/ma_policy.rs`:
+  `MaPolicyParams` (every §7 field, resolved), `MaPolicyParams::preset` for the eight
+  presets, and `MaPolicy` (the `MaPipeline` evaluator). Every preset but `legacy-window`
+  runs one evaluator, `CorroboratedMa` generalised: a case is a pseudonym or a device
+  link; a report's score is the largest `evidence.rules` entry among its checks (a check's
+  own `detect/<id>` key before its SM-MBR subtype's; 0 means the report is not evidence);
+  CaTch weighting, `min_score` (each trusted reporter's best decayed score, summed, as
+  `ma-replay`'s `catch`), `min_reports`, decay and the cluster guard extend it.
+  `legacy-window` delegates to `LegacyWindow`, whose distinct-seconds gate has no §7 field;
+  the fields it cannot read are named by `MaPolicyParams::applies`. `LegacyWindow` and
+  `CorroboratedMa` gained `ingest_pair` (a pure refactor of `ingest_evidence`) so a
+  replayed row and the policy take the same arithmetic. Choices (§9 rule, no source fixes
+  them, each ASSUMPTION): the replay presets take the middle of `ma-replay`'s grid (k = 3,
+  w = 1 h, θ = 3, c = 3, m = 3), `pseudonym-k` keeps every reporter (30-day window, the
+  range top), the replay presets and `legacy-window` decide automatically (as their
+  sources had no operator), and `custom` starts from `cv-pilot-manual`'s values rather
+  than from nothing, so an unwritten field is never undefined. The daily multiplier reads
+  the host's Eastern calendar (DST-aware `scms::calendar` in the engine; fixed EST alone).
+  Checks: `cv_pilot_manual_is_the_corroborating_ma` (six seeded 1,500-report streams,
+  out-of-order evidence, an infrastructure reporter: same decisions, counted events and
+  peak as `CorroboratedMa` for `cv-pilot-manual`, `corroborated-auto` and `custom`),
+  `legacy_window_is_the_legacy_gate`, `replay_rules_count_reporters`,
+  `scores_accuracy_and_decay_move_the_decision`,
+  `the_daily_multiplier_counts_eastern_mornings`,
+  `the_cluster_guard_raises_the_bar_in_a_crowded_class` and `rule_keys_cover_every_check`,
+  each red under its named fault (commit message).
 * B2: engine wiring through the `MaHost::Policy` arm, `ma_policies`, per-provider policy,
   the decision mode, and tests 1, 3 and 6.
+
+  **Status, B2 (2026-10-29): built; all three keys `wired`.** `crates/v2xw-engine/src/ma_policy.rs`
+  resolves a policy (a preset, or a name from `ma_policies`, whose own preset must be a
+  built-in one; every written field over the preset's), refuses each conflict at its path
+  (`detection.ma` with any policy; an unknown preset or name; a named policy called like a
+  preset; under `legacy-window` every field it cannot read; `tau_m`, `factor`/`hour_et`,
+  `half_life_s`, `c`/`m` and `review_s` outside their mode; a decay with no score threshold,
+  which would change nothing; a written `decision` with `ma_review_s`; a provider's
+  `ma_mode` with its policy's written decision), and hosts it. **Byte-identity**: a policy
+  whose rule is `CorroborationParams::default()` with no extension (checked against that,
+  not against the preset, so a broken preset shows) is hosted as today's MA, and a decision
+  left unwritten under the CV-pilot review leaves the run's review rule alone; so
+  `cv-pilot-manual`, `custom` and `corroborated-auto` (today's rule, automatic decision) run
+  today's code. Three hook lines in `phase2.rs` (A's file; A0's single call site could not
+  carry them): `ma_policy::hosts` builds one MA per provider, `ma_policy::apply_decision`
+  sets each provider run's `MaMode` after the `ma_mode` loop, and the ingest passes the LAs'
+  link, the issuer and the secMark phase (as `ma.received` records them) to a policy host.
+  `publish::module_keys_publish_menus_ranges_and_status` now checks each module key's
+  published status against its module's own row instead of the literal `refused`, so a
+  piece that builds a key can flip it (§11). Choices (§9 rule): `identity: device` takes the
+  LAs' answer at once (the PCA and LA round trips are not modelled; the engine already
+  links a decided pseudonym the same way); the decay acts on the score only (SM-MBR's
+  multiplier is a weight); a policy's decision overrides `ma_review_s` only where written.
+  Tests: `ma_policy::tests` (resolution, refusals, hosting, menus) and
+  `tests/ma_policy.rs` (accept tests 1 on `credential-lifecycle` 200 s and
+  `revocation-latency` 300 s at 3,000 veh/h, 3 and 6), each red under its named fault.
+  Not done here: guide rows (A5), presets and relevance (A3).
 * B3: the sweep report in v2xw-experiment, `ma-replay --policies`, and tests 2, 4 and 5.
+
+  **Status, B3 (2026-10-29): built.** `v2xw_engine::ma_policy::family_of` names the family
+  (the values of a sweep over `security.scms.ma_policy.preset`, else every preset and
+  every `ma_policies` name, each resolved with the run's calendar).
+  `v2xw ma-replay <run> --policies <scenario>` (`ma_replay::run_policies`, writing
+  `ma-replay-policies.csv`) replays it through `replay_policy`: the run's own evaluator,
+  one per deciding MA, over the `ma.received` rows **in the recording's order** (the
+  order the MA ingested them; `load_in_order`), each dated by its observation (the
+  report's generation time, which is the detection time the online MA dates by) and
+  carrying the LAs' link, issuer and secMark phase the online host passes. Its table
+  opens with what a replay cannot show (feedback, and which reporters are roadside units:
+  an `ma.received` row does not mark one, so a defence-on policy may distrust a unit the
+  run trusts). A sweep over the preset axis sets `report_records: true` on every point
+  (`ExperimentPlan::materialise`) and writes `ma-policy-family.csv` and `.md`
+  (`v2xw_experiment::ma_family`): per (policy, seed) attackers and honest devices revoked
+  (ground truth joined here only, through the device, never the pseudonym), honest
+  blocked per 10⁶ device-hours, attack start → MA decision → CRL published → first
+  receiver enforcing as median and p90, reports processed and peak open revocation cases
+  (decision to CRL entry issued); per policy a `mean` and a `ci95` row. Choice (§9 rule):
+  the interval is Student's t over the seeds (NIST/SEMATECH e-Handbook 1.3.6.7.2), not the
+  experiment table's normal 1.96, which with two seeds claims six times the precision.
+  The MA trait's `name` became `&str`, so a scenario's own policy names reach the CSV.
+  Out-of-column touch: `v2xw-cli` `cli.rs` and `main.rs` (the `--policies` flag).
+  Tests: `ma_replay::tests::every_policy_preset_is_blind` (test 4),
+  `ma_family::tests` (the device join, Student's interval) and
+  `crates/v2xw-cli/tests/ma_policy_family.rs`: test 2 runs each of the eight presets on
+  `credential-lifecycle` (200 s, no roadside unit, since a replay cannot know one) and
+  finds the run's first `ma.decision` about the replay's first decided pseudonym, stamped
+  at the backend step that processed its tipping report (within one 100 ms step after
+  it); test 5 sweeps three policies (`cv-pilot-manual`, `corroborated-auto` and a named
+  k = 1 policy) × two seeds over an honest-only fleet with benign GNSS outliers (0.2 Hz,
+  30 m) and finds 6 run rows, 3 means and 3 intervals, no attacker revoked and honest
+  revocations counted. Each is red under its named fault (commit message).
 * B4 (optional): `PyMaPolicy` and test 7.
+
+  **Status, B4 (2026-10-30): built.** The engine side is a seam any host program can
+  use: `v2xw_engine::ma_hook::MaPolicyHook` (`pin`, `decide`) and
+  `Engine::attach_ma_policy`, called after `Engine::build` and before `run`. The hook
+  takes every provider MA that would run the deployment-wide rule (`MaHost::External`;
+  a provider with its own `ma_policy` keeps it) and the manifest pins it as
+  `ma_policy:<id>` with its version and content hash. A scenario that already chooses the
+  rule (`detection.ma`, `security.scms.ma_policy`), a run with no SCMS, and a deployment
+  whose every provider has its own policy are refused. Each backend step in which an MA
+  receives evidence, `ingest_arrivals` makes one call with the rows its loop will ingest
+  (after the two set-asides, in the loop's order), and the loop then takes each decision
+  on the report it named, where a built-in policy's decision is taken, so the decision
+  mode, the LAs' one-case-per-device rule and the CRL apply unchanged. The Python side,
+  `v2xw-py` `ma_policy.rs`: `PyMaPolicy` (an `ma-pipeline` card, a callable
+  `decide(ctx, batch)`, and a module whose source `inspect.getsource` can read, hashed
+  with SHA-256 for the pin), `MaCtx` (`t_ns`, `ma`, `provider`) and `MaBatch` (the
+  `ma.received` columns plus `observed_ns` and `reporter_infrastructure`, as
+  `to_pyarrow()`, `column(name)` or `rows()`); `v2xw.run(..., ma_policy=obj)` and the
+  `v2xw.plugins.MaPolicy` base class. A rule that raises decides nothing for that call,
+  and `v2xw.run` raises its first traceback when the run ends. Choices (§9 rule): the
+  batch also answers in plain Python values, because `pyarrow` is optional for the
+  package; one object serves every MA it decides for, with `ctx.ma` to keep their states
+  apart; a decision may name its row, else it is taken on the last row about its subject.
+  Not built: a two-run digest check through `v2xw.run_twice`, which would need a policy
+  factory (a fresh object per run); test 7 shows the decisions are those of the Rust
+  preset, which is deterministic. Tests: `crates/v2xw-py/tests/ma_policy_hook.rs` (test 7
+  on `credential-lifecycle`, 200 s: the same `ma.decision` instants and subjects as the
+  `pseudonym-k` preset through the seam and through `v2xw.run`, read back from its
+  recording; the refusals; the batch's columns and a raise) and `ma_hook::tests` (a
+  verdict lands on its row once; a failure is kept and decides nothing).
 
 ---
 

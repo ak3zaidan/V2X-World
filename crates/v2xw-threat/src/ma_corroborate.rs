@@ -320,38 +320,36 @@ impl CorroboratedMa {
     /// observations), and decides, **emitting nothing**. The same contract as
     /// [`crate::ma::LegacyWindow::ingest_evidence`], so a host can swap one for the other.
     pub fn ingest_evidence(&mut self, r: &MisbehaviourReport, at: SimTime) -> Option<MaAction> {
+        self.ingest_pair(&r.reporter_cert_digest, &r.subject_cert_digest, at)
+    }
+
+    /// [`CorroboratedMa::ingest_evidence`] on the two digests it reads, for a host that
+    /// holds the report in another form (a replayed `ma.received` row, the MA policy's
+    /// equivalence test).
+    pub fn ingest_pair(&mut self, reporter: &str, subject: &str, at: SimTime) -> Option<MaAction> {
         let slot = at / self.slot_ns();
         // Pairs older than two windows can never be inside a window again that a later
         // decision reads.
         let keep_from = self
             .slot_range(at.saturating_sub(secs_to_ns(self.params.window_s)))
             .0;
-        let filed = self
-            .filed_by
-            .entry(r.reporter_cert_digest.clone())
-            .or_default();
-        filed.insert((slot, r.subject_cert_digest.clone()));
+        let filed = self.filed_by.entry(reporter.to_string()).or_default();
+        filed.insert((slot, subject.to_string()));
         filed.retain(|(s, _)| *s >= keep_from);
-        let about = self
-            .reported
-            .entry(r.subject_cert_digest.clone())
-            .or_default();
-        about.insert((slot, r.reporter_cert_digest.clone()));
+        let about = self.reported.entry(subject.to_string()).or_default();
+        about.insert((slot, reporter.to_string()));
         about.retain(|(s, _)| *s >= keep_from);
         let window = secs_to_ns(self.params.window_s);
-        let ev = self
-            .evidence
-            .entry(r.subject_cert_digest.clone())
-            .or_default();
+        let ev = self.evidence.entry(subject.to_string()).or_default();
         let pos = ev.partition_point(|(t, _)| *t <= at);
-        ev.insert(pos, (at, r.reporter_cert_digest.clone()));
+        ev.insert(pos, (at, reporter.to_string()));
         // Evidence older than one window before the newest can never count again: the
         // window only moves forward with the newest observation.
         let latest = ev.last().map_or(at, |e| e.0);
         let cutoff = latest.saturating_sub(window);
         let stale = ev.partition_point(|(t, _)| *t < cutoff);
         ev.drain(..stale);
-        self.correlate(&r.subject_cert_digest)
+        self.correlate(subject)
     }
 
     /// [`CorroboratedMa::ingest_evidence`] dated at the report's arrival.

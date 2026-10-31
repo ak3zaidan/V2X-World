@@ -105,6 +105,7 @@ def run(
     recording: Optional[str] = None,
     metrics: bool = True,
     metric_window_s: float = 1.0,
+    ma_policy: Any = None,
 ) -> Any:
     """Run ``scenario`` and return a :class:`Run`.
 
@@ -118,6 +119,9 @@ def run(
         metric_window_s: the metric aggregation window in simulated seconds. ``0``
             collapses the run to one sample per metric; the default gives a per-second
             series.
+        ma_policy: a :class:`v2xw.plugins.MaPolicy`, the MA decision rule for every
+            provider that would run the deployment-wide rule, or ``None`` for the
+            scenario's own. Only a run started here can carry one.
 
     Raises:
         ScenarioError: the scenario will not build.
@@ -133,6 +137,7 @@ def run(
         recording=recording,
         metrics=metrics,
         metric_window_s=metric_window_s,
+        ma_policy=ma_policy,
     )
 
 

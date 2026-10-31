@@ -34,6 +34,11 @@
 //!   within `w`, the class looks like a device population with a systematic benign
 //!   trigger, and a device in it needs `m·k` reporters instead of `k`.
 //!
+//! * The scenario's **MA policy family** (`--policies <scenario>`, 08-settings-ux-and-gaps
+//!   §7): every preset of `security.scms.ma_policy` and every named policy, or the names an
+//!   `experiment.sweep` over `security.scms.ma_policy.preset` lists, each replayed through
+//!   the run's own evaluator ([`replay_policy`]), so online and offline cannot drift apart.
+//!
 //! A parameterisation is `sound` when it needs corroboration (`k ≥ 2`, `θ ≥ 2`): a single
 //! report never revokes. `pseudonym-k` with `k = 1` is kept as the unsound baseline.
 //!
@@ -50,6 +55,7 @@ use std::path::Path;
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::SimTime;
 use v2xw_engine::report_records::{DeviceExposure, MaReceived, ReportFate};
+use v2xw_threat::ma_policy::{Identity, MaPolicy, PolicyEvidence};
 
 use crate::{CliError, Result};
 
@@ -76,8 +82,8 @@ pub struct Revocation {
 
 /// An MA decision rule: MA-visible rows in, revocations out.
 pub trait MaRule {
-    /// The family name.
-    fn name(&self) -> &'static str;
+    /// The family name (a policy family member's is the scenario's own name).
+    fn name(&self) -> &str;
     /// The parameters, as `key=value` words.
     fn params(&self) -> String;
     /// Whether it needs corroboration (no single report revokes).
@@ -122,7 +128,7 @@ pub struct PseudonymK {
 }
 
 impl MaRule for PseudonymK {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "pseudonym-k"
     }
     fn params(&self) -> String {
@@ -158,7 +164,7 @@ pub struct DeviceK {
 }
 
 impl MaRule for DeviceK {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "device-k"
     }
     fn params(&self) -> String {
@@ -227,7 +233,7 @@ pub struct Catch {
 }
 
 impl MaRule for Catch {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "catch"
     }
     fn params(&self) -> String {
@@ -271,7 +277,7 @@ pub struct Cluster {
 }
 
 impl MaRule for Cluster {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cluster"
     }
     fn params(&self) -> String {
@@ -534,11 +540,24 @@ pub fn check_blind(rules: &[Box<dyn MaRule>], log: &[MaView]) -> Vec<String> {
     bad
 }
 
-/// Reads the MA view and the truth from a run directory's `recording.mcap`.
+/// Reads the MA view and the truth from a run directory's `recording.mcap`, the view
+/// sorted by arrival.
 ///
 /// # Errors
 /// The recording cannot be opened or a record does not parse.
 pub fn load(dir: &Path) -> Result<(Vec<MaView>, Truth)> {
+    let (mut log, truth) = load_in_order(dir)?;
+    log.sort_by(|a, b| (a.t, &a.report_id).cmp(&(b.t, &b.report_id)));
+    Ok((log, truth))
+}
+
+/// [`load`] with the view in the recording's order: the order the MA ingested the rows
+/// (a batch of arrivals in observation order), which a policy replay needs to decide as
+/// the run did.
+///
+/// # Errors
+/// The recording cannot be opened or a record does not parse.
+pub fn load_in_order(dir: &Path) -> Result<(Vec<MaView>, Truth)> {
     let path = dir.join("recording.mcap");
     let mut reader = v2xw_record::reader::Reader::open(&path)?;
     let parse = |what: &'static str, j: &[u8]| -> Result<serde_json::Value> {
@@ -572,7 +591,6 @@ pub fn load(dir: &Path) -> Result<(Vec<MaView>, Truth)> {
             truth.subject_device.insert(f.subject, n);
         }
     }
-    log.sort_by(|a, b| (a.t, &a.report_id).cmp(&(b.t, &b.report_id)));
     Ok((log, truth))
 }
 
@@ -689,6 +707,146 @@ pub fn run(dir: &Path) -> Result<String> {
         source,
     })?;
     Ok(table(&rows, log.len(), accepted.len()))
+}
+
+/// One decision of a replayed MA policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyDecision {
+    /// The arrival of the report that tipped it (the online MA decides at that report).
+    pub t: SimTime,
+    /// The deciding MA (provider index).
+    pub ma: u32,
+    /// The tipping report's subject certificate: what the online MA hands the engine.
+    pub subject: String,
+    /// What is revoked: the pseudonym, or the device under `identity: device`.
+    pub target: Target,
+}
+
+/// Replays `policy` over `log`: the accepted `ma.received` rows **in the order the MA
+/// ingested them** (the recording's order; [`load_in_order`]). One evaluator per deciding
+/// MA, as the run hosts one per provider; each row is dated by its observation, the
+/// report's generation time, which is the detection time the online MA dates evidence by,
+/// and carries what the online MA's host passes it (the LAs' link, the issuer, the secMark
+/// phase). The online and the offline MA are then one evaluator on one input until the
+/// first decision; after it the run's feedback (a revoked device stops sending, a CRL
+/// reaches receivers) is what an offline replay cannot show.
+#[must_use]
+pub fn replay_policy(policy: &MaPolicy, log: &[MaView]) -> Vec<PolicyDecision> {
+    let identity = policy.params().identity;
+    let mut per_ma: BTreeMap<u32, MaPolicy> = BTreeMap::new();
+    let mut out = Vec::new();
+    for r in log.iter().filter(|r| r.set_aside.is_none()) {
+        let m = per_ma.entry(r.ma).or_insert_with(|| policy.clone());
+        let ev = PolicyEvidence {
+            at: r.generation_time,
+            reporter: &r.reporter_cert,
+            subject: &r.subject_cert,
+            device: Some(&r.la_link),
+            checks: &r.subtypes,
+            excess: r.excess,
+            pos_accuracy_m: r.pos_accuracy_m,
+            secmark_phase_ms: r.secmark_phase_ms,
+            issuer: &r.issuer,
+        };
+        if let Some(d) = m.ingest(&ev) {
+            out.push(PolicyDecision {
+                t: r.t,
+                ma: r.ma,
+                target: match identity {
+                    Identity::Device => Target::Device(d.case),
+                    Identity::Pseudonym => Target::Pseudonym(d.subject.clone()),
+                },
+                subject: d.subject,
+            });
+        }
+    }
+    out
+}
+
+/// A member of the scenario's MA policy family as a replay rule.
+pub struct PolicyRule {
+    /// Its name: a preset id or a key of `security.scms.ma_policies`.
+    pub name: String,
+    /// The evaluator, fresh.
+    pub policy: MaPolicy,
+}
+
+impl MaRule for PolicyRule {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn params(&self) -> String {
+        let p = self.policy.params();
+        format!(
+            "preset={} k={} events={} w={}s",
+            p.preset, p.min_distinct_reporters, p.min_events, p.window_s
+        )
+    }
+    fn sound(&self) -> bool {
+        self.policy.params().sound()
+    }
+    fn decide(&self, log: &[MaView]) -> Vec<Revocation> {
+        replay_policy(&self.policy, log)
+            .into_iter()
+            .map(|d| Revocation {
+                t: d.t,
+                target: d.target,
+            })
+            .collect()
+    }
+}
+
+/// The family `scenario` names (`v2xw_engine::ma_policy::family_of`) as replay rules.
+///
+/// # Errors
+/// The scenario does not load, or names a policy that does not resolve.
+pub fn policy_family(scenario: &Path) -> Result<Vec<Box<dyn MaRule>>> {
+    let s = v2xw_engine::Scenario::load(scenario)?;
+    let family = v2xw_engine::ma_policy::family_of(&s)?;
+    Ok(family
+        .into_iter()
+        .map(|(name, policy)| Box::new(PolicyRule { name, policy }) as Box<dyn MaRule>)
+        .collect())
+}
+
+/// What the policy replay cannot show, stated at the head of its table (08 §7).
+pub const POLICY_REPLAY_NOTE: &str = "offline replay of one recorded run: no feedback (a \
+    revoked device keeps sending and being reported, no CRL reaches a receiver, no \
+    reporter's reputation changes) and no roadside unit is known as trusted \
+    infrastructure; until each policy's first decision it is the online MA exactly. Run \
+    the sweep over security.scms.ma_policy.preset for the answer with feedback.";
+
+/// `v2xw ma-replay <dir> --policies <scenario>`: the scenario's MA policy family over one
+/// recorded run, written to `ma-replay-policies.csv`.
+///
+/// # Errors
+/// The recording or the scenario cannot be read, a policy does not resolve or is not
+/// blind, or the CSV cannot be written.
+pub fn run_policies(dir: &Path, scenario: &Path) -> Result<String> {
+    let (log, truth) = load_in_order(dir)?;
+    let rules = policy_family(scenario)?;
+    let accepted: Vec<MaView> = log
+        .iter()
+        .filter(|r| r.set_aside.is_none())
+        .cloned()
+        .collect();
+    let bad = check_blind(&rules, &accepted);
+    if !bad.is_empty() {
+        return Err(CliError::Agent(format!(
+            "ma-replay: policies not blind to ground truth: {bad:?}"
+        )));
+    }
+    let rows = replay(&rules, &log, &truth);
+    let out = dir.join("ma-replay-policies.csv");
+    std::fs::write(&out, csv(&rows)).map_err(|source| CliError::Io {
+        what: "cannot write",
+        path: out.display().to_string(),
+        source,
+    })?;
+    Ok(format!(
+        "{POLICY_REPLAY_NOTE}\n{}",
+        table(&rows, log.len(), accepted.len())
+    ))
 }
 
 #[cfg(test)]
@@ -876,7 +1034,7 @@ mod tests {
     }
 
     impl MaRule for Peeking {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "peeking"
         }
         fn params(&self) -> String {
@@ -917,6 +1075,40 @@ mod tests {
         let peeking: Vec<Box<dyn MaRule>> = vec![Box::new(Peeking { attackers })];
         let bad = check_blind(&peeking, &log);
         assert_eq!(bad.len(), 1, "the peeking rule passed: {bad:?}");
+    }
+
+    /// 08 §7 accept test 4: every preset of the MA policy family, replayed, is blind:
+    /// renaming every identifier renames its decisions the same way. The log holds the
+    /// isolated honest reports of [`honest_world`] and an attacker reported every second
+    /// for 24 s by ten reporters over two pseudonyms, which every preset decides on.
+    #[test]
+    fn every_policy_preset_is_blind() {
+        let (mut log, _) = honest_world();
+        for i in 0..24_u64 {
+            let p = if i % 2 == 0 { "pa" } else { "pb" };
+            log.push(row(200 + i, &format!("r{}", i % 10), p, "dev99"));
+        }
+        let rules: Vec<Box<dyn MaRule>> = v2xw_threat::ma_policy::PRESET_IDS
+            .iter()
+            .map(|id| {
+                let params = v2xw_threat::MaPolicyParams::preset(id).expect("a preset");
+                Box::new(PolicyRule {
+                    name: (*id).to_string(),
+                    policy: MaPolicy::new(params),
+                }) as Box<dyn MaRule>
+            })
+            .collect();
+        let silent: Vec<&str> = rules
+            .iter()
+            .filter(|r| r.decide(&log).is_empty())
+            .map(|r| r.name())
+            .collect();
+        assert!(
+            silent.is_empty(),
+            "presets that decided nothing: {silent:?}"
+        );
+        let bad = check_blind(&rules, &log);
+        assert!(bad.is_empty(), "{bad:?}");
     }
 
     #[test]

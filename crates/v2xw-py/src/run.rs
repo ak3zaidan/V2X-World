@@ -229,14 +229,16 @@ impl PyRun {
 /// `build_utc` is the caller's timestamp for the manifest; see the module note on why it
 /// is required rather than read here. `recording` is where to write the MCAP file, if
 /// anywhere. `metric_window_s` is the aggregation window; `0` collapses the run to one
-/// sample per metric.
+/// sample per metric. `ma_policy` is an MA decision rule written in Python
+/// ([`crate::ma_policy`]): it decides for every provider MA that would run the
+/// deployment-wide rule, and the manifest pins it.
 ///
 /// # Errors
 /// `ScenarioError` if the scenario will not build, `RecordingError` if the recording
 /// cannot be written, `MetricError` if a provider refuses a definition, `V2xwError` for a
-/// phase failure.
+/// phase failure, or an `ma_policy` that will not attach or raised during the run.
 #[pyfunction]
-#[pyo3(signature = (scenario, *, build_utc, recording=None, metrics=true, metric_window_s=1.0))]
+#[pyo3(signature = (scenario, *, build_utc, recording=None, metrics=true, metric_window_s=1.0, ma_policy=None))]
 pub fn run(
     py: Python<'_>,
     scenario: &PyScenario,
@@ -244,6 +246,7 @@ pub fn run(
     recording: Option<&str>,
     metrics: bool,
     metric_window_s: f64,
+    ma_policy: Option<Bound<'_, PyAny>>,
 ) -> PyResult<PyRun> {
     if !(metric_window_s.is_finite() && metric_window_s >= 0.0) {
         return Err(err::V2xwError::new_err(format!(
@@ -253,6 +256,17 @@ pub fn run(
     let window_ns = (metric_window_s * 1e9).round() as u64;
 
     let mut engine = Engine::build(scenario.scenario().clone(), build_utc).map_err(err::engine)?;
+    let ma_status = match ma_policy {
+        Some(object) => {
+            let hook = crate::ma_policy::PyMaPolicy::attach(object)?;
+            Some(
+                engine
+                    .attach_ma_policy(Box::new(hook))
+                    .map_err(err::engine)?,
+            )
+        }
+        None => None,
+    };
     let manifest = engine.manifest().clone();
     let manifest_json = serde_json::to_string(&manifest).map_err(|e| err::json("manifest", e))?;
 
@@ -286,6 +300,12 @@ pub fn run(
     // a run blocks other Python threads in the same process. Use a process per run, which
     // is what the experiment system does anyway (08-measurement §4).
     let report = engine.run(&mut tee).map_err(err::engine)?;
+    if let Some(e) = ma_status
+        .as_ref()
+        .and_then(v2xw_engine::ma_hook::MaHookStatus::error)
+    {
+        return Err(err::V2xwError::new_err(e));
+    }
     let records_refused = tee.refused_count();
     let samples = tee.finish(report.end_ns);
 

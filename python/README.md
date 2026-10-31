@@ -38,7 +38,7 @@ through the Arrow C data interface — nothing is serialised and nothing is copi
 | `v2xw.Metrics` | `series`, `arrow`, `ipc`, `summary`, `digest`. `rows()` exists and is the slow path, and says so. |
 | `v2xw.Recording` | open, `verify`, `channels`, `records`, `arrow`, `table_schema`, `content_digest`. |
 | `v2xw.math` | the engine's transcendentals. A plug-in uses these instead of `math`. |
-| `v2xw.plugins` | `CarFollowing` and `Detector` to subclass, `card()` to build a model card that validates. |
+| `v2xw.plugins` | `CarFollowing`, `Detector` and `MaPolicy` to subclass, `card()` to build a model card that validates. |
 | `v2xw.conformance` | the checks of 03-interfaces.md §17 a plug-in must pass. |
 | `v2xw.run_twice` | two runs of one scenario, both record-stream digests — the determinism gate. |
 
@@ -74,6 +74,42 @@ Three rules matter, and `v2xw.conformance` enforces them rather than advising th
 
 Passing the kit is necessary and not sufficient: state carried between calls is not
 decidable, and `v2xw.run_twice` over a real scenario is what catches it.
+
+### A Misbehaviour Authority decision rule
+
+A rule `security.scms.ma_policy` cannot express can be written as a
+`v2xw.plugins.MaPolicy` and passed to a run started here (a scenario file cannot name
+code):
+
+```python
+class KReporters(v2xw.plugins.MaPolicy):
+    card = card(id="threat/ma/k-reporters", family="ma-pipeline", version="0.1.0", purpose="...")
+    def __init__(self, k=3):
+        self.k, self.seen, self.revoked = k, {}, set()
+    def decide(self, ctx, batch):          # one call per MA step with new evidence
+        out = []
+        subjects, reporters = batch.column("subject_cert"), batch.column("reporter_cert")
+        for i, (s, r) in enumerate(zip(subjects, reporters)):
+            key = (ctx.ma, s)              # one state per deciding MA
+            if key in self.revoked:
+                continue
+            seen = self.seen.setdefault(key, set())
+            seen.add(r)
+            if len(seen) >= self.k:
+                self.revoked.add(key)
+                out.append((s, True, i))   # (subject, revoke, row)
+        return out
+
+run = v2xw.run("scenarios/credential-lifecycle.yaml", ma_policy=KReporters())
+```
+
+It decides for every provider MA that would run the deployment-wide rule; the scenario
+must not set `detection.ma` or `security.scms.ma_policy`. The batch is the `ma.received`
+columns (`batch.to_pyarrow()` with `pyarrow`, or `column(name)` and `rows()` without),
+never ground truth. A revoke goes through the provider's decision mode and the CRL like a
+built-in policy's. Define the class in a module file: the manifest pins it as
+`ma_policy:python:<module>.<class>` with the SHA-256 of the module's source. If `decide`
+raises, `v2xw.run` raises the traceback when the run ends.
 
 ## Examples
 

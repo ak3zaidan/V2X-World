@@ -58,6 +58,11 @@ These are referenced from the module documentation. None can be fixed from here.
    `ModelChoice` variant that carries a Python callable, and a place on `Engine` to put it.
    Owner: `v2xw-engine` (`scenario::ModelChoice`, `wiring`).
 
+   One family is wired, by design without a scenario key: an MA decision rule
+   (`ma_policy::PyMaPolicy`, 08-settings-ux-and-gaps §7 B4) reaches a run through
+   `Engine::attach_ma_policy`, which `v2xw.run(..., ma_policy=obj)` calls between build and
+   run, and the manifest pins it (`ma_policy:python:<module>.<class>`, source SHA-256).
+
 ## A leak found while testing, in `v2xw-record`
 
 `export::schema::ground_truth_fields("phy.rx")` returns `["tx_node", "distance_m",

@@ -47,6 +47,7 @@
 
 pub mod conformance;
 pub mod err;
+pub mod ma_policy;
 pub mod mathmod;
 pub mod metrics;
 pub mod plugins;

@@ -72,6 +72,7 @@ pub mod export;
 pub mod frag;
 pub mod hosted;
 pub mod infra;
+pub mod ma_hook;
 pub mod ma_policy;
 pub mod manifest;
 pub mod nema;
