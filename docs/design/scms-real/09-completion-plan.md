@@ -159,3 +159,17 @@ Dated notes go under each id as its wave lands.
   P-384 / P-256 ratio is unpublished for V2X parts (Thales T-2000 1.5, T-5000 1.0, OpenSSL
   on Cortex-A 4.5-8.9), so the software ratio of the device's own anchor is an ASSUMPTION
   and likely pessimistic for a hardware accelerator.
+
+### SC-D9
+
+- **2026-10-30 (wave A): closed, already fixed or not a defect.** The resume burst
+  (R-FFBURST) had two causes, both fixed in finalize 4 (testing/fast-forward.md §1): the
+  mobility clocks and the GNSS per-second hazards read the frozen window as elapsed time
+  (`Mobility::resume_after_pause`, `GnssModel::resume_after_pause`; tests
+  `calendar::the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed` and
+  `gauss_markov::a_receiver_resumed_after_a_pause_continues_its_error_as_if_no_time_had_passed`).
+  FB3 at full scale: 404 reports in the rollover window against FB2's 10,357, 0 cases.
+  The frequent stops are real wake sources (`stops_by_cause`): hourly conditional CRL
+  polls of each cellular device, the 60 s jump cap and kernel events; R-FFSLOW does not
+  reproduce after new3. FB2.honest-reports is `fixed` and FB2.ff-ticks a corrected
+  expectation. Left for the validation wave: FB4.ff-stops (cost per stop).
