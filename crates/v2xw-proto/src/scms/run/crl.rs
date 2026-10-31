@@ -738,7 +738,11 @@ impl ScmsState {
                 c.kind == crate::scms::appcert::AppCertKind::ObuIdentification
                     && c.at <= at
                     && c.expiry >= now32
-                    && self.apps.id_revoked.get(&c.device).is_some_and(|&t| t <= at)
+                    && self
+                        .apps
+                        .id_revoked
+                        .get(&c.device)
+                        .is_some_and(|&t| t <= at)
             })
             .map(|c| v2xw_sec::crl::HashRevocation {
                 id: c.id10,

@@ -729,7 +729,11 @@ fn an_obu_identification_cycle_preloads_and_renews() {
     assert!(third.at >= start(3) - 7 * DAY && third.at < start(3) - 7 * DAY + HOUR);
     assert!(run.app_starvation(DEVICE_B, at, horizon).is_empty());
     assert!(run.state.pdus.iter().any(|r| !r.preload));
-    assert!(run.state.pdu_rejections.is_empty(), "{:?}", run.state.pdu_rejections);
+    assert!(
+        run.state.pdu_rejections.is_empty(),
+        "{:?}",
+        run.state.pdu_rejections
+    );
     for c in run.app_installed(DEVICE_B) {
         assert_eq!(
             psids_of(c),
@@ -804,5 +808,9 @@ fn a_revoked_identification_certificate_goes_on_the_series_3_list() {
             && !run.state.ra.blocklist.contains(&DEVICE_B),
         "the device keeps its enrolment"
     );
-    assert!(run.state.pdu_rejections.is_empty(), "{:?}", run.state.pdu_rejections);
+    assert!(
+        run.state.pdu_rejections.is_empty(),
+        "{:?}",
+        run.state.pdu_rejections
+    );
 }

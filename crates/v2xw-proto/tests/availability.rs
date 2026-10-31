@@ -79,8 +79,14 @@ fn outages_follow_the_mtbf_and_mttr() {
     let mean_down = down as f64 / n as f64;
     let mean_up = ups as f64 / n as f64;
     let (b, r) = (m.mtbf.as_nanos() as f64, m.mttr.as_nanos() as f64);
-    assert!((mean_down - r).abs() <= 0.1 * r, "mean down {mean_down} against {r}");
-    assert!((mean_up - b).abs() <= 0.1 * b, "mean up {mean_up} against {b}");
+    assert!(
+        (mean_down - r).abs() <= 0.1 * r,
+        "mean down {mean_down} against {r}"
+    );
+    assert!(
+        (mean_up - b).abs() <= 0.1 * b,
+        "mean up {mean_up} against {b}"
+    );
     // Always up without a model.
     let mut k: Kernel<()> = Kernel::new(BackendNet::new());
     k.host(
@@ -131,5 +137,8 @@ fn drawn_outages_are_offline_faults_and_counted() {
         assert_eq!(plan.back_online(ra, f), Some(u));
         assert!(plan.retry_reaches(ra, f).is_some_and(|t| t >= u));
     }
-    assert!(!plan.offline(NodeId::new(4), w[0].0), "another entity stays up");
+    assert!(
+        !plan.offline(NodeId::new(4), w[0].0),
+        "another entity stays up"
+    );
 }

@@ -33,8 +33,8 @@ fn issuer8(c: &Certificate) -> [u8; 8] {
 
 #[test]
 fn each_aca_instance_counts_its_own_certificates() {
-    let home = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, deployment())
-        .expect("builds");
+    let home =
+        ScmsRun::new_deployed(ScmsParams::default().quick(), 0, deployment()).expect("builds");
     let mut peer = ScmsRun::new_peer(&home, 1).expect("provider-b's run builds");
     assert_eq!(peer.state.aca_extra.len(), 1, "provider-b's aca/1");
     peer.preload(NodeId::new(5_000_131), 0, 1, 20)
@@ -62,7 +62,9 @@ fn each_aca_instance_counts_its_own_certificates() {
     for c in acas {
         let n = if c.instance == 0 { n0 } else { n1 };
         assert_eq!(
-            c.counters.get("certs_issued").and_then(serde_json::Value::as_u64),
+            c.counters
+                .get("certs_issued")
+                .and_then(serde_json::Value::as_u64),
             Some(sent(n)),
             "{} counts its own issuance",
             c.id
@@ -75,8 +77,7 @@ fn each_aca_instance_counts_its_own_certificates() {
 fn a_root_rollover_recertifies_the_second_aca() {
     let mut d = deployment();
     d.providers[0].components.insert("aca".into(), 2);
-    let mut home =
-        ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
+    let mut home = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
     assert_eq!(home.state.aca_extra.len(), 1, "provider-a's aca/1");
     let label = home.state.gov.config.provider.clone();
     let before = NodeId::new(5_000_221);
@@ -105,7 +106,10 @@ fn a_root_rollover_recertifies_the_second_aca() {
         "with fresh keys"
     );
     assert_eq!(pki.aca_instances(), 1, "one aca-1, not two");
-    assert!(pki.retired.iter().any(|a| a.cert == old1.cert), "the old one retired");
+    assert!(
+        pki.retired.iter().any(|a| a.cert == old1.cert),
+        "the old one retired"
+    );
     assert_eq!(
         home.state.gov.counters.ica_certs_issued,
         ica_mid + 1,
@@ -130,5 +134,9 @@ fn a_root_rollover_recertifies_the_second_aca() {
     let news = creds(&home, joiner, pki.aca_at(1).id8());
     assert!(!news.is_empty(), "the new aca-1 issues");
     assert!(news.iter().all(|c| pki.signer_key(c).is_ok()));
-    assert!(home.state.pdu_rejections.is_empty(), "{:?}", home.state.pdu_rejections);
+    assert!(
+        home.state.pdu_rejections.is_empty(),
+        "{:?}",
+        home.state.pdu_rejections
+    );
 }
