@@ -17,6 +17,54 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-31 — SCMS completion wave A merge (side, crl, honest, records)
+
+Four tracks from `5c5dfc4e`, merged `--no-ff` in the order side, crl, honest, records.
+The only conflicts were end-of-file appends to `09-completion-plan.md` §7; both sides kept.
+`cargo fmt --all` then changed five files (own commit `b07ad300`).
+
+- **Merged items.**
+  - Side (`e6d4cf05`): `docs/design/scms-real/10-completion-specs.md`, the build specs for
+    waves C and D (SC-P1..P12, the 13 §4 rule gaps, UI requests U1-U15). Docs only.
+  - CRL (`b179ccfd`): SC-D1 a new ignored live_rsu test (later list airs only through a unit
+    that downloaded it); SC-D2 records only; SC-D3 two all-provider census keys (diagnostic);
+    SC-D4 a report shared with a down MA is held and retried.
+  - Honest (`dd1ab2d3`): SC-D5 the US profile pairs BSMs by msgCnt (setting `consecutive`,
+    default msg_count; Paper 1 scenarios pinned to `received`); SC-D8 P-384 on a profile with
+    no P-384 figure costs P-256 x the reference ratio; SC-D10 VeReMi first-BSM truth (VR-2);
+    SC-D6, D7, D9 records only.
+  - Records (`93b67187`): SC-D11 `judge_revoked` default 0; SC-D12 provider-b's ICA counter;
+    SC-D13 RSU `node.credentials` rows; SC-D14 sub-hour enrolment lifetimes, `crl_version`
+    as a publication count, PKI store bounded by bytes.
+- **Checks.** `cargo check --workspace --tests` clean. 203 test binaries (lib and every
+  test binary of engine, proto, threat, node, record, server and core; the engine's publish
+  (lib), scenario, sensitivity and regression tests among them), one heavy.sh call each,
+  30-minute cap: **2,188 pass, 4 fail, 20 ignored.** Per crate (pass/fail/ignored): engine
+  656/4/16, proto 347/0/0, threat 264/0/0, node 313/0/0, record 256/0/0, server 143/0/4,
+  core 209/0/0. `scms_knobs_runs` hit the cap after 12 of 20; the other 8 passed in one more
+  call (1,096 s).
+- **The 4 failures predate the merge** (no merged commit touches the publish schema, the
+  lifecycle menus or those expectation rows; not re-built at the base):
+  - `scms_knobs` x2: 39 published `security.scms.lifecycle.*` fields against the test's 30
+    moves, and `root_rollover_at_s` has no default. The A1 menus (`22d851fd`, 10-29) added
+    fields the test does not know.
+  - `sensitivity_catalogue` and `sensitivity_expectations` x1 each:
+    `security.signer_id_policy.full_cert_every_ms "high"` is no longer a planned end (rows in
+    security-network.yaml and security-track.yaml; menus changed by `22d851fd`).
+- **Goldens.** Only the records track moved any, each in its own re-bless commit
+  (`a79c3ef4`, `39a89468`, `454986c6`, `bd59e324`, `0de1e662`); final phase2-path `d590fd1b`,
+  i-s1-phase2-60s `ae92e07b`. The crl and honest tracks declared none, and the regression
+  binaries (`phase2`, `bsm_timing`, `trigger_ttc`, `scms_scale`) pass on the merged tree, so
+  the declared digests hold with all four tracks together; no re-bless was needed.
+- **Release and boot.** `cargo build --release -j 2 -p v2xw-cli --bins` ok (10 min 9 s);
+  `v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8758 --paused --speed 0`
+  listened on 127.0.0.1:8758 and was stopped by PID.
+- **Still open.** The 4 failures above; the ignored tests (live_rsu's three, among the 20)
+  were not run; US-profile rows measured on the old BSM pairing (matrix, realism, live-atk,
+  benchmark) need re-measuring; FB4.ff-stops; PV.m.issued-counters (provider-b aca/0 counts
+  both ACA instances); the server metric breakdown store still grows towards its cap; the
+  P-384 ratio is an ASSUMPTION (software figures); waves C and D per `10-completion-specs.md`.
+
 ## 2026-10-29 — UI round-2 polish merge (uimetrics, uicert)
 
 - Merged `--no-ff` in order uimetrics (0cfe11cb; b444c422 and 0cfe11cb were new, acbdadb1

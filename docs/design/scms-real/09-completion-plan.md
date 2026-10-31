@@ -125,6 +125,7 @@ Dated notes go under each id as its wave lands.
     (1609.2 `region` "omitted" rule), so the check reaches every provider-a device;
   - proto F9 is proposed for §6 (EU profile only).
 - Specs only: no code was changed and nothing was run.
+- 2026-10-31 (wave A merge): merged to main 2026-10-31 (wave A integration, side track `e6d4cf05`); docs only.
 
 ### SC-D1
 
@@ -141,6 +142,7 @@ Dated notes go under each id as its wave lands.
   tell a frame's list: a unit keeps relaying the older list while its download is on the
   line, so LR.S.l240.bc4.fix.lag-max is a wrong expectation, not a defect. Rows:
   live-rsu LR.S.l240.bc4.fix.*, LR.S.dbl.unexplained, LR.S.lat2000bc3.crl-lag.
+- 2026-10-31 (wave A merge): merged to main (crl track, head `b179ccfd`); `live_rsu` ignored tests not re-run by the integration (ignored), its normal tests pass on the merged tree.
 
 ### SC-D2
 
@@ -154,6 +156,7 @@ Dated notes go under each id as its wave lands.
   scms-stress MWC.recovery is now fixed. Kept as modelled and noted: the joiner holds its RA's
   list from the instant it joins, not after its first connection's round trip. That is
   seconds against a two-week tolerance, so negligible.
+- 2026-10-31 (wave A merge): merged to main (crl track); records only.
 
 ### SC-D3
 
@@ -167,6 +170,7 @@ Dated notes go under each id as its wave lands.
   no record or digest). Tests: `phase2.rs`
   `the_census_counts_the_entries_the_crl_generators_and_stores_hold` (path run, attacker
   revoked) and `with_no_attacker_nothing_is_revoked` (census 0).
+- 2026-10-31 (wave A merge): merged to main (crl track); `phase2` census tests pass on the merged tree.
 
 ### SC-D4
 
@@ -187,6 +191,7 @@ Dated notes go under each id as its wave lands.
   component message. New test `provider_runs.rs`
   `a_report_shared_with_a_down_ma_arrives_when_it_is_back`. It only changes a run with an
   MA outage under report sharing, and no shipped scenario has one, so no golden moves.
+- 2026-10-31 (wave A merge): merged to main (crl track); `proto provider_runs` and `ee_retry` pass on the merged tree.
 
 ### SC-D6
 
@@ -204,6 +209,7 @@ Dated notes go under each id as its wave lands.
   13 / 28; 186,368 BSMs discarded as in the future and 141,407 as too old. Fault (window
   opened to a year): reports about honest devices 13 -> 11,401. Row E2 in
   `scms/scms-edge-cases.yaml` updated.
+- 2026-10-31 (wave A merge): merged to main (honest track); records only.
 
 ### SC-D7
 
@@ -215,6 +221,7 @@ Dated notes go under each id as its wave lands.
   re-measurements: ML-DSA-44 cycle 0 -> 50,183 frames, MTU refusals 50,180 -> 2 (the
   relayed reports), BSM PSDU 814 B; Falcon-512 cycle PSDU 1,045 -> 380 B (the NDSS
   prediction); verify cost 0.630 ms against ECDSA's 0.628.
+- 2026-10-31 (wave A merge): merged to main (honest track); records only.
 
 ### SC-D8
 
@@ -237,6 +244,7 @@ Dated notes go under each id as its wave lands.
   P-384 / P-256 ratio is unpublished for V2X parts (Thales T-2000 1.5, T-5000 1.0, OpenSSL
   on Cortex-A 4.5-8.9), so the software ratio of the device's own anchor is an ASSUMPTION
   and likely pessimistic for a hardware accelerator.
+- 2026-10-31 (wave A merge): merged to main (honest track); `node curve_pricing` passes on the merged tree.
 
 ### SC-D9
 
@@ -251,6 +259,7 @@ Dated notes go under each id as its wave lands.
   polls of each cellular device, the 60 s jump cap and kernel events; R-FFSLOW does not
   reproduce after new3. FB2.honest-reports is `fixed` and FB2.ff-ticks a corrected
   expectation. Left for the validation wave: FB4.ff-stops (cost per stop).
+- 2026-10-31 (wave A merge): merged to main (honest track); records only.
 
 ### SC-D10
 
@@ -272,6 +281,7 @@ Dated notes go under each id as its wave lands.
   fault (no forward branch) red. Recorded, not changed: the node is live up to one step
   before its vehicle's first record; moving node creation would re-time every spawn and
   move every golden for an effect only this export sees.
+- 2026-10-31 (wave A merge): merged to main (honest track); `record` veremi and dataset tests pass on the merged tree.
 
 ### SC-D5
 
@@ -296,6 +306,7 @@ Dated notes go under each id as its wave lands.
   moved: the pinned runs use the research suite.
 - Left: the matrix, realism and live-atk US-profile rows were measured on the old reading,
   so they are re-measured in the validation wave.
+- 2026-10-31 (wave A merge): merged to main (honest track, head `dd1ab2d3`); `threat us_mbr_timing`, `node runtime_behaviour` and `engine bsm_timing` pass on the merged tree; US-profile rows measured on the old pairing still need re-measuring.
 
 ### SC-D11
 
@@ -320,6 +331,7 @@ Dated notes go under each id as its wave lands.
   `3ae7d414`, each tree built and run on its own) gives identical B0L and TSU1p0 digests;
   the control C2M differs (716ff763 -> 5a41b1a5). Both pass. Nothing left on SC-D11; the
   live-atk table's other open rows (F10 shares, TRL intensity) are not in this item.
+- 2026-10-31 (wave A merge): merged to main (records track, head `93b67187`); its phase2-path re-bless holds on the merged tree.
 
 ### SC-D12
 
@@ -335,6 +347,7 @@ Dated notes go under each id as its wave lands.
 - Left: PV.m.issued-counters (audit-prov) still reads provider-b's aca/0 `certs_issued`
   1,566 against 786 in its records (the instance counter counts both ACAs' issuance), and
   a root rollover re-certifies the governance set but not `aca-1` (code reading).
+- 2026-10-31 (wave A merge): merged to main (records track); the declared digests hold on the merged tree.
 
 ### SC-D13
 
@@ -356,6 +369,7 @@ Dated notes go under each id as its wave lands.
   AU.STORE.order: 282 -> 0. The record gap was closed on 10-25; the last 22 were a checker
   reading (a relayed report sent and never confirmed counted as pending), corrected in
   audit_mbpipe. Q's late `net.bytes` / `proto.revocation` stamps stay (§5).
+- 2026-10-31 (wave A merge): merged to main (records track); `rsu_certs`, `pki_view` and `server pki` pass on the merged tree; final digests phase2-path `d590fd1b`, i-s1 `ae92e07b` hold.
 
 ### SC-D14
 
@@ -373,3 +387,4 @@ Dated notes go under each id as its wave lands.
 - Left: the metric breakdown store is capped at 1,000,000 entries (about 120 MB by its own
   note) and still grows toward that cap on long runs; a UI client's feed adds to it. Not
   changed (it merges old samples, it does not lose them).
+- 2026-10-31 (wave A merge): merged to main (records track); `server` tests pass on the merged tree.
