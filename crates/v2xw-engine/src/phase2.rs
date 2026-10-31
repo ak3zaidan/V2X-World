@@ -256,7 +256,7 @@ impl LocalSuite {
     fn judged_times(&self, m: &ObservedMessage) -> (Option<SimTime>, SimTime) {
         let prev = match self {
             LocalSuite::Research(_) | LocalSuite::Ts(_) => None,
-            LocalSuite::Us(d) => d.consecutive_before(&m.signer, m.claimed_generation_time),
+            LocalSuite::Us(d) => d.consecutive_before(m),
         };
         (prev, m.claimed_generation_time)
     }
@@ -2534,8 +2534,9 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
                                 &field,
                                 format!(
                                     "is {value}; reading takes v1_0 or asn1_v1_1, time_base \
-                                     takes generation_time or secmark, and every other \
-                                     parameter a number"
+                                     takes generation_time or secmark, consecutive takes \
+                                     msg_count or received, and every other parameter a \
+                                     number"
                                 ),
                             ));
                         }

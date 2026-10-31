@@ -32,9 +32,15 @@
 //!   `|v₂ − v₁| / Δt`: the receiver's observation does not carry the BSM's `accelSet`.
 //! * **BrakeAcceleration** never fires: the observation does not carry `brakes`. No
 //!   attack of the catalogue falsifies the brake status, so nothing is missed today.
-//! * **Consecutive** means consecutively *received* from one certificate, at most
-//!   `max_gap_s` apart (ASSUMPTION, 0.5 s: five BSM intervals). Beyond that the first
-//!   BSM's velocity no longer predicts the second's position to within 1 m.
+//! * **Consecutive** means consecutive *on the air*: the second BSM's `msgCnt` is the
+//!   first's plus one (J2735 `MsgCount`, mod 128), and the two are at most `max_gap_s`
+//!   apart (ASSUMPTION, 0.5 s: five BSM intervals). Both SM-MBR texts judge "two
+//!   consecutive BSMs" (v1.0) "sent 0.1 seconds apart" (ASN.1 v1.1), and `msgCnt` is
+//!   the field a receiver tells them by. A receiver that lost the BSMs between two it
+//!   heard does not hold a consecutive pair (SC-D5: every honest `positionJump` at full
+//!   density compared BSMs with lost ones between, testing/memory-density.md §2.2).
+//!   `consecutive = received` restores the earlier reading, consecutively *received*
+//!   within `max_gap_s`. A BSM without a `msgCnt` (a unit test's) is judged by the gap.
 //!
 //! # RandomPosition: two normative readings, two clocks (Paper 1 item C)
 //!
@@ -112,6 +118,30 @@ pub struct UsMbrParams {
     /// Under the ASN.1 v1.1 reading, how far from 0.1 s a pair's Δt may be and still be
     /// "sent 0.1 seconds apart", seconds (ASSUMPTION, 0.05).
     pub spacing_tolerance_s: f64,
+    /// What makes two BSMs of one certificate consecutive (`msgCnt` successors).
+    pub consecutive: Consecutive,
+}
+
+/// What makes two BSMs from one certificate a consecutive pair.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Consecutive {
+    /// Consecutive on the air: `msgCnt` successors within `max_gap_s` (SC-D5).
+    #[default]
+    MsgCount,
+    /// Consecutively received within `max_gap_s`, BSMs lost between or not (the
+    /// reading before SC-D5).
+    Received,
+}
+
+impl Consecutive {
+    /// The name the scenario uses.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MsgCount => "msg_count",
+            Self::Received => "received",
+        }
+    }
 }
 
 /// Which normative text RandomPosition follows.
@@ -175,12 +205,13 @@ impl Default for UsMbrParams {
             reading: RandomPositionReading::V1_0,
             time_base: TimeBase::GenerationTime,
             spacing_tolerance_s: 0.05,
+            consecutive: Consecutive::MsgCount,
         }
     }
 }
 
 /// The parameter names [`UsMbrParams::apply`] reads.
-pub const PARAM_KEYS: [&str; 16] = [
+pub const PARAM_KEYS: [&str; 17] = [
     "constant_position",
     "random_position",
     "gps_drift_m",
@@ -197,6 +228,7 @@ pub const PARAM_KEYS: [&str; 16] = [
     "reading",
     "time_base",
     "spacing_tolerance_s",
+    "consecutive",
 ];
 
 impl UsMbrParams {
@@ -234,6 +266,13 @@ impl UsMbrParams {
                 };
             }
             "spacing_tolerance_s" => self.spacing_tolerance_s = v,
+            "consecutive" => {
+                self.consecutive = if on {
+                    Consecutive::Received
+                } else {
+                    Consecutive::MsgCount
+                };
+            }
             _ => return false,
         }
         true
@@ -247,6 +286,8 @@ impl UsMbrParams {
             ("reading", "asn1_v1_1") => self.reading = RandomPositionReading::Asn1V1_1,
             ("time_base", "generation_time") => self.time_base = TimeBase::GenerationTime,
             ("time_base", "secmark") => self.time_base = TimeBase::SecMark,
+            ("consecutive", "msg_count") => self.consecutive = Consecutive::MsgCount,
+            ("consecutive", "received") => self.consecutive = Consecutive::Received,
             _ => return false,
         }
         true
@@ -269,6 +310,15 @@ impl UsMbrParams {
             _ => by_generation,
         }
     }
+
+    /// Whether `m` follows `r` on the air: its `msgCnt` is `r`'s plus one, mod 128.
+    /// Always true under `consecutive = received`, and when either has no `msgCnt`.
+    fn in_sequence(&self, r_cnt: Option<u8>, m: &ObservedMessage) -> bool {
+        match (self.consecutive, r_cnt, m.bsm.msg_cnt) {
+            (Consecutive::MsgCount, Some(a), Some(b)) => b == (a + 1) % 128,
+            _ => true,
+        }
+    }
 }
 
 /// The previous BSM heard from one certificate.
@@ -285,6 +335,8 @@ struct Last {
     sec_mark: Option<u16>,
     /// Its `accelSet.long`, m/s².
     accel: Option<f64>,
+    /// Its `msgCnt`.
+    msg_cnt: Option<u8>,
 }
 
 /// How long a receiver keeps the previous BSM of a sender it no longer hears: 30 s,
@@ -332,10 +384,11 @@ impl UsSmMbr {
     /// evidence carries ([SM-MBR] §2.3.1.2.1, "a sequence of BSMs signed with the same
     /// certificate"). Read **before** [`Detector::on_message`] judges the message.
     #[must_use]
-    pub fn consecutive_before(&self, signer: &[u8; 8], generated: SimTime) -> Option<SimTime> {
-        let r = self.last.get(signer)?;
-        let dt = ns_to_secs(generated.saturating_sub(r.t));
-        (dt > 0.0 && dt <= self.params.max_gap_s).then_some(r.t)
+    pub fn consecutive_before(&self, m: &ObservedMessage) -> Option<SimTime> {
+        let r = self.last.get(&m.signer)?;
+        let dt = ns_to_secs(m.claimed_generation_time.saturating_sub(r.t));
+        (dt > 0.0 && dt <= self.params.max_gap_s && self.params.in_sequence(r.msg_cnt, m))
+            .then_some(r.t)
     }
 
     /// The checks `m` fails against the previous BSM `prev` of its sender (if consecutive)
@@ -347,7 +400,7 @@ impl UsSmMbr {
             // "The time between" two BSMs, on the configured clock (generationTime by
             // default, or secMark).
             let dt = p.delta_t(&r, m);
-            if dt > 0.0 && dt <= p.max_gap_s {
+            if dt > 0.0 && dt <= p.max_gap_s && p.in_sequence(r.msg_cnt, m) {
                 let disp = math::hypot(m.claimed_x_m - r.x, m.claimed_y_m - r.y);
                 if p.constant_position
                     && disp < p.position_resolution_m
@@ -438,6 +491,7 @@ impl Detector for UsSmMbr {
                 heard: m.received_at,
                 sec_mark: m.bsm.sec_mark_ms,
                 accel: m.bsm.accel_long_mps2,
+                msg_cnt: m.bsm.msg_cnt,
             },
         );
         self.since_sweep += 1;
@@ -505,7 +559,7 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
     let mut card = ModelCard::new(
         MODEL_ID,
         Family::Detector,
-        "1.0.0",
+        "1.1.0",
         "The strict US misbehaviour profile: the SCMS Manager PSID-0x20 report subtypes \
          (ConstantPosition, RandomPosition, MaxSpeed, MaxAcceleration, the ObsImplausible \
          distance check off) with their published default thresholds, every received BSM \
@@ -569,6 +623,16 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
             ),
         ),
         Parameter::new(
+            "consecutive",
+            "-",
+            json!(p.consecutive.as_str()),
+            standard(
+                "SM-MBR v1.0 §2.3.1.2 \"two consecutive BSMs\", ASN.1 v1.1 \"sent 0.1 \
+                 seconds apart\"; J2735 MsgCount (msg_count) or consecutively received \
+                 (received)",
+            ),
+        ),
+        Parameter::new(
             "spacing_tolerance_s",
             "s",
             json!(p.spacing_tolerance_s),
@@ -588,8 +652,8 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
         design("scms-real/03-protocols-and-operations.md §8.1"),
     ];
     card.assumptions = vec![
-        "Consecutive means consecutively received from one certificate, at most \
-         max_gap_s (0.5 s) apart."
+        "Consecutive means msgCnt successors from one certificate, at most max_gap_s \
+         (0.5 s) apart (consecutive = received: consecutively received)."
             .to_string(),
     ];
     card.limitations = vec![
@@ -814,5 +878,38 @@ mod tests {
         // The kept sender, frozen at x = 0 while claiming 20 m/s: still caught.
         let fired = feed(&mut d, [2; 8], 39_100, 0.0);
         assert!(fired.contains(&"constantPositionFrozen"), "{fired:?}");
+    }
+
+    /// `bsm` with its `msgCnt`.
+    fn counted(t_ms: u64, x: f64, speed: f64, cnt: u8) -> ObservedMessage {
+        let mut m = bsm(t_ms, x, speed);
+        m.bsm.msg_cnt = Some(cnt);
+        m
+    }
+
+    #[test]
+    fn only_bsms_consecutive_on_the_air_are_a_pair() {
+        // SC-D5: a car accelerating from 10 m/s; the receiver lost the three BSMs between
+        // msgCnt 5 and 9, so its straight-line prediction misses by 1.5 m over 0.4 s.
+        // Two BSMs with lost ones between are not "two consecutive BSMs": no check.
+        let lost = [counted(0, 0.0, 10.0, 5), counted(400, 5.5, 13.0, 9)];
+        assert!(
+            run(&lost, UsMbrParams::default()).iter().all(Vec::is_empty),
+            "a pair with lost BSMs between was judged"
+        );
+        // The earlier reading (consecutively received) judges it and fires.
+        let mut received = UsMbrParams::default();
+        assert!(received.apply_str("consecutive", "received"));
+        assert_eq!(run(&lost, received)[1], vec!["positionJump"]);
+        // msgCnt successors, wrapping at 127 -> 0, are judged as before: 1.5 m off in
+        // 0.1 s still fires.
+        let next = [counted(0, 0.0, 10.0, 127), counted(100, 2.5, 10.0, 0)];
+        assert_eq!(run(&next, UsMbrParams::default())[1], vec!["positionJump"]);
+        // The report evidence names the first BSM only for a pair on the air.
+        let mut d = UsSmMbr::new(UsMbrParams::default());
+        let mut ctx = CollectingCtx::new(1);
+        d.on_message(&mut ctx, &me(), &lost[0], &NoMap);
+        assert_eq!(d.consecutive_before(&lost[1]), None);
+        assert_eq!(d.consecutive_before(&counted(100, 1.0, 10.0, 6)), Some(0));
     }
 }

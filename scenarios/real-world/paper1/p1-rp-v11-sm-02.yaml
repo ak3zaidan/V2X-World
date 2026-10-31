@@ -13,3 +13,6 @@ detection:
         reading: asn1_v1_1
         time_base: secmark
         max_gap_s: 0.2
+        # The gap limit is the experiment: pairs consecutively received within it,
+        # BSMs lost between or not (SC-D5 made msgCnt successors the default).
+        consecutive: received
