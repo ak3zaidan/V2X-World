@@ -870,6 +870,7 @@ mod tests {
             issuer: "provider-0".into(),
             la_link: link.into(),
             set_aside: None,
+            subject_from: String::new(),
         }
     }
 
