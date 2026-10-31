@@ -199,7 +199,10 @@ fn a_wsa_is_encoded_and_decodes_per_the_1609_3_module() {
     let outcomes = run(&mut u, 60);
     // fault: wsa_period left at 5 s -> red (2 WSAs, RepeatRate 1).
     let n = count(&outcomes, MsgType::Wsa);
-    assert!((55..=61).contains(&n), "{n}: 10 Hz over 6 s (RSU Spec v4.1 App. D)");
+    assert!(
+        (55..=61).contains(&n),
+        "{n}: 10 Hz over 6 s (RSU Spec v4.1 App. D)"
+    );
     assert_eq!(u.unsized_broadcasts(), 0);
     assert_eq!(
         u.modelled_broadcasts(),

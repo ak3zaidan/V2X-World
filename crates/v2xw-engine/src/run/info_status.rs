@@ -90,7 +90,8 @@ impl Engine {
         let answered = service.after(t1);
         let (answer, seen) = self.phase2.as_mut()?.info_status_answer(node, answered);
         let size = answer.unwrap_or(crate::phase2::CRL_NOT_MODIFIED_BYTES);
-        let dl = self.info_status_leg(node, pos, v2xw_radio::cellular::Direction::Downlink, size)?;
+        let dl =
+            self.info_status_leg(node, pos, v2xw_radio::cellular::Direction::Downlink, size)?;
         let AccessOutcome::Arrives(t2) = dl else {
             return lost(self);
         };

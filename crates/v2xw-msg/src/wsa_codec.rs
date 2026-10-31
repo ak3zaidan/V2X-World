@@ -169,8 +169,7 @@ fn card() -> ModelCard {
             .to_string(),
     ];
     card.ignores = vec![
-        "The WAVE Short Message Protocol and IPv6 framing the advertisement rides in."
-            .to_string(),
+        "The WAVE Short Message Protocol and IPv6 framing the advertisement rides in.".to_string(),
     ];
     card.sources = vec![
         Source::new(
@@ -200,8 +199,7 @@ fn card() -> ModelCard {
             "wsa::tests::round_trip_with_routing_advertisement".to_string(),
             "wsa::tests::a_minimal_wsa_is_two_octets_and_bad_bytes_are_refused".to_string(),
             "wsa_oracle::the_wsa_codec_writes_and_reads_what_asn1tools_does".to_string(),
-            "wsa_codec::tests::the_codec_passes_a_canonical_wsa_and_refuses_the_rest"
-                .to_string(),
+            "wsa_codec::tests::the_codec_passes_a_canonical_wsa_and_refuses_the_rest".to_string(),
         ],
     };
     card

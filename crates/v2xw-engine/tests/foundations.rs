@@ -959,8 +959,15 @@ fn a_wsa_goes_out_in_the_control_channel_interval() {
         .iter()
         .filter(|&&t| sched.interval(t) != Interval::Cch)
         .count();
-    println!("WSA CCH: {} WSAs, {outside} outside the CCH interval", starts.len());
-    assert!((150..=210).contains(&starts.len()), "{} WSAs in 20 s", starts.len());
+    println!(
+        "WSA CCH: {} WSAs, {outside} outside the CCH interval",
+        starts.len()
+    );
+    assert!(
+        (150..=210).contains(&starts.len()),
+        "{} WSAs in 20 s",
+        starts.len()
+    );
     assert_eq!(outside, 0, "every WSA starts in the CCH interval");
 }
 

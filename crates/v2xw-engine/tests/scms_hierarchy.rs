@@ -236,7 +236,9 @@ fn a_deeper_hierarchy_runs_and_is_flagged_not_us() {
     let us = v2xw_engine::phase2::us_system(&s).expect("an SCMS run has a verdict");
     assert!(!us.is_us);
     assert!(
-        us.reasons.iter().any(|r| r == "provider-b has 3 ICA levels"),
+        us.reasons
+            .iter()
+            .any(|r| r == "provider-b has 3 ICA levels"),
         "{:?}",
         us.reasons
     );
@@ -294,7 +296,10 @@ fn a_failure_of_an_offline_ca_is_refused_by_name() {
             serde_json::from_value(serde_json::json!({"node": name, "mode": "offline"}))
                 .expect("a failure"),
         ];
-        let e = s.validate().expect_err("an offline CA cannot fail").to_string();
+        let e = s
+            .validate()
+            .expect_err("an offline CA cannot fail")
+            .to_string();
         assert!(
             e.contains("is an offline CA") && e.contains("crlg"),
             "{name}: {e}"
@@ -501,7 +506,11 @@ fn a_foreign_deeper_chain_is_learned_whole_by_p2pcd() {
         r.learned_by_node[1].iter().all(|n| *n == 2),
         "a provider-b device learns provider-a's ACA and ICA, once: {r:?}"
     );
-    assert_eq!(r.unanchored, [0, 0], "every learned certificate reached a root");
+    assert_eq!(
+        r.unanchored,
+        [0, 0],
+        "every learned certificate reached a root"
+    );
     assert!(
         r.a_verified_b > 0,
         "after learning, no provider-a device verified provider-b's traffic: {r:?}"

@@ -11069,8 +11069,10 @@ mod info_status_tests {
             id: CAMP_SCMS.to_string(),
             params: serde_json::json!({}),
         });
-        s.security.scms.get_or_insert_with(Default::default).crl_poll =
-            Some("info-status".to_string());
+        s.security
+            .scms
+            .get_or_insert_with(Default::default)
+            .crl_poll = Some("info-status".to_string());
         let engine = crate::Engine::build(s, "").expect("builds");
         let mut p = Phase2::build(engine.scenario(), engine.world())
             .expect("builds")
