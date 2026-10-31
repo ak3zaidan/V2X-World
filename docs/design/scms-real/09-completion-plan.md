@@ -148,6 +148,29 @@ Dated notes go under each id as its wave lands.
   ACA, `issued_by` cleared). No golden moved (engine `phase2`, 16 passed, digests held):
   the device fills the clear fields from the same certificate and the issuer names the
   same ACA the records did. `pki_view` counts a case's reporters by the MA-held subject.
+- 2026-10-31 (wave C, P1.2, engine, `0daaaef6`; golden in the next commit): **the decision
+  path no longer reads the engine's digest map.** Cause: `Phase2::resolve_subject`
+  (`by_digest` + `creds`) dropped a report whose digest the map lacked in
+  `report_at_proxy`, routed sharing by `provider_of_device(map device)` in
+  `ingest_arrivals`, and found the MA's report by the map's linkage value in
+  `start_cases_of`. Now `truth_subject` (records and truth only) is read by `log_fate`, the
+  run report's tallies, the modelled report path (no bytes; labelled
+  `engine-map (modelled report)`), the ETSI model and the decision de-duplication (left to
+  SC-P3); every real report is filed whatever the map says; sharing goes to the provider
+  whose ACA the certificate's issuer names (`ScmsState::issues_under`), carrying the
+  forwarding MA's subject; a case finds its report by the accused certificate's digest
+  (`MaState::report_about_cert`); `InFlightReport.subject` and the case's subject are
+  `Option`; `ma.received` gains `subject_from`. Tests:
+  `report_signing::a_report_is_decided_without_the_engine_map` (Manhattan, map hidden:
+  cases 1 = 1, same blocklist, 0 engine-map rows; red at cases 0 with the early return
+  restored), `scms_providers::a_report_routes_by_the_issuer_named_in_its_certificate`
+  (map naming the other provider's device: red under `provider_of_device` routing).
+  G-SCMS: phase2-path record digest `ae92e07b` -> `5a9b6eb7` (frames `736a1216` and the
+  10,243,399 records unchanged: the cause is the `subject_from` column on `ma.received`;
+  no report was unmapped on that run); i-s1 and ttc-triggered-brake held. No audit-mbpipe
+  row cites `resolve_subject` (re-grepped), so none closes; live-scms
+  `LS.MA.subject-from-cert` added, `verdict: open` (wave E, needs `live_scms.py` to read
+  `subject_from`). Still modelled: the Policy MA's `la_link` is the device's (SC-P2).
 
 ### SC-D1
 
