@@ -60,9 +60,9 @@ Source tags are those of 01 §Sources and 03 §0. Two sources are new in this fi
 | `shuffle_window_s` | 172800 | s | CITED | `service.rs` `CAMP_122_CERT_SHUFFLE` | [CAMP122] Table 67 max_cert_request_age, 2 days |
 | `report_shuffle_threshold` | 10000 | - | CITED | `service.rs` `CAMP_SHUFFLE` | [CAMP122] §5.2.8.4, SCMS-765 |
 | `report_shuffle_window_s` | 86400 | s | CITED | `service.rs` `CAMP_SHUFFLE` | One day. [CAMP122] SCMS-765 |
-| `pseudonym_change_interval_s` | 300 | s | CITED | card | SAE J2945/1 CERTCHG, via [PRIMER] pp.8–9 and [CVP-P2] item 25 |
-| `pseudonym_change_distance_m` | 2000 | m | CITED | card | NYC rule: every 2 km or 5 min. [PRIMER] pp.8–9 |
-| `cert_attach_interval_ms` | 450 | ms | CITED | card | J2945/1 CertAttachInt, via Rostami et al. 2018 Table 1 |
+| `pseudonym_change_interval_s` | 300 | s | CITED | card | SAE J2945/1 6.5.3, Table 21 `vCertChangeInterval` 5 min (primary, read 2026-10-31); also [PRIMER] pp.8–9, [CVP-P2] item 25 |
+| `pseudonym_change_distance_m` | 2000 | m | CITED | card | NYC rule: every 2 km or 5 min. [PRIMER] pp.8–9. The J2945/1 rule is 2,100 m ± 100 m of straight-line distance (Table 21 `vCertChangeDistance`), see 11 J8 |
+| `cert_attach_interval_ms` | 450 | ms | CITED | card | SAE J2945/1 6.5.2 `BSMSIGN-003`, Table 21 `vMaxCertDigestInterval` 450 ms (primary, read 2026-10-31). The scenario default is 1,000 ms (11 J1) |
 
 ### 1.4 Revocation
 

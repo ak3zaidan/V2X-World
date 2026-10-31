@@ -254,7 +254,8 @@ binary of main `4924a5d2`; "after" is an opt-2 build of this branch. Run-report 
   VAM) may be 2 s old, other application messages 600 s, and nothing may be more than
   40 ms ahead. These are the C2C-CC Basic System Profile values (RS_BSP_168, as Vanetza's
   `check_generation_time` transcribes them). The US J2945/1 values are not public, so they
-  are an ASSUMPTION. Settings: `security.scms.rx_beacon_max_age_s`, `rx_max_age_s`,
+  are an ASSUMPTION. (2026-10-31: settled. J2945/1 Table 11 gives 30 s past and 30 s future for a BSM, so this is a
+  DEVIATION for the US; fix J7 in `11-j2945-1-conformance.md`.) Settings: `security.scms.rx_beacon_max_age_s`, `rx_max_age_s`,
   `rx_max_future_s`. A dropped frame is `node.rx` cause `generation-time-window`; it is
   verified by no one and reaches no detector, so it is dropped, not reported.
 - **MA.** A report whose evidence was generated more than 40 ms after the report, or more

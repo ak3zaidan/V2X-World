@@ -127,7 +127,8 @@
     What a real receiver and MA do (SC-D6): IEEE 1609.2 §5.2 lets the receiving SDS refuse an SPDU whose
     generationTime is too far in the past or future before verifying it, and the BSM profile sets the
     window (the public value is C2C-CC BSP RS_BSP_168: 40 ms ahead, 2 s old; J2945/1's is paywalled, so
-    ASSUMPTION for the US). A discarded BSM is unverified, and SM-MBR judges only verified BSMs from one
+    ASSUMPTION for the US. 2026-10-31: J2945/1 Table 11 sets 30 s past and 30 s future for the BSM, so the US window is a
+    DEVIATION (fix J7, scms-real/11). This row's 5,000 s skew stays outside either window; skews under 30 s would move). A discarded BSM is unverified, and SM-MBR judges only verified BSMs from one
     certificate, so it is not evidence and no report names its sender. No published SCMS rule (SM-MBR
     §2.3, CAMP-EE, the MA policy) revokes a device for its clock, so nothing was added for it. The
     window landed in rxval::GenerationTimeWindow (8da5b7c1, 2026-10-21, after this row's new3 run), test

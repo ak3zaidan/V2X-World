@@ -18,7 +18,7 @@ Status: design draft for review (2026-09-18). None of these blocked the design; 
 
 | # | Question | Assumption used | Effect |
 |---|---|---|---|
-| B1 | Certificate attachment default for SCMS: 450 ms (`CertAttachInt`, Rostami et al.) or "every fifth SPDU" (NDSS 2024's reading)? The J2945/1 clause is paywalled (R4 §A.1). | 450 ms, cited to Rostami 2018 Table 1; flagged secondary. | Changes `full_cert_share` and air bytes by a few percent; a purchased J2945/1 copy settles it. |
+| B1 | Certificate attachment default for SCMS: 450 ms (`CertAttachInt`, Rostami et al.) or "every fifth SPDU" (NDSS 2024's reading)? The J2945/1 clause is paywalled (R4 §A.1). | 450 ms, cited to Rostami 2018 Table 1; flagged secondary. | Changes `full_cert_share` and air bytes by a few percent; a purchased J2945/1 copy settles it. **Settled 2026-10-31:** J2945/1 6.5.2 `BSMSIGN-003` and Table 21 set `vMaxCertDigestInterval` to 450 ms. At 10 Hz that is every fifth BSM, which is also NDSS's reading (5.1.3.2: about every 500 ms). The engine's scenario default of 1,000 ms deviates (scms-real/11 J1). |
 | B2 | CRL publication cadence for the SCMS plug-in: daily (USDOT 2013 working assumption), continuous, or weekly? The PoC value is UNVERIFIED (R6 §A.10). | Daily default; scenario-selectable. | Revocation-latency figures in RQ3/RQ4 shift by up to a day. |
 | B3 | Top-up download horizon (weeks of certificates a vehicle keeps): OEM-configurable per the primer; no number published. | 4 weeks, `TODO: calibrate`. | Passive-revocation lag and top-up traffic. |
 | B4 | Mobility step: 100 ms default, or 50 ms to match the legacy Java layer's 50 ms floor? | 100 ms (TR 36.885 location-update interval); 10–100 ms allowed. | Compute cost roughly linear in 1/Δt. |
@@ -43,7 +43,7 @@ Status: design draft for review (2026-09-18). None of these blocked the design; 
 
 | Item | Status | How to settle |
 |---|---|---|
-| J2945/1 parameter names `vDensityWeightFactor`, `vRescheduleThreshold`, the "attach certificate on new neighbour" rule, the 1.5 m position-accuracy clause | UNVERIFIED (R1, R4) | purchase SAE J2945/1_202004 |
+| J2945/1 parameter names `vDensityWeightFactor`, `vRescheduleThreshold`, the "attach certificate on new neighbour" rule, the 1.5 m position-accuracy clause | **Settled 2026-10-31** (scms-real/11). The primary is read: Table 21 gives `vDensityWeightFactor` 0.05 and `vRescheduleTh` 25 ms. J2945/1 has no new-neighbour attachment rule (6.5.2). Position accuracy is `vPosAccuracy` 1.5 m at 68 % under open sky (6.3.6-DATAACC-012, A.7) | done |
 | IEEE 1609.4 channel switching timing (50/50 ms, 4 ms guard) | secondary sources only (R1) | purchase IEEE 1609.4 |
 | IEEE 1609.2.1 CRL ASN.1 names for linkage entries, 1609.3 fragmentation and length statements | UNVERIFIED (R4, R6) | IEEE 1609.2.1/1609.3 texts |
 | TS 36.101 in-band emission table values; TS 36.331 CBR-PSSCH-TxConfigList numeric values; NR-V2X CR-limit table (not standardised) | UNVERIFIED (R2, R2e) | 3GPP spec zips; RAN1 contributions |

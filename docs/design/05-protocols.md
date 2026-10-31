@@ -69,10 +69,10 @@ Reference defaults:
 
 | Policy | Default | Source |
 |---|---|---|
-| SCMS/J2945-1 certificate attachment | full certificate at least every 450 ms (`CertAttachInt`), digest (HashedId8) otherwise | [ROSTAMI18 Table 1]; NDSS restates "every fifth SPDU" [NDSS24 §II-A] |
+| SCMS/J2945-1 certificate attachment | full certificate at least every 450 ms (`CertAttachInt`), digest (HashedId8) otherwise | [ROSTAMI18 Table 1]; NDSS restates "every fifth SPDU" [NDSS24 §II-A]. Primary (2026-10-31): SAE J2945/1 6.5.2 `BSMSIGN-003`, Table 21 `vMaxCertDigestInterval` 450 ms. The full certificate is also required on a critical event flag and on the first BSM after start-up or a change (`BSMSIGN-004/007/008`) |
 | ETSI CAM certificate attachment | digest by default; full AT once per second; immediately when a CAM from an unknown AT is received or an `inlineP2pcdRequest` names our AT | [TS103097 §7.1.1] |
 | ETSI DENM | signer is always the certificate; `generationLocation` present | [TS103097 §7.1.2] |
-| SCMS pseudonym change | every 5 min unless < 2 km since last change (J2945/1 `CERTCHG`); NYC pilot: 2 km or 5 min, whichever first | [PRIMER pp.7–8]; [BRECHT §II-A] |
+| SCMS pseudonym change | every 5 min unless < 2 km since last change (J2945/1 `CERTCHG`); NYC pilot: 2 km or 5 min, whichever first | [PRIMER pp.7–8]; [BRECHT §II-A]. Primary (2026-10-31): SAE J2945/1 6.5.3 and Table 21 give 5 min and 2,100 m ± 100 m of straight-line distance from the last change point. There is no change while a critical event flag is set |
 | C2C-CC pseudonym change (BSP) | at ignition within 1 min (unless restart < 10 min), then random 10–30 min; lock ≤ 15 min (ETSI max lock 255 s) | [TR103415 Table A.2, §4.4.5] |
 | C2C-CC newer strategy | ≥ 3 unlinkable segments per trip for ≥ 95 % of trips: change at trip start; next at random 800–1,500 m; further ≥ 800 m apart within 2–6 min | [TR103415 §4.2.3.2] |
 | P2PCD | inline requests, response backoff uniform 0–250 ms, respond only if fewer than 3 responses heard | IEEE 1609.2a-2017 §8; [NDSS24 §II-A] |
@@ -160,7 +160,7 @@ CRL distribution and OBU processing [PRIMER p.7; BRECHT §II-B, §VII; CAMP-EE �
 | Roles | 13 online roles + 2 offline; separations per [BRECHT §X] |
 | Credential types | enrollment cert (explicit), pseudonym cert (implicit ECQV, `linkageData` id with i and lv), identification/application certs, CA certs, CRLG/PG/MA certs |
 | Flows | bootstrap, provisioning, top-up, report, investigation, revocation, CRL distribution, policy-file update |
-| Signing policy | J2945/1 attachment (450 ms), P2PCD inline; change strategy 5 min / 2 km |
+| Signing policy | J2945/1 attachment (450 ms), P2PCD inline; change strategy 5 min / 2 km. 2026-10-31: J2945/1 Table 10 makes P2PCD out-of-band and optional, and Table 6 S3.6 does not support inline. Inline is a research choice here; the change distance is 2,100 m ± 100 m |
 | Revocation | `Both`: active linkage-seed CRL (series 1, daily default, RSU + cellular + optional epidemic) and passive RA blacklist |
 | Reporting | TS 103 759 payload in 1609.2.1 encrypted upload |
 | Trust anchors | GPF/GCCF via PG, elector-managed root CTL |

@@ -18,9 +18,9 @@
 
 # ---- J2945/1 below its thresholds ----
 - {setting: radio.dcc.max_itt_ms, change: low, metric: tx_rate_hz, expect: same,
-   source: "with fewer than B = 25 neighbours within 100 m the density rule keeps ITT at vMinITT 100 ms; vMax_ITT only caps a longer ITT (SAE J2945/1 6.3.6)"}
+   source: "with fewer than B = 25 neighbours within 100 m the density rule keeps ITT at vMinITT 100 ms; vMax_ITT only caps a longer ITT (SAE J2945/1 6.3.8.4 Eq. 7)"}
 - {setting: radio.dcc.density_coefficient, change: low, metric: tx_rate_hz, expect: down,
-   source: "ITT = 100 ms x N/B once N > B: B = 1 stretches it for every vehicle with a neighbour (SAE J2945/1 6.3.6)"}
+   source: "ITT = 100 ms x N/B once N > B: B = 1 stretches it for every vehicle with a neighbour (SAE J2945/1 6.3.8.4 Eq. 7)"}
 - {setting: radio.dcc.density_coefficient, change: low, metric: aoi_ms, expect: up,
    source: "a longer update interval ages the neighbour table (Kaul, Yates, Gruteser, INFOCOM 2012)"}
 - {setting: radio.dcc.min_power_dbm, change: low, metric: cbr_mean, expect: same,

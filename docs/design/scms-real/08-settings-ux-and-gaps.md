@@ -165,7 +165,7 @@ human-readable readout beside the number ("604,800 s = 1 week") and duration pre
 | `security.pseudonym_change.silent_period_s` | [f64; 2] | **JSON** | range pair: "from" and "to", in s, 0 to 60. Presets: "None"; "3–13 s" (PRESERVE). | none | A |
 | `security.pseudonym_change.mix_zone_radius_m` | f64 | number, no bound | m, 5 to 500. Preset: 30. Shown only under `mix-zone`. | 30 | A |
 | `security.pseudonym_change.mix_zone_min_age_s` | f64 | number, no bound | s, 0 to 3,600. Preset: 60. Shown only under `mix-zone`. | 60 | A |
-| `security.signer_id_policy.full_cert_every_ms` | u64 | number in ms, no range | select. `1000` "Once a second" (J2945/1 reading). `450` "Every 450 ms" (NYC pilot reading). "Other…": 0 to 10,000 ms. | 1000 | A |
+| `security.signer_id_policy.full_cert_every_ms` | u64 | number in ms, no range | select. `1000` "Once a second" (J2945/1 reading). `450` "Every 450 ms" (NYC pilot reading). **2026-10-31: the labels are swapped.** J2945/1 6.5.2 and Table 21 give 450 ms, and 1 s is ETSI's. The corrected menu is in scms-real/11 J1. "Other…": 0 to 10,000 ms. | 1000 | A |
 | `security.signer_id_policy.digest_otherwise` | bool | toggle | toggle "Send an 8-byte digest between full certificates" | on | A |
 | `security.signer_id_policy.on_new_neighbour` | bool | toggle | toggle "Also attach the certificate after hearing a new station" (ETSI CAM rule, not US) | off | A |
 

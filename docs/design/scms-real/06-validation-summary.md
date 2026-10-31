@@ -1307,7 +1307,8 @@ This round added more labelled ASSUMPTIONs:
 - the 412 answer's size, 92 B;
 - the retry between components, 10 s;
 - the `generationTime` window. Its values are C2C-CC's (2 s, 600 s, 40 ms), because the US
-  J2945/1 values are not public;
+  J2945/1 values are not public (2026-10-31: J2945/1 Table 11 gives 30 s / 30 s, so this is now a
+  DEVIATION for the US; fix J7 in `11-j2945-1-conformance.md`);
 - the GNSS receiver's smoothing constant (100 s, after DO-229's carrier smoothing), static
   hold (0.3 m/s, after u-blox) and velocity σ;
 - the US profile's sender eviction after 30 s without a message (at least 10× `max_gap_s`).

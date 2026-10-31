@@ -89,7 +89,7 @@ relabels of rule-gap-specs §3).
 | LTE-V2X BSM generation aligned to the SPS reservation by default? | Yes after SC-M5's measurement | A real LTE-V2X stack generates into its reservation; misaligned generation is what breaks the 100 ms budget |
 | Hold late-stamped records to the next tick? | No | A logging artefact, explained in fix round 5; no effect on results |
 | Alternating channel access by default? | No (continuous) | J2945/1 single-channel operation on 172 |
-| Buy the paywalled standards (IEEE 1609.2.1 body, 1609.2 §5.3.8, J2945/1, J2945/9, J3287)? | Owner action (a purchase); until then the rows stay "unverifiable" with their labelled readings | Not something the build can do |
+| Buy the paywalled standards (IEEE 1609.2.1 body, 1609.2 §5.3.8, J2945/1, J2945/9, J3287)? | Owner action (a purchase); until then the rows stay "unverifiable" with their labelled readings. **J2945/1 APR2020 supplied and read on 2026-10-31:** `11-j2945-1-conformance.md` | Not something the build can do |
 
 ## 6. Skipped or kept as modelled, with the reason
 
@@ -307,7 +307,8 @@ Dated notes go under each id as its wave lands.
   1609.2 §5.2 lets the receiving SDS discard an SPDU whose `generationTime` is too far in
   the past or the future before verifying it; the BSM profile sets the window (public
   value: C2C-CC BSP RS_BSP_168, 40 ms ahead and 2 s old; J2945/1's own is paywalled, so
-  ASSUMPTION for the US). A discarded BSM is unverified, and SM-MBR judges only verified
+  ASSUMPTION for the US; 2026-10-31: J2945/1 Table 11 gives 30 s past and 30 s future, so this is a DEVIATION,
+  fix J7 in `11-j2945-1-conformance.md`). A discarded BSM is unverified, and SM-MBR judges only verified
   BSMs of one certificate, so it is not evidence and its sender is not reported. No
   published rule (SM-MBR §2.3, CAMP-EE, the MA policy) revokes a device for its clock, so
   none was added. The window landed in `rxval::GenerationTimeWindow` (`8da5b7c1`,

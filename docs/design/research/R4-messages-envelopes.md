@@ -16,7 +16,7 @@ Encoding note that matters for every size below: ETSI facilities-layer messages 
 
 ### A.1 SAE J2945/1 — BSM
 
-J2945/1 itself is paywalled (editions: J2945/1_201603, J2945/1_202004, J2945/1B_202212 for non-light-duty vehicles and motorcycles — SAE catalogue pages listed in Sources). Values below come from papers that reproduce the standard's parameters.
+J2945/1 itself is paywalled (editions: J2945/1_201603, J2945/1_202004, J2945/1B_202212 for non-light-duty vehicles and motorcycles — SAE catalogue pages listed in Sources). Values below come from papers that reproduce the standard's parameters. (2026-10-31: J2945/1 APR2020 has since been read. `docs/design/scms-real/11-j2945-1-conformance.md` checks every value below against it.)
 
 | Parameter | Value | Source | Status |
 |---|---|---|---|

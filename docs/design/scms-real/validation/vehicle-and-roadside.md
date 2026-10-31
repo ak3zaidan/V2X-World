@@ -17,10 +17,12 @@ learned 2018; [EE-REQ] SCMS Manager EE Requirements v2.04; 1609.2 means IEEE 160
 
 | Verdict | Count |
 |---|---|
-| MATCHES | 41 |
+| MATCHES | 42 |
 | FIXED | 7 |
-| DOCUMENTED DEVIATION | 8 |
-| UNVERIFIABLE | 11 |
+| DOCUMENTED DEVIATION | 12 |
+| UNVERIFIABLE | 8 |
+
+2026-10-31: SAE J2945/1 APR2020 was read (`11-j2945-1-conformance.md` §3). S1 and P8 went from U to M, S2 from M to D, and C10 from U to D. S7 and C12 are new D rows. The counts above include these changes.
 
 Six deviations were fixed on this branch. Each fix has a test that was shown to fail with the
 fault put back (§3):
@@ -81,10 +83,11 @@ Verdicts: **M** MATCHES, **F** FIXED, **D** DOCUMENTED DEVIATION, **U** UNVERIFI
 
 | # | Real-world rule | Engine | Evidence | Verdict |
 |---|---|---|---|---|
-| S1 | A receiver may verify on demand or prioritise when load exceeds capacity (no single policy is mandated by J2945/1) | `v2xw-node/src/policy.rs` `VerifyAll`, `OnDemand`, `Prioritized` | `policy.rs` unit tests; engine `vru.rs::a_vru_device_runs_the_scenarios_verification_policy` | U: deployed OBUs' policies are not published. All three are modelled, and each is labelled on its card |
-| S2 | J2945/1: full certificate on a cadence and a digest otherwise. `CertAttachInt` 450 ms (constants.md, from Rostami et al. 2018 Table 1) | `v2xw-sec/src/envelope.rs:158` `SAE_450MS` (the node default) | `envelope.rs` `choose` tests | M for the default. The Midtown benchmark overrides it to 1,000 ms ("once a second"). The two published readings disagree and J2945/1 itself is paywalled. Re-check the scenario value when the primary text is read |
+| S1 | A receiver may verify on demand or prioritise when load exceeds capacity (no single policy is mandated by J2945/1) | `v2xw-node/src/policy.rs` `VerifyAll`, `OnDemand`, `Prioritized` | `policy.rs` unit tests; engine `vru.rs::a_vru_device_runs_the_scenarios_verification_policy` | U: deployed OBUs' policies are not published. All three are modelled, and each is labelled on its card. **2026-10-31: M.** J2945/1 5.1.3.3 and 6.5.4 (`BSMVERIFY-001`) leave the choice to the system and name verify-on-demand. Deployed policies are still unpublished |
+| S2 | J2945/1: full certificate on a cadence and a digest otherwise. `CertAttachInt` 450 ms (constants.md, from Rostami et al. 2018 Table 1) | `v2xw-sec/src/envelope.rs:158` `SAE_450MS` (the node default) | `envelope.rs` `choose` tests | M for the default. The Midtown benchmark overrides it to 1,000 ms ("once a second"). The two published readings disagree and J2945/1 itself is paywalled. Re-check the scenario value when the primary text is read. **2026-10-31: D.** J2945/1 6.5.2 `BSMSIGN-003` and Table 21 set `vMaxCertDigestInterval` to 450 ms, which at 10 Hz is every fifth BSM (5.1.3.2, "about every 500 ms"). The engine's effective default is the scenario schema's 1,000 ms, applied to BSM and CAM, and the menu labels are swapped. Fix J1 in 11 §5 |
 | S3 | The first message under a new certificate carries the certificate | `SignerIdPolicy::choose` (`last_attached` None → certificate), keyed per certificate | envelope tests | M |
-| S4 | A certificate is attached in the next BSM when a new neighbour is heard | `secure.rs:542` `note_new_neighbour` (`signer_id_policy.on_new_neighbour`) | `runtime_behaviour.rs` | M. It is optional, and off in the benchmark |
+| S4 | A certificate is attached in the next BSM when a new neighbour is heard | `secure.rs:542` `note_new_neighbour` (`signer_id_policy.on_new_neighbour`) | `runtime_behaviour.rs` | M. It is optional, and off in the benchmark. 2026-10-31: J2945/1 has no new-neighbour rule. Its triggers are the 450 ms cadence, the first BSM after start-up or after a change, and a critical event flag (6.5.2). The trigger is ETSI's (TS 103 097), and keeping it off is conformant |
+| S7 | J2945/1 6.5.2 `BSMSIGN-004`: the full certificate is attached whenever a critical event flag is set | not done (`secure.rs` `signer_id_for` has no event input) | — | **D** (2026-10-31, from the primary). Fix J6 in 11 §5 |
 | S5 | A digest that misses the peer cache cannot be verified until the certificate arrives | `runtime.rs` `learn_or_request` → `record_p2pcd_request`; inline P2PCD `on_unknown_signer_digest` | `unknown_signer.rs` | M |
 | S6 | The full-certificate share in the benchmark was 25 % against 10 % at 1 Hz (benchmark §9.5) | P2PCD inline answers and new-neighbour attachment add certificates during the fill | benchmark §9.5 | U: plausible during the fill. To be re-measured in steady state |
 
@@ -93,13 +96,13 @@ Verdicts: **M** MATCHES, **F** FIXED, **D** DOCUMENTED DEVIATION, **U** UNVERIFI
 | # | Real-world rule | Engine | Evidence | Verdict |
 |---|---|---|---|---|
 | P1 | Out-of-band request: an unknown issuer starts a `p2pcdLearningRequest` (HashedId3) in the next SPDU, one per SPDU (§8.2.4.1.1, §6.3.9) | `v2xw-node/src/p2pcd.rs` `on_unknown_issuer`, `take_header` | `p2pcd_exchange.rs::a_new_aca_certificate_propagates_out_of_band`; `p2pcd_air.rs` | M |
-| P2 | `requestActiveTimeout` and `observedRequestTimeout` 0.25 s (Annex C.2.1.3.1) | `v2xw-sec/src/p2pcd.rs:124` `RECOMMENDED` | `p2pcd.rs` unit test pinning the values; `a_request_is_sent_once_per_request_active_timeout`, `a_peers_request_suppresses_and_withdraws_ours` | M |
+| P2 | `requestActiveTimeout` and `observedRequestTimeout` 0.25 s (Annex C.2.1.3.1) | `v2xw-sec/src/p2pcd.rs:124` `RECOMMENDED` | `p2pcd.rs` unit test pinning the values; `a_request_is_sent_once_per_request_active_timeout`, `a_peers_request_suppresses_and_withdraws_ours` | M. J2945/1 Tables 10 and 21 set the same 0.25 s values for BSMs (2026-10-31) |
 | P3 | A responder answers only for CA certificates in the chain of a certificate it signed with within 60 s (`currentlyUsedTriggerCertificateTime`) | `note_signed_with` | `only_a_recently_used_chain_is_served` | M |
-| P4 | Random back-off up to `maxResponseBackoff` 0.25 s; no response once `responseCountThreshold` (3) responses were observed; `responseActiveTimeout` 0.25 s | `due_responses` | `a_responder_backs_off_and_stops_at_the_threshold`, `several_responders_back_off_and_stop_at_the_threshold`, `a_response_leaves_at_its_backoff_instant_not_at_a_step` | M |
+| P4 | Random back-off up to `maxResponseBackoff` 0.25 s; no response once `responseCountThreshold` (3) responses were observed; `responseActiveTimeout` 0.25 s | `due_responses` | `a_responder_backs_off_and_stops_at_the_threshold`, `several_responders_back_off_and_stop_at_the_threshold`, `a_response_leaves_at_its_backoff_instant_not_at_a_step` | M. J2945/1 Tables 10 and 21: 0.25 s, 1 min, 3 (2026-10-31) |
 | P5 | Inline flavour: requests go into `inlineP2pcdRequest`; the responder attaches its own certificate or one requested CA certificate in `requestedCertificate` (§8.2.4.1.2, §8.2.4.2.3) | `take_header` | `a_new_aca_certificate_propagates_inline`, `inline_answers_with_the_own_certificate_first_then_a_ca` | M |
 | P6 | Everyone learns from observed responses (§8.2.1) | `NodeSecurity::p2pcd_learn`, validated against an installed root before use | `a_forged_response_is_refused_and_the_request_goes_on` | M |
 | P7 | Maximum concurrent responses and inline entries are implementation-specific | 8 and 8 | — | U: labelled ASSUMPTION |
-| P8 | Which flavour US devices run | out-of-band default | — | U: no US profile publishes it |
+| P8 | Which flavour US devices run | out-of-band default | — | **2026-10-31: M.** J2945/1 Table 10 makes out-of-band P2PCD optional for BSMs, and Table 6 item S3.6 marks inline P2PCD not supported. The out-of-band default matches. Inline remains a research option |
 
 ### 1.4 Pseudonym pool and change
 
@@ -108,13 +111,14 @@ Verdicts: **M** MATCHES, **F** FIXED, **D** DOCUMENTED DEVIATION, **U** UNVERIFI
 | C1 | 20 concurrently valid pseudonyms per week ([PRIMER] p.8; [CAMP122] Table 67 `certs_per_i_period`) | `v2xw-proto/src/scms/params.rs:532` | `provisioning_b3a.rs::the_presets_carry_the_cited_numbers`; benchmark `cert_pool_valid` 20 | M |
 | C2 | Validity 1 week + 1 h of overlap (10,140 min) ([SMP] §2.1.17 Table 2) | `params.rs:531` | `stores.rs::a_change_in_the_overlap_moves_to_the_new_period` | M |
 | C3 | A device on the road holds its current and next week (top-up by `.info` and batch download, `ra-maxReqs` 1) | `DEVICE_POOL_PERIODS` = 2 (`scms/mod.rs:1100`), `topup_below_periods` 1 | benchmark §5: 0 starved, top-up at the rollover | M |
-| C4 | J2945/1 CERTCHG: change once 5 min have passed **and** the vehicle is ≥ 2 km from the last change ([CVP-P2] item 25; [PRIMER] pp.8–9) | `RotationPolicy::J2945_1` existed in `stores.rs` but no scenario could select it. `time: 300` gave the 5-minute condition alone | new `scms_constants.rs::the_us_pseudonym_change_rules_are_selectable_with_both_conditions`; `stores.rs::the_two_published_rotation_rules_differ_and_both_are_expressible` | **F**: `security.pseudonym_change.strategy: j2945-1` (`wiring.rs` `rotation_policy`). The Midtown benchmark now uses it |
+| C4 | J2945/1 CERTCHG: change once 5 min have passed **and** the vehicle is ≥ 2 km from the last change ([CVP-P2] item 25; [PRIMER] pp.8–9) | `RotationPolicy::J2945_1` existed in `stores.rs` but no scenario could select it. `time: 300` gave the 5-minute condition alone | new `scms_constants.rs::the_us_pseudonym_change_rules_are_selectable_with_both_conditions`; `stores.rs::the_two_published_rotation_rules_differ_and_both_are_expressible` | **F**: `security.pseudonym_change.strategy: j2945-1` (`wiring.rs` `rotation_policy`). The Midtown benchmark now uses it. 2026-10-31, primary: J2945/1 6.5.3 `CERTCHG-001` and Table 21 give 5 min and `vCertChangeDistance` 2,100 m with a 100 m tolerance, so a change at 2,000 m or more conforms. Fix J8 in 11 §5 sets the nominal 2,100 m |
 | C5 | NYC pilot: every 2 km **or** 5 min, whichever comes first ([PRIMER] pp.8–9) | `RotationPolicy::NYC_PILOT` | same test | **F**: `nyc-pilot` |
-| C6 | The 2 km is "from the last change point" | measured as distance travelled since the change | — | D: travelled distance ≥ displacement, so a change can come slightly earlier on a winding route |
+| C6 | The 2 km is "from the last change point" | measured as distance travelled since the change | — | D: travelled distance ≥ displacement, so a change can come slightly earlier on a winding route. **2026-10-31: confirmed by the primary.** The J2945/1 6.5.3 note defines absolute distance as the straight-line distance, not the distance driven. Fix: 10 §2.14 |
 | C7 | At a change every identifier changes together: certificate, temporary ID (first 4 octets of the HashedId8), link-layer address, `msgCnt` restarted (J2735 lets `MsgCount` restart on an identity change) | vehicle: `runtime.rs` (restart from `node/identity-change`); handset: **counted on** before this branch | new `vru_device.rs::a_pseudonym_change_restarts_the_psm_msg_count` | **F** for the handset (`vru.rs` `step_timed`). M for the vehicle |
 | C8 | Pool rotation goes through the whole pool before reusing a pseudonym; an exhausted or revoked pool stops transmission ([CAMP-EE §2.2.10.2]) | `stores.rs:275` `rotate` | `rotation_goes_round_the_whole_pool_before_reusing_a_pseudonym`, `a_revoked_own_certificate_leaves_the_node_unable_to_sign`, `vru_device.rs::a_device_with_no_credential_stops_transmitting` | M |
 | C9 | Silent periods: not required by J2945/1 | `silent_period_s` optional, off by default | `pseudonym_policy.rs` | M (off). The option is for research |
-| C10 | Path history across a change | not cleared | — | U: whether J2945/1 clears `PathHistory` at a change could not be checked (paywalled). A tracker can chain points across the change. Recorded for the privacy study |
+| C10 | Path history across a change | cleared at every change (`vehicle.rs` `set_identity`) | — | **2026-10-31: D** (was U). J2945/1 has no clearing rule. 6.3.6-DATAACC-039 requires at least `vMinPHistDistance` (200 m) except at start-up or without position, and 6.3.7 keeps the history even across a shutdown. Clearing shortens BSMs after a change and removes the link a real tracker has. Fix J5 in 11 §5 (keep by default; clearing becomes a research option) |
+| C12 | J2945/1 6.5.3 `CERTCHG-002`: no change while a critical event flag is set, unless the certificate expires. The flag is also an exception to the 5-minute rule | not checked (`stores.rs` `change_due`) | — | **D** (2026-10-31, from the primary). Fix J6 in 11 §5 |
 | C11 | Pseudonym-change rule for J2945/9 handsets | the scenario's rule, shared with vehicles | — | U: no public source. Under `j2945-1` a pedestrian rarely reaches 2 km |
 
 ### 1.5 Misbehaviour detection, reports and the device report queue
@@ -255,6 +259,6 @@ Suites run clean on this branch (test profile, after every fix): `v2xw-proto` `p
    unmapped research detectors.
 4. **Report uploads on a service channel (M11).** This needs multi-channel operation in the
    radio, which is outside this area.
-5. **Paywalled primaries** worth buying, because they would turn U into M: SAE J2945/1
-   (CertAttachInt 450 ms or 1 s; PathHistory at a change), SAE J2945/9 (PSM rate; handset
+5. **Paywalled primaries** worth buying, because they would turn U into M. SAE J2945/1 was
+   read on 2026-10-31 (`11-j2945-1-conformance.md`): 450 ms, and no clearing at a change. Still unread: SAE J2945/9 (PSM rate; handset
    permissions and pseudonym change).

@@ -201,7 +201,7 @@ Each spec gives the source, the observable behaviour, where it goes, the evidenc
 - **crypto #30:** re-label as a match. It follows [SMP] §6.3.1, the deployed profile, and the bytes are identical.
 - **proto C13:** re-label as a match. The engine follows the production online re-enrolment ([SM-REENR]), and the pilots' manual return to a secure environment ([CVP-P2] item 27) is not production practice.
 - **veh M13:** owner decision. The default already files no roadside reports (the DETPRIV reading). Accepting that reading makes it a match (summary §8 item 6: 276/326).
-- **veh C10:** a text fix only. `vehicle.rs` `set_identity` clears the path history (summary §8 item 4). The rule itself stays unverifiable, because J2945/1 is paywalled.
+- **veh C10:** a text fix only. `vehicle.rs` `set_identity` clears the path history (summary §8 item 4). The rule itself stays unverifiable, because J2945/1 is paywalled. (2026-10-31: settled as D. J2945/1 has no clearing rule and 6.3.6-DATAACC-039 needs 200 m of history; fix J5 in `11-j2945-1-conformance.md`.)
 
 ## 4. Not observable or unpublished (23): why no spec
 
@@ -217,6 +217,6 @@ Each spec gives the source, the observable behaviour, where it goes, the evidenc
 - **gov D-9, D-10, D-11, E-2:** data-centre regions, latency, fleet shares and the 6-year encoding are unpublished. D-10 is physics-based.
 - **veh S1, U3:** deployed verification policies are not published.
 - **veh S6:** this is a measurement, not a rule. It sits inside the sourced 5–30 % band.
-- **veh P7, P8:** P2PCD limits and flavour are not in any US profile.
-- **veh C10, C11, V3:** J2945/1 and J2945/9 are paywalled.
+- **veh P7, P8:** P2PCD limits and flavour are not in any US profile. (2026-10-31: P8 is settled as M by J2945/1 Table 10 and Table 6 S3.6. P7 stays U.)
+- **veh C10, C11, V3:** J2945/1 and J2945/9 are paywalled. (2026-10-31: C10 is settled as D by J2945/1. C11 and V3 wait for J2945/9.)
 - **veh M9, M10:** [SM-MBR] leaves the quota and the rate device-specific.

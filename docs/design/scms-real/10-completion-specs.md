@@ -1058,6 +1058,12 @@ expect: up}` and `{service_time.cv, 0 → 1, report.topup_latency_p99_s, up}`.
   case and the route winds. Own commit.
 - **Records:** the PT30 change rate in live-scms, open, predicted equal or lower.
 - **Size:** half a piece (D3).
+- **J2945/1 primary (2026-10-31, `11-j2945-1-conformance.md` F9-F11, J8):** the design is
+  confirmed. The 6.5.3 note defines absolute distance as the straight-line distance, not the
+  distance driven. The nominal `vCertChangeDistance` is 2,100 m with a 100 m tolerance
+  (Table 21), so 2,000 m conforms. Moving `J2945_1` to 2,100 m may fold in here (same
+  lines, same golden commit, about a quarter of a piece). The critical-flag gate
+  (`CERTCHG-002`) is J6, in wave J.
 
 ---
 
