@@ -109,3 +109,19 @@ relabels of rule-gap-specs §3).
 ## 7. Status
 
 Dated notes go under each id as its wave lands.
+
+### Waves C and D (SC-P1..SC-P12, the §4 rule gaps, the UI engine requests)
+
+- 2026-10-30: build specs written in `10-completion-specs.md`, re-grepped on `5c5dfc4e`.
+  Each item gives its file:line today, its design and source, accept tests each with a
+  named fault, its settings with menu values, and its golden moves and size. The file ends
+  with two three-agent schedules (C: real pipeline; D: rule gaps and UI requests) in which
+  no two agents of a wave share a hot file.
+- Refresh of `rule-gap-specs-2026-10-27.md`:
+  - proto D11's request-age reading is already enforced (the 5 s SCMS-1203 check); only
+    `ra-maxAge` is left;
+  - proto B9 drops TLS, which is already charged;
+  - veh R10 becomes SC-P11. Under ISS, end-entity certificates inherit the ICA region
+    (1609.2 `region` "omitted" rule), so the check reaches every provider-a device;
+  - proto F9 is proposed for §6 (EU profile only).
+- Specs only: no code was changed and nothing was run.

@@ -1,5 +1,8 @@
 # Rule-gap specs: the 51 SCMS rules not yet at "matches" (2026-10-27)
 
+> **Refreshed 2026-10-30:** wave D builds from `10-completion-specs.md` §2, which re-greps
+> every anchor below on `5c5dfc4e` and corrects D11, B9, R10 and the key names.
+
 **Summary**
 1. Scope: the 51 of 326 rules that are not "matches" or "fixed" in `06-validation-summary.md` §2.1: 22 documented deviations (§5) and 29 unverifiable rows (§7), at base `4aa798bb`.
 2. Classes: **10 implementable** from public sources, **8 partly** implementable (a public clause, with one unpublished choice labelled ASSUMPTION), **10 decisions or re-labels** that need no code, and **23 not observable or unpublished**.
