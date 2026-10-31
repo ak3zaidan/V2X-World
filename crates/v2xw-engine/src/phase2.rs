@@ -164,6 +164,45 @@ pub const US_SM_MBR: &str = "detect/us-sm-mbr";
 /// scoring modes), as `detection.local` names it. Listed alone: it is a whole suite.
 pub const TS_103_759: &str = "detect/ts103759";
 
+/// Whether a scenario that names no local detector runs [`US_SM_MBR`] (SC-P6): its
+/// credential protocol is the SCMS and its deployment is the US one
+/// ([`Deployment::is_us`]). [SM-MBR] §2.3: a US OBU detects and files the PSID-0x20
+/// subtypes, so under the US system the empty list means the US profile. Any other run
+/// (ETSI, the CAMP reference, a non-US deployment, no credential protocol) keeps the empty
+/// list's meaning: no local detector. A deployment that does not build is not the US one
+/// here; the loader names its own error.
+///
+/// [`Deployment::is_us`]: v2xw_proto::scms::deployment::Deployment::is_us
+#[must_use]
+pub fn us_default_detector(scenario: &Scenario) -> bool {
+    let protocol = scenario
+        .actors
+        .backend
+        .protocol
+        .clone()
+        .or_else(|| scenario.security.protocol.as_ref().map(|c| c.id.clone()));
+    scenario.detection.local.is_empty()
+        && protocol.as_deref() == Some(CAMP_SCMS)
+        && deployment_of(scenario, true).is_ok_and(|d| d.is_us())
+}
+
+/// The local detector suite a scenario's receivers run, by its `detection.local` id
+/// ([`LEGACY_12`], [`US_SM_MBR`], [`TS_103_759`]), or `""` when they run none: what
+/// [`Phase2Report::local_suite`] names.
+#[must_use]
+pub fn local_suite_id(scenario: &Scenario) -> &'static str {
+    let local = &scenario.detection.local;
+    if local.iter().any(|c| c.id == TS_103_759) {
+        TS_103_759
+    } else if local.iter().any(|c| c.id == US_SM_MBR) || us_default_detector(scenario) {
+        US_SM_MBR
+    } else if local.is_empty() {
+        ""
+    } else {
+        LEGACY_12
+    }
+}
+
 /// One receiver's local misbehaviour detector: the research suite or the US profile.
 #[derive(Debug, Clone)]
 enum LocalSuite {
@@ -2060,6 +2099,10 @@ pub struct Phase2Report {
     pub signature_mode: String,
     /// The `security.kem` scheme.
     pub kem_scheme: String,
+    /// The local detector suite every receiver ran (`detect/legacy-12`,
+    /// `detect/us-sm-mbr`, `detect/ts103759`), or empty when none ran. An empty
+    /// `detection.local` under the US system runs `detect/us-sm-mbr` (SC-P6).
+    pub local_suite: String,
     /// Per committee role (`pca`, `crl`, `linkage`): sessions, rounds, bytes, restarts,
     /// timeouts, invalid shares, failures and latency (`v2xw_proto::threshold::session`).
     pub committees:
@@ -2266,8 +2309,9 @@ pub struct Phase2 {
     attackers: BTreeMap<NodeId, AttackerSlot>,
     detectors: BTreeMap<NodeId, LocalSuite>,
     detector_params: DetectorParams,
-    /// The strict US profile's thresholds when `detection.local` names it, else the
-    /// research suite runs.
+    /// The strict US profile's thresholds when `detection.local` names it, or names
+    /// nothing under the US system ([`us_default_detector`], SC-P6); else the research
+    /// suite runs.
     us_profile: Option<v2xw_threat::us_mbr::UsMbrParams>,
     /// The TS 103 759 suite's thresholds when `detection.local` names it.
     ts_profile: Option<v2xw_threat::ts103759::Ts103759Params>,
@@ -2304,6 +2348,9 @@ pub struct Phase2 {
     /// Test hook ([`Phase2::share_unverified_for_test`]): share real reports as before
     /// SC-P5, without their bytes, so the receiving MA does not re-verify them.
     share_unverified: bool,
+    /// Test hook ([`Phase2::forge_brake_acceleration_for_test`]): every BSM a detector
+    /// judges reads as brakes on at +0.5 m/s².
+    forge_brakes: bool,
     /// The home root a scheduled rollover superseded (`root_removal_at_s` removes it).
     superseded_root: Option<[u8; 32]>,
     /// The PDU PKI followed a published root rollover since the engine last looked
@@ -2505,7 +2552,10 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
     // Off by default: a CRL-refused BSM never reaches misbehaviour detection (SC-D11).
     let mut judge_revoked = false;
     let mut map_check = true;
-    let mut us_profile: Option<v2xw_threat::us_mbr::UsMbrParams> = None;
+    // SC-P6: under the US system an empty list is the US profile at its defaults.
+    let default_us = us_default_detector(scenario);
+    let mut us_profile: Option<v2xw_threat::us_mbr::UsMbrParams> =
+        default_us.then(v2xw_threat::us_mbr::UsMbrParams::default);
     let mut ts_profile: Option<v2xw_threat::ts103759::Ts103759Params> = None;
     for (i, choice) in scenario.detection.local.iter().enumerate() {
         let us = choice.id == US_SM_MBR;
@@ -2725,6 +2775,7 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
         map_check,
         us_profile,
         ts_profile,
+        default_us,
     })
 }
 
@@ -2742,6 +2793,9 @@ pub(crate) struct DetectionParams {
     pub us_profile: Option<v2xw_threat::us_mbr::UsMbrParams>,
     /// The TS 103 759 suite's thresholds, when `detection.local` names it.
     pub ts_profile: Option<v2xw_threat::ts103759::Ts103759Params>,
+    /// Whether the receivers run the US profile because the list is empty under the US
+    /// system ([`us_default_detector`], SC-P6).
+    pub default_us: bool,
 }
 
 /// The keys `detection.local[].params` accepts that the host reads rather than the suite.
@@ -2936,6 +2990,7 @@ impl Phase2 {
             map_check,
             us_profile,
             ts_profile,
+            default_us,
         } = detection_params(scenario)?;
         let ma = MaHost::from_scenario(scenario)?;
 
@@ -3265,7 +3320,8 @@ impl Phase2 {
             detector_params,
             us_profile,
             ts_profile,
-            detection_on: wants_detection,
+            // SC-P6: under the US system an empty `detection.local` runs SM-MBR.
+            detection_on: wants_detection || default_us,
             stated_accuracy,
             judge_revoked,
             // A world with no motor-vehicle lane (a fixture, an empty extract) gives the
@@ -3285,6 +3341,7 @@ impl Phase2 {
             forwarded: BTreeSet::new(),
             in_flight: BTreeMap::new(),
             share_unverified: false,
+            forge_brakes: false,
             evidence: BTreeMap::new(),
             judged_evidence: BTreeMap::new(),
             superseded_root: None,
@@ -3309,6 +3366,7 @@ impl Phase2 {
                     .map_or("classical", |x| x.mode.as_str())
                     .to_string(),
                 kem_scheme: scenario.security.kem.clone(),
+                local_suite: local_suite_id(scenario).to_string(),
                 ..Phase2Report::default()
             },
             observer: v2xw_threat::PrivacyObserver::cited_defaults(NodeId::new(u32::MAX)),
@@ -4893,8 +4951,13 @@ impl Phase2 {
             // profile checks only verified BSM pairs and has no certificate subtype, so it
             // sees the refusal as before.
             let research_validity = m.outside_validity.filter(|_| self.us_profile.is_none());
+            let mut bsm = m.bsm;
+            if self.forge_brakes && m.msg_type == v2xw_msg::MsgType::Bsm {
+                bsm.brakes_applied = Some(true);
+                bsm.accel_long_mps2 = Some(0.5);
+            }
             let observed = ObservedMessage {
-                bsm: m.bsm,
+                bsm,
                 signer: key,
                 kind: match m.msg_type {
                     v2xw_msg::MsgType::Denm => ObservedKind::Denm(String::new()),
@@ -5194,6 +5257,16 @@ impl Phase2 {
     #[doc(hidden)]
     pub fn share_unverified_for_test(&mut self) {
         self.share_unverified = true;
+    }
+
+    /// **A test hook, not a model parameter** (SC-P6): from now on every BSM a receiver's
+    /// detector judges reads as brakes applied with `accelSet.long` +0.5 m/s², as a frame
+    /// forged that way would carry it ([SM-MBR] §2.3.1.3.4's BrakeAcceleration case). No
+    /// honest vehicle sends one (its brake switch is on only while it decelerates), so a
+    /// test of the BrakeAcceleration report path needs the forgery.
+    #[doc(hidden)]
+    pub fn forge_brake_acceleration_for_test(&mut self) {
+        self.forge_brakes = true;
     }
 
     /// The provider whose ACA certificate is `issuer` (SC-P1): the one that can resolve
@@ -10116,6 +10189,9 @@ fn us_subtype(check: &str, us: Option<&v2xw_threat::us_mbr::UsMbrParams>) -> Opt
         c if c == D::ImplausibleSpeed.as_str() => Some(mbr::Subtype::MaxSpeed {
             threshold_mps: u16_of(p.max_speed_mps),
         }),
+        // SC-P6 ([SM-MBR] §2.3.1.3.4): brakes on with an acceleration that is not
+        // negative; the subtype carries no parameter (NULL).
+        c if c == D::BrakeAcceleration.as_str() => Some(mbr::Subtype::BrakeAcceleration),
         // ObsImplausible/Distance needs a suspect and a reporter BSM as evidence, which
         // this host does not collect: the (default-off) distance check stays unmapped.
         _ => None,

@@ -710,6 +710,45 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   with the stand-in before and stayed silent after).
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`af28d882`, track c2, first). `credential_handoff` passes on the merged tree; no golden moved. Still open: an unprovisioned joiner never retries its first request (ASSUMPTION).
 
+### SC-P6
+
+- 2026-10-31 (wave C R7, C1): **`detect/us-sm-mbr` is the default under a US deployment.**
+  Cause, corrected from 10 §1 "Today": an empty `detection.local` did not run Legacy12;
+  it ran no local detector (`phase2.rs` `Phase2::build`, `detection_on:
+  wants_detection` with `wants_detection = !detection.local.is_empty()`; the shipped
+  SCMS scenarios that detect name `detect/legacy-12` themselves or through a `meta.base`,
+  e.g. `scms-conformance.yaml` from `credential-lifecycle.yaml`). Now
+  `phase2::us_default_detector` (empty list, credential protocol `protocol/scms/camp`,
+  `Deployment::is_us()`) makes `detection_params` set `us_profile =
+  UsMbrParams::default()` and `Phase2::build` arm the receivers (`detection_on: wants ||
+  default_us`). Every other case keeps the empty list's meaning (no detector): ETSI, the
+  CAMP reference, a non-US deployment, no credential protocol; an explicit list is kept as
+  written. New `report.phase2.local_suite` (`phase2::local_suite_id`) names the suite that
+  ran, or "" for none. `us_subtype` gains the `brakeAcceleration -> Subtype::BrakeAcceleration`
+  arm (Implausible, subtype 3, NULL parameters; [SM-MBR] §2.3.1.3.4), closing SC-P7's
+  leftover. Deviation from 10 §1 test 1: the CAMP reference gives `""` (no detector), not
+  `detect/legacy-12`, because that is what an empty list ran before; the test also
+  asserts an explicit `legacy-12` list under the US deployment is kept.
+  Tests (`scms_deployment`): `a_us_deployment_defaults_to_the_sm_mbr_profile` and
+  `a_us_device_files_brake_acceleration` (10-vehicle grid, 40 s, empty list, with
+  `Phase2::forge_brake_acceleration_for_test` because no honest vehicle brakes with a
+  non-negative acceleration: 3,440 real SM-MBRs, 955 opened at the MAs with subtype 3).
+  Faults: `is_us()` dropped -> the CAMP reference names SM-MBR (red); the arm removed ->
+  652 reports "no SM-MBR v1.1 subtype maps", 0 with subtype 3 (red).
+  Goldens: none moved. The three G-SCMS cases do not run the default: `phase2-manhattan`
+  (phase2-path and i-s1-phase2-60s) names `detect/legacy-12` and `ttc-triggered-brake`
+  has no credential protocol. G-ML and G-LEG come from `v2xw-threat`'s own harness
+  (`tests/common/sim.rs`, no engine dependency), which never reads `detection.local`.
+  Shipped SCMS scenarios that now gain SM-MBR detectors (empty list after bases, no
+  attackers): compare-signature-schemes, pq-certificate-cycle, pq-full-stack,
+  pq-signatures, pseudonym-strategies, scms-fix3/ci-scms(-cpm), scms-fix4/{bh-5, bh-200,
+  la-0, la-slow}. Wave E rows (verdict open) in `scms-final-bench.yaml`:
+  `FS.honest-reports.smmbr-default`, `FS.attackers-revoked.smmbr-default` (runs SMDL,
+  SMDU). Left for D1 (wave D, scenario files): the `detection.local` guide row, the
+  configuration reference and the `detect/us-sm-mbr` option text ("the default under a
+  US deployment"); `detection_policy_warnings` (`validate.rs`) still reads an empty list
+  as no detector; `ma_policy::RULE_KEYS` still has no `detect/brakeAcceleration`.
+
 ### SC-P7
 
 - 2026-10-31 (wave C, C2): BrakeAcceleration and MaxAcceleration read the BSM's own fields.
