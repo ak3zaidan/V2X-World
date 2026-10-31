@@ -143,3 +143,136 @@ fn each_list_rides_each_units_backhaul_once() {
         p.rsu_crls_installed
     );
 }
+
+/// Keeps the records a roadside-CRL check reads, `proto.revocation` and the CRL frames of
+/// `node.tx`, and drops the rest as they come (a 240 s Midtown run's `MemoryRecorder`
+/// would hold every reception).
+#[derive(Default)]
+struct CrlRecords {
+    kept: Vec<serde_json::Value>,
+    seen: u64,
+}
+
+impl v2xw_engine::RunRecorder for CrlRecords {
+    fn write(&mut self, _at: v2xw_core::time::SimTime, record: &v2xw_core::ctx::OwnedRecord) {
+        self.seen += 1;
+        let keep = record.channel == "proto.revocation"
+            || (record.channel == "node.tx"
+                && record
+                    .json
+                    .windows(16)
+                    .any(|w| w == br#""msg_type":"crl""#));
+        if keep {
+            let mut v: serde_json::Value = serde_json::from_slice(&record.json).expect("json");
+            v["channel"] = serde_json::json!(record.channel);
+            self.kept.push(v);
+        }
+    }
+
+    fn records_written(&self) -> Option<u64> {
+        Some(self.seen)
+    }
+}
+
+/// SC-D1 (docs/design/scms-real/09-completion-plan.md §1; live-rsu §6.3, rows
+/// LR.S.l240.bc4.fix.*): a list published after the carousel started reaches the air only
+/// through a unit whose own backhaul brought it.
+///
+/// `scenarios/live-rsu/scms-lat2000-bc4-240.yaml`: the 2,000 ms fibre, a 4 s carousel and
+/// 240 s, so lists come after the one that armed the carousel and a tick falls 0.146 s
+/// after such a list's publication. Every vehicle is relay-only, so a vehicle holds an
+/// entry only from a unit's frame (or from its RA connection if it joins later, which
+/// writes no `downloaded` row). So no vehicle downloads a case's entry earlier than its
+/// publication + 2 s, and no unit installs it earlier either. On 4399f8f8 (the backhaul
+/// fix alone) `on_flow_timer` aired the latest published list from every unit with no
+/// fetch in flight, so 10 of 30 units put the 120.004 s list on the air 0.146 s after its
+/// publication, before any download could land. A unit now relays what it installed.
+///
+/// The first frame after a later publication can still come 0.146 s after it: a unit
+/// keeps relaying the list it holds until its new download lands, so the frame-timing
+/// check of the 120 s test above applies to the first list only.
+#[test]
+#[ignore = "a Midtown run of 240 s; cargo test -p v2xw-engine --test live_rsu -- --ignored"]
+fn a_later_list_reaches_the_air_only_through_a_unit_that_downloaded_it() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let s = load(&root, "scenarios/live-rsu/scms-lat2000-bc4-240.yaml");
+    let mut engine = Engine::build(s, "").expect("builds");
+    let mut rec = CrlRecords::default();
+    engine.run(&mut rec).expect("runs");
+
+    let rev = |stage: &str| -> Vec<(String, u64, Option<u64>)> {
+        rec.kept
+            .iter()
+            .filter(|v| v["channel"] == "proto.revocation" && v["stage"] == stage)
+            .filter_map(|v| {
+                Some((
+                    v["id"].as_str()?.to_string(),
+                    v["t"].as_u64()?,
+                    v["node"].as_u64(),
+                ))
+            })
+            .collect()
+    };
+    let mut published: BTreeMap<String, u64> = BTreeMap::new();
+    for (id, t, _) in rev("published") {
+        published.entry(id).or_insert(t);
+    }
+    let mut times: Vec<u64> = published.values().copied().collect();
+    times.sort_unstable();
+    times.dedup();
+    let first = *times.first().expect("no list was published in the window");
+    let later: Vec<String> = published
+        .iter()
+        .filter(|(_, t)| **t > first)
+        .map(|(id, _)| id.clone())
+        .collect();
+    assert!(
+        !later.is_empty(),
+        "every case was on the list that armed the carousel: the later-list case is not exercised"
+    );
+    let crl_frames = rec
+        .kept
+        .iter()
+        .filter(|v| v["channel"] == "node.tx")
+        .count();
+    assert!(crl_frames > 0, "no unit broadcast a list");
+    let lag = |stage: &str| -> Vec<(String, u64, u64)> {
+        rev(stage)
+            .into_iter()
+            .filter_map(|(id, t, n)| {
+                let p = *published.get(&id)?;
+                Some((id, n?, t.saturating_sub(p)))
+            })
+            .collect()
+    };
+    let units = lag("rsu_installed");
+    let vehicles = lag("downloaded");
+    let later_vehicles = vehicles
+        .iter()
+        .filter(|(id, _, _)| later.contains(id))
+        .count();
+    println!(
+        "publications at {times:?} ns; {} later cases; {} unit installs, {} vehicle downloads \
+         ({later_vehicles} of later cases); {crl_frames} CRL frames; min unit lag {:?} ns, \
+         min vehicle lag {:?} ns",
+        later.len(),
+        units.len(),
+        vehicles.len(),
+        units.iter().map(|x| x.2).min(),
+        vehicles.iter().map(|x| x.2).min(),
+    );
+    assert!(
+        later_vehicles > 0,
+        "no vehicle heard a later list: the check below cannot fail"
+    );
+    for (what, rows) in [("unit", &units), ("vehicle", &vehicles)] {
+        for (id, n, d) in rows {
+            assert!(
+                *d >= 2 * S,
+                "{what} {n} holds case {id} {} ms after its publication, before a 2 s download \
+                 could land",
+                d / 1_000_000
+            );
+        }
+    }
+}

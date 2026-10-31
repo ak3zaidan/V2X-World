@@ -972,7 +972,10 @@ rows:
     publication + 2 s, whatever the carousel phase (with 5 s ticks and a 10 s cadence every list landed
     2 s before a tick, so LR.S.lat2000.crl-lag could not tell; 3 s ticks fall inside the download)'
   measured: '2.14603'
-  verdict: open
+  verdict: pass
+  judged: "2026-10-30, 5c5dfc4e debug build"
+  test: live_rsu.rs a_unit_broadcasts_a_list_only_once_its_backhaul_brought_it_and_not_while_it_is_down, a_later_list_reaches_the_air_only_through_a_unit_that_downloaded_it
+  note2: 'SC-D1, 2026-10-30: the unaligned later-list case owed here is now exercised by the 240 s 4 s test (lists at 80.004 and 210.004 s, a tick 0.146 s after the second): no unit installs and no vehicle downloads a case earlier than its publication + 2 s (min 2.096 s and 2.146 s); the 120 s test (first list, frame timing, the down unit silent) passes too'
   note: 'held on the base binary because only one revocation list was published in the 120 s window (published
     stage 1): the unaligned-tick case was not exercised. The defect is from code reading (install_rsu_crls
     dropped rsu_send arrival); a 240 s window with two lists is owed. 2026-10-26: the 240 s 3 s pair was
@@ -1225,8 +1228,10 @@ rows:
   source: 'a unit relays the list it downloaded, unchanged ([PRIMER] p.5): its line carries the reports it
     forwards and its own CRL fetches, nothing else (fibre: every fetch lands inside its step)'
   measured: "10"
-  verdict: open
-  judged: "2026-10-27, f4982788 release"
+  verdict: fixed
+  judged: "2026-10-30, 5c5dfc4e debug build (was open on the f4982788 release)"
+  test: live_rsu.rs each_list_rides_each_units_backhaul_once (ignored)
+  note2: "SC-D1, 2026-10-30: the ignored test passes on 5c5dfc4e (scms-base.yaml, 120 s): line messages == relayed reports + the units' own fetches, so 0 unexplained. Fixed by the per-unit carousel content and the carousel start that books nothing for a cycle unit with no landing fetch (run.rs on_backend_step step 4). The test's red evidence is its 3cbc95a4 figure, 214 = 108 + 90 + 16 (scms-fix4-b LR.once); no new fault run was spent on it"
   note: "ENGINE FINDING (traced, not fixed): 316 line messages = 186 relayed reports + 120 own fetches + 10. The carousel start (run.rs:8728-8737) still sends the list down the line of a crl unit that has no entry in rsu_crl_landing for that step; the map is cleared every step (run.rs:2246) and filled only for units whose own fetch was due. A unit whose RA version for it did not change has no fetch, so for one list 10 units book it again: the 10 of 30 units of the carousel-content defect (live-rsu 6.3, FS240bc4: 10 units air a list they never downloaded). The fix is the per-unit carousel content of 6.3: a unit relays what it installed and books nothing at the carousel start. The expectation stands."
 - id: LR.S.dbl.messages
   base: S0
@@ -1450,9 +1455,11 @@ rows:
   source: no list on the air before its 2,000 ms download lands; the later list's first frame comes at the
     first tick after landing, 4.146 s
   measured: "0.145968"
-  verdict: fail
-  judged: 2026-10-26
+  verdict: fixed
+  judged: "2026-10-30, 5c5dfc4e debug build (was fail on 4399f8f8, 2026-10-26)"
+  test: live_rsu.rs a_later_list_reaches_the_air_only_through_a_unit_that_downloaded_it (ignored, 206 s)
   note: "engine defect, open (traced): on the fix alone 10 of 30 units put the 120.004 s list on the air 0.146 s after publication, before any 2 s download could land; on_flow_timer broadcasts phase2.broadcast_crl() (the latest list) from every unit with no fetch in flight, so a unit whose own fetch was not due (its RA's version unchanged) broadcasts a list it never downloaded"
+  note2: "SC-D1, 2026-10-30: fixed at its cause on 2026-10-27 (run.rs on_flow_timer: a unit in the certificate cycle relays the RsuCrlFile it installed, rsu_crl_held, and nothing before its first install). Checked on this scenario by the new test at the case level, since node.tx does not carry the list a frame holds: lists at 80.004 and 210.004 s (the 4 s tick falls 0.146 s after the second), 90 unit installs (min 2.096 s after publication), 197 vehicle downloads, 134 of them of the later list's cases (min 2.146 s). Fault: cycle units air phase2.broadcast_crl() again -> the test red. This row's frame metric is content-blind: a unit keeps relaying the older list it holds while its new download is on the line, so a frame 0.146 s after a later publication is expected and is not the defect; the frame figure was not re-measured"
 - id: LR.S.l240.bc4.fix.lag-max
   base: FS240bc4
   variant: FS240bc4
@@ -1466,9 +1473,10 @@ rows:
   source: 2 s download + up to one 4 s carousel period (+0.1 s step, 0.05 s signing); the 4.146 s of the
     later lists
   measured: "2.14603"
-  verdict: fail
-  judged: 2026-10-26
+  verdict: wrong-expectation
+  judged: "2026-10-30, 5c5dfc4e debug build (was fail on 4399f8f8, 2026-10-26)"
   note: "as LR.S.l240.bc4.fix.lag-min: the 2.146 s maximum is the first list; the later list's earliest frames are the defect's 0.146 s"
+  note2: "SC-D1, 2026-10-30: the defect is fixed (LR.S.l240.bc4.fix.lag-min, its test). The band was wrong for a content-blind frame metric: the first CRL frame after a later publication is a unit relaying the list it already holds, which a real unit keeps on the air until its download lands, so the 4-6.3 s band holds only for frames of the new list. The case-level figure that replaces it: no vehicle download of either list's cases (197, 134 of the later list's) comes earlier than 2.146 s after its publication (2 s line + the next tick)"
 - id: LR.S.l240.bc4.veh-lag
   base: S240bc4
   variant: FS240bc4

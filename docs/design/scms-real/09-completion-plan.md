@@ -109,3 +109,19 @@ relabels of rule-gap-specs §3).
 ## 7. Status
 
 Dated notes go under each id as its wave lands.
+
+### SC-D1
+
+- 2026-10-30 (wave A): fixed in code before this wave (run.rs `on_flow_timer`, 2026-10-27:
+  a unit in the certificate cycle relays the `RsuCrlFile` it installed, `rsu_crl_held`,
+  and nothing before its first install; step 4 of `on_backend_step` books nothing down a
+  cycle unit's line). Both ignored `live_rsu.rs` tests pass on `5c5dfc4e`. They could not
+  see the defect: the 120 s run publishes one list. New ignored test
+  `a_later_list_reaches_the_air_only_through_a_unit_that_downloaded_it`
+  (`scms-lat2000-bc4-240.yaml`, lists at 80.004 and 210.004 s, a tick 0.146 s after the
+  second): no unit installs and no vehicle downloads a case before its publication + 2 s
+  (min 2.096 s and 2.146 s; 134 vehicle downloads of the later list). Fault: cycle units
+  air `broadcast_crl()` again -> red. The frame metric `s.crl_first_frame_lag_s_*` cannot
+  tell a frame's list: a unit keeps relaying the older list while its download is on the
+  line, so LR.S.l240.bc4.fix.lag-max is a wrong expectation, not a defect. Rows:
+  live-rsu LR.S.l240.bc4.fix.*, LR.S.dbl.unexplained, LR.S.lat2000bc3.crl-lag.
