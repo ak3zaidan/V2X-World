@@ -235,6 +235,32 @@ Dated notes go under each id as its wave lands.
   B4 revokes both chains in the first case, and SC-P4's list check covers it after).
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`789f7afa`, track c1), with SC-P2. `report_signing::a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation` passes on the merged tree. Still open: SC-P4 will move the covered/linked split; `LS.MA.linked-by-chain` for wave E.
 
+### SC-P4
+
+- 2026-10-31 (wave C R6, C1): **the MA checks the published CRL.** Cause:
+  `start_cases_of` built `covered` from `self.runs[k].state.crlg.entries`
+  (`phase2.rs:7775` on `3fcd8a45`), the CRL Generator's working set, so a decision taken
+  while an entry waited for its publication slot was counted
+  `decisions_already_covered` by a list no device or MA could yet hold. Now `covered` is
+  the CRL Store's published list (`crl_store.entries`, set at the `Published` stage,
+  `run/crl.rs:1091`); a decision in that wait opens a case, which the LAs' chain
+  identifiers end `linked` (SC-P3) with no second entry ([BRECHT] §VI-D). Test:
+  `report_signing::the_ma_counts_a_decision_covered_only_after_publication` (grid, one
+  ConstPos attacker, real calendar and its one-business-day CRL rule, 30 s review, a new
+  pseudonym every 60 s; decided at about 19 s and again at about 75 s): from 04:00 ET
+  (slot six hours off) decisions 2 = 1 + 1 linked + 0 covered, 1 entry, 0 published;
+  from 09:59 ET (slot at 60 s) decisions 2 = 1 + 0 linked + 1 covered, 1 case, 1
+  published. Red with `crlg.entries` restored (pending run: covered 1, linked 0).
+  `a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation` is
+  unchanged (4 = 1 + 1 linked + 2 covered: its 10 s cadence publishes before the later
+  pseudonyms are decided). G-SCMS held: no case of the three goldens is opened between
+  a decision and its publication (phase2-path `1b62b1df4dd1`, i-s1 and ttc unchanged).
+  live-scms `LS.MA.covered-after-publication` added, `verdict: open`.
+  Seen, not changed (C3/D3 file): the store's `CrlPublish` arm copies
+  `self.crlg.entries` when the message arrives (`run/crl.rs:1081`), not the list
+  `publish_crl` signed, so an entry appended during the Generator-to-Store hop rides
+  along under the earlier signature; the hop is one backend link (milliseconds).
+
 ### SC-P5
 
 - 2026-10-31 (wave C R5, C1): **the receiving MA re-verifies a shared report.** Cause:

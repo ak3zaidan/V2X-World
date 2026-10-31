@@ -7775,11 +7775,15 @@ impl Phase2 {
             };
             let (i, lv) = (held.subject_i, held.subject_lv);
             let _ = now;
-            // A certificate the Generator's list already revokes needs no second case: the
-            // authority holds the list and checks it before spending lookups [BRECHT §VI-D:
-            // one entry revokes every certificate of the device from `i` on].
+            // A certificate the provider's published list already revokes needs no second
+            // case: the authority checks the CRL before spending lookups [BRECHT §VI-D: the
+            // MA consults the CRL; one entry revokes every certificate of the device from
+            // `i` on]. The list is the one the CRL Store published (SC-P4), not the
+            // Generator's working set: an entry still waiting for its publication slot
+            // revokes nothing yet, and a decision taken meanwhile about the same chain is
+            // caught by the LAs' chain identifiers instead (SC-P3, a `linked` case).
             let mut covered = v2xw_sec::CrlStore::new();
-            for e in &self.runs[k].state.crlg.entries {
+            for e in &self.runs[k].state.crl_store.entries {
                 covered.add_linkage_entry(*e);
             }
             if covered.revokes_linkage_at_period(i, lv) {
