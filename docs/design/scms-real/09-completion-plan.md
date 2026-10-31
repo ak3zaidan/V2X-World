@@ -109,3 +109,20 @@ relabels of rule-gap-specs §3).
 ## 7. Status
 
 Dated notes go under each id as its wave lands.
+
+### SC-D6
+
+- **2026-10-30 (wave A): closed, no engine change needed.** What the real system does: IEEE
+  1609.2 §5.2 lets the receiving SDS discard an SPDU whose `generationTime` is too far in
+  the past or the future before verifying it; the BSM profile sets the window (public
+  value: C2C-CC BSP RS_BSP_168, 40 ms ahead and 2 s old; J2945/1's own is paywalled, so
+  ASSUMPTION for the US). A discarded BSM is unverified, and SM-MBR judges only verified
+  BSMs of one certificate, so it is not evidence and its sender is not reported. No
+  published rule (SM-MBR §2.3, CAMP-EE, the MA policy) revokes a device for its clock, so
+  none was added. The window landed in `rxval::GenerationTimeWindow` (`8da5b7c1`,
+  2026-10-21), after E2's new3 run; the honest revocations of new3 were that missing check.
+  Re-run on 5c5dfc4e's engine: `edge/clock-skew-ahead` against `scms-conformance`, cases
+  5 / 5, attackers revoked 5 / 5, honest revoked 0 / 0, reports about honest devices
+  13 / 28; 186,368 BSMs discarded as in the future and 141,407 as too old. Fault (window
+  opened to a year): reports about honest devices 13 -> 11,401. Row E2 in
+  `scms/scms-edge-cases.yaml` updated.
