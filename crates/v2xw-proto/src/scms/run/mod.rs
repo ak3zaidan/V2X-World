@@ -1852,13 +1852,19 @@ impl ScmsRun {
     ) -> Result<()> {
         if state.faults.offline(d.to, d.at) {
             let component = |n: NodeId| state.nodes.is_component(n);
+            // Another provider's MA sharing a report with this one (WP-D1): a backend
+            // component too, though not one of this run's nodes (SC-D4).
+            let peer_ma = d.to == state.nodes.ma
+                && matches!(d.msg, ScmsMsg::Report(_))
+                && !state.nodes.all().contains(&d.from)
+                && !state.devices.contains_key(&d.from);
             // A down component's own scheduled job is persisted and runs when it
             // restarts; a message from another component waits in that sender's queue,
             // retried until the receiver is back (`crate::fault`, edge case 3d). A device's
             // request is lost: the device finds out by timing out (SCMS-522).
             let later = if d.from == d.to && component(d.to) {
                 state.faults.back_online(d.to, d.at).map(|t| (t, true))
-            } else if d.from != d.to && component(d.from) && component(d.to) {
+            } else if d.from != d.to && (component(d.from) || peer_ma) && component(d.to) {
                 state.faults.retry_reaches(d.to, d.at).map(|t| (t, false))
             } else {
                 None

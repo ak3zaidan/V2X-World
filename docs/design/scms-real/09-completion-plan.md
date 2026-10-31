@@ -151,3 +151,23 @@ Dated notes go under each id as its wave lands.
   no record or digest). Tests: `phase2.rs`
   `the_census_counts_the_entries_the_crl_generators_and_stores_hold` (path run, attacker
   revoked) and `with_no_attacker_nothing_is_revoked` (census 0).
+
+### SC-D4
+
+- 2026-10-30 (wave A): fixed in code before this wave, by `dcee6cb7` (2026-10-21). The
+  E3 row was written on main `d3039b53` (10-18) and never updated. In `ScmsRun::step`, a
+  message one SCMS component sends to another that is down waits in the sender's queue
+  and is retried every `BACKEND_RETRY` (10 s) until the receiver is back
+  (`FaultPlan::held`). A down component's own timers (the shuffle release, the weekly
+  pre-generation) run when it restarts (`deferred_timers`). An outage that never ends
+  still loses both. The 10 s is an ASSUMPTION: no SCMS text specifies inter-component
+  retry, so SCMS-522's period is reused. All 13 `ee_retry.rs` tests pass on `5c5dfc4e`.
+  Fault: component messages to a down node are dropped again -> red (see the commit).
+  Row scms-edge-cases E3.ra-outage-loses-backend-answers is now fixed.
+- 2026-10-30 (wave A), a gap that remained: a report another provider's MA shares with
+  this one (`ScmsRun::shared_report_at_ma`) comes from a node outside this run's
+  `NodeSet`. So `step` treated it as a device's request and dropped it while this MA was
+  down (mod.rs `step`, the `component(d.from)` test). It is now held and retried like any
+  component message. New test `provider_runs.rs`
+  `a_report_shared_with_a_down_ma_arrives_when_it_is_back`. It only changes a run with an
+  MA outage under report sharing, and no shipped scenario has one, so no golden moves.
