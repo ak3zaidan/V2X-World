@@ -867,6 +867,7 @@ trustworthy or comparable; later waves add behaviours and radio features.
   `foundations::a_cut_off_download_is_retried_at_the_next_contact`: six vehicles; at
   0 dBm 12 of 12 top-ups complete; at -15 dBm 24 start, 19 are cut off and 5 complete.
 - Merged (2026-10-28, `e3e4aaa1`, air track head `b0f37241`): P19.1-P19.4 and the J2945/1 density-at-reception fix (`d1e2b5f5`) are on main. Default `net.rsu_ip.air: constant` leaves the goldens unchanged (bsm_timing, phase2, trigger_ttc pass on the merged tree). Open: the P19.5 expectation rows in `live-rsu.yaml` (need release city runs), a WSA `MessageCodec` arm, the 10 Hz WSA default, a separate CCH for WSAs, CAMP download resumption; the owner may make `sch` the default once the rows are measured.
+- SC-M4 (2026-10-30, wave B; 09-completion-plan.md §7): the WSA `MessageCodec` arm (`codec/uper/ieee1609-3-wsa`), the `RsuConfig::wsa_period` default 100 ms (App. D), and WSAs held to the CCH interval under alternating access (Req_588) are built; the separate 178 control channel is kept as modelled (09 §6). Still open for wave E: the P19.5 `live-rsu.yaml` rows and the `sch` default; CAMP download resumption.
 
 **WP-20 Traffic yields to emergency vehicles** (M, 5 days). Source: S-P5.
 - Scope: within a reaction distance civilians pull to the kerb or slow (US move-over, UVC

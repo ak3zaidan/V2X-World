@@ -182,8 +182,9 @@ fn the_registered_codecs_partition_the_message_set_they_claim() {
     let codecs = v2xw_msg::size_model::codecs();
     assert_eq!(
         codecs.len(),
-        5,
-        "one generated ETSI codec, two hand-written J2735 codecs, two size models"
+        6,
+        "one generated ETSI codec, two hand-written J2735 codecs, two size models, the \
+         hand-written IEEE 1609.3 WSA codec"
     );
     for codec in &codecs {
         assert_eq!(codec.family(), Family::Codec, "{}", codec.id());
@@ -203,7 +204,8 @@ fn the_registered_codecs_partition_the_message_set_they_claim() {
 
     // And the ones nobody claims are exactly the ones another crate or a later stage owns.
     // SPaT and MAP left this list when `codec/uper/j2735-spat-map` arrived; CPM and VAM
-    // left it when `codec/size-model/etsi` did.
+    // left it when `codec/size-model/etsi` did; WSA left it when `codec/uper/ieee1609-3-wsa`
+    // did (SC-M4).
     let unclaimed: Vec<MsgType> = MsgType::ALL
         .into_iter()
         .filter(|ty| !codecs.iter().any(|c| c.supports(*ty)))
@@ -211,7 +213,6 @@ fn the_registered_codecs_partition_the_message_set_they_claim() {
     assert_eq!(
         unclaimed,
         vec![
-            MsgType::Wsa,   // IEEE 1609.3, no codec planned
             MsgType::Crl,   // v2xw-sec, over sec_types
             MsgType::Mbr,   // TS 103 759, a later stage
             MsgType::P2pcd, // v2xw-sec::p2pcd, over sec_types
@@ -226,6 +227,7 @@ fn the_registered_codecs_partition_the_message_set_they_claim() {
     assert!(J2735SizeCodec::new().supports(MsgType::Psm));
     assert!(EtsiSizeCodec::new().supports(MsgType::Cpm));
     assert!(EtsiSizeCodec::new().supports(MsgType::Vam));
+    assert!(v2xw_msg::Ieee1609WsaCodec::new().supports(MsgType::Wsa));
     // The size model must not still claim the two messages that are now really encoded.
     assert!(!J2735SizeCodec::new().supports(MsgType::Spat));
     assert!(!J2735SizeCodec::new().supports(MsgType::Map));

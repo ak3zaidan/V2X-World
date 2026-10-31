@@ -1113,6 +1113,17 @@ impl ScmsSizes {
         )
     }
 
+    /// WP-35: the RA's `CertificateManagementInformationStatusSpdu` over a `body`-octet
+    /// status when no PDU is encoded (the 1609.2.1 layer off): a certificate-signed
+    /// envelope carrying the RA's authority certificate, and the status.
+    pub const fn info_status(&self, body: u32) -> WireSize {
+        WireSize::derived(
+            self.env_cert() + self.certs.authority.bytes() + body,
+            "envelope(cert) + authority certificate + CertificateManagementInfoStatus",
+            DERIVATION,
+        )
+    }
+
     /// Device → CRL Store: a fetch.
     pub const fn crl_request(&self) -> WireSize {
         WireSize::derived(

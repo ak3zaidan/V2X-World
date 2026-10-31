@@ -227,12 +227,13 @@ pub const EVIDENCE: &[MessageEvidence] = &[
     },
     MessageEvidence {
         ty: MsgType::Wsa,
-        exactness: ByteExactness::NotEncoded,
-        codec: None,
+        exactness: ByteExactness::OracleValidated,
+        codec: Some(crate::wsa_codec::IEEE1609_WSA_CODEC_ID),
         evidence: "IEEE 1609.3-2016 service advertisement: real UPER from crate::wsa, \
-                   checked byte for byte against asn1tools on the cached modules \
-                   (tests/wsa_oracle.rs). No MessageCodec claims it: a roadside unit \
-                   encodes its own (v2xw-node RsuRuntime::wsa_payload).",
+                   checked byte for byte against asn1tools 0.169 on the cached modules, 5 \
+                   vectors both directions (tests/wsa_oracle.rs). A roadside unit builds \
+                   its own (v2xw-node RsuRuntime::wsa_payload); codec/uper/ieee1609-3-wsa \
+                   validates the bytes (SC-M4).",
     },
     MessageEvidence {
         ty: MsgType::Crl,

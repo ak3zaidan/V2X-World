@@ -144,6 +144,7 @@ pub mod size_model;
 pub mod units;
 pub mod vam;
 pub mod wsa;
+pub mod wsa_codec;
 
 pub use codec::{
     ETSI_UPER_CODEC_ID, Encoded, EtsiUperCodec, Message, MessageCodec, MsgType, SizeModelVersion,
@@ -165,6 +166,7 @@ pub use j2735::map::MapData;
 pub use j2735::spat::Spat;
 pub use j2735::{J2735_BSM_CODEC_ID, J2735_INFRA_CODEC_ID, J2735BsmCodec, J2735InfraCodec};
 pub use size_model::{ContentProfile, J2735_SIZE_MODEL_ID, J2735SizeCodec, SizeRequest};
+pub use wsa_codec::{IEEE1609_WSA_CODEC_ID, Ieee1609WsaCodec};
 
 /// What `build.rs` generated, for the manifest and for anyone auditing the build.
 ///
@@ -309,6 +311,7 @@ mod tests {
             J2735InfraCodec::new().card().clone(),
             J2735SizeCodec::new().card().clone(),
             EtsiSizeCodec::new().card().clone(),
+            Ieee1609WsaCodec::new().card().clone(),
             CamGenerator::default().card().clone(),
             BsmGenerator::default().card().clone(),
         ];
@@ -334,6 +337,7 @@ mod tests {
             J2735InfraCodec::new().card().clone(),
             J2735SizeCodec::new().card().clone(),
             EtsiSizeCodec::new().card().clone(),
+            Ieee1609WsaCodec::new().card().clone(),
             CamGenerator::default().card().clone(),
             BsmGenerator::default().card().clone(),
         ] {

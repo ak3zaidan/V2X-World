@@ -1256,6 +1256,9 @@ fn model_default(path: &str) -> Option<Value> {
     if path == "security.scms.crl_overdue_scope" {
         return Some(json!("craca"));
     }
+    if path == "security.scms.crl_poll" {
+        return Some(json!("conditional"));
+    }
     if path == "security.scms.crl_overdue_tolerance_s" {
         return Some(json!(v2xw_node::rxval::OVERDUE_CRL_TOLERANCE_S));
     }

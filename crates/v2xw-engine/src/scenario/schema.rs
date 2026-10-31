@@ -3567,6 +3567,13 @@ pub struct ScmsSpec {
     /// them", which the sources leave to either reading.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crl_overdue_scope: Option<String>,
+    /// How a cellular vehicle polls its RA for new revocation lists (WP-35): `conditional`
+    /// (default), the composite CRL with `If-Modified-Since`, one exchange; `info-status`,
+    /// the RA's signed certificate-management information status first (IEEE 1609.2.1
+    /// §6.3.5.14, also `If-Modified-Since`), and the composite CRL only when it holds an
+    /// older list: two exchanges on a change, and the status's bytes on the air.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crl_poll: Option<String>,
     /// The receiver's `generationTime` relevance window (IEEE 1609.2 §5.2,
     /// `v2xw_node::rxval::GenerationTimeWindow`): the oldest a received BSM, CAM, PSM or
     /// VAM may be on the receiver's own clock, seconds (2 unless set, C2C-CC BSP

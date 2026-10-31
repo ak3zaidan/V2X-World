@@ -46,7 +46,7 @@
 //! | SPaT | 10 Hz (04-models.md §8.1's default, CTI 4501) | real octets from [`RsuRuntime::set_payload`], else `codec/size-model/j2735` |
 //! | MAP | 1 Hz (ibid.) | as SPaT |
 //! | CRL / CTL | on installation, and on [`RsuConfig::crl_repeat`] if a scenario sets one | the length the backend handed it |
-//! | WSA | [`RsuConfig::wsa_period`], 1 per 5 s (a configured value; USDOT RSU Spec v4.1 App. D sends 50 per 5 s) | real UPER from [`v2xw_msg::wsa`] (IEEE 1609.3-2016, oracle-checked) |
+//! | WSA | [`RsuConfig::wsa_period`], 10 Hz (USDOT RSU Spec v4.1 App. D: `RepeatRate` 50 per 5 s; SC-M4) | real UPER from [`v2xw_msg::wsa`] (IEEE 1609.3-2016, oracle-checked) |
 //!
 //! A unit with the WSA role advertises the SCMS service over IP on its service channel
 //! ([`v2xw_msg::wsa::scms_service_wsa`]: WAVE security management and IPv6 Routing, one
@@ -769,7 +769,9 @@ pub struct RsuConfig {
     pub map_lanes: Option<u32>,
     /// Which content profile the size model is asked for.
     pub content_profile: ContentProfile,
-    /// The WSA interval. 5 s, and UNVERIFIED (04-models.md §8.1).
+    /// The WSA interval. 100 ms: USDOT RSU Spec v4.1 App. D, `RepeatRate` 0x32, "the WSA is
+    /// repeated 50 times per 5 seconds" (SC-M4; the engine's `net.rsu_ip.wsa_interval_ms`
+    /// default is the same). Was 5 s, a configured value (04-models.md §8.1).
     pub wsa_period: Duration,
     /// The service channel the WSA advertises the SCMS service on. 174 is the engine's
     /// placeholder until WP-19 P19.2 passes the scenario's WP-13 service channel; the
@@ -807,7 +809,7 @@ impl Default for RsuConfig {
             map_period: Duration::from_secs(1),
             map_lanes: None,
             content_profile: ContentProfile::Typical,
-            wsa_period: Duration::from_secs(5),
+            wsa_period: Duration::from_millis(100),
             wsa_service_channel: 174,
             crl_repeat: None,
         }
@@ -2213,15 +2215,16 @@ fn card(profile: &HardwareProfile, config: &RsuConfig, backhaul: &Backhaul) -> M
                  requires'",
             ),
         ),
-        plan(
+        Parameter::new(
             "wsa_period_ms",
             "ms",
             serde_json::json!(config.wsa_period.as_nanos() / 1_000_000),
-            "IEEE 1609.3 `RepeatRate` counts WSAs per 5 s (USDOT RSU Spec v4.1 App. D: \
-             '32 ... repeated 50 times per 5 seconds'); the 1 per 5 s default is a \
-             configured value, not the reference one",
-            "Make 50 per 5 s (100 ms) the default once WP-19 puts WSAs on the air in the \
-             engine: it adds CCH load and so moves goldens, and lands as its own change.",
+            Source::new(
+                SourceKind::Standard,
+                "USDOT RSU Specification v4.1 (2017) App. D: `RepeatRate` 0x32, 'the WSA \
+                 is repeated 50 times per 5 seconds' (IEEE 1609.3 RepeatRate counts WSAs per \
+                 5 s), i.e. 100 ms; its range test transmits WSAs at 10 Hz",
+            ),
         ),
         Parameter::new(
             "wsa_service_channel",
