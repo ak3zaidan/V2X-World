@@ -349,6 +349,24 @@ Dated notes go under each id as its wave lands.
   1,566 against 786 in its records (the instance counter counts both ACAs' issuance), and
   a root rollover re-certifies the governance set but not `aca-1` (code reading).
 - 2026-10-31 (wave A merge): merged to main (records track); the declared digests hold on the merged tree.
+- 2026-10-31 (wave C, the two leftovers, agent C3): **PV.m.issued-counters, fixed.** Cause:
+  `inspect.rs` set the ACA entity's `certs_issued` to `PcaState::issued_count`, which
+  counts what every ACA instance issued, and the `aca/1` row in `pki.state` had no counter
+  (`pki_view.rs`, comment "no counters of their own because the run routes every request
+  to the primary", stale since the RA splits requests). `PcaState::issued_by_instance`
+  counts per instance node at the three issuance sites (pseudonym real and modelled paths,
+  application certificates); `aca/0` reads its own and `aca/1` carries its own. Test
+  `aca_instances::each_aca_instance_counts_its_own_certificates` (red with the summed
+  counter: 20 against 10). **The rollover leftover, measured and fixed.** Measured:
+  with a second home ACA, `ScmsPki::superseded_by` carried `aca-1` over with its old-ICA
+  certificate (issuer `6b9b2b1f…` against the new ICA `ddaad26d…`), so after the old
+  root's removal its pseudonyms would chain to a root no CTL approves. It is now
+  re-certified under the new ICA with keys drawn under the new ICA's HashedId8, its old
+  certificate retired (what it issued still verifies), and `ScmsState::follow_pki` counts
+  it on the home ICA. Test `aca_instances::a_root_rollover_recertifies_the_second_aca`
+  (red with the instance carried over). The shipped home provider runs one ACA, so no
+  shipped run changes from the rollover part. The counter fix moves G-SCMS (pki.state
+  values, own commit).
 
 ### SC-D13
 

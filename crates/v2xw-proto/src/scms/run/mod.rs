@@ -712,6 +712,10 @@ pub struct PcaState {
     pub issued_by: BTreeMap<(u32, [u8; 9]), NodeId>,
     /// How many certificates it has issued.
     pub issued_count: u64,
+    /// How many each ACA instance issued, by its node (the core ACA and `aca/1`, ...):
+    /// the per-instance `certs_issued` of `pki.state` (audit-prov PV.m.issued-counters,
+    /// which read both instances' issuance on `aca/0`).
+    pub issued_by_instance: BTreeMap<NodeId, u64>,
     /// Linkage-value lookups it answered for the Misbehaviour Authority.
     pub lookups: u32,
     certified_runs: BTreeSet<FlowRun>,
@@ -1082,6 +1086,20 @@ impl ScmsState {
             .get(self.provider)
             .is_some_and(|p| p.name == label);
         if own {
+            // An ACA instance the rollover re-certified ([`ScmsPki::superseded_by`]) is
+            // one more certificate the home ICA issued (09 §7 SC-D12).
+            let fresh = pki
+                .extra
+                .iter()
+                .filter(|a| a.name.starts_with("aca-"))
+                .filter(|a| {
+                    self.pki
+                        .as_ref()
+                        .is_none_or(|o| !o.extra.iter().any(|b| b.cert == a.cert))
+                })
+                .count();
+            self.gov
+                .note_ica_issued(u32::try_from(fresh).unwrap_or(u32::MAX));
             self.pki = Some(pki);
         } else if let Some(e) = self.peer_pki.iter_mut().find(|(l, _)| l == label) {
             e.1 = pki;

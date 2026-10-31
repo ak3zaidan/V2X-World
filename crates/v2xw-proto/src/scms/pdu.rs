@@ -970,12 +970,43 @@ impl ScmsPki {
 
     /// This PKI after a root rollover's publication: `next` signs from now on, and every
     /// certificate of this one (and of what it had retired) stays resolvable until it
-    /// expires ([`ScmsPki::retired`]). The extra components carry over.
+    /// expires ([`ScmsPki::retired`]).
+    ///
+    /// A further ACA instance (`aca-1`, [`ScmsPki::issue_aca_instance`]) is re-certified
+    /// under `next`'s ICA with fresh keys, as the rollover re-certifies every governance
+    /// component (Provider Req. §3.5.4: after the changeover the provider signs only with
+    /// the new keys); its old certificate is retired with the rest. It kept the old ICA's
+    /// certificate, so after the old root's removal its pseudonyms chained to a root no
+    /// CTL approved (09 §7 SC-D12). The keys are drawn under the new ICA's HashedId8, so
+    /// each generation's differ and no other draw moves. Other extra components (an
+    /// attack study's) carry over unchanged, as does an instance whose new certificate
+    /// would not encode (it cannot happen with the published forms).
     #[must_use]
     pub fn superseded_by(&self, mut next: ScmsPki) -> ScmsPki {
         let mut retired: Vec<Authority> = self.all().into_iter().cloned().collect();
         retired.extend(self.retired.iter().cloned());
-        next.extra.clone_from(&self.extra);
+        let seed = u64::from_be_bytes(next.ica.id8());
+        let mut carried = Vec::new();
+        let mut instances = Vec::new();
+        for a in &self.extra {
+            let inst = a
+                .name
+                .strip_prefix("aca-")
+                .and_then(|r| r.split_once('.'))
+                .and_then(|(k, _)| k.parse::<u32>().ok());
+            match inst {
+                Some(k) => instances.push((k, a)),
+                None => carried.push(a.clone()),
+            }
+        }
+        next.extra = carried;
+        for (k, a) in instances {
+            if next.issue_aca_instance(seed, k).is_ok() {
+                retired.push(a.clone());
+            } else {
+                next.extra.push(a.clone());
+            }
+        }
         next.retired = retired;
         next
     }

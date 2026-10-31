@@ -279,7 +279,11 @@ impl ScmsRun {
             Some(n.pca),
             true,
         );
-        pca.set("certs_issued", st.pca.issued_count);
+        // The core instance's own count: a further ACA (`aca/1`) has its own row.
+        pca.set(
+            "certs_issued",
+            st.pca.issued_by_instance.get(&n.pca).copied().unwrap_or(0),
+        );
         pca.set("lookups_answered", st.pca.lookups);
         pca.set("certificate", key("pca"));
         out.push(pca);

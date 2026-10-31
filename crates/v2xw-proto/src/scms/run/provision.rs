@@ -2007,6 +2007,7 @@ impl ScmsState {
                                     },
                                 );
                                 self.pca.issued_count += 1;
+                                *self.pca.issued_by_instance.entry(to).or_insert(0) += 1;
                                 // A carrier for the response: the RA reads only
                                 // `response`; the device derives everything else.
                                 credentials.push(IssuedCredential {
@@ -2114,6 +2115,7 @@ impl ScmsState {
                         },
                     );
                     self.pca.issued_count += 1;
+                    *self.pca.issued_by_instance.entry(to).or_insert(0) += 1;
                     credentials.push(IssuedCredential {
                         i: item.i,
                         j: item.j,

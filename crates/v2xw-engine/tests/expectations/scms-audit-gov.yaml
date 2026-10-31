@@ -260,6 +260,7 @@ rows:
   expect: 0 on the wrong root, at least one certificate on each side, the components re-certified
   measured: pending
   verdict: pending
+  note: 'SC-D12 (2026-10-31, agent C3): a further ACA instance of the home provider (aca-1, ScmsPki::issue_aca_instance) kept its old-ICA certificate through the changeover (ScmsPki::superseded_by carried it), so after the old root''s removal its pseudonyms chained to a root no CTL approved. It is now re-certified under the new ICA with fresh keys, its old certificate retired, and the home ICA counts it (follow_pki). Test aca_instances::a_root_rollover_recertifies_the_second_aca (red with the instance carried over). The shipped home provider runs one ACA, so the conformance run does not exercise it'
 - id: GOV.K1.time32
   area: timing
   check: every pki.state time32 against Time32(t0 + t) computed here (TAI since 2004-01-01, 5 leap seconds)

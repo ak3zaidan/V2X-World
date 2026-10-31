@@ -230,7 +230,7 @@ rows:
   expect: {diff: 0}
   measured: '8 counters; off (entity, counter, view, records): []'
   verdict: pass
-  note: added after the first checker pass, before its own run
+  note: 'added after the first checker pass, before its own run. SC-D12 (2026-10-31, agent C3): provider-b aca/0 read 1,566 against 786 records because inspect.rs set certs_issued to PcaState::issued_count, the issuance of both ACA instances, and aca/1 had no counter. PcaState::issued_by_instance now counts each instance; aca/0 reads its own and aca/1 carries its own certs_issued. Test aca_instances::each_aca_instance_counts_its_own_certificates (red with the summed counter: 20 against 10). The conf rerun is wave E''s'
 - id: PV.m.pool-fields
   run: conf
   behaviour: node.security pool_stored equals the certificates node.credentials says the device holds

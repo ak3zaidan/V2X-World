@@ -1129,6 +1129,7 @@ impl ScmsState {
                     });
                 }
                 self.pca.issued_count += 1;
+                *self.pca.issued_by_instance.entry(to).or_insert(0) += 1;
                 let resp = Pdu::new(issued.aca_ra_spdu);
                 let size = self.emit_pdu(SpduKind::AcaRaCertResponse, to, n.ra, at, &resp);
                 out.send(
