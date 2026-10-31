@@ -326,3 +326,129 @@ mod per_provider {
         }
     }
 }
+
+/// gov L-11: ISS's LAs carry `LaSsp` version 1 with `laId` 4 and 5, decoded from SCMS
+/// Manager's 2025-07-17 test chain file (`88 00 01 00 04`, `88 00 01 00 05`). Under the US
+/// production deployment provider-a is ISS: both engine PKIs (the device-facing PDU PKI
+/// and the governance hierarchy of the chain files) give its LAs exactly those bytes,
+/// its own LA states use those ids, and its linkage CRL's `LAGroup` names them.
+/// provider-b (SAESOL) keeps version 2 with 1 and 2. The published bytes are checked
+/// against the decoded test chain itself whenever the artefact cache is present.
+mod iss_la_ssp {
+    use v2xw_msg::sec_types::Certificate;
+    use v2xw_msg::sec_types::ieee1609_dot2_base_types::ServiceSpecificPermissions;
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    use v2xw_proto::scms::governance::{CertProfile, la_ids, ssp_bytes};
+    use v2xw_proto::scms::params::ScmsParams;
+    use v2xw_proto::scms::run::ScmsRun;
+    use v2xw_sec::linkage::LaId;
+
+    /// The decoded ISS LA SSPs (PSID 35): choice `la` (0x88), the SEQUENCE preamble,
+    /// version 1, `laId` 4 and 5.
+    const ISS_LA_SSPS: [[u8; 5]; 2] = [[0x88, 0, 1, 0, 4], [0x88, 0, 1, 0, 5]];
+
+    fn ssp35(c: &Certificate) -> Vec<u8> {
+        let perms =
+            c.0.to_be_signed
+                .app_permissions
+                .as_ref()
+                .expect("appPermissions");
+        let p = perms
+            .0
+            .iter()
+            .find(|p| p.psid.0 == 35.into())
+            .expect("a security-management permission");
+        match p.ssp.as_ref().expect("an SSP") {
+            ServiceSpecificPermissions::opaque(o) => o.to_vec(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn production() -> ScmsRun {
+        ScmsRun::new_deployed(
+            ScmsParams::default().quick(),
+            0,
+            Deployment::preset(Preset::UsProduction2025),
+        )
+        .expect("the production deployment builds")
+    }
+
+    #[test]
+    fn the_iss_las_carry_the_published_la_ssp_and_name_their_ids_on_the_crl() {
+        assert_eq!(la_ids(CertProfile::Iss), [4, 5]);
+        assert_eq!(ssp_bytes(CertProfile::Iss, "la1"), ISS_LA_SSPS[0]);
+        assert_eq!(ssp_bytes(CertProfile::Iss, "la2"), ISS_LA_SSPS[1]);
+        let mut run = production();
+        let pki = run.state.pki.clone().expect("the PDU PKI");
+        assert_eq!(pki.profile, CertProfile::Iss);
+        // The device-facing LA certificates and the governance ones (chain files).
+        assert_eq!(ssp35(&pki.la1.cert), ISS_LA_SSPS[0], "PDU PKI la1");
+        assert_eq!(ssp35(&pki.la2.cert), ISS_LA_SSPS[1], "PDU PKI la2");
+        for (k, role) in ["la1", "la2"].into_iter().enumerate() {
+            let c = run.state.gov.cert(role).expect("certified");
+            assert_eq!(ssp35(c), ISS_LA_SSPS[k], "governance {role}");
+        }
+        // The provider's LAs use the same ids, and its linkage CRL names them.
+        assert_eq!(
+            (run.state.la[0].la_id, run.state.la[1].la_id),
+            (LaId(4), LaId(5))
+        );
+        run.seed_standing_crl(1);
+        let secured = run.state.crlg.secured.clone().expect("a signed CRL");
+        let opened = v2xw_sec::crl::decode_crl(secured.bytes()).expect("decodes");
+        let entries = v2xw_sec::crl::linkage_entries(&opened.contents);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            (entries[0].la_id1, entries[0].la_id2),
+            (LaId(4), LaId(5)),
+            "LAGroup"
+        );
+        // provider-b (SAESOL production) keeps the 2022 module's version 2, ids 1 and 2.
+        let (_, peer) = &run.state.peer_pki[0];
+        assert_eq!(peer.profile, CertProfile::S2xProduction);
+        assert_eq!(ssp35(&peer.la1.cert), [0x88, 0, 2, 0, 1]);
+        assert_eq!(ssp35(&peer.la2.cert), [0x88, 0, 2, 0, 2]);
+        let b = ScmsRun::new_peer(&run, 1).expect("provider-b's run");
+        assert_eq!(
+            (b.state.la[0].la_id, b.state.la[1].la_id),
+            (LaId(1), LaId(2))
+        );
+    }
+
+    /// The oracle: the decoded ISS LA certificates of SCMS Manager's 2025-07-17 test
+    /// chain file carry exactly the SSP bytes the engine gives provider-a's LAs.
+    #[test]
+    fn the_published_iss_la_certificates_carry_these_bytes() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../third_party/scms-artefacts/files");
+        let forced = std::env::var("V2XW_SCMS_ARTEFACTS").is_ok_and(|v| v == "1");
+        if !forced && !dir.is_dir() {
+            eprintln!(
+                "SKIPPED the_published_iss_la_certificates_carry_these_bytes: no \
+                 third_party/scms-artefacts/files (python3 -I tools/scms-artefacts/fetch.py)"
+            );
+            return;
+        }
+        let bytes = std::fs::read(dir.join("test-2025-07-17/test_cert_chain.oer"))
+            .expect("the 2025-07-17 test chain file");
+        let (_, others) = v2xw_sec::ctl::decode_certificate_chain(&bytes).expect("decodes");
+        let mut las: Vec<Vec<u8>> = others
+            .iter()
+            .filter_map(|c| {
+                let perms = c.0.to_be_signed.app_permissions.as_ref()?;
+                perms.0.iter().find(|p| p.psid.0 == 35.into())?;
+                Some(ssp35(c))
+            })
+            .filter(|s| s.first() == Some(&0x88))
+            .collect();
+        las.sort();
+        assert_eq!(
+            las,
+            ISS_LA_SSPS.map(|s| s.to_vec()),
+            "the published ISS LAs"
+        );
+        let run = production();
+        let pki = run.state.pki.as_ref().expect("the PDU PKI");
+        assert_eq!([ssp35(&pki.la1.cert), ssp35(&pki.la2.cert)].to_vec(), las);
+    }
+}

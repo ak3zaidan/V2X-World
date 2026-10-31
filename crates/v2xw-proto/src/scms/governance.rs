@@ -672,6 +672,33 @@ pub fn ssp_version(profile: CertProfile, role: &str) -> u8 {
     }
 }
 
+/// The `laId`s of a provider's LA1 and LA2 (gov L-11). ISS's pre-production LAs carry 4
+/// and 5 (`LaSsp` `88 00 01 00 04` and `88 00 01 00 05`, decoded from SCMS Manager's
+/// 2025-07-17 test chain file); `laId` is provider-local, and no other US provider has
+/// published an LA certificate, so the others keep 1 and 2. The LAs' linkage seeds, the
+/// PLVs and every linkage CRL `LAGroup` of the provider name the same ids.
+#[must_use]
+pub fn la_ids(profile: CertProfile) -> [u16; 2] {
+    match profile {
+        CertProfile::Iss => [4, 5],
+        _ => [1, 2],
+    }
+}
+
+/// The `SecurityMgmtSsp` of `role` in `profile`'s form, version aside (the typed SSP is
+/// the 2022 module's, version 2; [`ssp_bytes`] writes the published version): an LA
+/// names its provider's `laId` ([`la_ids`]).
+#[must_use]
+pub fn security_mgmt_ssp_in(profile: CertProfile, role: &str) -> SecurityMgmtSsp {
+    match role {
+        "la1" | "la2" => {
+            let id = la_ids(profile)[usize::from(role == "la2")];
+            SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(id)))
+        }
+        _ => security_mgmt_ssp(role),
+    }
+}
+
 fn security_mgmt_ssp_v(role: &str, version: u8) -> SecurityMgmtSsp {
     let v = Uint8(version);
     match role {
@@ -764,8 +791,9 @@ fn explicit_psids(items: Vec<(u64, Option<SspRange>)>) -> SubjectPermissions {
 /// `version` at 2, so a version-1 SSP (ISS) is the version-2 encoding with that byte
 /// (choice tag, SEQUENCE preamble, `version`) set to 1: the bodies are the same, and the
 /// published bytes are exactly that (`83 00 01`, `88 00 01 00 04`).
-fn ssp_bytes(profile: CertProfile, role: &str) -> Vec<u8> {
-    let mut b = coer(&security_mgmt_ssp(role)).expect("an SSP encodes");
+#[must_use]
+pub fn ssp_bytes(profile: CertProfile, role: &str) -> Vec<u8> {
+    let mut b = coer(&security_mgmt_ssp_in(profile, role)).expect("an SSP encodes");
     let v = ssp_version(profile, role);
     if v != 2 && b.len() > 2 {
         b[2] = v;

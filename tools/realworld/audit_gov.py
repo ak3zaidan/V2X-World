@@ -419,6 +419,9 @@ def r_L10(R):
             return a, b
         if FORM.get(lab) == 's2x' and role not in ('la1', 'la2'):
             return a.hex(), b.hex()
+        # gov L-11: ISS's LAs byte for byte (version 1, laId 4 and 5).
+        if FORM.get(lab) == 'iss' and role in ('la1', 'la2'):
+            return a.hex(), b.hex()
         return a[:3].hex(), b[:3].hex()
     return _field_rows(R, f, 'ssp')
 

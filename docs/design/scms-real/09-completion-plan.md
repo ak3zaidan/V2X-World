@@ -842,3 +842,27 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `root_removal_at_s` or `peer_root_removal_at_s`; their removal CTL, and the chain files
   and composite CRL downloads that carry it, grow by one root certificate until the next
   CTL. The E8 row's re-run is wave E (verdict open).
+
+### gov L-11
+
+- 2026-10-31 (wave D R2, agent D2): **ISS's LAs carry `LaSsp` version 1 with `laId` 4
+  and 5.** Both LA certificates were `LaSsp::new(Uint8(2), Uint16(1|2))` in the PDU PKI
+  (`pdu.rs`, was `:832`, `:842`) for every profile, and the governance ones
+  (`governance.rs` `security_mgmt_ssp_v`, was `:673-674`) were version 1 under ISS but
+  with ids 1 and 2; the LA states were `LaId(1)`, `LaId(2)` (`run/mod.rs`, was `:1495`,
+  `:1670`). Now `governance::la_ids(profile)` gives `[4, 5]` under `CertProfile::Iss`
+  and `[1, 2]` otherwise; `ssp_bytes` (now public) encodes the provider's ids and
+  version; the PDU PKI writes those bytes over the typed SSP through `Form::ssp`
+  (the 2022 type fixes version 2, so the constraint check is kept and the version byte
+  is written after encoding, as the governance PKI already did); both `LaState`
+  constructors take the provider's ids, so the linkage seeds, the PLVs and every
+  linkage CRL `LAGroup` name them. Tests `pki_profile::iss_la_ssp::*` (both PKIs' LA
+  bytes equal `88 00 01 00 04`/`05`; the LA states 4 and 5; a standing CRL entry's
+  `LAGroup` 4 and 5; provider-b version 2 with 1 and 2; and, with the artefact cache, the
+  decoded ISS LA certificates of the 2025-07-17 test chain equal the engine's bytes), red
+  with the ISS LA version at 2 and red with the LA states at 1 and 2. G-SCMS record digests moved (the provider-a LA certificates in the chain files and the linkage seeds, PLVs and CRL entries under ids 4 and 5): `i-s1-phase2-60s` `815e9652af18…` to `701c9c09634f…`, `phase2-path` `73742934ef9a…` to `55883bf70fb3…`; frame digests and `ttc-triggered-brake` unmoved.
+  `tools/realworld/audit_gov.py` GOV.L10.ssp now compares ISS LA bytes in full (row
+  verdict open for wave E). Left: the PDU PKI's other ISS components are still version 2
+  (the governance PKI's are version 1); not in L-11's scope, recorded for the wave E
+  register. `phase2.rs` (D1) forges RSU false-CRL entries with `LaId(1)`, `LaId(2)`
+  (`:3935`): an attacker's choice, no effect on matching.

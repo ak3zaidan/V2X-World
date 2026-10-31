@@ -69,8 +69,8 @@ use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::{
     EeRaDownloadRequest, EeRaInterfacePdu, RaEeCertAck, RaEeCertInfo,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::{
-    AcaSsp, CrlSignerSsp, DcmSsp, EcaSsp, IcaSsp, LaSsp, MaSsp, RaSsp, RootCaSsp, ScmsPdu,
-    ScmsPduContent, ScopedCertificateRequest, SecurityMgmtSsp, SignedCertificateRequest,
+    AcaSsp, CrlSignerSsp, DcmSsp, EcaSsp, IcaSsp, MaSsp, RaSsp, RootCaSsp, ScmsPdu, ScmsPduContent,
+    ScopedCertificateRequest, SecurityMgmtSsp, SignedCertificateRequest,
 };
 use v2xw_sec::butterfly::Caterpillar;
 use v2xw_sec::cert::{self, CertHash, CertKey};
@@ -489,6 +489,10 @@ struct Form {
     craca: [u8; 3],
     region: Option<v2xw_msg::sec_types::ieee1609_dot2_base_types::GeographicRegion>,
     ra_request_form: bool,
+    /// The PSID-35 SSP bytes in the provider's published form, written over the typed
+    /// SSP's encoding where the 2022 module's type cannot carry them (an ISS LA's
+    /// version 1, gov L-11; [`crate::scms::governance::ssp_bytes`]).
+    ssp: Option<Vec<u8>>,
 }
 
 impl Form {
@@ -499,6 +503,7 @@ impl Form {
             craca: [i[5], i[6], i[7]],
             region: None,
             ra_request_form: false,
+            ssp: None,
         }
     }
 
@@ -515,6 +520,15 @@ impl Form {
                 .subca_region()
                 .map(crate::scms::enrolment::us_region),
             ra_request_form: profile.ra_request_form(),
+            ssp: None,
+        }
+    }
+
+    /// This form with `role`'s SSP bytes in `profile`'s published form.
+    fn with_ssp_of(&self, profile: CertProfile, role: &str) -> Form {
+        Form {
+            ssp: Some(crate::scms::governance::ssp_bytes(profile, role)),
+            ..self.clone()
         }
     }
 }
@@ -822,24 +836,26 @@ impl ScmsPki {
             )),
             &[],
         )?;
+        // Each LA names its provider's `laId`, in the provider's SSP version (gov L-11:
+        // ISS's LAs are `LaSsp` version 1 with ids 4 and 5).
         let la1 = mk(
             g,
             &ica,
-            &sub,
+            &sub.with_ssp_of(profile, "la1"),
             "la1",
             "la1",
             2,
-            &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(1))),
+            &crate::scms::governance::security_mgmt_ssp_in(profile, "la1"),
             &[],
         )?;
         let la2 = mk(
             g,
             &ica,
-            &sub,
+            &sub.with_ssp_of(profile, "la2"),
             "la2",
             "la2",
             2,
-            &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(2))),
+            &crate::scms::governance::security_mgmt_ssp_in(profile, "la2"),
             &[],
         )?;
         let dcm = mk(
@@ -1092,6 +1108,11 @@ impl ScmsPki {
         tbs.craca_id = HashedId3(FixedOctetString::from(form.craca));
         tbs.crl_series = CrlSeries(Uint16(series));
         tbs.region.clone_from(&form.region);
+        if let Some(bytes) = &form.ssp
+            && let Some(first) = tbs.app_permissions.as_mut().and_then(|a| a.0.first_mut())
+        {
+            first.ssp = Some(ServiceSpecificPermissions::opaque(bytes.clone().into()));
+        }
         if form.ra_request_form && name.starts_with("ra.") {
             tbs.cert_request_permissions = tbs.cert_issue_permissions.take();
         }

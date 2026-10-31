@@ -1491,10 +1491,15 @@ impl ScmsRun {
                 sizes,
                 ra: RaState::default(),
                 pca: PcaState::default(),
-                la: [
-                    LaState::new(LaIndex::One, LaId(1)),
-                    LaState::new(LaIndex::Two, LaId(2)),
-                ],
+                // The provider's own `laId`s (gov L-11: ISS's are 4 and 5).
+                la: {
+                    let [a, b] =
+                        crate::scms::governance::la_ids(deployment.providers[0].cert_profile);
+                    [
+                        LaState::new(LaIndex::One, LaId(a)),
+                        LaState::new(LaIndex::Two, LaId(b)),
+                    ]
+                },
                 ma: MaState::default(),
                 crlg: CrlState::default(),
                 crl_store: CrlState::default(),
@@ -1666,10 +1671,15 @@ impl ScmsRun {
                 sizes: home.state.sizes.clone(),
                 ra: RaState::default(),
                 pca: PcaState::default(),
-                la: [
-                    LaState::new(LaIndex::One, LaId(1)),
-                    LaState::new(LaIndex::Two, LaId(2)),
-                ],
+                // The provider's own `laId`s (gov L-11: ISS's are 4 and 5).
+                la: {
+                    let [a, b] =
+                        crate::scms::governance::la_ids(deployment.providers[k].cert_profile);
+                    [
+                        LaState::new(LaIndex::One, LaId(a)),
+                        LaState::new(LaIndex::Two, LaId(b)),
+                    ]
+                },
                 ma: MaState::default(),
                 crlg: CrlState::default(),
                 crl_store: CrlState::default(),

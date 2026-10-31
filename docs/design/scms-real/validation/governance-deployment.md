@@ -73,7 +73,7 @@ Verdicts:
 | L-8 | Root termination needs 365 days' notice and a subscriber majority for a transfer ([SM-PROV] §3.5.6) | Not modelled | — | DOCUMENTED DEVIATION (a run of a year or more; removal is modelled) |
 | L-9 | Renewal and suspension are not supported; a rekey always uses a fresh key ([SM-PROV] §3.4.6–3.4.9) | Every rollover draws a new key generation | Code | MATCHES |
 | L-10 | Component SSPs (`root 81 00 02`, `ica 83`, `eca 84`, `aca 85`, `ra 8b`, `ma 8a` + relevant PSIDs 0x20) | `security_mgmt_ssp`, `app_permissions` | `governance/tests.rs` pins each to the production/test bytes | MATCHES |
-| L-11 | LA SSP: ISS's LAs carry `LaSsp` version 1 with `laId` 4 and 5 | Version 2, `laId` 1 and 2 | Decoded | DOCUMENTED DEVIATION. `laId` is provider-local; version 2 is the 2022 module's fixed value |
+| L-11 | LA SSP: ISS's LAs carry `LaSsp` version 1 with `laId` 4 and 5 | Under `CertProfile::Iss` both engine PKIs give LA1 and LA2 `88 00 01 00 04` and `88 00 01 00 05` (`governance::la_ids`, `ssp_bytes`; the PDU PKI writes the bytes over the typed SSP, whose 2022 type fixes version 2), the provider's LA states use ids 4 and 5, and its linkage CRL `LAGroup` names them; SAESOL keeps version 2 with 1 and 2 (fixed 2026-10-31, gov L-11; tests `pki_profile::iss_la_ssp`) | Decoded | MATCHES (was a documented deviation: version 2, ids 1 and 2) |
 
 ### 1.4 Deployment topology
 

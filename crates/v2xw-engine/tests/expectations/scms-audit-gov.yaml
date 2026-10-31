@@ -148,10 +148,10 @@ rows:
 - id: GOV.L10.ssp
   area: spec
   check: the security-management SSP choice byte of every component certificate equals the published one; S2X bytes equal byte for byte
-  source: published chain files; gov L-10, L-11 (version 2 is the 2022 module's fixed value; ISS preprod carries version 1)
-  expect: choice equal everywhere; S2X bytes equal
-  measured: 'A PASS: 15 compared; all equal | B PASS: 15 compared; all equal'
-  verdict: pass
+  source: published chain files; gov L-10, L-11 (version 2 is the 2022 module's fixed value; ISS preprod carries version 1; ISS LAs `88 00 01 00 04` and `88 00 01 00 05`, fixed 2026-10-31)
+  expect: choice equal everywhere; S2X bytes equal; ISS LA bytes equal
+  measured: 'before L-11 (choice and version only for ISS LAs): A PASS: 15 compared; all equal | B PASS: 15 compared; all equal'
+  verdict: open
 - id: GOV.L.chain
   area: spec
   check: every component certificate's explicit signature verifies under its issuer (oracle ECDSA), and every chain ends at a root the CTL approves
