@@ -678,6 +678,11 @@ pub struct OpenedReport {
     /// Whether every suspect BSM verifies under the evidence's `signingCertificate`,
     /// which chains to the PKI.
     pub evidence_verified: bool,
+    /// The decrypted inner SPDU: the reporter-signed `Ieee1609Dot2Data` (COER). The MA
+    /// re-encrypts it to another provider's MA when it shares the report
+    /// ([`reencrypt_for_ma`]; SC-P5), so the receiving MA verifies the reporter's
+    /// signature and the evidence itself.
+    pub signed: Vec<u8>,
 }
 
 /// The MA's processing of a received report ([5GAA] (263) preconditions; [SM-MBR] §3):
@@ -737,7 +742,30 @@ pub fn ma_open_report(
         reporter_cert: signer,
         signed_at_us: t.0.0,
         evidence_verified,
+        signed: plain,
     })
+}
+
+/// A report an MA opened, re-encrypted to another provider's MA (SC-P5; WP-D1): the
+/// reporter-signed inner SPDU ([`OpenedReport::signed`]), byte for byte, encrypted to
+/// the `encryptionKey` of `peer_ma_cert` exactly as a device encrypts its report
+/// ([`secure_report`] without the signing step). The receiving MA opens it with
+/// [`ma_open_report`] and so checks the reporter's signature and the evidence itself
+/// ([SM-MBR] §3: the MA verifies the evidence it acts on).
+///
+/// **Modelled (ASSUMPTION, `constants.md`):** no published specification defines the
+/// MA-to-MA envelope; this is a real 1609.2 encryption to the peer MA, so the bytes on
+/// the link are the real ciphertext length.
+///
+/// # Errors
+/// The peer MA certificate does not encode or its key is unusable.
+pub fn reencrypt_for_ma(
+    inner_signed: &[u8],
+    peer_ma_cert: &Certificate,
+    peer_ma_enc: &Point,
+    g: &mut Drbg,
+) -> Result<Vec<u8>> {
+    pdu::encrypt_to_cert(inner_signed, peer_ma_cert, peer_ma_enc, g)
 }
 
 fn verify_under(o: &sig1609::OpenedSigned, cert: &Certificate, pki: &ScmsPki) -> Result<()> {

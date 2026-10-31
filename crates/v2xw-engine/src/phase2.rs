@@ -2301,6 +2301,9 @@ pub struct Phase2 {
     checked_at: BTreeMap<(NodeId, [u8; 8]), SimTime>,
     forwarded: BTreeSet<String>,
     in_flight: BTreeMap<(usize, FlowRun), InFlightReport>,
+    /// Test hook ([`Phase2::share_unverified_for_test`]): share real reports as before
+    /// SC-P5, without their bytes, so the receiving MA does not re-verify them.
+    share_unverified: bool,
     /// The home root a scheduled rollover superseded (`root_removal_at_s` removes it).
     superseded_root: Option<[u8; 32]>,
     /// The PDU PKI followed a published root rollover since the engine last looked
@@ -3102,6 +3105,13 @@ impl Phase2 {
             runs.push(peer);
         }
         runs.insert(0, scms);
+        // SC-P5: under modelled signatures the evidence's BSM signatures are not real
+        // ECDSA, so no MA can refuse a shared report on them.
+        let modelled_sigs =
+            scenario.security.crypto_mode == crate::scenario::CryptoModeSpec::Modeled;
+        for r in &mut runs {
+            r.set_evidence_signatures_modelled(modelled_sigs);
+        }
         // Server capacity per role (08-settings-ux-and-gaps §6), on every provider's run.
         crate::scms_topology::apply_capacity(scenario, &mut runs)?;
         // Per provider (WP-D1): its own CRL publication rule, and its own MA mode when
@@ -3274,6 +3284,7 @@ impl Phase2 {
             checked_at: BTreeMap::new(),
             forwarded: BTreeSet::new(),
             in_flight: BTreeMap::new(),
+            share_unverified: false,
             evidence: BTreeMap::new(),
             judged_evidence: BTreeMap::new(),
             superseded_root: None,
@@ -5174,6 +5185,15 @@ impl Phase2 {
     #[doc(hidden)]
     pub fn misattribute_providers_for_test(&mut self) {
         self.truth_hook = TruthHook::OtherProvider;
+    }
+
+    /// **A test hook, not a model parameter** (SC-P5): from now on a real report another
+    /// provider's MA shares crosses without its re-encrypted bytes, as before SC-P5, so
+    /// the receiving MA takes the forwarding MA's reading on trust. A test compares the
+    /// same seed with and without re-verification.
+    #[doc(hidden)]
+    pub fn share_unverified_for_test(&mut self) {
+        self.share_unverified = true;
     }
 
     /// The provider whose ACA certificate is `issuer` (SC-P1): the one that can resolve
@@ -7246,22 +7266,37 @@ impl Phase2 {
                     self.runs[k].state.shared.unresolvable += 1;
                     continue;
                 }
-                // Its real length when it was a real report, re-encrypted to the accused's
-                // provider's MA.
+                // SC-P5: a real report travels as the report this MA opened, re-encrypted
+                // to the accused's provider's MA, which decrypts it and verifies the
+                // reporter's signature and the evidence itself ([SM-MBR] §3); the bytes on
+                // the link are that ciphertext. A modelled report carries its length and
+                // what this MA knew of it.
+                let secured = match (held, self.runs[ks].ma_share_target()) {
+                    (Some(x), Some(peer)) if !self.share_unverified => {
+                        self.runs[k].reencrypt_report_for(x, &peer)
+                    }
+                    _ => None,
+                };
                 let ma_k = &self.runs[k].state.ma;
                 let bytes = held
                     .and_then(|x| ma_k.reports[x].secured.as_ref().map(|s| s.report.len()))
                     .map_or(report_bytes(), |n| u32::try_from(n).unwrap_or(u32::MAX));
-                // What this MA read from the report travels with it (the PKI view's case
-                // evidence on the deciding provider's side).
-                let evidence = held.and_then(|x| ma_k.report_evidence.get(x).cloned().flatten());
+                let modelled = secured.is_none().then(|| {
+                    (
+                        held.and_then(|x| ma_k.report_evidence.get(x).cloned().flatten()),
+                        subj,
+                    )
+                });
                 let from = self.runs[k].state.nodes.ma;
                 let observed = f.report.detection_time;
-                let run = self.runs[ks].shared_report_at_ma(from, i, lv, observed, s.t, bytes);
-                if let Some(e) = evidence {
-                    self.runs[ks].shared_report_evidence(run, e);
+                let run =
+                    self.runs[ks].shared_report_at_ma(from, i, lv, observed, s.t, bytes, secured);
+                if let Some((evidence, subj)) = modelled {
+                    if let Some(e) = evidence {
+                        self.runs[ks].shared_report_evidence(run, e);
+                    }
+                    self.runs[ks].shared_report_subject(run, subj);
                 }
-                self.runs[ks].shared_report_subject(run, subj);
                 self.runs[k].state.shared.forwarded += 1;
                 // The report's history before the sharing leg (detection, upload, the
                 // RA's shuffle) carries over to the deciding provider's log, so its

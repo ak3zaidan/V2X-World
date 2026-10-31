@@ -235,6 +235,41 @@ Dated notes go under each id as its wave lands.
   B4 revokes both chains in the first case, and SC-P4's list check covers it after).
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`789f7afa`, track c1), with SC-P2. `report_signing::a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation` passes on the merged tree. Still open: SC-P4 will move the covered/linked split; `LS.MA.linked-by-chain` for wave E.
 
+### SC-P5
+
+- 2026-10-31 (wave C R5, C1): **the receiving MA re-verifies a shared report.** Cause:
+  `shared_report_at_ma` (`run/mod.rs:1761` on `3fcd8a45`) injected the share with
+  `secured: None`, and the forwarding MA's evidence reading travelled as
+  `pending_evidence` (`phase2.rs:7262`), so the deciding MA acted on evidence it never
+  saw. Now the forwarding MA keeps the decrypted inner SPDU (`OpenedReport::signed`,
+  indexed by `MaState::report_opened`), and `ingest_arrivals` re-encrypts it byte for
+  byte to the issuing provider's MA (`mbr::reencrypt_for_ma`, `ScmsRun::reencrypt_report_for`,
+  its own `ma-share` DRBG stream; no `Download-Req` header). `shared_report_at_ma` takes
+  `secured: Option<SecuredReport>` and charges the ciphertext length; the receiving MA's
+  report arm decrypts, verifies the reporter signature and the evidence, labels the
+  subject `shared-report (re-verified)` (read from the certificate itself), and refuses a
+  shared report whose evidence does not verify. `pending_evidence` and
+  `pending_subjects` remain only for modelled reports. The MA-to-MA envelope is
+  `constants.md` `ma_share_envelope` (ASSUMPTION, 09 §6).
+  Tests: `provider_runs::a_shared_report_is_reverified_by_the_receiving_ma` (a flipped
+  evidence-signature byte: one `SecuredMisbehaviorReport` rejection, no report held, no
+  case; intact: opened, subject `Shared` with its issuer, evidence `shared` and verified,
+  link bytes = ciphertext, the case opens) and
+  `scms_providers::the_receiving_ma_opens_every_report_shared_with_it` (Manhattan, same
+  seed with `Phase2::share_unverified_for_test`: `shared.received` 151 / 36 both ways;
+  opened 329 -> 480 and 166 -> 202, exactly + received; 0 refused). Both red with
+  `secured: None` kept on the share.
+  **Found, open:** under `security.crypto_mode: modeled` (the shipped Manhattan
+  scenarios) no evidence verifies at any MA: 514/514 and 262/262 opened reports had
+  `evidence_verified = false` in the first run, because on-air BSM signatures are
+  `v2xw_sec::Modeled` tags and `mbr::verify_evidence` checks real ECDSA. The home MA has
+  always acted on such reports (it records `verified: false` and does not weigh it), so
+  the receiving MA refuses a shared report on its evidence only when the run's signatures
+  are real (`MaState::evidence_signatures_modelled`, set by the engine from
+  `crypto_mode`). Closing it needs the MA to check modelled evidence through the node's
+  modelled backend (C2/D owner, `v2xw-node/src/secure.rs`), or the MA to refuse failed
+  evidence on both paths under real crypto (a G-SCMS move); proposed to the owner.
+
 ### SC-D1
 
 - 2026-10-30 (wave A): fixed in code before this wave (run.rs `on_flow_timer`, 2026-10-27:

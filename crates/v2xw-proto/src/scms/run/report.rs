@@ -571,6 +571,9 @@ impl ScmsState {
                 Self::scalar_mults(out, 1);
                 let mut evidence = None;
                 let mut subject = None;
+                let mut opened_at = None;
+                // A report another provider's MA shared with this one (WP-D1).
+                let shared_in = self.ma.shared_runs.remove(&run);
                 if let (Some(s), Some(pki)) = (r.secured.as_ref(), self.ma_trust.clone()) {
                     // The MA decrypts, checks the reporter's pseudonym signature and the
                     // evidence ([SM-MBR] §3; [5GAA] (263)). A report that fails is
@@ -604,6 +607,26 @@ impl ScmsState {
                             return Ok(());
                         }
                     };
+                    // SC-P5: a shared report is acted on only if its evidence verifies
+                    // here, under this MA's trust view ([SM-MBR] §3: the MA verifies the
+                    // evidence it acts on); the forwarding MA's reading is not taken on
+                    // trust. Under modelled BSM signatures no evidence can verify, so
+                    // the report is recorded as unverified, as this MA's own are.
+                    if shared_in
+                        && !opened.evidence_verified
+                        && !self.ma.evidence_signatures_modelled
+                    {
+                        self.reject_pdu(
+                            SpduKind::SecuredMisbehaviorReport,
+                            to,
+                            at,
+                            crate::scms::pdu::PduError::Shape(
+                                "a shared report's evidence does not verify under the \
+                                 accused certificate",
+                            ),
+                        );
+                        return Ok(());
+                    }
                     evidence = Some(super::ReportEvidence {
                         mbr_type: Some(opened.report.mbr_type.number()),
                         type_name: Some(opened.report.mbr_type.name()),
@@ -614,32 +637,47 @@ impl ScmsState {
                             .map(|s| (s.number(), s.name()))
                             .collect(),
                         verified: Some(opened.evidence_verified),
+                        shared: shared_in,
                         ..super::ReportEvidence::default()
                     });
+                    opened_at = Some(self.ma.opened_reports.len());
                     self.ma.opened_reports.push(opened);
                 }
                 if evidence.is_none() {
-                    // A report another provider's MA shared, or a modelled one: what is
-                    // known of its evidence travels with it (`ScmsRun::shared_report_evidence`,
-                    // `ScmsRun::modelled_report_evidence`).
+                    // A modelled report, or a modelled report another provider's MA
+                    // shared: what is known of its evidence travels with it
+                    // (`ScmsRun::modelled_report_evidence`, `ScmsRun::shared_report_evidence`).
                     evidence = self.ma.pending_evidence.remove(&run);
                 }
-                // The accused certificate: read from the opened report on the real path;
-                // a shared or modelled report has no certificate here, so the subject it
-                // carries is all the MA has (modelled; SC-P5 re-verifies shared reports).
-                let shared = self.ma.pending_subjects.remove(&run);
-                let subject = subject.or(shared).unwrap_or(super::MaReport {
-                    subject_i: r.subject_i,
-                    subject_lv: r.subject_lv,
-                    issuer: None,
-                    cert: None,
-                    from: if evidence.as_ref().is_some_and(|e| e.shared) {
-                        super::SubjectFrom::Shared
-                    } else {
-                        super::SubjectFrom::EngineMap
-                    },
-                });
+                // The accused certificate: read from the opened report on the real path
+                // (a shared real report too, re-verified here, SC-P5); a modelled report
+                // has no certificate here, so the subject it carries is all the MA has.
+                let pending = self.ma.pending_subjects.remove(&run);
+                let subject = subject
+                    .map(|s| {
+                        if shared_in {
+                            super::MaReport {
+                                from: super::SubjectFrom::Shared,
+                                ..s
+                            }
+                        } else {
+                            s
+                        }
+                    })
+                    .or(pending)
+                    .unwrap_or(super::MaReport {
+                        subject_i: r.subject_i,
+                        subject_lv: r.subject_lv,
+                        issuer: None,
+                        cert: None,
+                        from: if shared_in || evidence.as_ref().is_some_and(|e| e.shared) {
+                            super::SubjectFrom::Shared
+                        } else {
+                            super::SubjectFrom::EngineMap
+                        },
+                    });
                 self.ma.report_subjects.push(subject);
+                self.ma.report_opened.push(opened_at);
                 self.ma.reports.push(*r);
                 self.ma.report_arrived.push(at);
                 self.ma.report_evidence.push(evidence);

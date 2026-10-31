@@ -1586,13 +1586,35 @@ rows:
   value: 0
   source: 'SC-P1: the MA reads the accused certificate (linkageData, issuer) from the report it opened
     ([SM-MBR] 3; [CAMP122] 5), never from the engine map: every real report''s ma.received row has
-    subject_from "suspect-certificate", a shared one "shared-report (modelled)"'
+    subject_from "suspect-certificate", a shared one "shared-report (re-verified)" (SC-P5: the receiving
+    MA reads it from the re-encrypted report itself)'
   measured: pending
   verdict: open
   note: 'written 2026-10-31 (wave C, SC-P1.2), predicted 0; the measure counts ma.received rows whose
     subject_from is "engine-map (modelled report)" on a run with modelled_reports off, and needs
     live_scms.py to read the new subject_from column (wave E). In-tree:
     report_signing::a_report_is_decided_without_the_engine_map holds it on Manhattan'
+- id: LS.MA.shared-reverified
+  base: L
+  variant: L
+  area: scms
+  measure: x.ma.shared_refused
+  expect: eq
+  value: 0
+  source: 'SC-P5: a report another provider''s MA shares crosses the MA-to-MA link as the report it
+    opened, re-encrypted to the receiving MA (unpublished envelope, ASSUMPTION in constants.md
+    ma_share_envelope), which decrypts it and verifies the reporter''s signature and the evidence itself
+    ([SM-MBR] 3: the MA verifies the evidence it acts on) and refuses what fails. On an honest city run
+    no shared report is refused, every real shared report is opened at the receiving MA, and
+    p2.reports_shared is unchanged from the pre-SC-P5 path'
+  measured: pending
+  verdict: open
+  note: 'written 2026-10-31 (wave C, SC-P5), predicted 0 refused with opened_reports at the receiving MA
+    = its own real reports + the real shared ones; the measure counts SecuredMisbehaviorReport
+    rejections at an MA on a shared run and needs live_scms.py to read them (wave E). In-tree:
+    provider_runs::a_shared_report_is_reverified_by_the_receiving_ma (a corrupt evidence signature is
+    refused, no case) and scms_providers::the_receiving_ma_opens_every_report_shared_with_it (Manhattan,
+    same seed with and without re-verification)'
 - id: LS.MA.linked-by-chain
   base: L
   variant: L
