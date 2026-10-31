@@ -2204,12 +2204,15 @@ pub struct Phase2 {
     /// reproduce the runs before 2026-09-30).
     stated_accuracy: bool,
     /// Whether the research suite judges a message its receiver refused on the CRL
-    /// (`true`, the default, which reproduces the runs before 2026-10-25;
-    /// `detection.local[].params.judge_revoked: 0` drops it before the suite). A revoked
-    /// sender's BSM has been dropped by the security layer: the suite then scores it a
-    /// failed signature, though the signature verified, and files a report about a device
-    /// already revoked (live-atk §3, `C2M`: 347 `signatureVerification` reports about a
-    /// revoked SlowDrift attacker). The US profile judges only verified BSMs either way.
+    /// (`false`, the default since 2026-10-30, SC-D11;
+    /// `detection.local[].params.judge_revoked: 1` reproduces the runs before). A revoked
+    /// sender's BSM has been dropped by the security layer (IEEE 1609.2 §5.1: a message
+    /// whose signer is on a CRL is not valid, so the application never consumes it), and
+    /// misbehaviour detection reads authenticated, accepted BSMs ([SM-MBR] §2.3). Judged,
+    /// the suite scored it a failed signature, though the signature verified, and filed a
+    /// report about a device already revoked (live-atk F2, `C2M`: 347
+    /// `signatureVerification` reports about a revoked SlowDrift attacker). The US
+    /// profile judges only verified BSMs either way.
     judge_revoked: bool,
     /// Whether each receiver checks a claimed position against its own map of the road
     /// network (`true`, the default; `detection.local[].params.use_map: 0` is a receiver
@@ -2423,7 +2426,8 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
     };
     let mut report_interval = secs(REPORT_INTERVAL_S);
     let mut stated_accuracy = true;
-    let mut judge_revoked = true;
+    // Off by default: a CRL-refused BSM never reaches misbehaviour detection (SC-D11).
+    let mut judge_revoked = false;
     let mut map_check = true;
     let mut us_profile: Option<v2xw_threat::us_mbr::UsMbrParams> = None;
     let mut ts_profile: Option<v2xw_threat::ts103759::Ts103759Params> = None;
