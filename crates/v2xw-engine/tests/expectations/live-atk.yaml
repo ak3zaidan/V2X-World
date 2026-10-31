@@ -85,6 +85,10 @@ runs:
   C3Mf: {scenario: scenarios/live-atk/cat3-m.yaml, note: 'C3M on the fix build'}
   TSU1f: {scenario: scenarios/live-atk/str-randomspeed-u-1p0.yaml, note: 'TSU1p0 on the fix build'}
   TSU3f: {scenario: scenarios/live-atk/str-randomspeed-u-3p0.yaml, note: 'TSU3p0 on the fix build'}
+  # 2026-10-30 (SC-D11): C1M, C2M, C3M, C3U, C3L and C2MJ re-made on an opt-level-2 dev
+  # build of a595d518 (judge_revoked default 0), --record-level events --build-utc
+  # 2026-01-01T00:00:00Z, one per tiny run slot (61-67 s wall, 86-105 MB peak).
+  C1MJ1: {scenario: scenarios/live-atk/cat1-m-jr1.yaml, note: 'C1M with judge_revoked 1 (the old default), same build (SC-D11 attribution)'}
 rows:
 # ---- 0. Attack-free: no attacker, nothing to revoke --------------------------------------
 - id: A0.L.no-attackers
@@ -301,9 +305,10 @@ rows:
   value: 1
   fault: swap-detector
   absent_is_zero: true
-  measured: '2'
-  verdict: pass
   source: 'positionJump is the check designed for RandomPos (detect.rs); with every verdict filed it reaches the MA'
+  measured: '0'
+  verdict: 'wrong-expectation'
+  note: '2026-10-30 (C1M on a595d518): 2 on 486c8cba, 0 now, and 0 with judge_revoked 1 too (C1MJ1), so not SC-D11. F9: ma.report names only the leading check; RandomPos leads with positionSpeedInconsistency (113), headingInconsistency (19) and mapOffRoad (3), and is decided (TTD 0.9 s)'
 
 - id: C.U.Teleport.reported
   base: C1U
@@ -685,10 +690,11 @@ rows:
   value: 1
   fault: swap-detector
   absent_is_zero: true
-  measured: '0'
-  verdict: open
-  note: 'F4: the host passes cert_valid_from 0 / cert_valid_to MAX, and the receiver rule refuses the certificate first, so the suite reports signatureVerification (613 in C2M); certValidity is unreachable'
   source: 'certValidity is the check designed for ExpiredCert (detect.rs); with every verdict filed it reaches the MA'
+  measured: '479'
+  verdict: 'fixed'
+  test: 'security_lifecycle::a_certificate_used_outside_its_validity_is_reported_as_cert_validity'
+  note: 'F4, fixed at 3ae7d414 (the receiver refuses by the generation-time-in-validity rule and the host hands the certificate period to the suite). C2M on a595d518 (2026-10-30): 479; C2Mf on f4982788: 489'
 
 - id: C.U.PosSpeedInconsistent.reported
   base: C2U
@@ -771,10 +777,10 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: 'None'
-  verdict: open
-  note: 'F3: on the release build a Sybil attacker has no onset, so it has no outcome to score; fixed on this branch (SYMb rows), re-run owed'
   source: 'each ghost is a separate certificate whose own consecutive claims are consistent; the profile has no co-location check; the US profile checks only verified BSM pairs: ConstantPosition, RandomPosition |p1 + v1 dt - p2| > 1 m along the first heading, MaxSpeed 90 m/s, MaxAcceleration 10 m/s2 (us_mbr.rs, [SM-MBR] 2.3)'
+  measured: '1'
+  verdict: 'wrong-expectation'
+  note: '2026-10-30 (C3U on a595d518; F3 fixed at 9cdb1639, so the Sybil has an onset): reported and decided through the US RandomPosition check (820 positionJump verdicts, TTD 0.11 s). The prediction missed the jitter: each ghost frame draws a fresh U[-1, 1] m offset in x and y (attack_legacy.rs Sybil ghosts, sybil_jitter_m 1, F2MD sr.uniform(-1, 1)), so one ghost certificate''s consecutive claims move up to 2.8 m off its own kinematics, over the 1 m US bound'
 
 - id: C.L.Sybil.decided
   base: C3L
@@ -784,10 +790,10 @@ rows:
   expect: eq
   value: 0
   fault: all-caught
-  measured: 'None'
-  verdict: open
-  note: 'F3, as C.U.Sybil.reported'
   source: 'sybilCoLocation has no subtype (a US device files only what SM-MBR v1.1 encodes, OF-2; the corroborated MA needs 3 events x 2 reporters in 60 s)'
+  measured: '0'
+  verdict: 'pass'
+  note: '2026-10-30 (C3L on a595d518; F3 fixed at 9cdb1639): the Sybil has an onset and is reported (TTD 1.9 s), and the corroborated MA does not decide it'
 
 - id: C.M.Sybil.sybilCoLocation
   base: C3M
@@ -835,10 +841,11 @@ rows:
   value: 1
   fault: swap-detector
   absent_is_zero: true
-  measured: '0'
-  verdict: open
-  note: 'F4, as C.M.ExpiredCert.certValidity'
   source: 'certValidity is the check designed for NotYetValid (detect.rs); with every verdict filed it reaches the MA'
+  measured: '554'
+  verdict: 'fixed'
+  test: 'security_lifecycle::a_certificate_used_outside_its_validity_is_reported_as_cert_validity'
+  note: 'F4, as C.M.ExpiredCert.certValidity. C3M on a595d518 (2026-10-30): 554; C3Mf on f4982788: 549'
 
 - id: C.U.OutOfOrder.reported
   base: C3U
@@ -969,10 +976,11 @@ rows:
   expect: eq
   value: 0
   fault: crossfire
-  measured: '974'
-  verdict: open
-  note: 'F2: CRL-refused BSMs of revoked attackers scored as failed signatures; judge_revoked: 0 (this branch) drops them, JR rows'
   source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+  measured: '0'
+  verdict: 'fixed'
+  test: 'security_lifecycle::a_crl_refused_bsm_is_not_judged_by_default'
+  note: 'F2, fixed 2026-10-30 (SC-D11, a595d518): judge_revoked defaults to 0, so a CRL-refused BSM is not judged. C1M on that build 974 -> 0; the same build with judge_revoked 1 (C1MJ1, scenarios/live-atk/cat1-m-jr1.yaml) 976, so the change is the cause; 6 decided either way'
 
 - id: C1M.crossfire.certValidity
   base: C1M
@@ -1054,10 +1062,11 @@ rows:
   expect: eq
   value: 0
   fault: crossfire
-  measured: '1244'
-  verdict: open
-  note: 'F2 (and F4: 613 about ExpiredCert)'
   source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+  measured: '0'
+  verdict: 'fixed'
+  test: 'security_lifecycle::a_crl_refused_bsm_is_not_judged_by_default'
+  note: 'F2 and F4, fixed: F4 (3ae7d414) removed the 613 ExpiredCert reports, SC-D11 (a595d518, judge_revoked default 0) the CRL-refused ones. C2M on a595d518: 0; its content digest equals C2MJ''s (judge_revoked 0) on the same build, cc653801'
 
 - id: C2M.crossfire.certValidity
   base: C2M
@@ -1139,10 +1148,11 @@ rows:
   expect: eq
   value: 0
   fault: crossfire
-  measured: '2699'
-  verdict: open
-  note: 'F2'
   source: 'signatureVerification fires only on the types it is built for (signature: InvalidSignature; certificate: ExpiredCert, NotYetValid; Sybil; stale/replay: the replay and timing types and the frozen-position types whose claim repeats)'
+  measured: '0'
+  verdict: 'fixed'
+  test: 'security_lifecycle::a_crl_refused_bsm_is_not_judged_by_default'
+  note: 'F2, fixed 2026-10-30 (SC-D11, a595d518): 2,699 -> 0 on that build'
 
 - id: C3M.crossfire.certValidity
   base: C3M
@@ -1794,10 +1804,11 @@ rows:
   value: 1
   fault: detector-blind
   absent_is_zero: true
-  measured: '0'
-  verdict: open
-  note: 'F5: RandomSpeed ignores intensity (reads magnitude_scale only); the draws stayed under 40 m/s, so the run did not test 120 m/s'
   source: 'intensity 3 draws up to 120 m/s: a quarter of the draws are over 90 m/s'
+  measured: '1781 (TSU3f: TSU3p0 on f4982788, which carries F5)'
+  verdict: 'fixed'
+  test: 'attacks::the_intensity_dial_scales_the_speed_lies_too'
+  note: 'F5, fixed at 3ae7d414: k = intensity x magnitude_scale scales the RandomSpeed lie (attack_legacy.rs); at intensity 3, implausibleSpeed fired 1,781 times (F5.maxspeed-at-k3)'
 
 - id: TSU.maxaccel
   base: TSU1p0
@@ -2129,10 +2140,10 @@ rows:
   expect: eq
   value: 0
   fault: crossfire
-  measured: '618'
-  verdict: open
-  note: '2026-10-26: all 618 are about the ExpiredCert attacker, i.e. F4, not F2 (judge_revoked 0 removed every CRL-refused one). Fixed by the F4 change on the branch, not yet run on a build of it'
   source: 'with CRL-refused BSMs not judged, no attacker that signs validly is reported for a bad signature'
+  measured: '0'
+  verdict: 'pass'
+  note: '2026-10-30 (C2MJ on a595d518, which carries F4): 0. The 618 of 10-26 were the ExpiredCert attacker (F4, fixed at 3ae7d414)'
 
 - id: JR.fewer-reports
   base: C2Mb

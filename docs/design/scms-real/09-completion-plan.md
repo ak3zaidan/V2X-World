@@ -109,3 +109,26 @@ relabels of rule-gap-specs §3).
 ## 7. Status
 
 Dated notes go under each id as its wave lands.
+
+### SC-D11
+
+- 2026-10-30 (wave A, `a595d518`, golden `a79c3ef4`): **CRL refusals scored as signature
+  failures, fixed.** Cause: `detection_params` defaulted `judge_revoked` to true and the
+  research host maps `Revoked` to `UnknownCertificate`, which the suite scores as
+  `signatureVerification`. Default now 0 (IEEE 1609.2: a revoked signer's message is not
+  valid and never reaches the application; SM-MBR detection reads accepted BSMs);
+  `judge_revoked: 1` reproduces the old runs. Test
+  `security_lifecycle::a_crl_refused_bsm_is_not_judged_by_default`, red with the default
+  put back (664 signature verdicts). Runs on that build: C1M/C2M/C3M cross-fire 974 /
+  1,244 / 2,699 -> 0; C1M with `judge_revoked: 1` 976; C2M's digest equals C2MJ's.
+  phase2-path record digest moved (8c8c8e56 -> 11561088), attributed by the old default
+  reproducing the old digest.
+- The other three were already fixed in code and are now re-measured: Sybil onset
+  (`9cdb1639`; C3L reported, not decided; C3U decided through RandomPosition, a wrong
+  expectation: ghost jitter is redrawn per frame), RandomSpeed intensity (`3ae7d414`,
+  1,781 implausibleSpeed at k = 3), the expired-certificate host (`3ae7d414`; certValidity
+  479 / 554 under M). C.M.RandomPos.positionJump moved 2 -> 0 between builds; not SC-D11
+  (0 with the old default too); a lead-check reading (F9).
+- Left: F4.B0L.untouched and F5.k1-untouched need a one-commit binary pair (both
+  unchanged by construction: `signer_validity` is set only for an attacker's out-of-window
+  frame, and `k = 1.0 x scale` equals `scale` exactly, so the branch is the old one).
