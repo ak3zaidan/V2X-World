@@ -172,17 +172,19 @@ rows:
   check: each component's pki.state `cert` equals the certificate its counters name (`counters.certificate`) at t0, before any rollover
   source: one component has one certificate (the chain file lists the certificate that signs, [SMP] §6.1); the Studio shows both
   expect: equal for every component with both
-  measured: 'A FAIL: 8 with both; differ: 4 provider-a/eca provider-a/aca provider-b/eca provider-b/aca | B FAIL: 8 with both; differ: 4 provider-a/eca provider-a/aca provider-b/eca provider-b/aca'
-  verdict: open
-  note: 'ECA and ACA carry a PDU-layer certificate (signs) and a governance one (chain files, rollover); audit-gov.md §4 item 1'
+  measured: 'conf on a595d518 (2026-10-30): 8 with both; differ: 0'
+  verdict: 'fixed'
+  test: 'provider_runs::every_component_signs_with_the_certificate_its_chain_file_lists'
+  note: 'Fixed at dc0c0250: the PDU-layer PKI is the governance''s own certificates and keys (Governance::pdu_pki, ScmsPki::of_governance), so the certificate that signs on the wire is the one the chain file lists and a rollover re-certifies. Re-measured on scenarios/scms-conformance.yaml (opt-level-2 dev build, --record-level events): every ECA and ACA of both providers names one certificate'
 - id: GOV.L.counters
   area: metrics
   check: pki.state root and ICA counters.certs_issued at t0 against the certificates in pki.state each signed (self-signature counted for the root), allowing the components with no recorded certificate (the PG, the CRL Store)
   source: metric integrity (per provider)
   expect: observed <= certs_issued <= observed + unrecorded, per provider
-  measured: 'A FAIL: provider-a/root 9 (records 4+3), provider-a/ica 14 (records 6+3), provider-b/root 0 (records 3+4), provider-b/ica 0 (records 7+4) | B FAIL: provider-a/root 5 (records 4+3), provider-a/ica 8 (records 6+3), provider-b/root 4 (records 3+4), provider-b/ica 6 (records 7+4)'
-  verdict: open
-  note: 'partly fixed (the cross-provider count; test: provider_runs each_providers_root_and_ica_count_their_own_certificates). Left: provider-b ICA 6 against 7 recorded, the GOV.L.onecert duality (audit-gov.md §4 item 1)'
+  measured: 'conf on 4f5bd447 (2026-10-30): provider-a/root 5 (records 4+3), provider-a/ica 8 (records 6+3), provider-b/root 4 (records 3+3), provider-b/ica 8 (records 8+3)'
+  verdict: 'fixed'
+  test: 'provider_runs::each_providers_root_and_ica_count_their_own_certificates'
+  note: 'SC-D12, fixed at d65cf1c4: provider-b''s second ACA (aca-1) is issued by the PDU layer under its ICA (ScmsPki::issue_aca_instance) outside the governance set Governance::rehome counts, so its ICA read 7 against 8 recorded; ScmsRun::new_peer now adds ScmsPki::aca_instances() (Governance::note_ica_issued). The cross-provider count was fixed earlier (the 9/14 and 0/0 readings). The row''s fault turns it red (provider-b/root 99)'
 - id: GOV.D1.acas
   area: spec
   check: provider-b runs two ACAs and each holds a certificate (SAESOL publishes two aca certificates in both chain files)

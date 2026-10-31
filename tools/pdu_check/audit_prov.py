@@ -117,7 +117,9 @@ def derive(R):
     # a plain (non-butterfly) request. Pre-run: an RSU's requests are those of a device that
     # never receives pseudonym PLVs. Identify RSUs from the in-run app-cert flow.
     D.rsus = {q['from'] for q in R.msgs if q['flow'] == 'rsu-application-cert' and q['name'] == 'app-cert-request'}
-    D.vehicles = set(R.creds) - D.rsus
+    # A unit's own node.credentials rows (device `rsu/<node>`, since 2026-10-30) carry its
+    # application certificates; they are not vehicles.
+    D.vehicles = {d for d in R.creds if not d.startswith('rsu/')} - D.rsus
     D.by_inst = collections.defaultdict(list)
     for q in R.msgs + R.stages:
         D.by_inst[q['instance']].append(q)
@@ -775,6 +777,18 @@ def _mut_cert(R, fn):
                     return
 
 
+def _mut_rsu_cert(R):
+    """Re-encode one RSU application certificate (series 3, 169 h) as 168 h."""
+    for k, h in sorted(R.certs.items()):
+        c = coer.decode('Certificate', bytes.fromhex(h))
+        tb = c['toBeSigned']
+        du = tb['validityPeriod']['duration']
+        if tb.get('crlSeries') == 3 and du[0] == 'hours' and du[1] == 169:
+            tb['validityPeriod']['duration'] = type(du)(('hours', 168))
+            R.certs[k] = coer.encode('Certificate', c).hex()
+            return
+
+
 def _bump(d, k, by=1):
     d[k] += by
 
@@ -804,7 +818,7 @@ FAULTS = {
     'PV.download-after-ready': lambda R, D: _first(R.msgs, lambda q: q['name'] == 'batch-download-request' and q['flow'] == 'topup').__setitem__('t', 1 * NS),
     'PV.topup-conservation': lambda R, D: R.stages.append(dict(_first(R.stages, lambda s: s['flow'] == 'topup' and s['name'] == 'installed'), instance='x/topup/dup', t=1)),
     'PV.rsu-renewal': lambda R, D: R.msgs.append(dict(_first(R.msgs, lambda q: q['name'] == 'app-cert-request'))),
-    'PV.rsu-cert': None,              # red on the real records (no series-3 certificate recorded)
+    'PV.rsu-cert': lambda R, D: _mut_rsu_cert(R),
     'PV.m.topups': lambda R, D: _bump(R.report, 'certs_topped_up'),
     'PV.m.topup-latency': lambda R, D: _bump(R.report['access']['exchange_latency']['topup'], 'sum_ns', NS),
     'PV.m.rsu-app-certs': lambda R, D: _bump(R.report, 'rsu_app_certs_renewed'),

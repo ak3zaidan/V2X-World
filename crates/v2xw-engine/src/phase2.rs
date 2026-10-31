@@ -732,6 +732,13 @@ struct RsuCycle {
     starved: bool,
     starved_since: Option<SimTime>,
     starved_last: SimTime,
+    /// The digest of the unit's last `node.credentials` record (0: none yet).
+    cred_digest: u64,
+    /// The application certificates a `node.credentials` record already carried.
+    certs_carried: std::collections::BTreeSet<[u8; 8]>,
+    /// The application certificates the unit has signed with (each one active in a
+    /// record): the row's `history`, as a vehicle's pseudonyms are.
+    certs_used: std::collections::BTreeSet<[u8; 8]>,
 }
 
 /// One roadside unit the scenario declared.
@@ -1526,6 +1533,10 @@ struct NodeSec {
     /// ones its poll in flight asked for: a re-issue with no new entry is fetched too.
     crl_serial: u64,
     crl_serial_asked: u64,
+    /// The publication count (summed over the providers' lists, re-issues included) of the
+    /// composite CRL this vehicle holds whole: its `node.security` `crl_version`. Read by
+    /// the record only (SC-D14: the record carried `crl_version`, the entry count).
+    crl_held_serial: u64,
     /// It joined holding a list newer than the `t0` ones (R-JOINCRL), fetched on its RA
     /// connection before it was switched on.
     crl_at_join: bool,
@@ -2204,12 +2215,15 @@ pub struct Phase2 {
     /// reproduce the runs before 2026-09-30).
     stated_accuracy: bool,
     /// Whether the research suite judges a message its receiver refused on the CRL
-    /// (`true`, the default, which reproduces the runs before 2026-10-25;
-    /// `detection.local[].params.judge_revoked: 0` drops it before the suite). A revoked
-    /// sender's BSM has been dropped by the security layer: the suite then scores it a
-    /// failed signature, though the signature verified, and files a report about a device
-    /// already revoked (live-atk §3, `C2M`: 347 `signatureVerification` reports about a
-    /// revoked SlowDrift attacker). The US profile judges only verified BSMs either way.
+    /// (`false`, the default since 2026-10-30, SC-D11;
+    /// `detection.local[].params.judge_revoked: 1` reproduces the runs before). A revoked
+    /// sender's BSM has been dropped by the security layer (IEEE 1609.2 §5.1: a message
+    /// whose signer is on a CRL is not valid, so the application never consumes it), and
+    /// misbehaviour detection reads authenticated, accepted BSMs ([SM-MBR] §2.3). Judged,
+    /// the suite scored it a failed signature, though the signature verified, and filed a
+    /// report about a device already revoked (live-atk F2, `C2M`: 347
+    /// `signatureVerification` reports about a revoked SlowDrift attacker). The US
+    /// profile judges only verified BSMs either way.
     judge_revoked: bool,
     /// Whether each receiver checks a claimed position against its own map of the road
     /// network (`true`, the default; `detection.local[].params.use_map: 0` is a receiver
@@ -2423,7 +2437,8 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
     };
     let mut report_interval = secs(REPORT_INTERVAL_S);
     let mut stated_accuracy = true;
-    let mut judge_revoked = true;
+    // Off by default: a CRL-refused BSM never reaches misbehaviour detection (SC-D11).
+    let mut judge_revoked = false;
     let mut map_check = true;
     let mut us_profile: Option<v2xw_threat::us_mbr::UsMbrParams> = None;
     let mut ts_profile: Option<v2xw_threat::ts103759::Ts103759Params> = None;
@@ -3452,6 +3467,111 @@ impl Phase2 {
             out.push((node, creds));
         }
         out
+    }
+
+    /// `node.credentials` for roadside unit `node` (audit-prov PV.rsu-cert, SC-D13): the
+    /// application certificates its provider issued it, one cell per i-period (`j` 0),
+    /// each certificate's bytes the first time a record carries it, written when the set
+    /// or a state changes. `device` is `rsu/<node>`, so a reader keeps units apart from
+    /// vehicles. `None` when the PKI view is off, under ETSI, or nothing changed. Before,
+    /// no record carried a unit's certificate: the response is sealed to the unit and
+    /// recorded without its plaintext, and `node.credentials` was vehicles only.
+    pub fn rsu_credentials(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+    ) -> Option<v2xw_proto::scms::pki_view::NodeCredentials> {
+        use v2xw_proto::scms::pki_view::{CredCell, NodeCredentials, PKI_VIEW_SCHEMA};
+        if self.etsi.is_some() || self.pki.is_none() || !self.rsu_cycle.contains_key(&node) {
+            return None;
+        }
+        let device = device_of(node);
+        let run = self.run_of(device);
+        let installed = run.app_installed(device);
+        if installed.is_empty() {
+            return None;
+        }
+        let current_i = run.state.params.period_at(now);
+        let provider = v2xw_proto::scms::pki_view::provider_label(run);
+        let cycle = self.rsu_cycle.get(&node)?;
+        let mut held = Vec::with_capacity(installed.len());
+        for c in installed {
+            let Ok(id8) = v2xw_sec::sig1609::cert_hashed_id8(&c.cred.cert) else {
+                continue;
+            };
+            // The certificate of the current i-period signs now: `active`, as a
+            // vehicle's pseudonym in use (the `node.credentials` contract: `active` is
+            // marked in the grid and in the history).
+            let state = if now < c.from {
+                "downloaded"
+            } else if now >= c.until {
+                "expired"
+            } else if c.cred.period == current_i {
+                "active"
+            } else {
+                "valid"
+            };
+            // The bytes only of a certificate no record has carried yet.
+            let coer = (!cycle.certs_carried.contains(&id8))
+                .then(|| v2xw_sec::cert::canonical_coer(&c.cred.cert).ok())
+                .flatten();
+            held.push((c.cred.period, id8, state, coer));
+        }
+        let mut b = Vec::with_capacity(32 + held.len() * 24);
+        b.extend_from_slice(b"v2xw/rsu.credentials/1");
+        b.extend_from_slice(&current_i.to_be_bytes());
+        for (i, id8, state, _) in &held {
+            b.extend_from_slice(&i.to_be_bytes());
+            b.extend_from_slice(id8);
+            b.extend_from_slice(state.as_bytes());
+        }
+        let d = v2xw_core::hash::sha256(&b);
+        let digest = u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]]).max(1);
+        if cycle.cred_digest == digest {
+            return None;
+        }
+        let hex = |b: &[u8]| v2xw_core::hash::hex_encode(b);
+        let mut certificates = BTreeMap::new();
+        let mut cells = Vec::with_capacity(held.len());
+        let mut active = None;
+        let c = self.rsu_cycle.get_mut(&node)?;
+        c.cred_digest = digest;
+        for (i, id8, state, coer) in held {
+            if let Some(coer) = coer {
+                c.certs_carried.insert(id8);
+                certificates.insert(hex(&id8), hex(&coer));
+            }
+            if state == "active" {
+                active = Some(hex(&id8));
+                c.certs_used.insert(id8);
+            }
+            cells.push(CredCell {
+                i,
+                j: 0,
+                state: state.to_string(),
+                id8: Some(hex(&id8)),
+                used: c.certs_used.contains(&id8),
+            });
+        }
+        let history = c.certs_used.iter().map(|d| hex(d)).collect();
+        Some(NodeCredentials {
+            schema: PKI_VIEW_SCHEMA,
+            t: now,
+            node: node.index(),
+            device: format!("rsu/{}", node.index()),
+            provider,
+            enrolled: true,
+            enrolment: None,
+            current_i,
+            jmax: 1,
+            active,
+            cells,
+            history,
+            ctl_sequence: None,
+            revoked: false,
+            certificates,
+            departed: false,
+        })
     }
 
     /// Counts certificates a roadside unit refused to install.
@@ -7971,6 +8091,9 @@ impl Phase2 {
         Vec<crate::sec_records::ProtoRevocation>,
     ) {
         let records = Vec::new();
+        // What the vehicle's RA serves now (version, publication count), so a list held
+        // whole is named by its publication count (`NodeSec::crl_held_serial`).
+        let served = (self.crl_version_for(node), self.crl_serial_for(node));
         // WP-C2: with the PDU layer on, the vehicle verified the signed CRL itself
         // (`ObuRuntime::install_secured_crl`) before this is called, and refused a frame
         // carrying an entry the CRL does not sign. Only the modelled path (PDU layer off:
@@ -8001,6 +8124,14 @@ impl Phase2 {
         n.crl_installed.extend(fresh.iter().cloned());
         if n.crl_installed.len() >= version as usize {
             n.crl_version = n.crl_version.max(version);
+            // The list it holds is the one its RA serves when the versions agree; else
+            // (a roadside copy behind the RA) the one its own fetch or join named.
+            let held = if served.0 == version {
+                served.1
+            } else {
+                n.crl_serial
+            };
+            n.crl_held_serial = n.crl_held_serial.max(held);
         }
         let size = u64::from(crl_bytes(&self.home().state.sizes, version).bytes());
         self.report.crls_installed += fresh.len() as u64;
@@ -8296,11 +8427,19 @@ impl Phase2 {
             outbox_reports: n.outbox.0.len() as u32,
             reports_uploaded: n.reports_uploaded,
             crl_entries,
-            crl_version: n.crl_version,
+            crl_version: Self::record_crl_version(n),
             self_revoked: n.self_revoked,
             // The node's own store holds them (`Engine::emit_node_security`).
             crls: Vec::new(),
         })
+    }
+
+    /// The `crl_version` of a vehicle's `node.security` row: the publication count of the
+    /// composite CRL it holds whole ([`NodeSec::crl_held_serial`]), as `pki.state`'s CRL
+    /// heads count versions. It was the list's entry count, so a re-issue at `nextCrl`
+    /// read as no new version and an empty list as version 0 (SC-D14; measure.md OF-3).
+    fn record_crl_version(n: &NodeSec) -> u32 {
+        u32::try_from(n.crl_held_serial).unwrap_or(u32::MAX)
     }
 
     /// Notes that the roadside put a CRL frame on the air.
@@ -9843,6 +9982,74 @@ mod join_crl_tests {
         assert_eq!(
             p.nodes[&early].crl_serial, s0,
             "an earlier joiner is untouched"
+        );
+    }
+}
+
+#[cfg(test)]
+mod crl_record_tests {
+    use super::*;
+
+    /// SC-D14: a vehicle's `node.security` `crl_version` is the publication count of the
+    /// composite CRL it holds (the `t0` lists of both providers, then provider 0's next
+    /// publication), not the list's entry count. Fault: `record_crl_version` back to
+    /// `n.crl_version` reads 1 (one entry) for the late joiner.
+    #[test]
+    fn the_security_record_names_the_crl_publication_the_vehicle_holds() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        let serial = |p: &Phase2, k: usize| p.runs[k].state.crl_store.versions;
+        let (a0, b0) = (serial(&p, 0), serial(&p, 1));
+        for (k, v, at, ser) in [(1, 0u32, 0, b0), (0, 0, 0, a0)] {
+            p.crl_feeds[k].push(CrlVersion {
+                at,
+                version: v,
+                entries: Vec::new(),
+                secured: Vec::new(),
+                serial: ser,
+            });
+        }
+        let early = NodeId::new(9_001);
+        p.nodes.insert(early, NodeSec::default());
+        let (v, e, _) = p.prerun_crl(early, 0).expect("the t0 lists");
+        let _ = p.install_crl(early, v, &e, 0, false, true);
+        let t0 = u32::try_from(p.nodes[&early].crl_held_serial).expect("small");
+        assert!(t0 >= 1, "the t0 lists are publications ({t0})");
+        assert_eq!(Phase2::record_crl_version(&p.nodes[&early]), t0);
+        let device = v2xw_sec::linkage::DeviceLinkageContext::new(
+            v2xw_sec::linkage::LaId(1),
+            v2xw_sec::linkage::LaId(2),
+            v2xw_sec::linkage::LinkageSeed::new([7; 16]),
+            v2xw_sec::linkage::LinkageSeed::new([9; 16]),
+        );
+        let entry = CrlLinkageEntry::from_device(&device, 615, v2xw_sec::linkage::DEFAULT_JMAX);
+        let published: SimTime = 191_400_000_000_000;
+        p.crl_feeds[0].push(CrlVersion {
+            at: published,
+            version: 1,
+            entries: vec![entry],
+            secured: Vec::new(),
+            serial: a0 + 1,
+        });
+        p.backend_now = published + 3_600_000_000_000;
+        let late = NodeId::new(9_002);
+        p.nodes.insert(late, NodeSec::default());
+        let now = p.backend_now;
+        let (v, e, _) = p.prerun_crl(late, now).expect("the lists its RA serves");
+        let _ = p.install_crl(late, v, &e, now, false, true);
+        assert_eq!(
+            Phase2::record_crl_version(&p.nodes[&late]),
+            a0 + 1 + b0,
+            "the record names the publication it holds, not its one entry"
         );
     }
 }

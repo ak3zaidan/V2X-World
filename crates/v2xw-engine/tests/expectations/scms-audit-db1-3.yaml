@@ -156,11 +156,10 @@ rows:
   value: 0
   source: once a receiver holds a validated pseudonym certificate, later digest-signed SPDUs of it verify
     (R16) while it is cached (4,096 entries, no eviction expected at this fleet)
-  measured: '1'
-  verdict: open
-  note: 'one case in 37,295 digest BSMs: receiver 96 validated vehicle 82''s pseudonym from a relayed
-    over-the-air MBR (EE cache) but the peer certificate store learns only from awareness frames, so 82''s
-    next digest BSM was unverified (audit O-2)'
+  measured: '0'
+  verdict: 'fixed'
+  test: 'rx_validation::a_vehicle_discards_an_overheard_relayed_report_unverified'
+  note: 'O-2 and O-3, fixed at eaf1260f: a vehicle discards an overheard relayed MBR (PSID 0x26, no application registered; IEEE 1609.3 WSMP) before the security services see it, so it neither verifies it nor caches its signer from it. A re-made 2026-10-30 on an opt-level-2 dev build of a595d518 (88 s, 143 MB): 0 of the digest BSMs; the row''s fault (cached) turns it red (2,502)'
 - id: OA.RX.ee-validations
   base: A
   variant: A

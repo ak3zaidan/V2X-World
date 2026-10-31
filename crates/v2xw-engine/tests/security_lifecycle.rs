@@ -1358,18 +1358,19 @@ fn a_relayed_report_is_uploaded_only_once_a_unit_takes_it() {
     );
 }
 
-/// `detection.local[].params.judge_revoked: 0`: a BSM its receiver refused on the CRL is
-/// not judged by the research suite. Judged (the default), it scores as a failed signature
-/// though its signature verified, and the receiver keeps reporting a device the SCMS has
-/// already revoked (live-atk 2026-10-25 §3: 347 `signatureVerification` reports about a
-/// revoked SlowDrift attacker in one 150 s run). The MA's decisions do not move: the
-/// research suite's reports about a revoked device carry no SM-MBR subtype and are not
-/// filed.
+/// A BSM its receiver refused on the CRL is not judged by the research suite (the default
+/// since 2026-10-30, SC-D11; `detection.local[].params.judge_revoked: 1` restores the old
+/// scoring). Judged, it scored as a failed signature though its signature verified, and
+/// the receiver kept reporting a device the SCMS had already revoked (live-atk 2026-10-25
+/// F2: 347 `signatureVerification` reports about a revoked SlowDrift attacker in one 150 s
+/// run). The MA's decisions do not move: the research suite's reports about a revoked
+/// device carry no SM-MBR subtype and are not filed.
 ///
-/// Fault injected (and reverted): the host's `judge_revoked` skip removed makes the third
-/// assertion fail (the flag-off run still scores CRL-refused frames).
+/// Faults injected (and reverted): the host's `judge_revoked` skip removed makes the
+/// default-run assertion fail (CRL-refused frames scored), and the default put back to
+/// `true` (phase2.rs `detection_params`) fails it too.
 #[test]
-fn a_crl_refused_bsm_is_not_judged_when_judge_revoked_is_off() {
+fn a_crl_refused_bsm_is_not_judged_by_default() {
     let base = |judge: Option<f64>| {
         let mut s = Scenario::load(scenarios().join("live-atk/share-constpos-l-10.yaml"))
             .expect("the live-atk scenario loads");
@@ -1395,8 +1396,8 @@ fn a_crl_refused_bsm_is_not_judged_when_judge_revoked_is_off() {
             .copied()
             .unwrap_or(0)
     };
-    let (on, _) = run(base(None));
-    let (off, _) = run(base(Some(0.0)));
+    let (on, _) = run(base(Some(1.0)));
+    let (off, _) = run(base(None));
     println!(
         "judged: {} CRL refusals, {} signature verdicts, {} revoked; not judged: {} \
          refusals, {} signature verdicts, {} revoked",
@@ -1413,12 +1414,12 @@ fn a_crl_refused_bsm_is_not_judged_when_judge_revoked_is_off() {
     );
     assert!(
         sig(&on) > 0,
-        "the default must still judge CRL-refused frames (the runs before 2026-10-25)"
+        "judge_revoked 1 must still judge CRL-refused frames (the runs before 2026-10-30)"
     );
     assert_eq!(
         sig(&off),
         0,
-        "a CRL-refused frame was judged with judge_revoked 0"
+        "a CRL-refused frame was judged under the default"
     );
     assert_eq!(off.phase2.revoked_attackers, on.phase2.revoked_attackers);
     assert_eq!(off.phase2.revoked_honest, 0);

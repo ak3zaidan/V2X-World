@@ -396,7 +396,10 @@ fn an_enrolment_certificate_names_the_provider_whose_eca_issued_it() {
 /// its ICA the ECA, PCA, RA, both LAs, the DCM and the ICA-issued CRL signer. Fault (the
 /// first form): the home view counted every provider's (9 and 14 at t0) and provider-b's
 /// none (0). Provider-b's ICA count was 6 while its records showed 7: the DCM that signs
-/// its enrolment traffic had a PDU-layer certificate only (GOV.L.onecert).
+/// its enrolment traffic had a PDU-layer certificate only (GOV.L.onecert). It was then 7
+/// against 8 (SC-D12): its second ACA (`aca-1`, SAESOL's two published ACA certificates)
+/// is issued by the PDU layer under the same ICA and was not counted. Fault: the count in
+/// `ScmsRun::new_peer` removed makes the ICA assertion read 7.
 #[test]
 fn each_providers_root_and_ica_count_their_own_certificates() {
     let (home, peer) = runs();
@@ -409,10 +412,17 @@ fn each_providers_root_and_ica_count_their_own_certificates() {
         p.root_certs_issued, 4,
         "provider-b's root: itself, ICA, PG, MA"
     );
+    let extra = peer.state.pki.as_ref().map_or(0, |k| k.aca_instances());
     assert_eq!(
-        p.ica_certs_issued, 7,
-        "provider-b's ICA: ECA, PCA, RA, LA1, LA2, DCM, CRLG"
+        extra, 1,
+        "provider-b runs a second ACA with its own certificate"
     );
+    assert_eq!(
+        p.ica_certs_issued, 8,
+        "provider-b's ICA: ECA, PCA, RA, LA1, LA2, DCM, CRLG and the second ACA"
+    );
+    // The home provider runs one ACA: nothing beside its governance set.
+    assert_eq!(home.state.pki.as_ref().map_or(0, |k| k.aca_instances()), 0);
 }
 
 /// The PDU-layer components of `run`'s provider, by governance role.

@@ -111,7 +111,7 @@ The loader refuses:
 
 | Knob | Path | Keys |
 |---|---|---|
-| Detector suite and thresholds | `detection.local[].params` | `consistency_threshold_m`, `heading_threshold_deg`, `detector_lag_s`, `z_threshold`, `min_consecutive`, `sybil_min_certs`, `sybil_cell_m`, `art_max_m`, `max_accel_mps2`, `stale_max_s`, the `heading_*` keys, `offroad_confidence_bound`; host keys `report_interval_s` (the per-subject report rate limit, 1 s), `use_stated_accuracy`, `use_map` |
+| Detector suite and thresholds | `detection.local[].params` | `consistency_threshold_m`, `heading_threshold_deg`, `detector_lag_s`, `z_threshold`, `min_consecutive`, `sybil_min_certs`, `sybil_cell_m`, `art_max_m`, `max_accel_mps2`, `stale_max_s`, the `heading_*` keys, `offroad_confidence_bound`; host keys `report_interval_s` (the per-subject report rate limit, 1 s), `use_stated_accuracy`, `use_map`, `judge_revoked` (0 or 1, default 0: whether the research suite judges a BSM its receiver refused on the CRL; 1 reproduces the runs before 2026-10-30) |
 | MA corroboration | `detection.ma.params` (`threat/ma/corroborated`) | `event_window_s`, `event_min_reporters`, `min_events`, `window_s`, `min_reporters`, `defence`, `reputation_max`, `report_budget` |
 | Legacy MA | `detection.ma.params` (`threat/ma/legacy-window`) | `report_threshold_k`, `revoke_min_seconds`, `revoke_persist_s`, `revoke_window_s`, `defence`, `reputation_max`, `report_budget` |
 

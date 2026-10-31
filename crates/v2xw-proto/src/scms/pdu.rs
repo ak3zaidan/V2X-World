@@ -1217,6 +1217,16 @@ impl ScmsPki {
         Ok(self.extra.len() - 1)
     }
 
+    /// How many further ACA instances ([`ScmsPki::issue_aca_instance`]) this PKI holds:
+    /// certificates its ICA signed beside the governance's own set.
+    #[must_use]
+    pub fn aca_instances(&self) -> usize {
+        self.extra
+            .iter()
+            .filter(|a| a.name.starts_with("aca-"))
+            .count()
+    }
+
     /// The ACA that signs at instance `inst`: the core one at 0, else its
     /// [`ScmsPki::issue_aca_instance`] certificate (the core one when none was issued).
     pub fn aca_at(&self, inst: u32) -> &Authority {

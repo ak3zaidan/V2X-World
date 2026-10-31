@@ -4204,7 +4204,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                than offroad_tol_m (15 m) beyond the carriageway edge is off the road; \
                use_map: 0 is a receiver with no map, offroad_confidence_bound: 0 the \
                legacy check on the point. A PSM sender is checked as a vulnerable road \
-               user (no vehicle kinematic or map check). params \
+               user (no vehicle kinematic or map check). A BSM its receiver refused on \
+               the CRL is not judged (judge_revoked: 1 scores it as a failed signature, \
+               the runs before 2026-10-30). params \
                override the suite's thresholds by name (consistency_threshold_m, \
                heading_threshold_deg, detector_lag_s, z_threshold, min_consecutive, \
                sybil_min_certs, art_max_m, max_accel_mps2, stale_max_s, …) and \
