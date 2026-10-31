@@ -129,9 +129,10 @@ Dated notes go under each id as its wave lands.
   1,781 implausibleSpeed at k = 3), the expired-certificate host (`3ae7d414`; certValidity
   479 / 554 under M). C.M.RandomPos.positionJump moved 2 -> 0 between builds; not SC-D11
   (0 with the old default too); a lead-check reading (F9).
-- Left: F4.B0L.untouched and F5.k1-untouched need a one-commit binary pair (both
-  unchanged by construction: `signer_validity` is set only for an attacker's out-of-window
-  frame, and `k = 1.0 x scale` equals `scale` exactly, so the branch is the old one).
+- F4.B0L.untouched and F5.k1-untouched: the one-commit pair (`3ae7d414^` against
+  `3ae7d414`, each tree built and run on its own) gives identical B0L and TSU1p0 digests;
+  the control C2M differs (716ff763 -> 5a41b1a5). Both pass. Nothing left on SC-D11; the
+  live-atk table's other open rows (F10 shares, TRL intensity) are not in this item.
 
 ### SC-D12
 

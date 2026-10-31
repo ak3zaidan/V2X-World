@@ -2228,10 +2228,10 @@ rows:
   measure: digest
   expect: identical
   fault: nondeterministic
-  measured: 'B0L (938fb16a) ac21ba05… -> B0Lf (f4982788) ec1e84d7…'
-  verdict: open
-  note: '2026-10-27: the digests differ, but 938fb16a..f4982788 holds more engine changes than F4 (adoption WP-04 to WP-09 and the four-round integration), so the difference cannot be put on F4. Owed: B0L on a build of 3ae7d414^ against B0Lf on 3ae7d414 (one-commit pair).'
   source: 'the fix changes only frames under an out-of-window certificate and RandomSpeed/StopAndGo at k != 1; an attack-free run is byte-identical'
+  measured: 'B0L on 3ae7d414^ 440ac8a0... -> B0L on 3ae7d414 440ac8a0... (identical)'
+  verdict: 'pass'
+  note: '2026-10-30 (SC-D11): the one-commit pair, made. Both trees exported with git archive and built as opt-level-2 dev binaries, each run from its own tree (scenarios/live-atk/base.yaml, --record-level events --build-utc 2026-01-01T00:00:00Z): content digests identical. Control on the same pair: C2M (an ExpiredCert attacker) 716ff763... -> 5a41b1a5..., so the comparison sees the fix where it acts'
 - id: F4.M.ExpiredCert.certValidity
   base: C2Mf
   variant: C2Mf
@@ -2368,10 +2368,10 @@ rows:
   measure: digest
   expect: identical
   fault: nondeterministic
-  measured: 'not judgeable on one binary: TSU1f 0a16dc5e…, TSU1p0 (938fb16a) digest not recorded'
-  verdict: open
-  note: '2026-10-27 (f4982788 release): the row compares TSU1p0 on 938fb16a with the fix build; F5 is in f4982788, so both runs on that binary would be the same run, and the 938fb16a binary and its TSU1p0 digest are gone. Owed: TSU1p0 on a build of 3ae7d414^ against TSU1f on 3ae7d414.'
   source: 'at k = 1 the claimed speed is the historic draw; the run is byte-identical'
+  measured: 'TSU1p0 on 3ae7d414^ 12836b37... -> TSU1p0 on 3ae7d414 12836b37... (identical)'
+  verdict: 'pass'
+  note: '2026-10-30 (SC-D11): the one-commit pair of F4.B0L.untouched; scenarios/live-atk/str-randomspeed-u-1p0.yaml at intensity 1: content digests identical (k = 1.0 x scale is scale exactly, so the branch is the old one)'
 - id: F5.maxspeed-at-k3
   base: TSU3f
   variant: TSU3f
