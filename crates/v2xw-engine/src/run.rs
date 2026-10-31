@@ -2187,6 +2187,13 @@ impl Engine {
         self.phase2.as_ref()
     }
 
+    /// **A test hook, not a model parameter.** The Phase 2 path's state, mutably, so a
+    /// test can arm one of its `*_for_test` hooks before the run (SC-P1).
+    #[doc(hidden)]
+    pub fn phase2_mut(&mut self) -> Option<&mut crate::phase2::Phase2> {
+        self.phase2.as_mut()
+    }
+
     /// **A test hook, not a model parameter.** Walks the node phase in reverse id order.
     ///
     /// The phase reads each node's own inbox and writes only its own state, so the

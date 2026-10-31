@@ -629,10 +629,12 @@ impl ScmsState {
                 // The accused certificate: read from the opened report on the real path;
                 // a shared or modelled report has no certificate here, so the subject it
                 // carries is all the MA has (modelled; SC-P5 re-verifies shared reports).
-                let subject = subject.unwrap_or(super::MaReport {
+                let shared = self.ma.pending_subjects.remove(&run);
+                let subject = subject.or(shared).unwrap_or(super::MaReport {
                     subject_i: r.subject_i,
                     subject_lv: r.subject_lv,
                     issuer: None,
+                    cert: None,
                     from: if evidence.as_ref().is_some_and(|e| e.shared) {
                         super::SubjectFrom::Shared
                     } else {
@@ -689,6 +691,7 @@ fn accused_subject(
         subject_i: u32::from(ld.i_cert.0.0),
         subject_lv: LinkageValue::new(lv),
         issuer: Some(issuer),
+        cert: Some(crate::scms::pdu::cert_id8(cert)),
         from: super::SubjectFrom::SuspectCertificate,
     })
 }

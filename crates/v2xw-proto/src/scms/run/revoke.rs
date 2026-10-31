@@ -178,6 +178,22 @@ impl ScmsState {
             .unwrap_or(self.nodes.pca)
     }
 
+    /// Whether one of this provider's ACAs holds the certificate `id8` (the core one, the
+    /// certificate a root rollover superseded, or a further instance): the issuer digest
+    /// an accused certificate names says which provider can resolve it (Provider Req.
+    /// §2.2; SC-P1).
+    #[must_use]
+    pub fn issues_under(&self, id8: &[u8; 8]) -> bool {
+        let Some(pki) = self.pki.as_deref() else {
+            return false;
+        };
+        pki.is_role(&pki.aca, id8)
+            || (1..=self.aca_extra.len()).any(|k| {
+                let a = pki.aca_at(u32::try_from(k).unwrap_or(u32::MAX));
+                !core::ptr::eq(a, &pki.aca) && a.id8() == *id8
+            })
+    }
+
     /// Handles every message of this flow; [`ScmsState::handle`] routes here.
     #[allow(unused_variables)]
     pub(super) fn handle_revoke(

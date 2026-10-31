@@ -98,3 +98,106 @@ fn every_due_crl_poll_asks_and_a_current_copy_is_answered_412() {
         "the fleet polled hourly with random phases, so some poll fell in the window"
     );
 }
+
+/// The NYC Manhattan scenario with every third roadside unit (as `tests/phase2.rs`): a
+/// five-minute run on the compressed calendar that reaches a revocation.
+fn manhattan() -> Scenario {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut s = Scenario::load(root.join("scenarios/phase2-manhattan.yaml")).expect("loads");
+    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source
+        && Path::new(path).is_relative()
+    {
+        *path = root.join(&*path).to_string_lossy().into_owned();
+    }
+    s.actors.rsus = s
+        .actors
+        .rsus
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % 3 == 0)
+        .map(|(_, r)| r)
+        .collect();
+    s
+}
+
+type Blocklists = Vec<std::collections::BTreeSet<v2xw_core::ids::NodeId>>;
+
+/// One Manhattan run: its report, each provider's RA blocklist, and per provider the
+/// MA's subject sources (rows read from the certificate, from a shared report, from the
+/// engine's map).
+fn decided(forget_map: bool) -> (RunReport, Blocklists, Vec<[usize; 3]>) {
+    let mut engine = Engine::build(manhattan(), "").expect("builds");
+    if forget_map {
+        engine
+            .phase2_mut()
+            .expect("an SCMS run")
+            .forget_digest_map_for_test();
+    }
+    let report = engine.run(&mut NullRecorder::new()).expect("runs");
+    let p2 = engine.phase2().expect("an SCMS run");
+    let blocklists = p2
+        .scms_runs()
+        .iter()
+        .map(|r| r.state.ra.blocklist.clone())
+        .collect();
+    let sources = p2
+        .scms_runs()
+        .iter()
+        .map(|r| {
+            use v2xw_proto::scms::run::SubjectFrom as F;
+            let rows = &r.state.ma.report_subjects;
+            let n = |f: F| rows.iter().filter(|s| s.from == f).count();
+            [n(F::SuspectCertificate), n(F::Shared), n(F::EngineMap)]
+        })
+        .collect();
+    (report, blocklists, sources)
+}
+
+/// SC-P1 ([SM-MBR] §3; [CAMP122] §5): a report is decided without the engine's map.
+/// The MA reads the accused certificate from the report it opened and the issuing ACA
+/// resolves it from its own table, so with the engine's digest-to-device map gone
+/// (`Phase2::forget_digest_map_for_test`) the MA opens the same cases and the RA
+/// blocklists the same devices, the attacker among them. Every report the MA received
+/// on this real-report run names its subject from the certificate
+/// (live-scms `LS.MA.subject-from-cert`). Fault: restore the early return on an
+/// unmapped digest in `Phase2::report_at_proxy` -> no report reaches the MA,
+/// `cases_opened` is 0 and the test goes red.
+#[test]
+fn a_report_is_decided_without_the_engine_map() {
+    let (base, base_blocked, _) = decided(false);
+    let (blind, blind_blocked, sources) = decided(true);
+    let (b, h) = (&base.phase2, &blind.phase2);
+    println!(
+        "cases {} / {}; decisions {} / {}; linked {} / {}; blocked {:?} / {:?}; sources {:?}",
+        b.cases_opened,
+        h.cases_opened,
+        b.ma_revoke_decisions,
+        h.ma_revoke_decisions,
+        b.decisions_linked,
+        h.decisions_linked,
+        base_blocked,
+        blind_blocked,
+        sources
+    );
+    assert!(b.cases_opened > 0, "the baseline opened no case");
+    assert!(b.revoked_attackers >= 1, "the baseline revoked no attacker");
+    assert_eq!(
+        h.cases_opened, b.cases_opened,
+        "the MA opens the same cases"
+    );
+    assert!(
+        blind_blocked.iter().any(|s| !s.is_empty()),
+        "nothing was blocklisted without the map"
+    );
+    assert_eq!(
+        blind_blocked, base_blocked,
+        "the same devices are blocklisted"
+    );
+    assert!(sources.iter().any(|s| s[0] > 0), "no MA read a certificate");
+    for (k, s) in sources.iter().enumerate() {
+        assert_eq!(
+            s[2], 0,
+            "provider {k}: a real report's subject came from the engine's map"
+        );
+    }
+}

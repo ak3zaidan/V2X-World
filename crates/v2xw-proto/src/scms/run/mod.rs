@@ -780,6 +780,9 @@ pub struct MaState {
     /// report, read from the opened report's `suspect.signingCertificate`; the reporter's
     /// clear [`ReportSubmission::subject_lv`] is not read.
     pub report_subjects: Vec<MaReport>,
+    /// The accused certificate of reports still on their way over the MA-to-MA link, as
+    /// the forwarding MA read it, by their run ([`ScmsRun::shared_report_subject`]).
+    pub pending_subjects: BTreeMap<FlowRun, MaReport>,
 }
 
 impl MaState {
@@ -787,6 +790,22 @@ impl MaState {
     #[must_use]
     pub fn subject(&self, index: usize) -> Option<&MaReport> {
         self.report_subjects.get(index)
+    }
+
+    /// The index of the report that reached the MA on `run` (its `report-received`
+    /// stamp's run): the latest, if several did.
+    #[must_use]
+    pub fn report_on_run(&self, run: FlowRun) -> Option<usize> {
+        self.report_runs.iter().rposition(|r| *r == run)
+    }
+
+    /// The latest report the MA holds whose accused certificate is `id8` (its
+    /// whole-certificate HashedId8, read from the opened report).
+    #[must_use]
+    pub fn report_about_cert(&self, id8: &[u8; 8]) -> Option<usize> {
+        self.report_subjects
+            .iter()
+            .rposition(|s| s.cert.as_ref() == Some(id8))
     }
 }
 
@@ -827,6 +846,9 @@ pub struct MaReport {
     /// The HashedId8 of the ACA certificate that issued it (its `issuer`), when the MA
     /// read the certificate: the routing key for the PCA lookup. `None` off the real path.
     pub issuer: Option<[u8; 8]>,
+    /// The accused certificate's own whole-certificate HashedId8 (the digest its BSMs
+    /// are signed under), when the MA read the certificate.
+    pub cert: Option<[u8; 8]>,
     /// Where the subject came from.
     pub from: SubjectFrom,
 }
@@ -1606,6 +1628,19 @@ impl ScmsRun {
             ReportEvidence {
                 shared: true,
                 ..evidence
+            },
+        );
+    }
+
+    /// The accused certificate the forwarding MA read from the report it shared as `run`
+    /// ([`ScmsRun::shared_report_at_ma`]'s return): this MA holds it with the report on
+    /// arrival, labelled [`SubjectFrom::Shared`]. **Modelled**, like the shared report.
+    pub fn shared_report_subject(&mut self, run: FlowRun, subject: MaReport) {
+        self.state.ma.pending_subjects.insert(
+            run,
+            MaReport {
+                from: SubjectFrom::Shared,
+                ..subject
             },
         );
     }

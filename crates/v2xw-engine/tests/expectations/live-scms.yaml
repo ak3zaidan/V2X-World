@@ -1563,3 +1563,19 @@ rows:
   measured: 45055 -> 3035
   verdict: pass
   measured_on: 2026-10-27, f4982788 release (fixes 82533437 in)
+- id: LS.MA.subject-from-cert
+  base: L
+  variant: L
+  area: scms
+  measure: x.ma.received_subject_not_from_cert
+  expect: eq
+  value: 0
+  source: 'SC-P1: the MA reads the accused certificate (linkageData, issuer) from the report it opened
+    ([SM-MBR] 3; [CAMP122] 5), never from the engine map: every real report''s ma.received row has
+    subject_from "suspect-certificate", a shared one "shared-report (modelled)"'
+  measured: pending
+  verdict: open
+  note: 'written 2026-10-31 (wave C, SC-P1.2), predicted 0; the measure counts ma.received rows whose
+    subject_from is "engine-map (modelled report)" on a run with modelled_reports off, and needs
+    live_scms.py to read the new subject_from column (wave E). In-tree:
+    report_signing::a_report_is_decided_without_the_engine_map holds it on Manhattan'

@@ -231,6 +231,13 @@ fn the_ma_reads_the_subject_from_the_suspect_certificate() {
     assert_eq!(held.from.as_str(), "suspect-certificate");
     let aca = st.pki.as_ref().expect("the PDU layer").aca.id8();
     assert_eq!(held.issuer, Some(aca), "the issuer the certificate names");
+    let accused = v2xw_proto::scms::pdu::cert_id8(&report.evidence.suspect().cert);
+    assert_eq!(
+        held.cert,
+        Some(accused),
+        "the accused certificate's own digest"
+    );
+    assert_eq!(st.ma.report_about_cert(&accused), Some(0));
     run.revoke(0, 0, 2).expect("held");
     run.run().expect("runs");
     let case = run.state.ma.case().expect("a case");

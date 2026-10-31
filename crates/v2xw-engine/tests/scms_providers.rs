@@ -175,3 +175,83 @@ fn a_shared_report_is_revoked_by_the_issuing_provider_and_enforced_by_everyone()
         );
     }
 }
+
+/// SC-P1 ([CAMP122] §5; Provider Req. §2.2): a report goes to the MA of the provider
+/// whose ACA the accused certificate's issuer names, as the receiving MA read it from
+/// the report, not to the provider the engine's map gives the accused device. With that
+/// map naming a device of the other provider for every certificate
+/// (`Phase2::misattribute_providers_for_test`), a provider-b certificate reported
+/// through provider-a's RA still reaches provider-b's MA, every report an MA received
+/// from another MA names one of its own ACAs, and every report about another provider's
+/// certificate was shared with that provider. Fault: route by the map's device
+/// (`provider_of_device`) -> the reports are misrouted and the test goes red.
+#[test]
+fn a_report_routes_by_the_issuer_named_in_its_certificate() {
+    use std::collections::BTreeSet;
+    use v2xw_proto::scms::run::SubjectFrom;
+    let mut engine = Engine::build(scenario(), "").expect("builds");
+    engine
+        .phase2_mut()
+        .expect("an SCMS run")
+        .misattribute_providers_for_test();
+    let report = engine.run(&mut DigestRecorder::new()).expect("runs");
+    assert_eq!(
+        report.phase2.backend_errors, 0,
+        "{}",
+        report.phase2.first_backend_error
+    );
+    let runs = engine.phase2().expect("an SCMS run").scms_runs();
+    assert_eq!(runs.len(), 2);
+    let owner = |id8: &[u8; 8]| runs.iter().position(|r| r.state.issues_under(id8));
+    // Per provider: the certificates it holds a shared report about, and the
+    // certificates of other providers its own vehicles reported to it.
+    let mut shared_in: Vec<BTreeSet<[u8; 8]>> = vec![BTreeSet::new(); runs.len()];
+    let mut foreign: Vec<(usize, [u8; 8])> = Vec::new();
+    // A report that reached an MA in the run's last second may still be on the MA-to-MA
+    // link when the run ends.
+    let last = runs
+        .iter()
+        .flat_map(|r| r.state.ma.report_arrived.iter().copied())
+        .max()
+        .unwrap_or(0);
+    for (k, r) in runs.iter().enumerate() {
+        for (idx, s) in r.state.ma.report_subjects.iter().enumerate() {
+            let late = r.state.ma.report_arrived[idx] + 1_000_000_000 > last;
+            let (Some(issuer), Some(cert)) = (s.issuer, s.cert) else {
+                continue;
+            };
+            match s.from {
+                SubjectFrom::Shared => {
+                    assert_eq!(
+                        owner(&issuer),
+                        Some(k),
+                        "provider {k}'s MA was shared a report it cannot resolve"
+                    );
+                    shared_in[k].insert(cert);
+                }
+                SubjectFrom::SuspectCertificate if !late => {
+                    if let Some(x) = owner(&issuer).filter(|x| *x != k) {
+                        foreign.push((x, cert));
+                    }
+                }
+                SubjectFrom::SuspectCertificate => {}
+                SubjectFrom::EngineMap => {}
+            }
+        }
+    }
+    println!(
+        "shared in {:?}; foreign {}",
+        shared_in.iter().map(BTreeSet::len).collect::<Vec<_>>(),
+        foreign.len()
+    );
+    assert!(
+        foreign.iter().any(|(x, _)| *x == 1),
+        "no provider-a vehicle reported a provider-b certificate"
+    );
+    for (x, cert) in &foreign {
+        assert!(
+            shared_in[*x].contains(cert),
+            "a report about provider {x}'s certificate never reached its MA"
+        );
+    }
+}

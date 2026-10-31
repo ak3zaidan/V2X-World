@@ -115,6 +115,11 @@ pub struct MaReceived {
     /// Opaque: equal for two reports exactly when the LAs link their subjects to one
     /// device.
     pub la_link: String,
+    /// Where the MA's accused certificate came from (SC-P1): `suspect-certificate` (read
+    /// from the opened report), `shared-report (modelled)` or `engine-map (modelled
+    /// report)`.
+    #[serde(default)]
+    pub subject_from: String,
     /// `None` when the MA accepted the report as evidence; else why it set it aside.
     #[serde(default)]
     pub set_aside: Option<String>,
@@ -148,6 +153,17 @@ pub struct DeviceExposure {
 impl Record for DeviceExposure {
     const CHANNEL: &'static str = "gt.device_exposure";
     const VISIBILITY: Visibility = Visibility::Gt;
+}
+
+/// The `la_link` token of a certificate no device is known to hold: a domain-separated
+/// digest of the certificate's own digest, so it links nothing but that certificate.
+#[must_use]
+pub fn cert_link(subject_cert_hex: &str, seed: u64) -> String {
+    let mut b = Vec::with_capacity(48);
+    b.extend_from_slice(b"v2xw/ma-replay/cert-link/v1");
+    b.extend_from_slice(&seed.to_le_bytes());
+    b.extend_from_slice(subject_cert_hex.as_bytes());
+    v2xw_core::hash::sha256_hex(&b)[..16].to_string()
 }
 
 /// The `la_link` token of a device: a domain-separated digest of its node index, the
