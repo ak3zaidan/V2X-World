@@ -1792,6 +1792,15 @@ impl Governance {
         Some((cert_hashed_id8(&a.cert).ok()?, out))
     }
 
+    /// Counts `n` certificates this view's ICA signed outside its own set: a provider's
+    /// further ACA instances, which the PDU layer issues under this ICA
+    /// ([`crate::scms::pdu::ScmsPki::issue_aca_instance`]). Without them provider-b's ICA
+    /// read 7 against the 8 certificates `pki.state` shows it signed (audit-gov
+    /// GOV.L.counters, SC-D12).
+    pub fn note_ica_issued(&mut self, n: u32) {
+        self.counters.ica_certs_issued = self.counters.ica_certs_issued.saturating_add(n);
+    }
+
     /// The same governance seen from provider `label` (WP-D1: one run per provider).
     ///
     /// The electors, the roots and the CTL are the deployment's, shared and unchanged:

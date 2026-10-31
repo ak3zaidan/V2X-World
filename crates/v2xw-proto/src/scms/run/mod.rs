@@ -1236,7 +1236,7 @@ impl ScmsRun {
         // One clock for the whole deployment: the governance artefacts (CTL
         // `effectiveDate`, component validity) and every PDU's `Time32` count from the
         // same `t0` (`PduLayer::t0_unix_s`).
-        let gov = Governance::ceremony_with(
+        let mut gov = Governance::ceremony_with(
             &params,
             &nodes,
             &rng,
@@ -1298,6 +1298,11 @@ impl ScmsRun {
         } else {
             None
         };
+        // The further ACA instances the home ICA signed in the PDU layer (none in the
+        // shipped deployments; provider-b's are counted on its own view, `new_peer`).
+        if let Some(p) = pki.as_ref() {
+            gov.note_ica_issued(u32::try_from(p.aca_instances()).unwrap_or(u32::MAX));
+        }
         // Every other provider's PDU PKI: its own governance root, ICA and components.
         let mut peer_pki = Vec::new();
         if pki.is_some() {
@@ -1392,7 +1397,7 @@ impl ScmsRun {
         let mut params = home.state.params;
         params.master_seed = provider_seed(home.state.params.master_seed, &label);
         let nodes = deployment.nodes(k).online;
-        let gov = home
+        let mut gov = home
             .state
             .gov
             .rehome(&label)
@@ -1466,6 +1471,10 @@ impl ScmsRun {
             ),
             None => None,
         };
+        // The further ACA instances this provider's ICA signed in the PDU layer.
+        if let Some(p) = pki.as_ref() {
+            gov.note_ica_issued(u32::try_from(p.aca_instances()).unwrap_or(u32::MAX));
+        }
         // The other providers, the home one first, as this run's peers.
         let mut peer_pki: Vec<(String, std::sync::Arc<crate::scms::pdu::ScmsPki>)> = Vec::new();
         if let Some(h) = home.state.pki.as_ref() {
