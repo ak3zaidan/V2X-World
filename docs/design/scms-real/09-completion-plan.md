@@ -109,3 +109,21 @@ relabels of rule-gap-specs §3).
 ## 7. Status
 
 Dated notes go under each id as its wave lands.
+
+### SC-M3
+
+- 2026-10-30 (wave B): merged `worktree-wf_0343ab94-a4a-1` (13ae0463) and finished it.
+  Review against IEEE 1609.2.1 §6.3.5.14 as the repo cites it (03 §3 l.111, [SMP] §4.4
+  If-Modified-Since, [ASN-2.1] l.337) found one defect in the wip: the RA's answer was
+  computed, logged and recorded as the vehicle's `If-Modified-Since` before the request had
+  reached the RA, so a lost uplink still counted a signed status and a lost downlink left
+  the vehicle answered 412 for a status it never received. Now the RA answers only a
+  request that arrived (and logs the SPDU at its arrival plus service time), and the
+  vehicle keeps the status only when the answer reaches it
+  (`Phase2::info_status_received`). The wip's integration test ran the conformance
+  scenario's first 420 s, where no list changes (0 downloads in both modes), so it could
+  not fail; it now runs `credential-lifecycle.yaml`: conditional 270 x 412 + 206
+  downloads; info-status 476 polls, 207 signed statuses, 269 x 412, 206 downloads, DL
+  bytes +72 kB. Off by default (`conditional`). Kept as modelled: a CTL-only change fetches
+  the composite (it carries the CTL), not the chain file (6.3.5.7); no source says
+  deployed devices poll infoStatus first, so the default stays.

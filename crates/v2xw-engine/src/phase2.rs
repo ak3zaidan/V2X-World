@@ -1813,13 +1813,16 @@ pub struct Phase2Report {
     /// How many CRL downloads cellular vehicles completed.
     pub crl_downloads: u64,
     /// Conditional CRL polls the RA answered with HTTP 412 (the copy is current; [SMP]
-    /// §4.3.2): each a request and a 92 B answer on the cellular link.
+    /// §4.3.2): each a request and a 92 B answer on the cellular link. Under
+    /// `security.scms.crl_poll: info-status` these are the information-status polls
+    /// answered 412 (WP-35): the composite is then fetched only when something changed.
     pub crl_polls_not_modified: u64,
     /// WP-35: information-status polls (`security.scms.crl_poll: info-status`), each a
-    /// request on the cellular link.
+    /// request put on the cellular link (some are lost).
     #[serde(skip_serializing_if = "is_zero_count")]
     pub info_status_polls: u64,
-    /// WP-35: polls the RA answered with its signed status (the rest were HTTP 412).
+    /// WP-35: polls the RA answered with its signed status (the rest that reached it were
+    /// HTTP 412). Each is a `CertificateManagementInformationStatusSpdu` the RA logged.
     #[serde(skip_serializing_if = "is_zero_count")]
     pub info_status_sent: u64,
     /// Issued revocations whose publication the run horizon cut off.
@@ -7977,20 +7980,42 @@ impl Phase2 {
     /// Its CRL lines are the lists of the composite the RA serves; the CTL, `caCcf`, MA and
     /// RA lines are the RA's own (`ScmsRun::ra_status_lines`). With the 1609.2.1 PDU layer
     /// off (no RA key) the size is the size model's (`ScmsSizes::info_status`).
-    pub fn info_status_answer(&mut self, node: NodeId, now: SimTime) -> Option<u32> {
-        use v2xw_proto::scms::pdu::{CrlStatusLine, CtlStatusLine, InfoStatus};
-        self.report.info_status_polls += 1;
+    ///
+    /// The second value is what that status stands for: the caller hands it to
+    /// [`Phase2::info_status_received`] once the answer reached the vehicle, and not before
+    /// (a lost answer leaves the vehicle's `If-Modified-Since` where it was).
+    pub fn info_status_answer(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+    ) -> (Option<u32>, (u32, u64, u32)) {
         let fp = self.status_fingerprint(node);
         if self
             .nodes
             .get(&node)
             .is_some_and(|n| n.status_seen == Some(fp))
         {
-            return None;
+            return (None, fp);
         }
+        (self.info_status_signed(node, now), fp)
+    }
+
+    /// WP-35: an information-status poll put on the air.
+    pub fn note_info_status_poll(&mut self) {
+        self.report.info_status_polls += 1;
+    }
+
+    /// WP-35: the signed status reached the vehicle; it keeps what the status stands for
+    /// as its next `If-Modified-Since`.
+    pub fn info_status_received(&mut self, node: NodeId, seen: (u32, u64, u32)) {
         if let Some(n) = self.nodes.get_mut(&node) {
-            n.status_seen = Some(fp);
+            n.status_seen = Some(seen);
         }
+    }
+
+    /// The RA's signed status for `node` at `now`, logged, and its size.
+    fn info_status_signed(&mut self, node: NodeId, now: SimTime) -> Option<u32> {
+        use v2xw_proto::scms::pdu::{CrlStatusLine, CtlStatusLine, InfoStatus};
         self.report.info_status_sent += 1;
         let (_, _, secured) = self.published_crl_for(node);
         let crl: Vec<CrlStatusLine> = secured
@@ -10693,5 +10718,85 @@ mod settings_menu_tests {
                 .any(|r| r.contains("CAMP reference"))
         );
         assert_eq!(us_system(&Scenario::minimal()), None);
+    }
+}
+
+#[cfg(test)]
+mod info_status_tests {
+    use super::*;
+
+    /// SC-M3 (WP-35 P35.2): the RA's side of an information-status poll, as a vehicle
+    /// meets it. A vehicle that joined with the RA's lists holds its status, so its poll is
+    /// answered 412; once a provider publishes, the RA answers with its signed
+    /// `CertificateManagementInformationStatusSpdu` (signed by the RA, `ra` present,
+    /// IEEE 1609.2.1 l.111 and l.337), and keeps answering it until the vehicle has
+    /// received one: a lost answer leaves its `If-Modified-Since` where it was.
+    ///
+    /// fault: `info_status_answer` records the status as the vehicle's on sending it (the
+    /// unverified wip's form) -> red (the poll after a lost answer is a 412).
+    #[test]
+    fn a_status_is_answered_until_the_vehicle_has_received_it() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        s.security.scms.get_or_insert_with(Default::default).crl_poll =
+            Some("info-status".to_string());
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        assert!(p.params.info_status_poll);
+        for run in &mut p.runs {
+            run.state.params.pdu.keep_bytes = true;
+        }
+        let node = NodeId::new(9_001);
+        p.nodes.insert(node, NodeSec::default());
+        p.prerun_crl(node, 0).expect("the t0 lists");
+        let (a, _) = p.info_status_answer(node, 1);
+        assert_eq!(a, None, "it joined with the RA's status: 412");
+        assert_eq!(p.report.info_status_sent, 0);
+        // Its provider publishes: the RA's status changes.
+        let h = p.provider_of_device(device_of(node));
+        let serial = p.runs[h].state.crl_store.versions;
+        p.crl_feeds[h].push(CrlVersion {
+            at: 0,
+            version: 1,
+            entries: Vec::new(),
+            secured: Vec::new(),
+            serial: serial + 1,
+        });
+        let (a, seen) = p.info_status_answer(node, 2);
+        let size = a.expect("a changed status is sent");
+        assert!(size > CRL_NOT_MODIFIED_BYTES, "{size} B: a signed SPDU");
+        // The answer is lost: the vehicle still has the old status, so it is sent again.
+        let (again, seen2) = p.info_status_answer(node, 3);
+        assert!(again.is_some(), "a lost status is answered again, not 412");
+        assert_eq!(seen, seen2);
+        assert_eq!(p.report.info_status_sent, 2);
+        p.info_status_received(node, seen2);
+        assert_eq!(p.info_status_answer(node, 4).0, None, "received: 412");
+        // What the RA sent: its signed status, as a vehicle opens it.
+        let run = &p.runs[h];
+        let sent: Vec<_> = run
+            .state
+            .pdus
+            .iter()
+            .filter(|e| e.kind == v2xw_proto::scms::pdu::SpduKind::InfoStatus)
+            .collect();
+        assert_eq!(sent.len(), 2, "each signed status is logged by the RA");
+        let pki = run.state.pki.clone().expect("the PDU layer is on");
+        for e in sent {
+            assert_eq!(e.from, run.state.nodes.ra.index());
+            let bytes = e.bytes.as_ref().expect("kept");
+            assert_eq!(bytes.len(), size);
+            let st = v2xw_proto::scms::pdu::open_info_status(bytes.bytes(), &pki)
+                .expect("an RA-signed status with its ra date");
+            assert!(st.ra.is_some());
+            assert_eq!(st.ctl.len(), 1);
+        }
     }
 }
