@@ -64,7 +64,25 @@ const MOVES: &[(&str, f64)] = &[
     ("report_weight_max_speed", 4.0),
     ("report_weight_max_acceleration", 5.0),
     ("report_weight_brake_acceleration", 6.0),
+    // The keys that were `security.protocol.params`-only until the A1 menus (08 §4.1
+    // item 8).
+    ("ee_retry_timeout_s", 20.0),
+    ("ee_retry_max_per_hour", 3.0),
+    ("crl_background_entries", 1_234.0),
+    ("clock_skew_s", 2.5),
+    ("clock_skew_share", 0.5),
+    ("root_rollover_at_s", 100.0),
+    ("root_removal_at_s", 200.0),
+    ("peer_root_removal_at_s", 300.0),
+    ("modelled_reports", 1.0),
 ];
+
+/// `crl_background_entries` is read by `Phase2::new`, not held in `LifecycleParams`: its
+/// model value is the key the loader resolves (`lifecycle_param`, typed field winning).
+fn background(doc: &Value) -> Option<f64> {
+    let s = Scenario::from_document(doc.clone()).expect("deserialises");
+    v2xw_engine::phase2::lifecycle_param(&s, "crl_background_entries")
+}
 
 #[test]
 fn every_lifecycle_field_moves_the_model_exactly_as_its_protocol_param_does() {
@@ -89,10 +107,22 @@ fn every_lifecycle_field_moves_the_model_exactly_as_its_protocol_param_does() {
         } else {
             json!(v)
         };
+        // A switch is a boolean in the typed field and 0/1 in the protocol params.
+        let typed_v = if *key == "modelled_reports" {
+            json!(true)
+        } else {
+            v.clone()
+        };
         let mut typed = base.clone();
-        typed["security"]["scms"] = json!({"lifecycle": {*key: v}});
+        typed["security"]["scms"] = json!({"lifecycle": {*key: typed_v}});
         let mut param = base.clone();
         param["security"]["protocol"]["params"] = json!({*key: v});
+        if *key == "crl_background_entries" {
+            assert_eq!(background(&base), None);
+            assert_eq!(background(&typed), Some(1_234.0), "{key} changed nothing");
+            assert_eq!(background(&typed), background(&param), "{key} disagrees");
+            continue;
+        }
         let (t, p) = (params(&typed), params(&param));
         assert_ne!(
             t, default,
@@ -214,13 +244,20 @@ fn every_lifecycle_field_is_published_with_words_a_default_and_a_level() {
             "wired"
         };
         assert_eq!(f["x-status"], expected, "{path}");
+        // A switch (modelled_reports) is on or off: no unit.
         assert!(
-            f["unit"].as_str().is_some_and(|u| !u.is_empty()),
+            f["kind"] == "boolean" || f["unit"].as_str().is_some_and(|u| !u.is_empty()),
             "{path}: no unit"
         );
-        // Absent, the CRL follows each provider's rule, which is not a number.
-        if key == "crl_cadence_s" {
+        // Absent, the CRL follows each provider's rule, which is not a number, and a root
+        // event never happens (`phase2::lifecycle_defaults`): no default.
+        if key == "crl_cadence_s"
+            || key.ends_with("root_rollover_at_s")
+            || key.ends_with("root_removal_at_s")
+        {
             assert!(f.get("default").is_none_or(Value::is_null), "{path}");
+        } else if key == "modelled_reports" {
+            assert_eq!(f["default"], json!(false), "{path}");
         } else {
             assert!(f["default"].is_number(), "{path}: no default");
         }

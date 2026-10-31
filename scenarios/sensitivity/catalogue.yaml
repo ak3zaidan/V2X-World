@@ -231,6 +231,11 @@ values:
   # model default, so the high end moved nothing. Clean, and one jump per 10 s (urban
   # multipath outliers: Groves, Principles of GNSS, Inertial and Multisensor Navigation 2e, 9.4).
   actors.vehicles.gnss.outlier_rate_hz: [0.0, 0.1]
+  # The guide's "1,000 ms (the J2945/1 reading); 450 ms (the NYC pilot)" tops at the
+  # 1000 ms default (and reads a 1 out of "J2945/1"), so no high end was planned and the
+  # rows' `change: high` named nothing. Half and double the J2945/1 cadence, as before the
+  # A5 guide row (b3f36b93).
+  security.signer_id_policy.full_cert_every_ms: [500, 2000]
 
 # The most values a choice is swept at (spread over its options).
 max_choices: 6
