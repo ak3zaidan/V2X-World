@@ -461,6 +461,71 @@ impl ScmsRun {
         );
         Ok(rev)
     }
+
+    /// The MA revokes `device`'s OBU identification certificates at `at` (SC-P9.1;
+    /// [SMP] §6.3.3, Table 1): a non-pseudonym certificate carries no linkage data, so it
+    /// is revoked by its `HashedId10` on the series-3 hash CRL of the CRACA it names (the
+    /// ICA; the CRL signer `{issuerIsCraca, [4,3,1,2]}` signs it). Every identification
+    /// certificate the ACA has issued the device and that has not expired goes on the
+    /// list at each publication at or after `at`, so one the ACA issues while the
+    /// decision is on its way joins the next one; and from `at` the RA issues the device
+    /// no more.
+    ///
+    /// ASSUMPTION (labelled): the decision withdraws the privilege only. The device keeps
+    /// its enrolment certificate and its pseudonyms; revoking the whole device is the
+    /// linkage path ([`ScmsRun::revoke`] and the RA blocklist). No published source says
+    /// whether a misbehaving emergency vehicle loses both.
+    ///
+    /// # Errors
+    /// The PDU layer is off, or no certificate of the PKI signs a series-3 list under the
+    /// CRACA the device's identification certificates name.
+    pub fn revoke_identification(
+        &mut self,
+        device: NodeId,
+        at: SimTime,
+    ) -> crate::scms::pdu::Result<()> {
+        use crate::scms::pdu::PduError;
+        let pki = self
+            .state
+            .pki
+            .clone()
+            .ok_or(PduError::Policy("identification CRLs need the PDU layer"))?;
+        let (_, craca) = hash_crl_signer(&pki, v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION)
+            .ok_or(PduError::Policy("no CRL signer lists series 3"))?;
+        let named = self
+            .state
+            .apps
+            .devices
+            .get(&device)
+            .into_iter()
+            .flat_map(|d| d.installed.iter())
+            .all(|c| {
+                let t = &c.cred.cert.0.to_be_signed;
+                t.crl_series.0.0 == v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION
+                    && t.craca_id.0[..] == craca[5..]
+            });
+        if !named {
+            return Err(PduError::Policy(
+                "the identification certificate names another cracaId or crlSeries",
+            ));
+        }
+        self.state.apps.id_revoked.entry(device).or_insert(at);
+        let at = at.max(self.kernel.now());
+        let crlg = self.state.nodes.crlg;
+        let run = self.new_run();
+        self.inject_at(
+            at,
+            crlg,
+            ScmsMsg::CrlAppend {
+                i: 0,
+                pairs: Vec::new(),
+                jmax: 0,
+            },
+            FlowId::CrlIssuance,
+            run,
+        );
+        Ok(())
+    }
 }
 
 impl ScmsState {
@@ -660,6 +725,36 @@ impl ScmsState {
             if !list.iter().any(|e| e.id == r.entry.id) {
                 list.push(r.entry);
                 self.crlg.component_revoked.push(r);
+            }
+        }
+        // Revoked identification certificates join the series-3 list (SC-P9.1): every one
+        // the ACA issued a revoked device by now that has not expired.
+        let now32 = self.time32(at);
+        let ids: Vec<_> = self
+            .apps
+            .issued
+            .iter()
+            .filter(|c| {
+                c.kind == crate::scms::appcert::AppCertKind::ObuIdentification
+                    && c.at <= at
+                    && c.expiry >= now32
+                    && self.apps.id_revoked.get(&c.device).is_some_and(|&t| t <= at)
+            })
+            .map(|c| v2xw_sec::crl::HashRevocation {
+                id: c.id10,
+                expiry: c.expiry,
+            })
+            .collect();
+        if !ids.is_empty() {
+            let list = self
+                .crlg
+                .hash_entries
+                .entry(v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION)
+                .or_default();
+            for e in ids {
+                if !list.iter().any(|x| x.id == e.id) {
+                    list.push(e);
+                }
             }
         }
         // A full hash CRL for every series with entries (2, 3, 4, 256; [SMP] Table 1),

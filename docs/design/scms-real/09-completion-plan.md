@@ -502,3 +502,24 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `component_revoked*` keys, the RunReport leaf and the engine test. `mbr::select_ma`
   (unused) is unchanged; app-certificate devices (`apps.devices`) download no CRL in the
   proto and are not covered.
+
+### SC-P9
+
+- 2026-10-31 (wave C R3, P9.1, agent C3): **the OBU identification cycle and its series-3
+  revocation.** Causes: `preload_app_cert` (`run/appcert.rs`, was `:479`) always enrolled
+  the device on its scratch kernel, so an emergency OBU that already held its pseudonym
+  pool got a second enrolment certificate, which replaced the one its pseudonym requests
+  use; and nothing put an identification certificate on a CRL. Now the preload signs with
+  the enrolment certificate the OBU holds. The ACA's issuance record (`IssuedApp`) carries
+  the certificate's expiry. `ScmsRun::revoke_identification(device, at)` lists every
+  unexpired identification certificate the ACA issued the device on the series-3 hash CRL
+  at each publication from `at` (signed by the CRL signer `{issuerIsCraca, [4,3,1,2]}`
+  under the ICA's `cracaId`), and from `at` the RA refuses the device's identification
+  requests ("identification certificate revoked"). ASSUMPTION (labelled): the device
+  keeps its enrolment and pseudonyms. Revoking the whole device is the linkage path. Tests
+  `appcert::an_obu_identification_cycle_preloads_and_renews` (red with the kind mapped to
+  the RSU PSIDs: `[130]` against `[32, 2113686]`) and
+  `appcert::a_revoked_identification_certificate_goes_on_the_series_3_list` (red with the
+  issued certificates left off the list). Not called by the engine yet (P9.2 C2, P9.3 D1),
+  so no golden moves. Not shown red: the enrolment-kept assert alone (the PSID fault fails
+  the same test first).
