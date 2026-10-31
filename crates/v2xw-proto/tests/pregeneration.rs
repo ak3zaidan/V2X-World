@@ -270,7 +270,12 @@ fn the_info_answer_is_one_time32_the_device_acts_on() {
         .iter()
         .find(|s| s.step == "info-response")
         .expect("an .info answer");
-    assert_eq!(step.bytes, 4, "one COER Time32");
+    // One COER Time32, the body of the RA's `200` answer (proto B9a framing).
+    assert_eq!(
+        step.bytes,
+        v2xw_proto::scms::http::answer_bytes(v2xw_proto::scms::http::Status::Ok, 4, &[]),
+        "one COER Time32"
+    );
     // The device came back for the batch no earlier than that time (Time32 seconds).
     let ack = run.kernel.stages.at(t, StageId::Acknowledged).unwrap();
     let dl = run.kernel.stages.at(t, StageId::Downloaded).unwrap();

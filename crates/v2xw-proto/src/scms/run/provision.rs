@@ -6,6 +6,7 @@
 
 use super::*;
 
+use crate::scms::http;
 use crate::scms::pdu::{self, Pdu, PduError, RequestSigner, SpduKind};
 use crate::scms::pdu_prov;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::EeRaInterfacePdu;
@@ -1197,7 +1198,7 @@ impl ScmsState {
                 reason: Refusal::UnknownEnrolment,
             },
             "provisioning-refused",
-            self.sizes.refusal(),
+            self.http_answer(http::Status::InternalServerError, self.sizes.refusal()),
             Transport::BackendNet,
             flow,
             run,
@@ -1229,21 +1230,35 @@ impl ScmsState {
         }
     }
 
-    /// The batch file's size on the wire for `device`'s download of period `i`: the whole
-    /// file, or under a resumed download (`Range: bytes=<n>-`, the bytes it already holds,
-    /// [SMP] §4.3.2) the 206 answer's remainder. The value is the one the device's Range
-    /// header carries; read from its state rather than modelled as a request field.
-    fn range_remainder(&self, device: NodeId, i: u32, size: WireSize) -> WireSize {
+    /// The batch file's answer on the wire for `device`'s download of period `i` (`size`
+    /// the whole zip): `200` with the file, or under a resumed download (`Range:
+    /// bytes=<n>-`, [SMP] §4.3.2) `206` with the remainder and its `Content-Range`. The
+    /// device's held count is the bytes of the first answer that arrived before the cut,
+    /// its status line and headers first, so the file bytes it holds are that count less
+    /// the first answer's framing (proto B9a). Read from its state rather than modelled
+    /// as a request field.
+    fn batch_answer(&self, device: NodeId, i: u32, size: WireSize) -> WireSize {
+        let total = size.bytes();
         let held = self
             .devices
             .get(&device)
             .and_then(|d| d.batch_resume.get(&i))
             .copied()
             .unwrap_or(0);
-        if held == 0 || held >= size.bytes() {
-            return size;
+        let header = http::answer_bytes(http::Status::Ok, total, &[]) - total;
+        let from = held.saturating_sub(header);
+        if from == 0 || from >= total {
+            return self.http_answer(http::Status::Ok, size);
         }
-        WireSize::real(size.bytes() - held, "batch zip remainder (Range, HTTP 206)")
+        let rest = total - from;
+        WireSize::real(
+            http::answer_bytes(
+                http::Status::PartialContent,
+                rest,
+                &[http::content_range(from, total)],
+            ),
+            "batch zip remainder (Range, HTTP 206)",
+        )
     }
 
     /// Whether `device` is waiting for `kind`, clearing the wait when it is. An answer it
@@ -1299,7 +1314,7 @@ impl ScmsState {
                         lccf,
                     },
                     "file-request",
-                    self.sizes.file_request(),
+                    self.file_request_size(lpf, lccf),
                     Transport::CellularUu,
                     flow,
                     run,
@@ -1328,6 +1343,7 @@ impl ScmsState {
                         }
                         None => self.sizes.batch_download_request(),
                     };
+                    let size = self.http_download(http::path::DOWNLOAD_INFO, size, None);
                     let (device, i, enrolment) = (req.device, req.start_i, req.enrolment);
                     // A retry repeats the whole session: the file check and the `.info`
                     // request, signed afresh.
@@ -1384,6 +1400,7 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::EeRaCertRequest, req.device, n.lop, at, &p),
                     None => self.sizes.provisioning_request_for(certs),
                 };
+                let size = self.http_post(http::path::PROVISION_PSEUDONYM_BATCH, size);
                 self.await_answer(
                     out,
                     req.device,
@@ -1414,6 +1431,7 @@ impl ScmsState {
                         .sizes
                         .provisioning_request_for(req.periods.saturating_mul(req.jmax)),
                 };
+                let size = self.http_post(http::path::PROVISION_PSEUDONYM_BATCH, size);
                 out.send(
                     n.ra,
                     ScmsMsg::ProvisioningRequest(req),
@@ -1485,7 +1503,7 @@ impl ScmsState {
                             reason,
                         },
                         "provisioning-refused",
-                        self.sizes.refusal(),
+                        self.http_answer(http::Status::InternalServerError, self.sizes.refusal()),
                         Transport::BackendNet,
                         flow,
                         run,
@@ -1525,6 +1543,7 @@ impl ScmsState {
                         Some(p) => self.emit_pdu(SpduKind::RaEeCertAck, to, n.lop, at, p),
                         None => self.sizes.provisioning_ack(),
                     };
+                    let size = self.http_answer(http::Status::Ok, size);
                     out.send(
                         n.lop,
                         ScmsMsg::ProvisioningAck {
@@ -1561,7 +1580,7 @@ impl ScmsState {
                             reason: Refusal::RequestLimit,
                         },
                         "provisioning-refused",
-                        self.sizes.refusal(),
+                        self.http_answer(http::Status::InternalServerError, self.sizes.refusal()),
                         Transport::BackendNet,
                         flow,
                         run,
@@ -1666,6 +1685,7 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::RaEeCertAck, to, n.lop, at, p),
                     None => self.sizes.provisioning_ack(),
                 };
+                let size = self.http_answer(http::Status::Ok, size);
                 out.send(
                     n.lop,
                     ScmsMsg::ProvisioningAck {
@@ -1712,6 +1732,7 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::RaEeCertAck, to, device, at, p),
                     None => self.sizes.provisioning_ack(),
                 };
+                let size = self.http_answer(http::Status::Ok, size);
                 out.send(
                     device,
                     ScmsMsg::ProvisioningAck {
@@ -2266,6 +2287,11 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::EeRaDownloadRequest, device, n.lop, at, p),
                     None => self.sizes.batch_download_request(),
                 };
+                let size = self.http_download(
+                    http::path::DOWNLOAD_BATCH,
+                    size,
+                    self.range_held(device, i),
+                );
                 self.await_answer(
                     out,
                     device,
@@ -2294,6 +2320,11 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::EeRaDownloadRequest, to, n.ra, at, p),
                     None => self.sizes.batch_download_request(),
                 };
+                let size = self.http_download(
+                    http::path::DOWNLOAD_BATCH,
+                    size,
+                    self.range_held(device, i),
+                );
                 out.send(
                     n.ra,
                     ScmsMsg::BatchDownloadRequest { device, i, pdu },
@@ -2368,7 +2399,7 @@ impl ScmsState {
                     }
                     WireSize::real(pdu_prov::stored_zip_len(&entries), "batch zip (stored)")
                 };
-                let size = self.range_remainder(device, i, size);
+                let size = self.batch_answer(device, i, size);
                 // The batch file travels back through the proxy, encrypted end to end: each
                 // certificate to the device's butterfly encryption key, which neither the
                 // RA nor the LOP holds.
@@ -2408,7 +2439,7 @@ impl ScmsState {
                     }
                     WireSize::real(pdu_prov::stored_zip_len(&entries), "batch zip (stored)")
                 };
-                let size = self.range_remainder(device, i, size);
+                let size = self.batch_answer(device, i, size);
                 out.send(
                     device,
                     ScmsMsg::BatchDownload {
@@ -2577,6 +2608,7 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::EeRaDownloadRequest, to, n.ra, at, p),
                     None => self.sizes.batch_download_request(),
                 };
+                let size = self.http_download(http::path::DOWNLOAD_INFO, size, None);
                 out.send(
                     n.ra,
                     ScmsMsg::InfoRequest {
@@ -2667,7 +2699,7 @@ impl ScmsState {
                         n.lop,
                         ScmsMsg::ProvisioningRefused { device, reason },
                         "provisioning-refused",
-                        self.sizes.refusal(),
+                        self.http_answer(http::Status::InternalServerError, self.sizes.refusal()),
                         Transport::BackendNet,
                         flow,
                         run,
@@ -2687,6 +2719,7 @@ impl ScmsState {
                     }
                     None => self.sizes.provisioning_ack(),
                 };
+                let size = self.http_answer(http::Status::Ok, size);
                 out.send(
                     n.lop,
                     ScmsMsg::InfoResponse {
@@ -2726,6 +2759,7 @@ impl ScmsState {
                     }
                     None => self.sizes.provisioning_ack(),
                 };
+                let size = self.http_answer(http::Status::Ok, size);
                 out.send(
                     device,
                     ScmsMsg::InfoResponse {
@@ -2782,7 +2816,7 @@ impl ScmsState {
                     device,
                     ScmsMsg::ProvisioningRefused { device, reason },
                     "provisioning-refused-proxied",
-                    self.sizes.refusal(),
+                    self.http_answer(http::Status::InternalServerError, self.sizes.refusal()),
                     Transport::CellularUu,
                     flow,
                     run,
@@ -2834,5 +2868,92 @@ impl ScmsState {
             _ => unreachable!("ScmsState::handle routes only this flow's messages here"),
         }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// HTTP framing on the EE-RA exchanges (proto B9a)
+// ---------------------------------------------------------------------------------------
+
+impl ScmsState {
+    /// The `Host` of every request a device sends its RA: the RA's certificate name
+    /// (`ra.<provider>`, which the server's TLS certificate must match, [SMP] §3.2) and
+    /// the [CAMP122] port.
+    pub(super) fn ra_host(&self) -> http::Header {
+        http::host(&format!("ra.{}", self.gov.config.provider), http::RA_PORT)
+    }
+
+    /// A device's `POST` of `size` (the SPDU) to `path`, framed.
+    pub(super) fn http_post(&self, path: &str, size: WireSize) -> WireSize {
+        http::reframed(size, http::post_bytes(self.ra_host(), path, size.bytes()))
+    }
+
+    /// A device's `GET` of `path` with `size` (the `SecuredAuthenticatedDownloadRequest`)
+    /// in its `Download-Req` header: charged at the Base64 length, once.
+    pub(super) fn http_download(
+        &self,
+        path: &str,
+        size: WireSize,
+        range_from: Option<u32>,
+    ) -> WireSize {
+        http::reframed(
+            size,
+            http::download_bytes(self.ra_host(), path, size.bytes(), range_from),
+        )
+    }
+
+    /// The RA's answer `status` with `size` as its body, framed.
+    pub(super) fn http_answer(&self, status: http::Status, size: WireSize) -> WireSize {
+        http::reframed(size, http::answer_bytes(status, size.bytes(), &[]))
+    }
+
+    /// The first file byte the device asks for with `Range` ([SMP] §4.3.2) after an
+    /// interrupted download of batch `i`: the bytes it holds less the first answer's
+    /// status line and headers. Only the header's length is charged from it; the
+    /// `Content-Length` digits are taken from the held count (the device read the real
+    /// one; at most one digit apart, ASSUMPTION).
+    fn range_held(&self, device: NodeId, i: u32) -> Option<u32> {
+        let held = self
+            .devices
+            .get(&device)
+            .and_then(|d| d.batch_resume.get(&i))
+            .copied()?;
+        let header = http::answer_bytes(http::Status::Ok, held, &[]) - held;
+        Some(held.saturating_sub(header)).filter(|&f| f > 0)
+    }
+
+    /// The session's file check ([CAMP122] §3 step 8): a conditional `GET` of the Local
+    /// Policy File and one of the Local Certificate Chain File, each with the
+    /// `If-None-Match` of the copy the device holds. The LPF's entity tag is CAMP's
+    /// `"local_policy_<global>_<local>.oer"` (SCMS-544); the LCCF's is unpublished and
+    /// taken as `"local_certificate_chain_<version>.oer"` (ASSUMPTION, constants.md
+    /// `http_header_set`). The device's global version is taken as the RA's current one.
+    pub(super) fn file_request_size(&self, lpf: Option<u32>, lccf: Option<u32>) -> WireSize {
+        let host = self.ra_host();
+        let g = self.gov.gpf.version;
+        let len = |t: String| u32::try_from(t.len()).unwrap_or(u32::MAX);
+        let lpf_tag = lpf.map(|l| len(format!("\"local_policy_{g}_{l}.oer\"")));
+        let lccf_tag = lccf.map(|v| len(format!("\"local_certificate_chain_{v}.oer\"")));
+        WireSize::derived(
+            http::conditional_get_bytes(host, http::path::LOCAL_POLICY, lpf_tag)
+                + http::conditional_get_bytes(host, http::path::LOCAL_CHAIN, lccf_tag),
+            "two conditional GETs: request line + Host + If-None-Match",
+            "[CAMP122] Table 79, SCMS-544; scms/http.rs",
+        )
+    }
+
+    /// The RA's two answers to the file check: `200` with each newer file, `304` for a
+    /// current one. The files are their own signed SPDUs (no envelope around both).
+    pub(super) fn file_response_size(&self, lpf: bool, chain: Option<u32>) -> WireSize {
+        let answer = |body: Option<u32>| match body {
+            Some(b) => http::answer_bytes(http::Status::Ok, b, &[]),
+            None => http::answer_bytes(http::Status::NotModified, 0, &[]),
+        };
+        WireSize::derived(
+            answer(lpf.then(|| self.sizes.policy_file().bytes()))
+                + answer(chain.map(|n| self.sizes.chain_file(n).bytes())),
+            "two answers: 200 + the newer file, or 304",
+            "[CAMP122] Table 79, SCMS-544; scms/http.rs",
+        )
     }
 }

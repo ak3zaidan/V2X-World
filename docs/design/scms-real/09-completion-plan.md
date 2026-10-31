@@ -913,3 +913,34 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   in `governance_due`, the key `test_ballot_interval_days` and the engine accept test
   `security_lifecycle::a_long_run_holds_a_test_ballot_each_year` (D1's file). No golden
   moves.
+
+### proto B9
+
+- 2026-10-31 (wave D R4, agent D2): **B9a, the EE-RA framing.** No request line, header
+  or status line was charged: each hop carried the bare SPDU (`run/provision.rs`,
+  `run/enrol.rs` sends; `pdu_layer` asserted step bytes = SPDU length). New
+  `scms/http.rs`: `request_bytes(method, path, headers, body_len)`,
+  `response_bytes(status, headers, body_len)` and the exchange forms built on them
+  (`post_bytes`, `download_bytes` with the Base64 `Download-Req` and an optional `Range`,
+  `conditional_get_bytes`, `upload_bytes`, `answer_bytes`, `content_range`), the
+  [CAMP122] Table 79 paths, and `reframed` (the payload's size provenance is kept). Used on
+  both hops (device-LOP and LOP-RA) of the provisioning request, its ack, the `.info`
+  request and answer, the batch download request and the batch (a resumed batch is a `206`
+  of the remainder; the device's held bytes start with the first answer's headers), every
+  `provisioning-refused` (`500`), the session's file check (two conditional `GET`s
+  answered `200` or `304`, replacing the modelled envelope), and the re-enrolment request,
+  ack, download and response. The misbehaviour upload (`run/report.rs`, a small change)
+  is a `POST` whose `Download-Req` header carries the 315 B authentication Base64, once,
+  not again as body. Enrolment at manufacture (device-DCM-ECA) is not an RA exchange
+  and stays unframed. The minimal header set is an ASSUMPTION (constants.md
+  `http_header_set`); its 412 answer is the engine's 92 B `CRL_NOT_MODIFIED_BYTES`, so
+  B9b (the CRL poll in `phase2.rs`, D1) can take it from `http::answer_bytes`. Tests
+  `tests/http_framing.rs` (six: literal request and answer texts with the file's own
+  Base64), red with the Base64 expansion dropped; `pdu_layer`, `ee_retry` (the 206
+  remainder) and `pregeneration` (the `.info` answer) assert the framed counts exactly;
+  `provisioning_parallel`'s pinned digest re-pinned (`c6e1e2bb…` to `75016779…`, one
+  thread = four still: the SPDUs are sent and stamped later). Left: B9b, and
+  `run/appcert.rs` (identification and RSU application certificates), whose owner is not
+  D2. Found: the RA's `provisioning-ack` to the LOP is sent `Transport::CellularUu`
+  (`run/provision.rs`, both ack sends), so the engine counts that backend hop in the
+  cellular downlink bucket (`phase2.rs` `ByteBucket`); not changed here.

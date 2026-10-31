@@ -376,10 +376,24 @@ fn an_interrupted_batch_download_resumes_with_range_for_the_rest() {
         .collect();
     assert_eq!(rest.len(), 1, "{rest:?}");
     let held = (ser / 2) * SLOW.bandwidth_bps / 8 / S;
+    // The answers are HTTP (proto B9a): the first is `200` around the whole zip, and the
+    // device held its status line and headers before any file byte. The resumed one is
+    // `206` around the rest, with `Content-Range: bytes <from>-<last>/<total>`.
+    use v2xw_proto::scms::http::{Status, answer_bytes, content_range};
+    let total = (0..=full)
+        .rev()
+        .find(|&t| answer_bytes(Status::Ok, t, &[]) == full)
+        .expect("the first answer is a 200 around the zip");
+    let from = u32::try_from(held).unwrap() - (full - total);
+    let remainder = total - from;
     assert_eq!(
-        u64::from(rest[0]),
-        u64::from(full) - held,
-        "a {full} B file, {held} B held: the 206 answer is the remainder"
+        rest[0],
+        answer_bytes(
+            Status::PartialContent,
+            remainder,
+            &[content_range(from, total)]
+        ),
+        "a {total} B file, {from} B held: the 206 answer is the remainder"
     );
 }
 

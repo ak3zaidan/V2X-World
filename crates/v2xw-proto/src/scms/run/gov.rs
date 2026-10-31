@@ -41,7 +41,7 @@ impl ScmsState {
                     n.ra,
                     ScmsMsg::FileRequest { device, lpf, lccf },
                     "file-request-proxied",
-                    self.sizes.file_request(),
+                    self.file_request_size(lpf, lccf),
                     Transport::BackendNet,
                     flow,
                     run,
@@ -59,7 +59,7 @@ impl ScmsState {
                 self.ra.files_served +=
                     u32::from(newer_lpf.is_some()) + u32::from(newer_lccf.is_some());
                 Self::sign(out, 1);
-                let size = self.sizes.file_response(
+                let size = self.file_response_size(
                     newer_lpf.is_some(),
                     newer_lccf
                         .as_ref()
@@ -81,7 +81,7 @@ impl ScmsState {
             }
             ScmsMsg::FileResponse { device, lpf, lccf } if to == n.lop => {
                 self.lop.downstream += 1;
-                let size = self.sizes.file_response(
+                let size = self.file_response_size(
                     lpf.is_some(),
                     lccf.as_ref()
                         .map(|c| u32::try_from(c.certs.len()).unwrap_or(0)),
