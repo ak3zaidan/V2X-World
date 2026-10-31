@@ -806,3 +806,22 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   later), red with `time32(at)` restored (effective 695466005 against 695034005). G-SCMS
   unmoved: none of the three cases issues a CTL after genesis, whose deadline is its vote.
   `validation/governance-deployment.md` C-9 is now MATCHES.
+
+### gov C-10
+
+- 2026-10-31 (wave D R1, agent D2): **the genesis CTL takes the production series'
+  sequence.** The ceremony built it as sequence 0 (`governance.rs`, was `:1524`, `:1580`,
+  log `:1588`). `genesis_ctl_sequence(t0_unix_s, stated)` now gives 1 from 2025-07-16
+  00:00 UTC (`PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S`, the day sequence 1 became effective)
+  and 0 before, read from the run's wall clock; `ScmsParams::ctl_genesis_sequence`
+  (`Option<u32>`, default `None` = auto) states it. `next_sequence` counts on from it.
+  Test `governance::tests::the_genesis_sequence_follows_the_production_series` (2026 gives
+  1, 2024 gives 0, the boundary second, both stated overrides, the signed bytes, the log,
+  a bootstrapped device, and the next list 2), red with the genesis hard-coded to 0. Tests
+  that named sequence numbers absolutely now count from the genesis
+  (`governance/tests.rs` x5, `tests/governance.rs`, engine `scms_wiring.rs` rollover
+  1 and 2, `conformance.rs` "a list after genesis" is `> seqs[0]`, not `>= 1`, which a
+  sequence-1 genesis would have passed without a new list). G-SCMS record digests moved (genesis bytes and sequence numbers in every record that carries a CTL): `i-s1-phase2-60s` `a68647061795…` to `815e9652af18…`, `phase2-path` `64f8489024f3…` to `73742934ef9a…`; frame digests and `ttc-triggered-brake` unmoved.
+  Left to D1 (R5): the scenario key `security.scms.lifecycle.ctl_genesis_sequence`
+  (`auto` "By date, as the production series", `0`, `1`; "The sequence number of the
+  run's first trust list") mapped to `ScmsParams::ctl_genesis_sequence`.

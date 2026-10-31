@@ -478,12 +478,12 @@ fn the_run_walks_every_lifecycle_step() {
     }
     // 5. The CTL change.
     assert!(p.ctls_published >= 1, "no CTL was published");
-    assert!(o.ctls[0].0.iter().any(|s| *s >= 1) && o.ctls[0].1 >= 1);
+    // A list after the genesis one: the genesis sequence is the production series' at
+    // t0 (gov C-10), 1 for this 2026 run, so "new" is "above the first", not "above 0".
+    let after_genesis = |seqs: &Vec<u32>| seqs.iter().any(|s| *s > seqs[0]);
+    assert!(after_genesis(&o.ctls[0].0) && o.ctls[0].1 >= 1);
     for (k, (seqs, _)) in o.ctls.iter().enumerate() {
-        assert!(
-            seqs.iter().any(|s| *s >= 1),
-            "provider {k} holds no new CTL"
-        );
+        assert!(after_genesis(seqs), "provider {k} holds no new CTL");
     }
     let _ = get;
 }

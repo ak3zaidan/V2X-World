@@ -58,7 +58,11 @@ fn a_bootstrapped_device_trusts_every_online_authority() {
     {
         assert!(t.trusts_role(role), "{role} not trusted");
     }
-    assert_eq!(t.ctl_sequence, Some(0));
+    assert_eq!(
+        t.ctl_sequence,
+        Some(1),
+        "a 2026 t0 starts at the production series' sequence 1 (gov C-10)"
+    );
     assert_eq!(t.policy().map(|p| p.certs_per_period), Some(20));
     assert_eq!(t.rejected, 0);
     assert_eq!(
@@ -111,7 +115,7 @@ fn the_quorum_can_only_be_lowered_by_a_quorum() {
     assert_eq!(t.install_ctl(&g.forge_next_ctl(1, &[0, 1, 2])), Ok(3));
     assert_eq!(t.ctl_trust.as_ref().map(|c| c.quorum), Some(1));
     let mut g2 = g.shadow();
-    g2.ctl.sequence = 1;
+    g2.ctl.sequence = g.ctl.sequence + 1;
     assert_eq!(t.install_ctl(&g2.forge_next_ctl(1, &[0])), Ok(1));
 }
 
@@ -200,7 +204,7 @@ fn root_removal_propagates_to_devices() {
     assert_eq!(at, decided + 2 * DAY, "removal within 48 h");
     assert_eq!(g.publish_due(at - 1), 0, "not before the deadline");
     assert_eq!(g.publish_due(at), 1);
-    assert_eq!(g.ctl.sequence, 1);
+    assert_eq!(g.ctl.sequence, 2, "the list after the sequence-1 genesis");
     assert!(g.ctl.roots.is_empty());
     assert_eq!(t.install_ctl(&g.ctl), Ok(5));
     assert!(t.roots.is_empty());
@@ -233,7 +237,7 @@ fn an_elector_replacement_is_installed_in_sequence() {
     assert_eq!(dec.elector_approve().len(), 5);
     assert_eq!(early.install_ctl(&c1), Ok(4));
     // CTL 2 signed by the new elector and two old ones.
-    let c2 = g.build_ctl(2, c1.effective, None, &[5, 1, 2]);
+    let c2 = g.build_ctl(c1.sequence + 1, c1.effective, None, &[5, 1, 2]);
     assert_eq!(early.install_ctl(&c2), Ok(3));
     assert_eq!(
         late.install_ctl(&c2),
@@ -247,7 +251,7 @@ fn an_elector_replacement_is_installed_in_sequence() {
     }
     assert_eq!(late.install_ctl(&c2), Ok(3));
     // The removed elector no longer counts.
-    let c3 = g.build_ctl(3, c1.effective, None, &[0, 1, 2]);
+    let c3 = g.build_ctl(c1.sequence + 2, c1.effective, None, &[0, 1, 2]);
     assert_eq!(
         early.install_ctl(&c3),
         Err(TrustError::CtlQuorum {
@@ -668,4 +672,56 @@ fn a_ctl_is_effective_at_its_vote_and_published_by_the_deadline() {
         "the signed effectiveDate is the vote"
     );
     assert!(dec.effective_date() < clock.time32(at).expect("in range"));
+}
+
+/// gov C-10: the genesis CTL takes the production series' sequence at the run's `t0`
+/// (sequence 0 of 2019-12-12, sequence 1 effective 2025-07-16), unless one is stated.
+#[test]
+fn the_genesis_sequence_follows_the_production_series() {
+    use crate::scms::calendar::days_from_civil;
+    assert_eq!(
+        PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S,
+        days_from_civil(2025, 7, 16) * 86_400,
+        "2025-07-16 00:00 UTC"
+    );
+    let at = |unix: i64, stated: Option<u32>| {
+        let p = ScmsParams {
+            ctl_genesis_sequence: stated,
+            ..params()
+        };
+        let config = GovernanceConfig {
+            clock: v2xw_core::time::WallClock::new(unix),
+            ..GovernanceConfig::default()
+        };
+        Governance::ceremony_with(&p, &ScmsNodes::default(), &rng(), 0, config)
+    };
+    let y2026 = days_from_civil(2026, 3, 2) * 86_400;
+    let y2024 = days_from_civil(2024, 3, 4) * 86_400;
+    for (unix, stated, want) in [
+        (y2026, None, 1),
+        (y2024, None, 0),
+        (PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S, None, 1),
+        (PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S - 1, None, 0),
+        (y2026, Some(0), 0),
+        (y2024, Some(1), 1),
+    ] {
+        let g = at(unix, stated);
+        assert_eq!(g.ctl.sequence, want, "t0 {unix}, stated {stated:?}");
+        let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+        assert_eq!(u32::from(dec.sequence()), want, "the signed sequence");
+        let e = g
+            .log
+            .iter()
+            .find(|e| e.kind == "ctl-genesis")
+            .expect("logged");
+        assert_eq!(e.ctl_sequence, Some(want));
+        // A device bootstraps from it.
+        assert_eq!(bootstrapped(&g).ctl_sequence, Some(want));
+    }
+    // The next decision counts on from a sequence-1 genesis.
+    let mut g = at(y2026, None);
+    let root = g.ctl.roots[0];
+    let published = g.remove_root(root, DAY).expect("approved");
+    g.publish_due(published);
+    assert_eq!(g.ctl.sequence, 2);
 }

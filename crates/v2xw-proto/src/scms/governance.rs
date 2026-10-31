@@ -137,6 +137,21 @@ pub const US_IPERIOD_EPOCH_UNIX_S: i64 = 1_420_534_800;
 /// real `time.t0` passes its own [`WallClock`] in [`GovernanceConfig`].
 pub const DEFAULT_T0_UNIX_S: i64 = US_IPERIOD_EPOCH_UNIX_S + 574 * 7 * 86_400;
 
+/// From this instant the production CTL series stands at sequence 1: 2025-07-16 00:00 UTC,
+/// the day of sequence 1's `effectiveDate` (08:00 UTC). Before it the series was sequence 0
+/// of 2019-12-12 (decoded production CTLs, `validation/governance-deployment.md` C-10).
+pub const PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S: i64 = 1_752_624_000;
+
+/// The genesis CTL's sequence number (gov C-10): `stated` when the scenario states one,
+/// otherwise the production series' number at the run's `t0`, so a run that starts on or
+/// after 2025-07-16 begins at 1 and an earlier one at 0.
+#[must_use]
+pub fn genesis_ctl_sequence(t0_unix_s: i64, stated: Option<u32>) -> u32 {
+    stated.unwrap_or(u32::from(
+        t0_unix_s >= PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S,
+    ))
+}
+
 /// The node ids the governance entities are known by. None of them is hosted on the
 /// request path; the SCMS Manager and the Policy Generator are hosted so a policy change
 /// is a message with a latency like any other.
@@ -1483,7 +1498,8 @@ impl Governance {
     }
 
     /// The setup ceremony: the five electors, the home provider's Root CA, its ICA and
-    /// every component certificate, the genesis CTL (sequence 0) signed by every elector,
+    /// every component certificate, the genesis CTL (its sequence from
+    /// [`genesis_ctl_sequence`]) signed by every elector,
     /// and the first global and local policy and chain files.
     ///
     /// It happens at `t0` and charges nothing to the run's clock: the Root CA and the
@@ -1499,6 +1515,8 @@ impl Governance {
     ) -> Governance {
         let nodes = GovernanceNodes::new(p.electors);
         let now32 = config.clock.time32(t0).unwrap_or(0);
+        let genesis =
+            genesis_ctl_sequence(config.clock.unix_seconds_at(t0), p.ctl_genesis_sequence);
         let start = ELECTOR_START_TIME32.min(now32);
         let electors = nodes
             .electors
@@ -1521,7 +1539,7 @@ impl Governance {
             })
             .collect();
         let placeholder_ctl = SignedCtl {
-            sequence: 0,
+            sequence: genesis,
             quorum: p.elector_quorum,
             roots: Vec::new(),
             electors: Vec::new(),
@@ -1577,7 +1595,7 @@ impl Governance {
         for peer in gov.config.peers.clone() {
             gov.certify_peer(rng, &peer, issued);
         }
-        let ctl = gov.build_ctl(0, now32, None, &gov.approved_signers());
+        let ctl = gov.build_ctl(genesis, now32, None, &gov.approved_signers());
         gov.ctl = ctl.clone();
         gov.ctl_history.push(ctl);
         gov.counters.ctls_published += 1;
@@ -1585,7 +1603,7 @@ impl Governance {
             decided_at: t0,
             published_at: Some(t0),
             kind: "ctl-genesis",
-            ctl_sequence: Some(0),
+            ctl_sequence: Some(genesis),
             signers: gov.ctl.signers.clone(),
             detail: label,
         });
