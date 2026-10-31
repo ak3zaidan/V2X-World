@@ -100,6 +100,9 @@ Source tags are those of 01 §Sources and 03 §0. Two sources are new in this fi
 | `uu_link_bandwidth_bps` | 10000000 | bit/s | ASSUMPTION | `params.rs` | As `uu_link_latency_ms` |
 | `v2x_air_bandwidth_bps` | 6000000 | bit/s | CITED | `params.rs` | QPSK rate 1/2 on the 10 MHz OFDM PHY. EN 302 663 V1.3.1 Annex C.3 Table C.1 |
 | `v2x_air_latency_ms` | 1 | ms | ASSUMPTION | `params.rs` | Library-only channel-access delay. The engine puts roadside broadcasts through its MAC instead |
+| `availability.model` | `always-up` | - | ASSUMPTION | `service.rs` `AvailabilityModel`, `kernel.rs` `availability_windows` (SC-P12.1) | Off by default. `two-state`: up times exponential with mean MTBF, down times exponential with mean MTTR (06-node-models §4, `todo-calibrate`), each interval a keyed hash of (seed, entity, k, kind). Every entity starts up at 0. No provider publishes its availability; the values are for the sensitivity sweeps (09 §6) |
+| `availability.mtbf_h` | 720 | h | ASSUMPTION | `AvailabilityModel::mtbf` | Mean time between failures. Not published (06 §7.7). Menu 24, 168, 720, 8,760 h |
+| `availability.mttr_min` | 30 | min | ASSUMPTION | `AvailabilityModel::mttr` | Mean time to repair. Not published. Menu 5, 30, 60, 240 min. A drawn outage is an `offline` fault, so the backend retry (`BACKEND_RETRY`, SC-D4) and the EE timeout handle it as a `failures[]` window |
 
 ### 1.7 Wire sizes
 

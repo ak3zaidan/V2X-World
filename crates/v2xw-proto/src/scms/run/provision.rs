@@ -516,6 +516,10 @@ impl ScmsState {
         if !pki.is_role(&pki.ra, &pdu::cert_id8(&signer)) {
             return Err(PduError::Signer("an ack is signed by the RA"));
         }
+        // SC-P8.2: an RA on a component CRL the device holds is not answered.
+        if self.device_refuses(device, &signer).is_some() {
+            return Err(PduError::Policy("the RA's certificate is revoked"));
+        }
         let ScmsPduContent::ee_ra(EeRaInterfacePdu::raEeCertAck(a)) = p.content else {
             return Err(PduError::Shape("expected ee-ra.raEeCertAck"));
         };
@@ -2025,6 +2029,7 @@ impl ScmsState {
                                     },
                                 );
                                 self.pca.issued_count += 1;
+                                *self.pca.issued_by_instance.entry(to).or_insert(0) += 1;
                                 // A carrier for the response: the RA reads only
                                 // `response`; the device derives everything else.
                                 credentials.push(IssuedCredential {
@@ -2132,6 +2137,7 @@ impl ScmsState {
                         },
                     );
                     self.pca.issued_count += 1;
+                    *self.pca.issued_by_instance.entry(to).or_insert(0) += 1;
                     credentials.push(IssuedCredential {
                         i: item.i,
                         j: item.j,

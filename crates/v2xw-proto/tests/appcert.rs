@@ -670,3 +670,147 @@ fn the_published_wyoming_distress_ssp_encodes_as_camp_prints_it() {
         &[appcert::SPAT_MAP_PSID]
     );
 }
+
+fn psids_of(c: &v2xw_proto::scms::run::appcert::InstalledApp) -> Vec<u64> {
+    c.cred
+        .cert
+        .0
+        .to_be_signed
+        .app_permissions
+        .as_ref()
+        .expect("appPermissions")
+        .0
+        .iter()
+        .map(|p| u64::try_from(p.psid.0.clone()).expect("small PSID"))
+        .collect()
+}
+
+/// SC-P9.1: an emergency OBU that already holds its pseudonym pool and enrolment
+/// certificate is preloaded with this month's identification certificate and next
+/// month's (requested `ra-maxGenDelay` ahead, before the run), under the same enrolment
+/// certificate; the cycle then renews in the run over the cellular link. Each certificate
+/// carries the identification PSIDs, BSM and SRM ([CAMP122] Table 1), on series 3.
+#[test]
+fn an_obu_identification_cycle_preloads_and_renews() {
+    let mut run = deployment();
+    let p = run.state.params;
+    let month = v2xw_core::time::Duration::from_secs(30 * 86_400);
+    let start = |k: u32| p.period_start_of(month, k);
+    run.add_device(DEVICE_B);
+    run.preload(DEVICE_B, 0, 1, 2).expect("pseudonyms preload");
+    let ec = run.state.devices[&DEVICE_B]
+        .enrolment_credential
+        .as_ref()
+        .expect("enrolled")
+        .cert
+        .clone();
+    // Day 25 of month 1: month 2's request time (a week before it) is already past.
+    let at = start(1) + 25 * DAY;
+    run.preload_app_cert(DEVICE_B, AppCertKind::ObuIdentification, at, true)
+        .expect("pre-run flows");
+    assert_eq!(periods(&run, DEVICE_B), vec![1, 2]);
+    assert_eq!(
+        run.state.devices[&DEVICE_B]
+            .enrolment_credential
+            .as_ref()
+            .unwrap()
+            .cert,
+        ec,
+        "the OBU keeps its one enrolment certificate"
+    );
+    assert!(run.app_installed(DEVICE_B).iter().all(|c| c.at == 0));
+    assert!(run.state.pdus.iter().all(|r| r.preload && r.step.is_none()));
+    assert!(run.app_credential_at(DEVICE_B, at).is_some());
+    // Month 3 is asked for a week before it starts, in the run.
+    let horizon = start(3) - 6 * DAY;
+    run.run_until(horizon).unwrap();
+    assert_eq!(periods(&run, DEVICE_B), vec![1, 2, 3]);
+    let third = &run.app_installed(DEVICE_B)[2];
+    assert!(third.at >= start(3) - 7 * DAY && third.at < start(3) - 7 * DAY + HOUR);
+    assert!(run.app_starvation(DEVICE_B, at, horizon).is_empty());
+    assert!(run.state.pdus.iter().any(|r| !r.preload));
+    assert!(
+        run.state.pdu_rejections.is_empty(),
+        "{:?}",
+        run.state.pdu_rejections
+    );
+    for c in run.app_installed(DEVICE_B) {
+        assert_eq!(
+            psids_of(c),
+            vec![appcert::BSM_PSID, appcert::SRM_PSID],
+            "identification PSIDs, period {}",
+            c.cred.period
+        );
+        let t = &c.cred.cert.0.to_be_signed;
+        assert_eq!(t.crl_series.0.0, 3);
+        assert_eq!(c.until - c.from, 30 * DAY + HOUR);
+    }
+    signs_verifiably(&run, DEVICE_B);
+    assert!(
+        run.kernel
+            .bytes_by_transport()
+            .contains_key(&v2xw_proto::net::Transport::CellularUu)
+    );
+}
+
+/// SC-P9.1: the MA revokes an emergency OBU's identification certificate. It goes on the
+/// series-3 hash CRL by its HashedId10, under the ICA's `cracaId`; a receiver that
+/// installs the list refuses it (RevokedByHash), and the RA issues the OBU no more.
+#[test]
+fn a_revoked_identification_certificate_goes_on_the_series_3_list() {
+    use v2xw_proto::scms::run::HashRefusal;
+    let mut run = deployment();
+    enrolled(&mut run, DEVICE_B, false);
+    enrolled(&mut run, DEVICE_A, false);
+    let p = run.state.params;
+    let month = v2xw_core::time::Duration::from_secs(30 * 86_400);
+    let t0 = run.kernel.now();
+    run.start_app_certs(DEVICE_B, AppCertKind::ObuIdentification, t0);
+    run.run_until(t0 + 2 * HOUR).unwrap();
+    let cert = run.app_installed(DEVICE_B)[0].cred.cert.clone();
+    let id10 = v2xw_sec::sig1609::cert_hashed_id10(&cert).unwrap();
+    assert_eq!(run.state.device_refuses(DEVICE_A, &cert), None);
+    assert!(!run.state.crlg.hash_crls.contains_key(&3));
+    let decided = run.kernel.now();
+    run.revoke_identification(DEVICE_B, decided)
+        .expect("revocable");
+    run.run_until(decided + 4 * DAY).unwrap();
+    let list = run
+        .state
+        .crlg
+        .hash_entries
+        .get(&3)
+        .expect("a series-3 list was issued");
+    assert_eq!(list.iter().map(|e| e.id).collect::<Vec<_>>(), vec![id10]);
+    assert!(run.state.crl_store.hash_crls.contains_key(&3));
+    assert_eq!(run.crl_component_entries(), 0, "not a component");
+    run.distribute_crl(DEVICE_A);
+    run.run_until(decided + 5 * DAY).unwrap();
+    assert_eq!(
+        run.state.device_refuses(DEVICE_A, &cert),
+        Some(HashRefusal::RevokedByHash),
+        "{:?}",
+        run.state.pdu_rejections
+    );
+    // Month 1 is asked for a week before it starts; the RA refuses it.
+    run.run_until(p.period_start_of(month, 1) + HOUR).unwrap();
+    assert_eq!(installed(&run, DEVICE_B), 1);
+    assert!(
+        run.state
+            .apps
+            .ra_refusals
+            .iter()
+            .any(|r| r.1 == DEVICE_B && r.3 == "identification certificate revoked")
+    );
+    assert!(run.state.apps.devices[&DEVICE_B].stopped);
+    assert!(
+        run.state.devices[&DEVICE_B].enrolment_credential.is_some()
+            && !run.state.ra.blocklist.contains(&DEVICE_B),
+        "the device keeps its enrolment"
+    );
+    assert!(
+        run.state.pdu_rejections.is_empty(),
+        "{:?}",
+        run.state.pdu_rejections
+    );
+}

@@ -300,6 +300,8 @@ pub struct IssuedApp {
     pub period: u32,
     /// HashedId10.
     pub id10: [u8; 10],
+    /// Its expiry (Time32): the hash CRL entry may be dropped after it.
+    pub expiry: u32,
     /// When the ACA issued it.
     pub at: SimTime,
 }
@@ -317,6 +319,10 @@ pub struct AppCertState {
     pub ra_store: BTreeMap<String, Pdu>,
     /// Every refusal the RA answered: `(when, device, period, why)`.
     pub ra_refusals: Vec<(SimTime, NodeId, u32, &'static str)>,
+    /// Devices whose identification certificates were revoked, and when it was decided
+    /// ([`ScmsRun::revoke_identification`], SC-P9.1): every identification certificate
+    /// the ACA issued them goes on the series-3 hash CRL, and the RA issues them no more.
+    pub id_revoked: BTreeMap<NodeId, SimTime>,
     /// The RA's answered requests: `(device, period)` → the request's HashedId8.
     ra_answered: BTreeMap<(NodeId, u32), Answered>,
     /// RA → ACA requests in flight, by the HashedId8 of the `RaAcaCertRequestSpdu`.
@@ -332,6 +338,7 @@ impl AppCertState {
             params: AppCertParams::default(),
             devices: BTreeMap::new(),
             issued: Vec::new(),
+            id_revoked: BTreeMap::new(),
             ra_store: BTreeMap::new(),
             ra_refusals: Vec::new(),
             ra_answered: BTreeMap::new(),
@@ -486,7 +493,17 @@ impl ScmsRun {
             .map(|d| core::mem::take(&mut d.outages))
             .unwrap_or_default();
         let run_faults = core::mem::take(&mut self.state.faults);
-        self.enrol_at(device, 0);
+        // An OBU preloaded with pseudonyms already holds its one enrolment certificate
+        // (SC-P9.1): the identification request is signed with it, as on a real device,
+        // and a second enrolment would replace the credential its pseudonym requests use.
+        let enrolled = self
+            .state
+            .devices
+            .get(&device)
+            .is_some_and(|d| d.enrolled && d.enrolment_credential.is_some());
+        if !enrolled {
+            self.enrol_at(device, 0);
+        }
         let mut outcome = Self::drain_into(&mut self.state, &mut self.kernel);
         let mut deferred = None;
         if outcome.is_ok() {
@@ -975,8 +992,12 @@ impl ScmsState {
                     .is_some_and(|ec| ec.valid_at(at));
                 let start = opened.tbs.validity_period.start.0.0;
                 let horizon = self.time32(self.apps.params.max_gen_ahead.after(at));
+                let id_revoked = kind == AppCertKind::ObuIdentification
+                    && self.apps.id_revoked.get(&device).is_some_and(|&t| t <= at);
                 let reason = if self.ra.blocklist.contains(&device) {
                     Some("blocklisted")
+                } else if id_revoked {
+                    Some("identification certificate revoked")
                 } else if !enrolment_ok {
                     Some("enrolment certificate expired or unknown")
                 } else if opened.kind() != kind {
@@ -1097,15 +1118,18 @@ impl ScmsState {
                         .get(&job.device)
                         .map_or(AppCertKind::RsuApplication, |x| x.kind);
                     let id10 = v2xw_sec::cert::cert_id10(&issued.cert).unwrap_or([0; 10]);
+                    let expiry = v2xw_sec::crl::hash_entry(&issued.cert).map_or(0, |e| e.expiry);
                     self.apps.issued.push(IssuedApp {
                         device: job.device,
                         kind,
                         period: job.period,
                         id10,
+                        expiry,
                         at,
                     });
                 }
                 self.pca.issued_count += 1;
+                *self.pca.issued_by_instance.entry(to).or_insert(0) += 1;
                 let resp = Pdu::new(issued.aca_ra_spdu);
                 let size = self.emit_pdu(SpduKind::AcaRaCertResponse, to, n.ra, at, &resp);
                 out.send(

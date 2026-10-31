@@ -162,12 +162,10 @@ impl ScmsRun {
             .ok_or(PduError::Key("no enrolment credential"))?;
         let key = v2xw_sec::sig1609::Signer1609::p256(&ec::scalar_to_be32(&cred.private))
             .ok_or(PduError::Key("pseudonym key"))?;
-        let mas: Vec<&crate::scms::pdu::Authority> =
-            core::iter::once(&pki.ma).chain(pki.extra.iter()).collect();
-        let ma = mas
-            .iter()
-            .find(|a| mbr::ma_covers(&a.cert, mbr::BSM_APP_PSID))
-            .ok_or(PduError::Shape("no MA certificate covers PSID 0x20"))?;
+        // SC-P8.2: an MA certificate on a component CRL the device holds is skipped.
+        let ma = self.state.device_ma(reporter, &pki).ok_or(PduError::Shape(
+            "no unrevoked MA certificate covers PSID 0x20",
+        ))?;
         let ma_enc = ma.enc_public().ok_or(PduError::Key("MA encryption key"))?;
         let v2xw_msg::sec_types::ieee1609_dot2::CertificateId::linkageData(ld) =
             &report.evidence.suspect().cert.0.to_be_signed.id

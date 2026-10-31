@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{DEVICE_A, DEVICE_B, deployment, provisioned};
+use common::{DEVICE_A, DEVICE_B, DEVICE_C, deployment, provisioned};
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::NS_PER_S;
 use v2xw_msg::scms_types::WireEdition;
@@ -381,4 +381,250 @@ fn a_later_crl_walks_earlier_seeds_forward_to_its_i_rev() {
         assert!(!crl::revokes(&c, &cert(DEVICE_A, 0, j)), "A (0,{j})");
         assert!(crl::revokes(&c, &cert(DEVICE_B, 1, j)), "B (1,{j})");
     }
+}
+
+/// The newest list of `series` the Generator signed, opened, with whether it verifies
+/// under `signer` (issued by `issuer`).
+fn component_list(
+    run: &ScmsRun,
+    series: u16,
+    signer: &v2xw_proto::scms::pdu::Authority,
+    issuer: Option<&v2xw_proto::scms::pdu::Authority>,
+) -> (crl::OpenedCrl, bool) {
+    let c = run
+        .state
+        .crlg
+        .issued
+        .iter()
+        .rev()
+        .find(|c| c.series == series)
+        .unwrap_or_else(|| panic!("a series-{series} list was issued"));
+    let opened = crl::decode_crl(c.pdu.bytes()).expect("decodes");
+    let v2xw_sec::sig1609::SpduSigner::Certificate(cert) = opened.signed.signer.clone() else {
+        panic!("the CRL carries its signer's certificate");
+    };
+    assert_eq!(
+        cert, signer.cert,
+        "series {series}: signed by {}",
+        signer.name
+    );
+    let ok = crl::verify_crl(
+        &opened,
+        &cert,
+        issuer.map(|i| &i.cert),
+        WireEdition::Ieee2022,
+    )
+    .accepted();
+    (opened, ok)
+}
+
+/// SC-P8.1 ([SMP] Table 1; IEEE 1609.2 §5.1.3): revoking a component puts its
+/// certificate's HashedId10 on the hash CRL of the series and CRACA the certificate
+/// names, signed by the certificate whose `CrlSsp` lists that series.
+/// - S2X (the default profile): the PCA is ICA-issued, so series 2 under the ICA, signed
+///   by the ICA-issued CRL signer (`issuerIsCraca`, [4, 3, 1, 2]).
+/// - ISS (provider-a of the 2025 production preset): the PCA is ICA-issued on series 2
+///   and names the root (CF-CRACA), so series 2 under the root, signed by the
+///   root-issued CRL signer. (The spec's "ISS gives series 256" is the root-issued
+///   components' series; the certificate decides, the `governance.rs` series rule.)
+/// - Root-issued components (the MA in both, the ISS CRL signer) go on series 256 under
+///   the root, signed by the root itself (`isCraca`, [256], every published US root).
+/// - The S2X ICA names the root on series 2, which no S2X certificate can sign: refused.
+///
+/// Fault: the series loop left at {3, 4}. No series-2 or 256 list is issued, red.
+#[test]
+fn a_revoked_pca_appears_on_its_component_crl() {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    use v2xw_proto::scms::governance::CertProfile;
+    // S2X.
+    let mut run = deployment(1);
+    let pki = run.state.pki.clone().expect("layer on");
+    assert_eq!(pki.profile, CertProfile::S2xProduction);
+    assert!(
+        run.state.crlg.issued.iter().all(|c| c.series == 1),
+        "no component revoked, no component list"
+    );
+    let rev = run
+        .revoke_component("pca", 0)
+        .expect("the S2X PCA is revocable");
+    assert_eq!(
+        (rev.series, rev.craca),
+        (crl::SERIES_SCMS_COMPONENTS, pki.ica.id8())
+    );
+    let ma = run.revoke_component("ma", 0).expect("the MA is revocable");
+    assert_eq!(
+        (ma.series, ma.craca),
+        (crl::SERIES_ROOT_SIGNED, pki.root.id8())
+    );
+    assert!(
+        run.revoke_component("ica", 0).is_err(),
+        "S2X: no certificate signs series 2 under the root"
+    );
+    assert!(run.revoke_component("nobody", 0).is_err());
+    run.run().expect("runs");
+    let (opened, ok) = component_list(&run, 2, &pki.crlg, Some(&pki.ica));
+    assert!(ok, "the S2X series-2 list verifies");
+    assert_eq!(
+        opened.contents.crl_craca.0[..],
+        pki.ica.id8()[..],
+        "crlCraca = ICA"
+    );
+    let ids: Vec<[u8; 10]> = crl::hash_entries(&opened.contents)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        ids,
+        vec![crl::hash_entry(&pki.aca.cert).unwrap().id],
+        "the PCA only"
+    );
+    assert!(crl::revokes(&opened.contents, &pki.aca.cert));
+    assert!(!crl::revokes(&opened.contents, &pki.ra.cert));
+    let (opened, ok) = component_list(&run, 256, &pki.root, None);
+    assert!(ok, "the root-signed series-256 list verifies");
+    assert_eq!(opened.contents.crl_craca.0[..], pki.root.id8()[..]);
+    assert!(crl::revokes(&opened.contents, &pki.ma.cert));
+    assert!(!crl::revokes(&opened.contents, &pki.aca.cert));
+    assert_eq!(run.state.crlg.component_revoked.len(), 2);
+    assert!(run.state.crlg.component_pending.is_empty());
+
+    // ISS.
+    let mut iss = ScmsRun::new_deployed(
+        ScmsParams::default().quick(),
+        0,
+        Deployment::preset(Preset::UsProduction2025),
+    )
+    .expect("the production deployment builds");
+    let pki = iss.state.pki.clone().expect("layer on");
+    assert_eq!(pki.profile, CertProfile::Iss);
+    let rev = iss
+        .revoke_component("pca", 0)
+        .expect("the ISS PCA is revocable");
+    assert_eq!(
+        (rev.series, rev.craca),
+        (crl::SERIES_SCMS_COMPONENTS, pki.root.id8())
+    );
+    iss.revoke_component("crlg", 0)
+        .expect("the ISS CRL signer is revocable");
+    iss.revoke_component("ica", 0)
+        .expect("the ISS ICA is revocable");
+    iss.run().expect("runs");
+    let (opened, ok) = component_list(&iss, 2, &pki.crlg, Some(&pki.root));
+    assert!(ok, "the ISS series-2 list verifies");
+    assert_eq!(
+        opened.contents.crl_craca.0[..],
+        pki.root.id8()[..],
+        "crlCraca = root"
+    );
+    assert!(crl::revokes(&opened.contents, &pki.aca.cert));
+    assert!(crl::revokes(&opened.contents, &pki.ica.cert));
+    let (opened, ok) = component_list(&iss, 256, &pki.root, None);
+    assert!(ok, "the root-signed series-256 list verifies");
+    assert!(crl::revokes(&opened.contents, &pki.crlg.cert));
+}
+
+/// SC-P8.2: the component CRLs travel with the series-1 list to the CRL Store and the
+/// roadside path, a device verifies each itself (`device_check_crl`) and installs it,
+/// and from then on:
+/// - every pseudonym the revoked PCA issued is refused as issuer-revoked (the PCA's
+///   own certificate as revoked by hash), while a certificate no list names is not;
+/// - the device no longer encrypts reports to the revoked MA (`device_ma`, what
+///   `secure_mbr_as` uses);
+/// - the device refuses the revoked RA's signed provisioning ack.
+///
+/// A device that has not downloaded the lists refuses nothing.
+///
+/// Fault: the component CRL signed under the wrong CRACA. The device installs nothing,
+/// accepts the pseudonym, and the test goes red.
+#[test]
+fn a_device_refuses_pseudonyms_of_a_revoked_pca_after_install() {
+    use v2xw_proto::scms::run::{HashRefusal, device_check_crl};
+    let mut run = deployment(3);
+    provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
+    run.enrol(DEVICE_B);
+    run.run().expect("enrolment runs");
+    let pki = run.state.pki.clone().expect("layer on");
+    let pseudonym = implicit(&run, DEVICE_A, 0);
+    assert_eq!(run.crl_component_entries(), 0);
+    for role in ["pca", "ra", "ma"] {
+        run.revoke_component(role, 0).expect("revocable");
+    }
+    run.run().expect("runs");
+    assert_eq!(run.crl_component_entries(), 3, "PCA and RA on 2, MA on 256");
+    let store = &run.state.crl_store;
+    assert_eq!(
+        store.hash_crls.keys().copied().collect::<Vec<_>>(),
+        vec![crl::SERIES_SCMS_COMPONENTS, crl::SERIES_ROOT_SIGNED],
+        "the store serves both component lists"
+    );
+    assert_eq!(run.state.crl_broadcast.hash_crls, store.hash_crls);
+    let full = store.secured.as_ref().expect("the series-1 list").len();
+    let total = full + store.hash_crls.values().map(|p| p.len()).sum::<u32>();
+    assert_eq!(
+        run.state.device_refuses(DEVICE_A, &pseudonym),
+        None,
+        "nothing held yet"
+    );
+    run.distribute_crl(DEVICE_A);
+    run.distribute_crl(DEVICE_B);
+    run.run().expect("runs");
+    let st = &run.state;
+    assert_eq!(
+        st.device_refuses(DEVICE_A, &pseudonym),
+        Some(HashRefusal::IssuerRevoked),
+        "a pseudonym of the revoked PCA, after install ({:?})",
+        st.pdu_rejections
+    );
+    for j in 1..JMAX {
+        assert_eq!(
+            st.device_refuses(DEVICE_A, &implicit(&run, DEVICE_A, j)),
+            Some(HashRefusal::IssuerRevoked)
+        );
+    }
+    assert_eq!(
+        st.device_refuses(DEVICE_A, &pki.aca.cert),
+        Some(HashRefusal::RevokedByHash)
+    );
+    assert_eq!(
+        st.device_refuses(DEVICE_A, &pki.eca.cert),
+        None,
+        "not listed"
+    );
+    assert_eq!(
+        st.device_refuses(DEVICE_C, &pseudonym),
+        None,
+        "C downloaded nothing"
+    );
+    assert_eq!(st.devices[&DEVICE_A].crls_rejected, 0);
+    assert!(st.pdu_rejections.is_empty(), "{:?}", st.pdu_rejections);
+    for p in st.crl_store.hash_crls.values() {
+        device_check_crl(&pki, p.bytes(), &[]).expect("the device accepts the list");
+    }
+    // The download carried every list.
+    assert!(
+        run.kernel
+            .steps
+            .iter()
+            .filter(|s| s.step == "crl-download")
+            .all(|s| s.bytes == total)
+    );
+    // The MA: no unrevoked MA certificate is left to write to.
+    assert!(
+        st.device_ma(DEVICE_A, &pki).is_none(),
+        "the revoked MA is skipped"
+    );
+    assert!(st.device_ma(DEVICE_C, &pki).is_some());
+    // The RA: B holds the list and refuses the RA's ack, so it never downloads a batch.
+    run.provision(DEVICE_B, 0, 1, JMAX);
+    let horizon = run.kernel.now() + 120 * NS_PER_S;
+    run.run_until(horizon).expect("runs");
+    let st = &run.state;
+    assert!(
+        st.pdu_rejections
+            .iter()
+            .any(|r| r.kind == SpduKind::RaEeCertAck && r.at_node == DEVICE_B.index()),
+        "{:?}",
+        st.pdu_rejections
+    );
+    assert!(st.devices[&DEVICE_B].credentials.is_empty());
 }

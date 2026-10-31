@@ -4,14 +4,21 @@
 //! entity here is a `c`-server queue: a request occupies one server for a service time
 //! composed from the cryptographic operations it performs plus a fixed per-request
 //! overhead, and a request that arrives while every server is busy waits. That is the
-//! `medium` tier's structure with a deterministic service time; the `high` tier's
-//! log-normal per-request distribution and its availability model are a documented hook
-//! (`ServiceModelSpec::availability`), not built, because their parameters are
-//! `todo-calibrate` in the design and inventing them would be worse than leaving the seam.
+//! `medium` tier's structure with a deterministic service time.
 //!
-//! Determinism: no RNG, no float. Service times are sums of the integer nanosecond
-//! durations of `v2xw_sec::primitive`'s cost tables, and the server a request lands on is
-//! the lowest-indexed one that is free earliest, chosen by an explicit total order.
+//! The `high` tier's availability model is [`AvailabilityModel`] (SC-P12.1): a two-state
+//! alternating renewal process per entity (06-node-models §4), off by default. Its
+//! parameters are `todo-calibrate` in the design, so every value is a labelled
+//! ASSUMPTION (`docs/design/scms-real/constants.md`) for the sensitivity sweeps (09 §6).
+//! Its down intervals are applied as `offline` faults ([`crate::fault`]), exactly as a
+//! scenario's `actors.backend.failures[]` window is.
+//!
+//! Determinism: no RNG stream, no float in the queue. Service times are sums of the
+//! integer nanosecond durations of `v2xw_sec::primitive`'s cost tables, and the server a
+//! request lands on is the lowest-indexed one that is free earliest, chosen by an
+//! explicit total order. The availability draws are keyed hashes ([`keyed_uniform`]):
+//! each interval is a pure function of `(seed, entity, k, kind)`, and takes no position
+//! in any stream.
 
 use v2xw_core::time::{Duration, SimTime};
 
@@ -44,6 +51,91 @@ impl BatchPolicy {
     };
 }
 
+/// SplitMix64's finaliser: a bijective 64-bit mix.
+const fn mix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+/// A uniform draw in `[0, 1)` keyed by `(seed, entity, k, kind)` (53 bits): a pure
+/// function of its key, so no other draw moves it and it moves no other (§0 rule 5 of
+/// `wp16-24-build-plans.md`).
+#[must_use]
+pub fn keyed_uniform(seed: u64, entity: u64, k: u64, kind: u64) -> f64 {
+    let mut h = mix64(seed ^ 0x6176_6169_6c61_6269); // "availabi"
+    h = mix64(h ^ entity);
+    h = mix64(h ^ k);
+    h = mix64(h ^ kind);
+    #[allow(clippy::cast_precision_loss)]
+    let u = (h >> 11) as f64 / (1u64 << 53) as f64;
+    u
+}
+
+/// The two-state availability model of an entity (06-node-models §4; SC-P12.1): it
+/// alternates up and down, up times exponential with mean `mtbf`, down times exponential
+/// with mean `mttr`. The long-run down share is `mttr / (mtbf + mttr)`.
+///
+/// ASSUMPTION (labelled, `constants.md`): every entity starts up at time 0 (the run
+/// starts after the backend came up); the parameters are the scenario's, not measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvailabilityModel {
+    /// Mean time between failures: the mean up time.
+    pub mtbf: Duration,
+    /// Mean time to repair: the mean down time.
+    pub mttr: Duration,
+}
+
+/// Draw kinds of [`AvailabilityModel::outages`].
+const UP_DRAW: u64 = 0x7570; // "up"
+const DOWN_DRAW: u64 = 0x646f_776e; // "down"
+
+impl AvailabilityModel {
+    /// One exponential interval with mean `mean`: `-mean·ln(1 − u)`, rounded to whole
+    /// nanoseconds and at least 1 ns.
+    fn interval(mean: Duration, seed: u64, entity: u64, k: u64, kind: u64) -> u64 {
+        let u = keyed_uniform(seed, entity, k, kind);
+        #[allow(clippy::cast_precision_loss)]
+        let x = -(mean.as_nanos() as f64) * (1.0 - u).ln();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ns = x.round() as u64;
+        ns.max(1)
+    }
+
+    /// The long-run share of time down, `mttr / (mtbf + mttr)`.
+    #[must_use]
+    pub fn down_share(&self) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let (b, r) = (self.mtbf.as_nanos() as f64, self.mttr.as_nanos() as f64);
+        if b + r == 0.0 { 0.0 } else { r / (b + r) }
+    }
+
+    /// Entity `entity`'s down intervals `[from, until)` that start before `horizon`,
+    /// drawn under `seed`: the k-th up time is `-mtbf·ln(1 − keyed_uniform(seed, entity,
+    /// k, up))` and the k-th down time the same with `mttr` and `down`. The last one may
+    /// end after `horizon`. None when `mttr` is zero; `mtbf` zero is treated as 1 ns.
+    #[must_use]
+    pub fn outages(&self, seed: u64, entity: u64, horizon: SimTime) -> Vec<(SimTime, SimTime)> {
+        let mut out = Vec::new();
+        if self.mttr.as_nanos() == 0 {
+            return out;
+        }
+        let mut t: SimTime = 0;
+        let mut k = 0u64;
+        loop {
+            t = t.saturating_add(Self::interval(self.mtbf, seed, entity, k, UP_DRAW));
+            if t >= horizon {
+                return out;
+            }
+            let end = t.saturating_add(Self::interval(self.mttr, seed, entity, k, DOWN_DRAW));
+            out.push((t, end));
+            t = end;
+            k += 1;
+        }
+    }
+}
+
 /// How an entity serves requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServiceModelSpec {
@@ -53,10 +145,9 @@ pub struct ServiceModelSpec {
     pub fixed_overhead: Duration,
     /// The batching window, where the entity has one.
     pub batching: Option<BatchPolicy>,
-    /// Availability: a documented hook. `None` everywhere in this crate, because
-    /// 06-node-models §4 leaves the two-state Markov parameters `todo-calibrate` and this
-    /// crate does not invent them.
-    pub availability: Option<()>,
+    /// Availability: `None` (always up, the default) or the two-state model whose down
+    /// intervals [`crate::Kernel::availability_faults`] draws (SC-P12.1).
+    pub availability: Option<AvailabilityModel>,
     /// Requests that may wait beyond the busy servers; one more arriving is turned away
     /// as busy (`capacity.<role>.queue_limit`, 08-settings-ux-and-gaps §6). `None`:
     /// unlimited, the default.
@@ -80,6 +171,15 @@ impl ServiceModelSpec {
     pub const fn limited(self, limit: Option<u32>) -> ServiceModelSpec {
         ServiceModelSpec {
             queue_limit: limit,
+            ..self
+        }
+    }
+
+    /// The same, with random outages under `model` (SC-P12.1).
+    #[must_use]
+    pub const fn available(self, model: Option<AvailabilityModel>) -> ServiceModelSpec {
+        ServiceModelSpec {
+            availability: model,
             ..self
         }
     }
@@ -115,6 +215,8 @@ pub struct ServiceQueue {
     limit: Option<u32>,
     /// Requests turned away because the queue was at its limit.
     refused: u64,
+    /// Its availability model, if it fails at random.
+    availability: Option<AvailabilityModel>,
 }
 
 impl ServiceQueue {
@@ -130,12 +232,20 @@ impl ServiceQueue {
             servers: spec.servers.max(1),
             limit: spec.queue_limit,
             refused: 0,
+            availability: spec.availability,
         }
     }
 
     /// The model it was built from (without the batching, which its entity applies).
     pub const fn spec(&self) -> ServiceModelSpec {
-        ServiceModelSpec::new(self.servers, self.fixed_overhead).limited(self.limit)
+        ServiceModelSpec::new(self.servers, self.fixed_overhead)
+            .limited(self.limit)
+            .available(self.availability)
+    }
+
+    /// Its availability model, if it fails at random.
+    pub const fn availability(&self) -> Option<AvailabilityModel> {
+        self.availability
     }
 
     /// Whether a request arriving at `t` finds the queue full: every server busy and

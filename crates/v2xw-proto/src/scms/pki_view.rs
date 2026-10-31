@@ -621,8 +621,8 @@ pub fn pki_state(runs: &[ScmsRun], now: SimTime, tracker: &mut PkiTracker) -> Op
                 }
             }
         }
-        // Instances beyond the first (a second ACA): the kernel's numbers, no counters
-        // of their own because the run routes every request to the primary.
+        // Instances beyond the first (a second ACA): the kernel's numbers and, for an ACA,
+        // the certificates it issued itself (the RA splits its requests between them).
         for (_, (id, role, inst)) in ids.iter().filter(|(_, (_, _, i))| *i > 0) {
             if id.starts_with(MANAGER) {
                 continue;
@@ -646,7 +646,7 @@ pub fn pki_state(runs: &[ScmsRun], now: SimTime, tracker: &mut PkiTracker) -> Op
             if let Some(c) = cert {
                 carry(c, tracker);
             }
-            components.push(component_from(
+            let mut c = component_from(
                 run,
                 &e,
                 id.clone(),
@@ -655,7 +655,15 @@ pub fn pki_state(runs: &[ScmsRun], now: SimTime, tracker: &mut PkiTracker) -> Op
                 *inst,
                 cert.map(cert_id8),
                 now,
-            ));
+            );
+            if role == "aca"
+                && let Some(n) = node
+            {
+                let issued = run.state.pca.issued_by_instance.get(&n).copied();
+                c.counters
+                    .insert("certs_issued".into(), issued.unwrap_or(0).into());
+            }
+            components.push(c);
         }
         // CRL heads: the newest of each (series, delta).
         let mut heads: BTreeMap<(u16, bool), (u32, &crate::scms::run::IssuedCrl)> = BTreeMap::new();

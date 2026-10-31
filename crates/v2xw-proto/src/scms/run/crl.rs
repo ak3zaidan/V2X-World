@@ -71,6 +71,100 @@ pub struct IssuedCrl {
     pub pdu: crate::scms::pdu::Pdu,
 }
 
+/// One SCMS component's certificate put on its provider's component CRL (SC-P8.1).
+///
+/// [SMP] Table 1 and IEEE 1609.2 §5.1.3: a hash CRL revokes the certificates that name
+/// its `crlCraca` (by the low 3 bytes, `cracaId`) and its `crlSeries`. Each component
+/// certificate names its own: an ICA-issued component series 2 under the ICA (S2X) or
+/// the root (ISS); a root-issued one (MA, PG, the ISS CRL signer) series 256 under the
+/// root; the ICA itself series 2 under the root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComponentRevocation {
+    /// The component's role (`ica`, `pca`, `ra`, `eca`, `la1`, `la2`, `ma`, `crlg`,
+    /// `dcm`).
+    pub role: &'static str,
+    /// When the revocation was decided.
+    pub at: SimTime,
+    /// The `crlSeries` its certificate names.
+    pub series: u16,
+    /// The `crlCraca` of the list it goes on: the HashedId8 of its CRACA.
+    pub craca: [u8; 8],
+    /// Its `HashedId10` and expiry.
+    pub entry: v2xw_sec::crl::HashRevocation,
+}
+
+/// The component of `pki` that `role` names, by its canonical role name (`pca` and the
+/// engine's host label `aca` are the same component).
+#[must_use]
+pub fn component_authority<'a>(
+    pki: &'a crate::scms::pdu::ScmsPki,
+    role: &str,
+) -> Option<(&'static str, &'a crate::scms::pdu::Authority)> {
+    Some(match role {
+        "ica" => ("ica", &pki.ica),
+        "pca" | "aca" => ("pca", &pki.aca),
+        "ra" => ("ra", &pki.ra),
+        "eca" => ("eca", &pki.eca),
+        "la1" => ("la1", &pki.la1),
+        "la2" => ("la2", &pki.la2),
+        "ma" => ("ma", &pki.ma),
+        "crlg" => ("crlg", &pki.crlg),
+        "dcm" => ("dcm", &pki.dcm),
+        _ => return None,
+    })
+}
+
+/// The certificate that signs `pki`'s hash CRLs of `series`, and the `crlCraca` such a
+/// list carries: the first of the CRL signer and the root whose `CrlSsp` (version 1)
+/// lists the series, with the CRACA its `associatedCraca` names (itself for `isCraca`,
+/// its issuer for `issuerIsCraca`).
+///
+/// The published certificates decide it ([SMP] Table 1 rows 2 and 256 name no signer):
+/// the CRL signer holds `{issuerIsCraca, [4, 3, 1, 2]}` (ISS `crlg.preprod`), so it signs
+/// series 2, 3 and 4 under its issuer; every published US root holds
+/// `{isCraca, [256]}`, so the root signs series 256 itself ("root-signed", Table 1). No
+/// published certificate signs series 2 under the root when the CRL signer is
+/// ICA-issued (S2X), so the S2X ICA has no component CRL (`None` for that pairing,
+/// [`ScmsRun::revoke_component`]).
+#[must_use]
+pub fn hash_crl_signer(
+    pki: &crate::scms::pdu::ScmsPki,
+    series: u16,
+) -> Option<(&crate::scms::pdu::Authority, [u8; 8])> {
+    use v2xw_sec::crl::CracaType;
+    [&pki.crlg, &pki.root].into_iter().find_map(|a| {
+        let ssp = v2xw_sec::crl::crl_ssp(&a.cert).filter(|s| s.version.0 == 1)?;
+        if !ssp.crls.iter().any(|c| c.0.0 == series) {
+            return None;
+        }
+        let craca = match ssp.associated_craca {
+            CracaType::isCraca => a.id8(),
+            CracaType::issuerIsCraca => match &a.cert.0.issuer {
+                v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h)
+                | v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha384AndDigest(h) => {
+                    let id = v2xw_sec::hashedid::id8_bytes(h);
+                    [&pki.root, &pki.ica]
+                        .into_iter()
+                        .find(|i| i.id8() == id)?
+                        .id8()
+                }
+                _ => return None,
+            },
+        };
+        Some((a, craca))
+    })
+}
+
+/// Why a device refuses a certificate on a hash CRL it holds
+/// ([`ScmsState::device_refuses`]); the receivers' `RxReject` of the same names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashRefusal {
+    /// The certificate itself is listed.
+    RevokedByHash,
+    /// A CA certificate above it is listed (a revoked PCA, ICA, ...).
+    IssuerRevoked,
+}
+
 /// Where a CRL stands in the sequence its CRL Generator issues for one
 /// `(crlCraca, crlSeries)` (R2).
 ///
@@ -124,10 +218,14 @@ impl CrlOrder {
 /// on (see the `CrlDownload` handler). Returns the CRL's series and [`CrlOrder`], which
 /// the caller compares with the CRL it holds.
 ///
+/// A hash CRL (series 2, 3, 4 or 256; SC-P8.2) carries its own entries, so `list` is not
+/// read for it; its signer's issuer is the authority the signer names (the CRACA of an
+/// `issuerIsCraca` signer; none is needed for the root's `isCraca` series-256 list).
+///
 /// # Errors
 /// The CRL does not decode, the signer is not one attached certificate that chains to
-/// the PKI, [`v2xw_sec::crl::verify_crl`] does not accept it, or `list` is not exactly
-/// what it signs.
+/// the PKI, [`v2xw_sec::crl::verify_crl`] does not accept it, `list` is not exactly
+/// what a linkage CRL signs, or a hash CRL claims series 1.
 pub fn device_check_crl(
     pki: &crate::scms::pdu::ScmsPki,
     bytes: &[u8],
@@ -140,10 +238,25 @@ pub fn device_check_crl(
         return Err(PduError::Signer("a CRL carries its signer's certificate"));
     };
     pki.signer_key(&signer)?;
+    let hash = matches!(
+        opened.contents.type_specific,
+        T::fullHashCrl(_) | T::deltaHashCrl(_)
+    );
+    let issuer = if hash {
+        match &signer.0.issuer {
+            v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h)
+            | v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha384AndDigest(h) => pki
+                .by_id8(&v2xw_sec::hashedid::id8_bytes(h))
+                .map(|a| &a.cert),
+            _ => None,
+        }
+    } else {
+        Some(&pki.crl_signer_issuer().cert)
+    };
     let verdict = v2xw_sec::crl::verify_crl(
         &opened,
         &signer,
-        Some(&pki.crl_signer_issuer().cert),
+        issuer,
         v2xw_msg::scms_types::WireEdition::default(),
     );
     if !verdict.accepted() {
@@ -154,6 +267,12 @@ pub fn device_check_crl(
         });
     }
     let c = &opened.contents;
+    if hash {
+        if c.crl_series.0.0 == v2xw_sec::crl::SERIES_PSEUDONYM {
+            return Err(PduError::Shape("series-1 CRL is a linkage CRL"));
+        }
+        return Ok(CrlOrder::of(c));
+    }
     let (i_rev, index_within_i, delta) = match &c.type_specific {
         T::fullLinkedCrl(t) => (t.i_rev.0.0, t.index_within_i.0, false),
         T::deltaLinkedCrl(t) => (t.i_rev.0.0, t.index_within_i.0, true),
@@ -275,6 +394,138 @@ impl ScmsRun {
             run,
         );
     }
+
+    /// The provider revokes one of its own SCMS components at `at` (SC-P8.1): the
+    /// component's certificate goes on the hash CRL of the series and CRACA it names
+    /// ([`ComponentRevocation`]), signed by the certificate whose `CrlSsp` lists that
+    /// series ([`hash_crl_signer`]), at the first publication at or after `at`.
+    ///
+    /// The decision reaches the CRL Generator as a change to the list, so it is
+    /// published by the provider's publication rule as a linkage revocation is: the next
+    /// business-day slot ([SM-PROV] §3.4.9, "within 1 business day of any change"), the
+    /// cadence boundary, or at once. ASSUMPTION (labelled): the root-signed series-256
+    /// list rides the provider's publication; a real root is offline and signs it at a
+    /// ceremony whose delay is not published.
+    ///
+    /// # Errors
+    /// The PDU layer is off, `role` names no component, or no certificate of the PKI
+    /// can sign a CRL that matches the component's `(cracaId, crlSeries)`: the S2X ICA
+    /// names the root on series 2, and its CRL signer's CRACA is the ICA (recorded in
+    /// `pki_profile.rs`, CF-CRACA).
+    pub fn revoke_component(
+        &mut self,
+        role: &str,
+        at: SimTime,
+    ) -> crate::scms::pdu::Result<ComponentRevocation> {
+        use crate::scms::pdu::PduError;
+        let pki = self
+            .state
+            .pki
+            .clone()
+            .ok_or(PduError::Policy("component CRLs need the PDU layer"))?;
+        let (role, a) =
+            component_authority(&pki, role).ok_or(PduError::Policy("no such SCMS component"))?;
+        let tbs = &a.cert.0.to_be_signed;
+        let series = tbs.crl_series.0.0;
+        let craca3 = &tbs.craca_id.0[..];
+        let (_, craca) = hash_crl_signer(&pki, series)
+            .filter(|(_, c)| c[5..] == *craca3)
+            .ok_or(PduError::Policy(
+                "no CRL signer holds the component's cracaId and crlSeries",
+            ))?;
+        let entry =
+            v2xw_sec::crl::hash_entry(&a.cert).map_err(|e| PduError::Coer(e.to_string()))?;
+        let rev = ComponentRevocation {
+            role,
+            at,
+            series,
+            craca,
+            entry,
+        };
+        self.state.crlg.component_pending.push(rev);
+        let at = at.max(self.kernel.now());
+        let crlg = self.state.nodes.crlg;
+        let run = self.new_run();
+        // A change to the list with no linkage entry: the Generator arms its publication
+        // exactly as for a revocation's `crl-append`.
+        self.inject_at(
+            at,
+            crlg,
+            ScmsMsg::CrlAppend {
+                i: 0,
+                pairs: Vec::new(),
+                jmax: 0,
+            },
+            FlowId::CrlIssuance,
+            run,
+        );
+        Ok(rev)
+    }
+
+    /// The MA revokes `device`'s OBU identification certificates at `at` (SC-P9.1;
+    /// [SMP] §6.3.3, Table 1): a non-pseudonym certificate carries no linkage data, so it
+    /// is revoked by its `HashedId10` on the series-3 hash CRL of the CRACA it names (the
+    /// ICA; the CRL signer `{issuerIsCraca, [4,3,1,2]}` signs it). Every identification
+    /// certificate the ACA has issued the device and that has not expired goes on the
+    /// list at each publication at or after `at`, so one the ACA issues while the
+    /// decision is on its way joins the next one; and from `at` the RA issues the device
+    /// no more.
+    ///
+    /// ASSUMPTION (labelled): the decision withdraws the privilege only. The device keeps
+    /// its enrolment certificate and its pseudonyms; revoking the whole device is the
+    /// linkage path ([`ScmsRun::revoke`] and the RA blocklist). No published source says
+    /// whether a misbehaving emergency vehicle loses both.
+    ///
+    /// # Errors
+    /// The PDU layer is off, or no certificate of the PKI signs a series-3 list under the
+    /// CRACA the device's identification certificates name.
+    pub fn revoke_identification(
+        &mut self,
+        device: NodeId,
+        at: SimTime,
+    ) -> crate::scms::pdu::Result<()> {
+        use crate::scms::pdu::PduError;
+        let pki = self
+            .state
+            .pki
+            .clone()
+            .ok_or(PduError::Policy("identification CRLs need the PDU layer"))?;
+        let (_, craca) = hash_crl_signer(&pki, v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION)
+            .ok_or(PduError::Policy("no CRL signer lists series 3"))?;
+        let named = self
+            .state
+            .apps
+            .devices
+            .get(&device)
+            .into_iter()
+            .flat_map(|d| d.installed.iter())
+            .all(|c| {
+                let t = &c.cred.cert.0.to_be_signed;
+                t.crl_series.0.0 == v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION
+                    && t.craca_id.0[..] == craca[5..]
+            });
+        if !named {
+            return Err(PduError::Policy(
+                "the identification certificate names another cracaId or crlSeries",
+            ));
+        }
+        self.state.apps.id_revoked.entry(device).or_insert(at);
+        let at = at.max(self.kernel.now());
+        let crlg = self.state.nodes.crlg;
+        let run = self.new_run();
+        self.inject_at(
+            at,
+            crlg,
+            ScmsMsg::CrlAppend {
+                i: 0,
+                pairs: Vec::new(),
+                jmax: 0,
+            },
+            FlowId::CrlIssuance,
+            run,
+        );
+        Ok(())
+    }
 }
 
 impl ScmsState {
@@ -314,7 +565,24 @@ impl ScmsState {
             (n.crl_broadcast, "crl-broadcast"),
         ] {
             let size = match &secured {
-                Some(p) => self.emit_pdu(SpduKind::SecuredCrl, n.crlg, to, at, p),
+                Some(p) => {
+                    let full = self.emit_pdu(SpduKind::SecuredCrl, n.crlg, to, at, p);
+                    // The hash CRLs of the publication travel with it, each its own
+                    // `SecuredCrl` (SC-P8.2); none unless a component was revoked.
+                    let hash: Vec<_> = self.crlg.hash_crls.values().cloned().collect();
+                    let mut bytes = full.bytes();
+                    for h in &hash {
+                        bytes = bytes.saturating_add(
+                            self.emit_pdu(SpduKind::SecuredCrl, n.crlg, to, at, h)
+                                .bytes(),
+                        );
+                    }
+                    if hash.is_empty() {
+                        full
+                    } else {
+                        WireSize::real(bytes, SpduKind::SecuredCrl.name())
+                    }
+                }
                 None => self.sizes.crl(entries),
             };
             out.send(
@@ -447,11 +715,61 @@ impl ScmsState {
                 self.crlg.delta = Some(d);
             }
         }
-        for series in [
-            v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION,
-            v2xw_sec::crl::SERIES_ENROLMENT,
-        ] {
+        // Component revocations decided by now join their series' list (SC-P8.1).
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.crlg.component_pending)
+            .into_iter()
+            .partition(|r| r.at <= at);
+        self.crlg.component_pending = later;
+        for r in due {
+            let list = self.crlg.hash_entries.entry(r.series).or_default();
+            if !list.iter().any(|e| e.id == r.entry.id) {
+                list.push(r.entry);
+                self.crlg.component_revoked.push(r);
+            }
+        }
+        // Revoked identification certificates join the series-3 list (SC-P9.1): every one
+        // the ACA issued a revoked device by now that has not expired.
+        let now32 = self.time32(at);
+        let ids: Vec<_> = self
+            .apps
+            .issued
+            .iter()
+            .filter(|c| {
+                c.kind == crate::scms::appcert::AppCertKind::ObuIdentification
+                    && c.at <= at
+                    && c.expiry >= now32
+                    && self
+                        .apps
+                        .id_revoked
+                        .get(&c.device)
+                        .is_some_and(|&t| t <= at)
+            })
+            .map(|c| v2xw_sec::crl::HashRevocation {
+                id: c.id10,
+                expiry: c.expiry,
+            })
+            .collect();
+        if !ids.is_empty() {
+            let list = self
+                .crlg
+                .hash_entries
+                .entry(v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION)
+                .or_default();
+            for e in ids {
+                if !list.iter().any(|x| x.id == e.id) {
+                    list.push(e);
+                }
+            }
+        }
+        // A full hash CRL for every series with entries (2, 3, 4, 256; [SMP] Table 1),
+        // each signed by the certificate whose `CrlSsp` lists it, under the CRACA that
+        // `CrlSsp` names ([`hash_crl_signer`]). No entries, no list.
+        let hash_series: Vec<u16> = self.crlg.hash_entries.keys().copied().collect();
+        for series in hash_series {
             let Some(entries) = self.crlg.hash_entries.get(&series).cloned() else {
+                continue;
+            };
+            let Some((signer, craca)) = hash_crl_signer(&pki, series) else {
                 continue;
             };
             let serial = {
@@ -471,7 +789,16 @@ impl ScmsState {
                     entries: entries.clone(),
                 },
             };
-            if let Some(p) = sign(&spec) {
+            let signed = (|| {
+                let contents = v2xw_sec::crl::crl_contents(&spec);
+                v2xw_sec::crl::check_crl(&contents, v2xw_msg::scms_types::WireEdition::default())
+                    .ok()?;
+                let crl = v2xw_sec::crl::sign_crl(&contents, &signer.cert, &signer.key).ok()?;
+                Some(crate::scms::pdu::Pdu::new(
+                    v2xw_sec::crl::encode_crl(&crl).ok()?,
+                ))
+            })();
+            if let Some(p) = signed {
                 log.push((series, false, entries.len(), p.clone()));
                 self.crlg.hash_crls.insert(series, p);
             }
@@ -607,6 +934,22 @@ impl ScmsRun {
     pub fn crl_entry(&self) -> Option<&v2xw_sec::linkage::CrlLinkageEntry> {
         self.state.crl_store.entries.first()
     }
+
+    /// `crl_component_entries`: the component certificates on this provider's signed
+    /// component CRLs, series 2 and 256 (SC-P8.2). 0 unless a component was revoked.
+    #[must_use]
+    pub fn crl_component_entries(&self) -> u32 {
+        let n: usize = [
+            v2xw_sec::crl::SERIES_SCMS_COMPONENTS,
+            v2xw_sec::crl::SERIES_ROOT_SIGNED,
+        ]
+        .iter()
+        .filter(|s| self.state.crlg.hash_crls.contains_key(s))
+        .filter_map(|s| self.state.crlg.hash_entries.get(s))
+        .map(Vec::len)
+        .sum();
+        u32::try_from(n).unwrap_or(u32::MAX)
+    }
 }
 
 impl ScmsState {
@@ -738,15 +1081,17 @@ impl ScmsState {
                 let list = self.crlg.entries.clone();
                 let secured = self.crlg.secured.clone();
                 let retired = self.crlg.secured_retired.clone();
+                let hash = self.crlg.hash_crls.clone();
                 let size = secured.as_ref().map_or_else(
                     || self.sizes.crl(entries).bytes(),
-                    crate::scms::pdu::Pdu::len,
+                    |p| with_hash_lists(p.len(), &hash),
                 );
                 let signature = self.crlg.signature;
                 if to == n.crl_store {
                     self.crl_store.entries = list;
                     self.crl_store.secured = secured;
                     self.crl_store.secured_retired = retired;
+                    self.crl_store.hash_crls = hash;
                     self.crl_store.signature = signature;
                     self.crl_store.versions += 1;
                     self.crl_store.published_runs.push(run);
@@ -755,6 +1100,7 @@ impl ScmsState {
                     self.crl_broadcast.entries = list;
                     self.crl_broadcast.secured = secured;
                     self.crl_broadcast.secured_retired = retired;
+                    self.crl_broadcast.hash_crls = hash;
                     self.crl_broadcast.signature = signature;
                     self.crl_broadcast.versions += 1;
                     out.stage_at(StageId::FirstRsuBroadcast, to, Some(size), flow, run);
@@ -775,7 +1121,12 @@ impl ScmsState {
                 let entries = u32::try_from(self.crl_store.entries.len()).unwrap_or(u32::MAX);
                 let size = self.crl_store.secured.as_ref().map_or_else(
                     || self.sizes.crl(entries),
-                    |p| WireSize::real(p.len(), SpduKind::SecuredCrl.name()),
+                    |p| {
+                        WireSize::real(
+                            with_hash_lists(p.len(), &self.crl_store.hash_crls),
+                            SpduKind::SecuredCrl.name(),
+                        )
+                    },
                 );
                 out.send(
                     device,
@@ -794,7 +1145,12 @@ impl ScmsState {
                 let entries = u32::try_from(self.crl_broadcast.entries.len()).unwrap_or(u32::MAX);
                 let size = self.crl_broadcast.secured.as_ref().map_or_else(
                     || self.sizes.crl(entries),
-                    |p| WireSize::real(p.len(), SpduKind::SecuredCrl.name()),
+                    |p| {
+                        WireSize::real(
+                            with_hash_lists(p.len(), &self.crl_broadcast.hash_crls),
+                            SpduKind::SecuredCrl.name(),
+                        )
+                    },
                 );
                 out.send(
                     device,
@@ -807,20 +1163,36 @@ impl ScmsState {
                 );
             }
             ScmsMsg::CrlDownload { device, entries } => {
-                let secured = if from == n.crl_broadcast {
-                    self.crl_broadcast.secured.clone()
+                let (secured, hash) = if from == n.crl_broadcast {
+                    (
+                        self.crl_broadcast.secured.clone(),
+                        self.crl_broadcast.hash_crls.clone(),
+                    )
                 } else {
-                    self.crl_store.secured.clone()
+                    (
+                        self.crl_store.secured.clone(),
+                        self.crl_store.hash_crls.clone(),
+                    )
                 };
                 let size = secured.as_ref().map_or_else(
                     || self.sizes.crl(entries).bytes(),
-                    crate::scms::pdu::Pdu::len,
+                    |p| with_hash_lists(p.len(), &hash),
                 );
                 out.stage_at(StageId::Downloaded, device, Some(size), flow, run);
                 // One signature verification over the list, then per entry: two SHA-256
                 // per i-period walked and two AES per index searched ([ACPC §2],
                 // [BRECHT §VII]).
                 Self::verify(out, 1);
+                // The hash CRLs that came with it (series 2, 3, 4, 256; SC-P8.2), each
+                // verified on its own (1609.2.1 §6.3.5: every `SecuredCrl` of a composite
+                // file is checked by itself): one that fails is refused and recorded, the
+                // others install whatever the series-1 list does.
+                if let Some(pki) = self.pki.clone() {
+                    for p in hash.values() {
+                        Self::verify(out, 1);
+                        self.install_hash_crl(&pki, device, at, p);
+                    }
+                }
                 // The device processes the list it *received*, from whichever path
                 // delivered it. The two paths carry the same signed artefact, and reading
                 // the store's copy on the broadcast path would make an RSU-only vehicle
@@ -925,4 +1297,126 @@ impl ScmsState {
         }
         Ok(())
     }
+
+    /// `device` checks one hash `SecuredCrl` it received ([`device_check_crl`]) and, when
+    /// it verifies and is not older than the list it holds for that `(crlCraca,
+    /// crlSeries)`, installs its entries (SC-P8.2). A list that does not verify, or a
+    /// replay of an older one, is refused and recorded.
+    fn install_hash_crl(
+        &mut self,
+        pki: &crate::scms::pdu::ScmsPki,
+        device: NodeId,
+        at: SimTime,
+        p: &crate::scms::pdu::Pdu,
+    ) {
+        let checked = device_check_crl(pki, p.bytes(), &[]).and_then(|(key, order)| {
+            let c = v2xw_sec::crl::decode_crl(p.bytes())
+                .map_err(|e| crate::scms::pdu::PduError::Coer(e.to_string()))?;
+            let ids: Vec<[u8; 10]> = v2xw_sec::crl::hash_entries(&c.contents)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            Ok((key, order, ids))
+        });
+        let (key, order, ids) = match checked {
+            Ok(v) => v,
+            Err(e) => {
+                if let Some(dev) = self.devices.get_mut(&device) {
+                    dev.crls_rejected += 1;
+                }
+                self.reject_pdu(SpduKind::SecuredCrl, device, at, e);
+                return;
+            }
+        };
+        let digest = v2xw_core::hash::sha256(p.bytes());
+        let Some(dev) = self.devices.get_mut(&device) else {
+            return;
+        };
+        if dev
+            .crl_held
+            .get(&key)
+            .is_some_and(|&(o, h)| h != digest && order <= o)
+        {
+            dev.crls_stale += 1;
+            self.reject_pdu(
+                SpduKind::SecuredCrl,
+                device,
+                at,
+                crate::scms::pdu::PduError::Policy(
+                    "stale CRL: not newer than the one held for its CRACA and series",
+                ),
+            );
+            return;
+        }
+        dev.crl_held.insert(key, (order, digest));
+        dev.hash_held.insert(key, ids);
+    }
+
+    /// Whether `device` refuses `cert` on a hash CRL it holds (SC-P8.2; IEEE 1609.2
+    /// §5.1.3), and why: `cert` itself is listed, or a CA certificate above it in this
+    /// provider's PKI is; `None` when neither. A list applies to a certificate only when its `crlCraca` ends in
+    /// the certificate's `cracaId` and its series is the certificate's `crlSeries`.
+    #[must_use]
+    pub fn device_refuses(
+        &self,
+        device: NodeId,
+        cert: &v2xw_msg::sec_types::ieee1609_dot2::Certificate,
+    ) -> Option<HashRefusal> {
+        use v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier;
+        let dev = self.devices.get(&device)?;
+        if dev.hash_held.values().all(Vec::is_empty) {
+            return None;
+        }
+        let listed = |c: &v2xw_msg::sec_types::ieee1609_dot2::Certificate| {
+            let tbs = &c.0.to_be_signed;
+            let (craca, series) = (&tbs.craca_id.0[..], tbs.crl_series.0.0);
+            let Ok(id) = v2xw_sec::sig1609::cert_hashed_id10(c) else {
+                return false;
+            };
+            dev.hash_held
+                .iter()
+                .any(|((k, s), ids)| *s == series && k[5..] == *craca && ids.contains(&id))
+        };
+        if listed(cert) {
+            return Some(HashRefusal::RevokedByHash);
+        }
+        let pki = self.pki.as_ref()?;
+        let mut c = cert.clone();
+        // Root, ICA levels, component: a short chain; the bound stops a loop.
+        for _ in 0..8 {
+            let up = match &c.0.issuer {
+                IssuerIdentifier::sha256AndDigest(h) | IssuerIdentifier::sha384AndDigest(h) => {
+                    v2xw_sec::hashedid::id8_bytes(h)
+                }
+                _ => return None,
+            };
+            let issuer = pki.by_id8(&up)?;
+            if listed(&issuer.cert) {
+                return Some(HashRefusal::IssuerRevoked);
+            }
+            c = issuer.cert.clone();
+        }
+        None
+    }
+
+    /// The MA certificate `device` encrypts its reports to: the first of the provider's
+    /// MA certificates whose `MaSsp` covers BSM misbehaviour (PSID 0x20) and that no hash
+    /// CRL the device holds revokes (SC-P8.2: a revoked MA is no longer written to).
+    #[must_use]
+    pub fn device_ma<'a>(
+        &self,
+        device: NodeId,
+        pki: &'a crate::scms::pdu::ScmsPki,
+    ) -> Option<&'a crate::scms::pdu::Authority> {
+        core::iter::once(&pki.ma)
+            .chain(pki.extra.iter())
+            .filter(|a| crate::scms::mbr::ma_covers(&a.cert, crate::scms::mbr::BSM_APP_PSID))
+            .find(|a| self.device_refuses(device, &a.cert).is_none())
+    }
+}
+
+/// `full` bytes of the series-1 `SecuredCrl` plus every hash CRL beside it: what one
+/// download or publication carries (SC-P8.2). Equal to `full` with no hash list.
+fn with_hash_lists(full: u32, hash: &BTreeMap<u16, crate::scms::pdu::Pdu>) -> u32 {
+    hash.values().fold(full, |b, p| b.saturating_add(p.len()))
 }

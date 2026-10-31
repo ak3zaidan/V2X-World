@@ -349,6 +349,26 @@ Dated notes go under each id as its wave lands.
   1,566 against 786 in its records (the instance counter counts both ACAs' issuance), and
   a root rollover re-certifies the governance set but not `aca-1` (code reading).
 - 2026-10-31 (wave A merge): merged to main (records track); the declared digests hold on the merged tree.
+- 2026-10-31 (wave C, the two leftovers, agent C3): **PV.m.issued-counters, fixed.** Cause:
+  `inspect.rs` set the ACA entity's `certs_issued` to `PcaState::issued_count`, which
+  counts what every ACA instance issued, and the `aca/1` row in `pki.state` had no counter
+  (`pki_view.rs`, comment "no counters of their own because the run routes every request
+  to the primary", stale since the RA splits requests). `PcaState::issued_by_instance`
+  counts per instance node at the three issuance sites (pseudonym real and modelled paths,
+  application certificates); `aca/0` reads its own and `aca/1` carries its own. Test
+  `aca_instances::each_aca_instance_counts_its_own_certificates` (red with the summed
+  counter: 20 against 10). **The rollover leftover, measured and fixed.** Measured:
+  with a second home ACA, `ScmsPki::superseded_by` carried `aca-1` over with its old-ICA
+  certificate (issuer `6b9b2b1f…` against the new ICA `ddaad26d…`), so after the old
+  root's removal its pseudonyms would chain to a root no CTL approves. It is now
+  re-certified under the new ICA with keys drawn under the new ICA's HashedId8, its old
+  certificate retired (what it issued still verifies), and `ScmsState::follow_pki` counts
+  it on the home ICA. Test `aca_instances::a_root_rollover_recertifies_the_second_aca`
+  (red with the instance carried over). The shipped home provider runs one ACA, so no
+  shipped run changes from the rollover part. The counter fix moves G-SCMS record digests
+  only (pki.state counter values; frames and record counts unchanged; checked on the parent
+  `ed49ff75`, where phase2-path still reproduced `ae92e07b`): phase2-path `ae92e07b ->
+  3746e52f`, i-s1-phase2-60s `d590fd1b -> a6864706`; ttc-triggered-brake unchanged.
 
 ### SC-D13
 
@@ -574,3 +594,87 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   its fault. G-SCMS does not move: phase2-path, i-s1-phase2-60s and ttc-triggered-brake
   reproduce, since US BSMs carry no `generationLocation`. Records: veh R10 marked fixed in
   06; `LS.region-unchecked` (eq 0, verdict open) in `live-scms.yaml`.
+
+### SC-P8
+
+- 2026-10-31 (wave C R1, P8.1, agent C3): **component hash CRLs are issued.** Cause: the
+  Generator's hash-list loop named series 3 and 4 only (`run/crl.rs`, was `:450-452`) and
+  nothing put a component on a list. `ScmsRun::revoke_component(role, at)` puts the
+  component certificate's HashedId10 on the list of the `(cracaId, crlSeries)` it names,
+  and the loop now issues a full hash CRL for every series with entries. The signer is
+  the certificate whose `CrlSsp` lists the series (`hash_crl_signer`): the CRL signer
+  (`issuerIsCraca`, [4, 3, 1, 2]) for series 2 under its issuer, the root itself
+  (`isCraca`, [256], every published US root) for series 256. Results: S2X PCA series 2
+  under the ICA; ISS PCA series 2 under the root (the spec's "ISS gives 256" is the series of
+  root-issued components; the certificate decides); MA and the ISS CRL signer series 256 under
+  the root. Labelled choices: the S2X ICA (series 2 under the root) has no signer and is
+  refused (CF-CRACA, recorded in `pki_profile.rs`); the root-signed list rides the
+  provider's publication rule (ASSUMPTION: a real root is offline, ceremony delay
+  unpublished); the decision reaches the Generator as an empty `crl-append`, so the
+  business-day SLA applies. Test `crl_issuance::a_revoked_pca_appears_on_its_component_crl`
+  (red with the loop left at {3, 4}). Off unless a component is revoked; no golden moves.
+- 2026-10-31 (wave C R2, P8.2, agent C3): **distribution and effects.** The hash CRLs of
+  a publication travel with the series-1 list to the CRL Store and the roadside path
+  (`CrlState::hash_crls`; every hop and the download charged their bytes), and the device
+  verifies each on its own (`device_check_crl` now accepts hash CRLs: the signer's issuer
+  is the authority it names, so the root's `isCraca` series-256 list verifies) and
+  installs it (`DeviceState::hash_held`, with the same stale-replay rule as series 1).
+  Effects: `ScmsState::device_refuses` (a pseudonym of a revoked PCA is issuer-revoked,
+  the PCA itself revoked by hash); `ScmsState::device_ma` skips a revoked MA, and
+  `secure_mbr_as` uses it; the provisioning ack of a revoked RA is refused
+  (`ee_check_ack`). `ScmsRun::crl_component_entries` counts the series-2 and 256 entries
+  per provider. Test `crl_issuance::a_device_refuses_pseudonyms_of_a_revoked_pca_after_install`
+  (red with the component CRL signed under a wrong CRACA: the device refuses the lists and
+  accepts the pseudonym). No golden moves (no list without a revocation). Left to P8.3
+  (D1): the engine composite must chain `crl_store.hash_crls`/`crl_broadcast.hash_crls`
+  beside `secured_retired` (`phase2.rs` crl_feeds and `broadcast_secured_crls`), and
+  `run.rs` `sort_composite_entries` must consider linkage CRLs only (a verified hash CRL's
+  `signed_form` is `None`, which today keeps an entry no linkage CRL signs); the
+  `component_revoked*` keys, the RunReport leaf and the engine test. `mbr::select_ma`
+  (unused) is unchanged; app-certificate devices (`apps.devices`) download no CRL in the
+  proto and are not covered.
+
+### SC-P9
+
+- 2026-10-31 (wave C R3, P9.1, agent C3): **the OBU identification cycle and its series-3
+  revocation.** Causes: `preload_app_cert` (`run/appcert.rs`, was `:479`) always enrolled
+  the device on its scratch kernel, so an emergency OBU that already held its pseudonym
+  pool got a second enrolment certificate, which replaced the one its pseudonym requests
+  use; and nothing put an identification certificate on a CRL. Now the preload signs with
+  the enrolment certificate the OBU holds. The ACA's issuance record (`IssuedApp`) carries
+  the certificate's expiry. `ScmsRun::revoke_identification(device, at)` lists every
+  unexpired identification certificate the ACA issued the device on the series-3 hash CRL
+  at each publication from `at` (signed by the CRL signer `{issuerIsCraca, [4,3,1,2]}`
+  under the ICA's `cracaId`), and from `at` the RA refuses the device's identification
+  requests ("identification certificate revoked"). ASSUMPTION (labelled): the device
+  keeps its enrolment and pseudonyms. Revoking the whole device is the linkage path. Tests
+  `appcert::an_obu_identification_cycle_preloads_and_renews` (red with the kind mapped to
+  the RSU PSIDs: `[130]` against `[32, 2113686]`) and
+  `appcert::a_revoked_identification_certificate_goes_on_the_series_3_list` (red with the
+  issued certificates left off the list). Not called by the engine yet (P9.2 C2, P9.3 D1),
+  so no golden moves. Not shown red: the enrolment-kept assert alone (the PSID fault fails
+  the same test first).
+
+### SC-P12
+
+- 2026-10-31 (wave C R4, P12.1, agent C3): **two-state availability, off by default.**
+  `ServiceModelSpec::availability` was `Option<()>`, a hook nothing read
+  (`service.rs`, was `:56-59`). It is now `Option<AvailabilityModel { mtbf, mttr }>`, and
+  `ServiceQueue::spec` keeps it. `AvailabilityModel::outages` draws the k-th up time as
+  `-mtbf·ln(1 − keyed_uniform(seed, entity, k, up))` and the k-th down time the same with
+  `mttr` (a SplitMix64 keyed hash, no stream position). Every entity starts up at 0
+  (ASSUMPTION). `Kernel::availability_windows` gives each hosted entity with a model its
+  windows, keyed by its node index. `Kernel::apply_availability` adds them to the run's
+  `FaultPlan` as `offline` faults (`FaultPlan::add_outages`), so the backend retry and the
+  EE timeout treat them as a `failures[]` window. `FaultPlan::outages` and `downtime` are
+  the per-entity counters. Parameters are rows in `constants.md` §1.6 (ASSUMPTION). Tests
+  `availability::outages_follow_the_mtbf_and_mttr` (red with the down time drawn from the
+  MTBF: share 0.506 against 0.040), `availability::the_same_seed_gives_the_same_outages`
+  (red with the draws keyed by position among the modelled entities, a shared stream:
+  entity 5 moved when entity 2 was added), and
+  `availability::drawn_outages_are_offline_faults_and_counted` (red with the faults not
+  added). No golden moves: no entity has a model. Left to P12.3 (D1): the scenario keys,
+  the `crypto_config.rs` mapping, the call `run.kernel.apply_availability(&mut
+  run.state.faults, seed, horizon)` after hosting, the RunReport leaves, and the
+  `scms-knobs.yaml` rows. Note: the engine's `scms_topology.rs` `with_capacity` rebuilds
+  the spec with `ServiceModelSpec::new`, which drops a model, so P12.3 must keep it there.

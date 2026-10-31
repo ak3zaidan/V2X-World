@@ -45,7 +45,10 @@ mod report;
 mod revoke;
 
 use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
-pub use crl::{CrlOrder, IssuedCrl, crl_bytes, crl_digest, linkage_revocations};
+pub use crl::{
+    ComponentRevocation, CrlOrder, HashRefusal, IssuedCrl, component_authority, crl_bytes,
+    crl_digest, device_check_crl, hash_crl_signer, linkage_revocations,
+};
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 const ECQV: PrimitiveId = PrimitiveId::ECQV_P256;
@@ -103,6 +106,9 @@ pub struct DeviceState {
     /// ([`CrlOrder`]), so a replay of an earlier, validly signed
     /// list cannot roll a revocation back.
     pub crl_held: BTreeMap<([u8; 8], u16), (CrlOrder, [u8; 32])>,
+    /// Per `(crlCraca, crlSeries)` of a hash CRL it installed: the `HashedId10`s it
+    /// lists (series 2, 3, 4, 256; SC-P8.2). Replaced whole by each newer list.
+    pub hash_held: BTreeMap<([u8; 8], u16), Vec<[u8; 10]>>,
     /// Its real enrolment credential (WP-B1 PDU layer): the implicit certificate the ECA
     /// issued and the key reconstructed from `privateKeyInfo`. `None` when the layer is
     /// off or the device was enrolled out of band ([`ScmsRun::set_enrolment`]).
@@ -283,6 +289,7 @@ impl DeviceState {
             crls_rejected: 0,
             crls_stale: 0,
             crl_held: BTreeMap::new(),
+            hash_held: BTreeMap::new(),
             enrolment_credential: None,
             request_hash8: None,
             name: None,
@@ -705,6 +712,10 @@ pub struct PcaState {
     pub issued_by: BTreeMap<(u32, [u8; 9]), NodeId>,
     /// How many certificates it has issued.
     pub issued_count: u64,
+    /// How many each ACA instance issued, by its node (the core ACA and `aca/1`, ...):
+    /// the per-instance `certs_issued` of `pki.state` (audit-prov PV.m.issued-counters,
+    /// which read both instances' issuance on `aca/0`).
+    pub issued_by_instance: BTreeMap<NodeId, u64>,
     /// Linkage-value lookups it answered for the Misbehaviour Authority.
     pub lookups: u32,
     certified_runs: BTreeSet<FlowRun>,
@@ -897,13 +908,18 @@ pub struct CrlState {
     pub crls_at_i: BTreeMap<u16, u8>,
     /// Entries already covered by the previous publication (the delta's base).
     pub published_entries: usize,
-    /// Certificates revoked by hash, by series (3: RSU application and OBU
-    /// identification; 4: enrolment).
+    /// Certificates revoked by hash, by series (2: SCMS components; 3: RSU application
+    /// and OBU identification; 4: enrolment; 256: root-signed components).
     pub hash_entries: BTreeMap<u16, Vec<v2xw_sec::crl::HashRevocation>>,
     /// `crlSerial` per hash series.
     pub hash_serial: BTreeMap<u16, u32>,
     /// The latest full hash CRL per series.
     pub hash_crls: BTreeMap<u16, crate::scms::pdu::Pdu>,
+    /// Component revocations decided ([`ScmsRun::revoke_component`]) and not yet on a
+    /// signed list: each goes on the first publication at or after its decision (SC-P8.1).
+    pub component_pending: Vec<crl::ComponentRevocation>,
+    /// Every component revocation that reached a signed list, in order (SC-P8.1).
+    pub component_revoked: Vec<crl::ComponentRevocation>,
     /// The run of each CRL version that reached this entity, in order (CRL Store only):
     /// the instant a case's entry became public is the first of their `published` stamps
     /// at or after its issue, since entries appended while a business-day or cadence
@@ -1070,6 +1086,20 @@ impl ScmsState {
             .get(self.provider)
             .is_some_and(|p| p.name == label);
         if own {
+            // An ACA instance the rollover re-certified ([`ScmsPki::superseded_by`]) is
+            // one more certificate the home ICA issued (09 §7 SC-D12).
+            let fresh = pki
+                .extra
+                .iter()
+                .filter(|a| a.name.starts_with("aca-"))
+                .filter(|a| {
+                    self.pki
+                        .as_ref()
+                        .is_none_or(|o| !o.extra.iter().any(|b| b.cert == a.cert))
+                })
+                .count();
+            self.gov
+                .note_ica_issued(u32::try_from(fresh).unwrap_or(u32::MAX));
             self.pki = Some(pki);
         } else if let Some(e) = self.peer_pki.iter_mut().find(|(l, _)| l == label) {
             e.1 = pki;
