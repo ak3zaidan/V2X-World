@@ -633,3 +633,39 @@ fn devices_share_one_copy_of_each_governance_certificate() {
         assert!(cert_hashed_id8(&b.chain[&d]).is_ok_and(|x| x == d));
     }
 }
+
+/// gov C-9: a CTL's `effectiveDate` is the EAC vote, and the list is published by the SLA
+/// deadline after it (production sequence 1: effective 2025-07-16, published 2025-08-13).
+#[test]
+fn a_ctl_is_effective_at_its_vote_and_published_by_the_deadline() {
+    let mut g = gov();
+    let clock = g.config.clock;
+    // t0 is Tuesday 2026-01-06 09:00 UTC; the vote is three days later, a Friday.
+    let decided = 3 * DAY;
+    let unix = clock.unix_seconds_at(decided);
+    let (y, m, d) = crate::scms::calendar::eastern_date(unix);
+    assert_eq!(
+        crate::scms::calendar::weekday(crate::scms::calendar::days_from_civil(y, m, d)),
+        5,
+        "the vote is on a Friday (0 = Sunday)"
+    );
+    let (_, at) = g.add_root(&rng(), "provider-b", decided);
+    // Three business days after a Friday: Monday, Tuesday, Wednesday.
+    assert_eq!(
+        at,
+        decided + 5 * DAY,
+        "published at the 3-business-day deadline"
+    );
+    let e = g.log.last().expect("the decision is logged");
+    assert_eq!((e.decided_at, e.published_at), (decided, Some(at)));
+    let vote32 = clock.time32(decided).expect("in range");
+    assert_eq!(g.publish_due(at), 1);
+    assert_eq!(g.ctl.effective, vote32, "effective at the vote");
+    let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    assert_eq!(
+        dec.effective_date(),
+        vote32,
+        "the signed effectiveDate is the vote"
+    );
+    assert!(dec.effective_date() < clock.time32(at).expect("in range"));
+}

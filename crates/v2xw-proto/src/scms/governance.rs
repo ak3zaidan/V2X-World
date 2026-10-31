@@ -2444,7 +2444,10 @@ impl Governance {
     ) -> SimTime {
         self.counters.manager_decisions += 1;
         let at = ctl_publication_deadline(kind, decided_at, self.config.clock);
-        let effective = self.config.clock.time32(at).unwrap_or(0);
+        // `effectiveDate` is the vote, publication follows by the SLA deadline (gov C-9):
+        // production sequence 1 is effective 2025-07-16 08:00 UTC and was published
+        // 2025-08-13; the test sequences 1-3 were published 0-4 days after theirs.
+        let effective = self.config.clock.time32(decided_at).unwrap_or(0);
         let seq = self.next_sequence();
         let ctl = self.build_ctl(seq, effective, removed_elector, signers);
         self.counters.elector_endorsements += u32::try_from(signers.len()).unwrap_or(0);

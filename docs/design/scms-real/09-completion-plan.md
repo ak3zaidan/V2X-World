@@ -793,3 +793,16 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `scms-knobs.yaml` rows. Note: the engine's `scms_topology.rs` `with_capacity` rebuilds
   the spec with `ServiceModelSpec::new`, which drops a model, so P12.3 must keep it there.
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3; P12.1 only). Proto `availability` passes on the merged tree. Still open: P12.2 not started; P12.3 (D1) wiring and the `scms_topology.rs` `with_capacity` drop of the model.
+
+### gov C-9
+
+- 2026-10-31 (wave D R1, agent D2): **a CTL's `effectiveDate` is the EAC vote.** `decide`
+  (`governance.rs`, was `:2447`) set `effective = clock.time32(at)` with `at` the
+  publication deadline, so a CTL was effective 0 to 28 days after SCMS Manager's practice
+  (production sequence 1 effective 2025-07-16, published 2025-08-13). It is now
+  `clock.time32(decided_at)`; publication stays at the deadline. Test
+  `governance::tests::a_ctl_is_effective_at_its_vote_and_published_by_the_deadline` (an
+  add-root vote on Friday 2026-01-09: effective at the vote, published Wednesday, 5 days
+  later), red with `time32(at)` restored (effective 695466005 against 695034005). G-SCMS
+  unmoved: none of the three cases issues a CTL after genesis, whose deadline is its vote.
+  `validation/governance-deployment.md` C-9 is now MATCHES.
