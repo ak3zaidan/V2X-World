@@ -125,3 +125,65 @@ Dated notes go under each id as its wave lands.
     (1609.2 `region` "omitted" rule), so the check reaches every provider-a device;
   - proto F9 is proposed for §6 (EU profile only).
 - Specs only: no code was changed and nothing was run.
+
+### SC-D1
+
+- 2026-10-30 (wave A): fixed in code before this wave (run.rs `on_flow_timer`, 2026-10-27:
+  a unit in the certificate cycle relays the `RsuCrlFile` it installed, `rsu_crl_held`,
+  and nothing before its first install; step 4 of `on_backend_step` books nothing down a
+  cycle unit's line). Both ignored `live_rsu.rs` tests pass on `5c5dfc4e`. They could not
+  see the defect: the 120 s run publishes one list. New ignored test
+  `a_later_list_reaches_the_air_only_through_a_unit_that_downloaded_it`
+  (`scms-lat2000-bc4-240.yaml`, lists at 80.004 and 210.004 s, a tick 0.146 s after the
+  second): no unit installs and no vehicle downloads a case before its publication + 2 s
+  (min 2.096 s and 2.146 s; 134 vehicle downloads of the later list). Fault: cycle units
+  air `broadcast_crl()` again -> red. The frame metric `s.crl_first_frame_lag_s_*` cannot
+  tell a frame's list: a unit keeps relaying the older list while its download is on the
+  line, so LR.S.l240.bc4.fix.lag-max is a wrong expectation, not a defect. Rows:
+  live-rsu LR.S.l240.bc4.fix.*, LR.S.dbl.unexplained, LR.S.lat2000bc3.crl-lag.
+
+### SC-D2
+
+- 2026-10-30 (wave A): fixed in code before this wave, by `2a14d6c4` (2026-10-24, R-JOINCRL):
+  `Phase2::prerun_crl` hands a joiner the composite its RA serves at its join once that is
+  newer than the `t0` snapshot, and marks its copy as of it. The 755 refusals were measured
+  on `77cffb5b`, before the fix. The MWC runs on `f4982788` (release) and `a925db58+` (debug)
+  refuse 0 messages of any kind, so W5 has 0 crl-overdue refusals; MW went 16,618 -> 0.
+  Test `join_crl_tests::a_device_joining_after_a_publication_holds_the_newest_list` passes
+  on `5c5dfc4e`. Fault: `newer = false` (every joiner gets the `t0` lists) -> red. Row
+  scms-stress MWC.recovery is now fixed. Kept as modelled and noted: the joiner holds its RA's
+  list from the instant it joins, not after its first connection's round trip. That is
+  seconds against a two-week tolerance, so negligible.
+
+### SC-D3
+
+- 2026-10-30 (wave A): not an engine defect. The benchmark is honest traffic only, so it
+  should have 0 entries. FB3 ran the same file to 172,800 s: 2 CRL versions (the `t0` lists),
+  0 issued, 0 cases and 0 revocations, with 1,447 honest reports at the MAs (FB3.pki,
+  FB3.honest-reports). No reissue is due within 2 days (nextCrl = issue + 7 d). FB2.crl now
+  passes, judged on FB3. One thing found: the census keys `scms.crlg_entries` and
+  `scms.crl_store_entries` count the home provider only. New diagnostic keys
+  `scms.crlg_entries_all` and `scms.crl_store_entries_all` sum every provider (they reach
+  no record or digest). Tests: `phase2.rs`
+  `the_census_counts_the_entries_the_crl_generators_and_stores_hold` (path run, attacker
+  revoked) and `with_no_attacker_nothing_is_revoked` (census 0).
+
+### SC-D4
+
+- 2026-10-30 (wave A): fixed in code before this wave, by `dcee6cb7` (2026-10-21). The
+  E3 row was written on main `d3039b53` (10-18) and never updated. In `ScmsRun::step`, a
+  message one SCMS component sends to another that is down waits in the sender's queue
+  and is retried every `BACKEND_RETRY` (10 s) until the receiver is back
+  (`FaultPlan::held`). A down component's own timers (the shuffle release, the weekly
+  pre-generation) run when it restarts (`deferred_timers`). An outage that never ends
+  still loses both. The 10 s is an ASSUMPTION: no SCMS text specifies inter-component
+  retry, so SCMS-522's period is reused. All 13 `ee_retry.rs` tests pass on `5c5dfc4e`.
+  Fault: component messages to a down node are dropped again -> red (see the commit).
+  Row scms-edge-cases E3.ra-outage-loses-backend-answers is now fixed.
+- 2026-10-30 (wave A), a gap that remained: a report another provider's MA shares with
+  this one (`ScmsRun::shared_report_at_ma`) comes from a node outside this run's
+  `NodeSet`. So `step` treated it as a device's request and dropped it while this MA was
+  down (mod.rs `step`, the `component(d.from)` test). It is now held and retried like any
+  component message. New test `provider_runs.rs`
+  `a_report_shared_with_a_down_ma_arrives_when_it_is_back`. It only changes a run with an
+  MA outage under report sharing, and no shipped scenario has one, so no golden moves.

@@ -105,7 +105,7 @@ not root-caused. It may be the RERUNS item that `node.rx` labels an out-of-date-
 | FB2.radio | as R-FS: CBR 0.07–0.09, PDR 100 m 0.80–0.87, e2e 12–15 ms | 130–150 s **identical to R-FS**. 200–240 s: CBR 0.081–0.087, p95 0.15–0.17; PDR 100 m 0.833–0.841; e2e 12.4 ms. Hidden terminal 2.4 % of attempts | pass |
 | FB2.verify-load | 200–290 per node per second | 240 at 130–150 s, 268 at 230 s (484 k/s); queue p99 0; unverified 5.2 → 6.2 % | pass |
 | FB2.honest-reports | no constantPositionFrozen burst; 0–4 cases; 0 revoked | **1,935 reports in 240 s** (8.1/s), all honest, none delivered before the fast-forward. **10,357 more in the 60 s rollover window**, 4,876 of them in the 10 s after the resume. 15,062 reached the MAs at 43,200–43,220 s: **71 cases**, 71 honest vehicles falsely accused (vehicle-level FPR 3.3 %) | **open** |
-| FB2.crl | 0 entries; 2–4 versions; 0 refusals | 0 CRL Generator entries through 46,790 s; the rest needs the run report | open |
+| FB2.crl | 0 entries; 2–4 versions; 0 refusals | 0 CRL Generator entries through 46,790 s; the rest needs the run report | open; pass on FB3 (2 versions, 0 issued, 0 cases; SC-D3, 2026-10-30) |
 | FB2.trust | no refusals on honest traffic | no signature, PSID, CTL or CRL loss cause; unknown-signer 1e-4 of attempts at the resume | pass (from metrics) |
 | FB2.privacy | changes at the rollover; claims ≤ changes heard | `pseudonym_change_rate` 0 in every window, the rollover included; linkability 0/0 | wrong expectation (corrected 2026-10-24: no change is due at the boundary under CERTCHG with the 1 h overlap, fast-forward.md §3; 0 is right) |
 | FB2.traffic | 1.5–3 m/s | 2.75 → 1.82 m/s; **p50 0 m/s from 160 s** (gridlock, density rising) | pass |

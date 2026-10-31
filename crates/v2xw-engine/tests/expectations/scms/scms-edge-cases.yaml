@@ -57,8 +57,8 @@
   expect: the batch still arrives once the RA is back
   source: "a real RA's peers (LA, ACA) retry their HTTP calls"
   measured: the LAs' and ACA's answers to the down RA are dropped and never resent; the batch is never made
-  verdict: "open: backend-to-backend retry is not specified; the test uses a LOP partition instead"
-- id: E5.crl-reissue
+  verdict: "fixed (SC-D4, judged 2026-10-30; was open on main d3039b53: backend-to-backend retry is not specified, and the test used a LOP partition instead): tests ee_retry.rs an_ra_down_when_the_aca_answers_gets_the_answer_on_a_retry, an_ra_down_across_its_shuffle_release_releases_it_when_back"
+  note: "dcee6cb7 (2026-10-21): a message one SCMS component sends another that is down waits in the sender's queue and is retried every BACKEND_RETRY (10 s, ASSUMPTION: SCMS-522's period reused, no SCMS text specifies inter-component retry) until the receiver is back (ScmsRun::step, FaultPlan::held); a down component's own timers (the RA's shuffle release, its weekly pre-generation) run when it restarts (FaultPlan::deferred_timers); an outage that never ends still loses both. Checked 2026-10-30 on 5c5dfc4e: ee_retry.rs an_ra_down_when_the_aca_answers_gets_the_answer_on_a_retry (held >= 1, installed after the RA's return, each certificate issued once), an_ra_down_across_its_shuffle_release_releases_it_when_back and an_outage_that_never_ends_still_loses_the_answers pass. Gap closed 2026-10-30: a report another provider's MA shares with a down MA was still dropped (its sender is not one of the receiving run's components); now held and retried (provider_runs.rs a_report_shared_with_a_down_ma_arrives_when_it_is_back)"- id: E5.crl-reissue
   run: proto ee_retry.rs an_idle_crl_generator_renews_its_list_every_next_crl
   expect: a CRL Generator with nothing new re-issues by nextCrl (issue + 7 d), so no healthy receiver ever reaches nextCrl + 14 d
   source: "IEEE 1609.2 CrlContents.nextCrl; [CAMP122] Table 67 overdue_CRL_tolerance 2 weeks"

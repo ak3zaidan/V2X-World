@@ -7,7 +7,8 @@
 //!   the device, which finds out by timing out (SCMS-522). Two exceptions, both what a real
 //!   service does (edge case 3d of the configuration testing, `ScmsRun::step`):
 //!   - a message one SCMS component sends another (an LA's PLVs or the ACA's certificates
-//!     to a down RA) waits in the sender's outbound queue, which retries every
+//!     to a down RA, or a report another provider's MA shares with a down MA) waits in
+//!     the sender's outbound queue, which retries every
 //!     [`BACKEND_RETRY`] until the receiver is back ([`FaultPlan::held`]);
 //!   - a down component's own scheduled jobs (the RA's shuffle release, its weekly
 //!     pre-generation) are persisted and run when it restarts

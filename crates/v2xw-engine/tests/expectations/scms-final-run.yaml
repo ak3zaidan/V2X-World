@@ -334,7 +334,10 @@ rows:
     the CRL period (2-4 versions over 2 days); 0 crl-period refusals; 0 revoked receptions
   source: "testing/stress.md R-NOCRL; 03 §9 (SCMS Manager CRL SLA)"
   measured: "census: scms.crlg_entries 0 and crl_store_entries 0 through 46,470 s (no revocation yet); versions, downloads and refusals need the run report"
-  verdict: open
+  verdict: pass
+  judged: "2026-10-30 (SC-D3), on FB3, the same file run to 172,800 s (scms-full-bench FB3.pki, FB3.honest-reports)"
+  test: phase2.rs the_census_counts_the_entries_the_crl_generators_and_stores_hold, with_no_attacker_nothing_is_revoked
+  note: "SC-D3 is not an engine defect. The file is honest traffic only, and FB3 completed it: 2 CRL versions (the t0 lists, 0 entries), 0 issued, 60 RSU installs, 70,946 conditional polls all 412, 0 downloads; 1,447 honest reports reached the MAs (released by the report shuffle at 86,430 s), 0 vehicles accused, 0 cases, 0 revocations. So 0 Generator and Store entries is the correct state, and no list is due on the CRL period inside 2 days (nextCrl = issue + 7 d), so 2 versions sits at the band's low end. The census keys scms.crlg_entries and scms.crl_store_entries are the home provider's alone; scms.crlg_entries_all and scms.crl_store_entries_all (added 2026-10-30, diagnostic, no record or digest) sum every provider's. The tests show the census counts entries when a device is revoked and reads 0 when none is"
 - id: FB2.trust
   base: RFS
   variant: FB2

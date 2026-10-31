@@ -178,6 +178,51 @@ fn a_shared_report_crosses_the_inter_provider_link_and_is_decided_there() {
     assert!(home.state.crlg.entries.is_empty());
 }
 
+/// SC-D4 (09-completion-plan.md §1; edge case 3d): a report another provider's MA shares
+/// with this one while this MA is down waits in the sharing MA's queue, retried every
+/// `BACKEND_RETRY`, and arrives once the MA is back, as a message between two of one
+/// provider's components does. Before, the sender was not one of this run's components,
+/// so the report was dropped as a device's request is. Fault: drop it again -> no report
+/// at the MA.
+#[test]
+fn a_report_shared_with_a_down_ma_arrives_when_it_is_back() {
+    let (home, mut peer) = runs();
+    let device = NodeId::new(5_000_124);
+    peer.preload(device, 0, 1, 2).expect("provisions");
+    let (&(i, _), c) = peer.state.devices[&device]
+        .credentials
+        .iter()
+        .next()
+        .expect("a pseudonym");
+    let lv = c.lv;
+    let sent = 1_000_000_000;
+    let back = sent + 60_000_000_000;
+    peer.set_faults(vec![v2xw_proto::fault::Fault {
+        node: peer.state.nodes.ma,
+        kind: v2xw_proto::fault::FaultKind::Offline,
+        from: sent,
+        until: back,
+    }]);
+    let run = peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200);
+    peer.run_until(back + 30_000_000_000).expect("runs");
+    assert!(
+        peer.state.faults.held >= 1,
+        "the shared report was not held: {:?}",
+        peer.state.faults
+    );
+    assert_eq!(
+        peer.state.ma.reports.len(),
+        1,
+        "the report never reached the MA"
+    );
+    let at = peer
+        .kernel
+        .stages
+        .at(run, StageId::ReportReceived)
+        .expect("arrived at provider-b's MA");
+    assert!(at >= back, "{at}: received while the MA was down");
+}
+
 /// A home root rollover re-certifies the home provider's ICA and components under the new
 /// root; each peer's copy of that hierarchy follows (`sync_peer_from`), so the peer's
 /// local chain file lists the re-certified ICA, and still lists the home provider once

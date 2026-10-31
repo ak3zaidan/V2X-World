@@ -241,8 +241,11 @@ rows:
   expect: the Generator's timers run on its return at 2,600,000 s (FLOWS), it reissues at once, devices fetch at their next hourly poll, and W5 (day 33) has 0 overdue refusals
   source: FLOWS fix (held messages and timers on restart); crl_fetch_interval
   measured: "re-run on 77cffb5b: 755 crl-overdue refusals in W5, all at four devices that join during W5 (nodes 71-74, from 2,851,241 to 2,851,271 s), each from its first reception until its first CRL download (2-49 s); the devices on the road since before the outage refuse nothing"
-  verdict: open
+  verdict: fixed
+  judged: "2026-10-30 (SC-D2), on the MWC runs of f4982788 (release, 2026-10-27) and a925db58+ (debug, fix round 5, 2026-10-28)"
+  test: phase2.rs join_crl_tests::a_device_joining_after_a_publication_holds_the_newest_list
   note: "R-JOINCRL (new): a mid-run joiner is given every provider's t0 CRL (phase2.rs, the lists a node holds when it joins), which on day 33 is long overdue, instead of the newest list published before it joined. MWP shows the same at every joiner in W3-W5"
+  note2: "SC-D2, 2026-10-30: fixed at its cause by 2a14d6c4 (2026-10-24): Phase2::prerun_crl hands a joiner the composite its RA serves at its join (published_crl_for) once that is newer than the t0 snapshot, and marks its copy as of it, so its first conditional poll is answered 412 ([PRIMER] pp. 5, 8; [CAMP122] SCMS-567, the latest CRL at bootstrap). Both later MWC runs refuse 0 messages of any kind (scms-variants RR.MWC.overdue recheck_fix5), so W5 has 0 crl-overdue refusals, down from 755; W5's receivers hold the home list reissued after the 2,600,000 s return (nextCrl day 37.26). MW (RR.MW.no-overdue) went 16,618 -> 0 on f4982788. Fault: prerun_crl hands every joiner the t0 snapshot (newer = false) -> the test red. Kept as modelled: a joiner gets its RA's list at the join instant, not after its first RA connection's round trip (seconds against a 2-week tolerance; negligible)"
 - id: MWC.revocation-blocked
   base: MW
   variant: MWC

@@ -2752,6 +2752,20 @@ impl Phase2 {
             ("scms.ma_reports", n(st.ma.reports.len())),
             ("scms.crlg_entries", n(st.crlg.entries.len())),
             ("scms.crl_store_entries", n(st.crl_store.entries.len())),
+            // Every provider's, since the two keys above are the home provider's alone: a
+            // revocation under provider-b's CRACA leaves them at 0 (SC-D3).
+            (
+                "scms.crlg_entries_all",
+                n(self.runs.iter().map(|r| r.state.crlg.entries.len()).sum()),
+            ),
+            (
+                "scms.crl_store_entries_all",
+                n(self
+                    .runs
+                    .iter()
+                    .map(|r| r.state.crl_store.entries.len())
+                    .sum()),
+            ),
             ("scms.issued_enrolment", n(st.issued_enrolment.len())),
             ("scms.kernel_stages", n(k.stages.stamps().len())),
             ("scms.kernel_steps", n(k.steps.len())),
