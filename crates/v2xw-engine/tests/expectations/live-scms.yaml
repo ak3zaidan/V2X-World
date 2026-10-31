@@ -1577,3 +1577,36 @@ rows:
   note: RunReport leaf receiver_validation.region_unchecked (omitted from the report when the whole
     receiver block is empty); the three G-SCMS digests reproduce on 2026-10-31
   verdict: open
+- id: LS.MA.subject-from-cert
+  base: L
+  variant: L
+  area: scms
+  measure: x.ma.received_subject_not_from_cert
+  expect: eq
+  value: 0
+  source: 'SC-P1: the MA reads the accused certificate (linkageData, issuer) from the report it opened
+    ([SM-MBR] 3; [CAMP122] 5), never from the engine map: every real report''s ma.received row has
+    subject_from "suspect-certificate", a shared one "shared-report (modelled)"'
+  measured: pending
+  verdict: open
+  note: 'written 2026-10-31 (wave C, SC-P1.2), predicted 0; the measure counts ma.received rows whose
+    subject_from is "engine-map (modelled report)" on a run with modelled_reports off, and needs
+    live_scms.py to read the new subject_from column (wave E). In-tree:
+    report_signing::a_report_is_decided_without_the_engine_map holds it on Manhattan'
+- id: LS.MA.linked-by-chain
+  base: L
+  variant: L
+  area: scms
+  measure: p2.revocations_repeated
+  expect: eq
+  value: 0
+  source: 'SC-P2/P3: every case asks the issuing ACA and both LAs, and the MA links a decision to an
+    earlier one by the LAs'' linkage chain identifiers ([CAMP122] 5; Whyte et al., VNC 2013, V), never
+    by the engine''s device: no device is revoked twice, and a second pseudonym decided before the
+    first entry is on the list ends as a linked case (p2.decisions_linked), not a second entry'
+  measured: pending
+  verdict: open
+  note: 'written 2026-10-31 (wave C, SC-P2/P3.2), predicted 0 repeated with decisions_linked >= 0 (under
+    the 8 h review on the real calendar, every decision about a second pseudonym inside the review
+    window is linked). In-tree:
+    report_signing::a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation'

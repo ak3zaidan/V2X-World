@@ -128,6 +128,110 @@ Dated notes go under each id as its wave lands.
 - Specs only: no code was changed and nothing was run.
 - 2026-10-31 (wave A merge): merged to main 2026-10-31 (wave A integration, side track `e6d4cf05`); docs only.
 
+### SC-P1
+
+- 2026-10-31 (wave C, P1.1, proto): **the MA reads the accused certificate from the
+  report it opened.** Cause: the MA arm of `handle_report` (`run/report.rs`) opened the
+  report but kept the reporter's clear `ReportSubmission.subject_i/lv`, and every case
+  (`run/revoke.rs` `investigate`/`revoke`/`request_*`) looked up those clear fields; the
+  lookup went to the ACA the PCA's own issuance records named (`issuing_aca`, from
+  `pca.issued_by`), not the one the certificate names. Now the MA takes `(iCert, linkage
+  value, issuer HashedId8)` from `suspect.signingCertificate` ([SM-MBR] §3) into
+  `MaState::report_subjects` (`MaReport`, `subject_from`: `suspect-certificate`; a shared
+  or modelled report keeps its carried subject, labelled), and the case's PCA lookup goes
+  to the ACA whose certificate the issuer names ([CAMP122] §5, [BRECHT] §VI-D), the
+  issuance records only off the real path. A report whose accused certificate has no
+  `linkageData` is refused at the MA. Tests: `resolution::the_ma_reads_the_subject_from_the_suspect_certificate`
+  (clear `subject_lv` deliberately wrong, the device still resolves),
+  `resolution::a_modelled_report_keeps_its_carried_subject_and_says_so`,
+  `provider_runs::the_ma_asks_the_aca_its_accused_certificates_issuer_names` (a second
+  ACA, `issued_by` cleared). No golden moved (engine `phase2`, 16 passed, digests held):
+  the device fills the clear fields from the same certificate and the issuer names the
+  same ACA the records did. `pki_view` counts a case's reporters by the MA-held subject.
+- 2026-10-31 (wave C, P1.2, engine, `0daaaef6`; golden in the next commit): **the decision
+  path no longer reads the engine's digest map.** Cause: `Phase2::resolve_subject`
+  (`by_digest` + `creds`) dropped a report whose digest the map lacked in
+  `report_at_proxy`, routed sharing by `provider_of_device(map device)` in
+  `ingest_arrivals`, and found the MA's report by the map's linkage value in
+  `start_cases_of`. Now `truth_subject` (records and truth only) is read by `log_fate`, the
+  run report's tallies, the modelled report path (no bytes; labelled
+  `engine-map (modelled report)`), the ETSI model and the decision de-duplication (left to
+  SC-P3); every real report is filed whatever the map says; sharing goes to the provider
+  whose ACA the certificate's issuer names (`ScmsState::issues_under`), carrying the
+  forwarding MA's subject; a case finds its report by the accused certificate's digest
+  (`MaState::report_about_cert`); `InFlightReport.subject` and the case's subject are
+  `Option`; `ma.received` gains `subject_from`. Tests:
+  `report_signing::a_report_is_decided_without_the_engine_map` (Manhattan, map hidden:
+  cases 1 = 1, same blocklist, 0 engine-map rows; red at cases 0 with the early return
+  restored), `scms_providers::a_report_routes_by_the_issuer_named_in_its_certificate`
+  (map naming the other provider's device: red under `provider_of_device` routing).
+  G-SCMS: phase2-path record digest `ae92e07b` -> `5a9b6eb7` (frames `736a1216` and the
+  10,243,399 records unchanged: the cause is the `subject_from` column on `ma.received`;
+  no report was unmapped on that run); i-s1 and ttc-triggered-brake held. No audit-mbpipe
+  row cites `resolve_subject` (re-grepped), so none closes; live-scms
+  `LS.MA.subject-from-cert` added, `verdict: open` (wave E, needs `live_scms.py` to read
+  `subject_from`). Still modelled: the Policy MA's `la_link` is the device's (SC-P2).
+
+### SC-P2
+
+- 2026-10-31 (wave C, P2/P3.1, proto): **every case runs the PCA lookup and the LA
+  linking.** Cause: `request_revocation` and `revoke` opened their case with
+  `open_case(..., direct: true, ...)` (`run/revoke.rs:69-86` on `f09d4e1d`), and in a
+  `direct` case the PCA's answer went straight to the RA blocklist (`revoke.rs:244-259`);
+  the LAs were asked only for seeds afterwards. Now `open_case` has no `direct` argument
+  (one report is a single-subject case, two a link), and the PCA's answer sends each LA its
+  sealed pointer (`ScmsMsg::ChainIdRequest`); each LA answers with a linkage chain
+  identifier (`ChainIdResponse`, `chain_identifier`: SHA-256 over a tag, its `la_id` and
+  the chain's initial seed, 16 bytes), and only when both are in does the case resolve,
+  stamp `resolved` and ask the RA to blocklist ([CAMP122] §5; Whyte et al., VNC 2013, §V;
+  [BRECHT] §VI-C/D). The identifier is the chain's: certificates of one request batch
+  share it, and two LAs' identifiers are unrelated. Sizes (modelled, 09 §6):
+  `chain-id-request` = envelope + one LCI, `chain-id-response` = envelope + 16 (ASSUMPTION).
+  `Case.chain_ids` holds the pair. The two-report research API (`investigate`,
+  `request_link`) keeps the one-bit "same device?" exchange. Test:
+  `revocation_path::every_case_asks_both_las_for_the_chain_before_the_blocklist` (red with
+  the `direct` shortcut restored: no chain steps). Proto `revocation_path` (5), `ma_cases`
+  (7), `resolution` (7), `provider_runs` (17), `crl_issuance` (8), `lockstep` (5),
+  `threshold` (18), `redteam_pki` (5), `pki_view` (12), `mbr` (12) pass. The UI's message
+  card and case diagram name the two new steps. G-SCMS moves in the joint P2/P3 golden
+  commit (see SC-P3). Protocol row G2 updated.
+- 2026-10-31 (P2/P3.2): engine suites pass on the joint change: `report_signing` (4),
+  `scms_providers` (3), `scms_deployment` (5), engine `pki_view` (9), `phase2` (16, the
+  re-blessed digest), `trigger_ttc` and `bsm_timing` golden checks, proto lib (84).
+
+### SC-P3
+
+- 2026-10-31 (wave C, P2/P3.2): **the MA de-duplicates decisions by linkage chain, not by
+  device.** Cause: `ingest_arrivals` dropped a second verdict by the engine's device
+  (`truth_subject` into `ma_decided_devices`, `phase2.rs:7391` on `f09d4e1d`), which the
+  MA cannot know. Now `MaState::decided_chains` holds every `[LA1, LA2]` chain-identifier
+  pair a case has decided; a case whose pair is already there ends `linked`
+  (`Case.linked`, `Case::outcome()` = `revoked` / `linked` / `unresolved`, the U12 labels)
+  with no blocklist request and no seed release ([CAMP122] §5). The engine counts
+  `decisions_linked` from the case outcome in `advance`'s case loop, and a linked case is
+  not `cases_unresolved`; the case board shows a `linked` stage instead of `refused`. Only
+  the ETSI model keeps the device-map de-duplication (no LAs; modelled). Every verdict is
+  now a decision (`ma_revoke_decisions`): a second pseudonym costs a case (a PCA lookup and
+  two LA calls) while the first is open, and after its entry is on the Generator's list it
+  is `decisions_already_covered` (`start_cases_of`; SC-P4 moves that to the published
+  list). Test: `report_signing::a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation`
+  (grid, one ConstPos attacker, 30 s review: decisions 4 = 1 + 1 linked + 2 covered, 1
+  entry, 1 linked case, 2 cases, 0 repeated; the same with the engine map cleared). Red
+  with the `decided_chains` check dropped: linked 0, 2 entries, 1 repeated. The spec's
+  "decisions = 2" did not count the decisions the list covers; the test asserts the
+  accounting instead. `sensitivity_security::the_revocations_move_the_crl_size` asserted
+  decisions <= devices and linked > 0 under the old engine-side drop; re-expressed as
+  revoking decisions (decisions - linked - covered) <= devices and linked + covered > 0
+  (0.1: 6 decisions = 3 revoked + 3 covered; 0.3: 15 = 8 + 7 covered; 0 linked, 0 repeated). `report.decisions_linked` catalogue
+  text: "cases the MA closed because the chain was already decided". G-SCMS:
+  `phase2-path` record digest `5a9b6eb7b4b6` -> `f159c9bab38b`, records 10,243,399 ->
+  10,243,407 (frames `736a1216` unchanged): the case's two chain-id requests and answers;
+  `i-s1-phase2-60s` and `ttc-triggered-brake` held. live-scms `LS.MA.linked-by-chain`
+  added, `verdict: open`. Still modelled: the Policy MA's ingest hint `la_link` is the
+  device's (it is read before any case runs, where no LA has answered), and a device's
+  second request's chain is not linked to its first (the LA knows chains, not devices;
+  B4 revokes both chains in the first case, and SC-P4's list check covers it after).
+
 ### SC-D1
 
 - 2026-10-30 (wave A): fixed in code before this wave (run.rs `on_flow_timer`, 2026-10-27:

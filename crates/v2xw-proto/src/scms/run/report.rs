@@ -570,6 +570,7 @@ impl ScmsState {
                 Self::verify(out, 1);
                 Self::scalar_mults(out, 1);
                 let mut evidence = None;
+                let mut subject = None;
                 if let (Some(s), Some(pki)) = (r.secured.as_ref(), self.ma_trust.clone()) {
                     // The MA decrypts, checks the reporter's pseudonym signature and the
                     // evidence ([SM-MBR] §3; [5GAA] (263)). A report that fails is
@@ -590,8 +591,14 @@ impl ScmsState {
                             break;
                         }
                     }
-                    let opened = match opened {
-                        Ok(o) => o,
+                    let opened = match opened.and_then(|o| {
+                        let s = accused_subject(&o.report.evidence.suspect().cert)?;
+                        Ok((o, s))
+                    }) {
+                        Ok((o, s)) => {
+                            subject = Some(s);
+                            o
+                        }
                         Err(e) => {
                             self.reject_pdu(SpduKind::SecuredMisbehaviorReport, to, at, e);
                             return Ok(());
@@ -617,6 +624,22 @@ impl ScmsState {
                     // `ScmsRun::modelled_report_evidence`).
                     evidence = self.ma.pending_evidence.remove(&run);
                 }
+                // The accused certificate: read from the opened report on the real path;
+                // a shared or modelled report has no certificate here, so the subject it
+                // carries is all the MA has (modelled; SC-P5 re-verifies shared reports).
+                let shared = self.ma.pending_subjects.remove(&run);
+                let subject = subject.or(shared).unwrap_or(super::MaReport {
+                    subject_i: r.subject_i,
+                    subject_lv: r.subject_lv,
+                    issuer: None,
+                    cert: None,
+                    from: if evidence.as_ref().is_some_and(|e| e.shared) {
+                        super::SubjectFrom::Shared
+                    } else {
+                        super::SubjectFrom::EngineMap
+                    },
+                });
+                self.ma.report_subjects.push(subject);
                 self.ma.reports.push(*r);
                 self.ma.report_arrived.push(at);
                 self.ma.report_evidence.push(evidence);
@@ -632,4 +655,41 @@ impl ScmsState {
         }
         Ok(())
     }
+}
+
+/// The accused certificate's `(iCert, linkage value)` and issuer HashedId8, as the MA
+/// reads them from an opened report's `suspect.signingCertificate` ([SM-MBR] §3; [CAMP122]
+/// §5; [BRECHT] §VI-D): the MA's lookup goes to the ACA the issuer names.
+///
+/// # Errors
+/// The certificate carries no `linkageData` (not a pseudonym certificate) or names no
+/// issuer digest.
+fn accused_subject(
+    cert: &v2xw_msg::sec_types::ieee1609_dot2::Certificate,
+) -> core::result::Result<super::MaReport, crate::scms::pdu::PduError> {
+    use v2xw_msg::sec_types::ieee1609_dot2::{CertificateId, IssuerIdentifier};
+    let CertificateId::linkageData(ld) = &cert.0.to_be_signed.id else {
+        return Err(crate::scms::pdu::PduError::Shape(
+            "the accused certificate has no linkageData",
+        ));
+    };
+    let issuer = match &cert.0.issuer {
+        IssuerIdentifier::sha256AndDigest(h) | IssuerIdentifier::sha384AndDigest(h) => {
+            v2xw_sec::hashedid::id8_bytes(h)
+        }
+        _ => {
+            return Err(crate::scms::pdu::PduError::Shape(
+                "the accused certificate names no issuer digest",
+            ));
+        }
+    };
+    let mut lv = [0u8; 9];
+    lv.copy_from_slice(&ld.linkage_value.0[..]);
+    Ok(super::MaReport {
+        subject_i: u32::from(ld.i_cert.0.0),
+        subject_lv: LinkageValue::new(lv),
+        issuer: Some(issuer),
+        cert: Some(crate::scms::pdu::cert_id8(cert)),
+        from: super::SubjectFrom::SuspectCertificate,
+    })
 }

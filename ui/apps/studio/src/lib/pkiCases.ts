@@ -21,6 +21,8 @@ export const MESSAGE_STAGE: Readonly<Record<string, string>> = {
   "blocklist-notice": "plv-lookup",
   "same-device-request": "la-seeds",
   "same-device-response": "la-seeds",
+  "chain-id-request": "plv-lookup",
+  "chain-id-response": "plv-lookup",
   "seed-request": "la-seeds",
   "seed-response": "la-seeds",
   "crl-append": "crl-published",
@@ -32,6 +34,8 @@ export const MESSAGE_STAGE: Readonly<Record<string, string>> = {
 const MORE_LEARNS: Readonly<Record<string, string>> = {
   "same-device-request": "two linkage chain identifiers to compare, sealed for it",
   "same-device-response": "whether the reported certificates belong to one device, not whose they are",
+  "chain-id-request": "its own sealed pointer to one chain, from the ACA's answer",
+  "chain-id-response": "an identifier for the chain, under the LA's own key: the MA links cases by it, never learning the device",
 };
 
 /** Each stage's standard term, for the tooltip. */

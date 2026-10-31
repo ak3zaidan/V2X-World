@@ -109,6 +109,14 @@ const TABLE: Record<string, ModelledMessage> = {
     purpose: "The linkage authority answers yes or no, nothing more.",
     parts: [ENV_DIGEST, { part: "Same device?", bytes: 1, example: "true" }],
   },
+  "chain-id-request": {
+    purpose: "The MA forwards a linkage authority its sealed pointer from the ACA's answer and asks which chain it is.",
+    parts: [ENV_DIGEST, LCI],
+  },
+  "chain-id-response": {
+    purpose: "The linkage authority names the chain with an identifier of its own: stable for the chain, never comparable with the other authority's, and naming no device.",
+    parts: [ENV_DIGEST, { part: "Linkage chain identifier (keyed hash, assumed 16 bytes)", bytes: 16, example: "chain 4c1f…9a20" }],
+  },
   "seed-request": {
     purpose: "The MA asks a linkage authority for its seed from the revocation week on.",
     parts: [ENV_DIGEST, LCI, I_PERIOD],

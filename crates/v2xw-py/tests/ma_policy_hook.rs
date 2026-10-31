@@ -363,6 +363,7 @@ fn row(i: u32, subject: &str) -> MaHookRow {
             secmark_phase_ms: 7,
             issuer: "provider-0".to_string(),
             la_link: "link".to_string(),
+            subject_from: "suspect-certificate".to_string(),
             set_aside: None,
         },
         observed: 900 + u64::from(i),

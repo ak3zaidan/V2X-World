@@ -28,8 +28,9 @@ use crate::net::{BackendNet, Link, Transport};
 use crate::pseudonym::{CertEvent, PseudonymStore, PseudonymStrategy};
 use crate::scms::governance::{DeviceTrust, Governance, Policy};
 use crate::scms::msg::{
-    CertRequestItem, EnrolmentCert, IssuedCredential, LaIndex, Lci, PcaLookup, PreLinkageBatch,
-    ProvisioningRequest, Refusal, ReportSubmission, ScmsMsg, ScmsSizes, SealedForLa, SealedForPca,
+    CHAIN_ID_BYTES, CertRequestItem, EnrolmentCert, IssuedCredential, LaIndex, Lci, PcaLookup,
+    PreLinkageBatch, ProvisioningRequest, Refusal, ReportSubmission, ScmsMsg, ScmsSizes,
+    SealedForLa, SealedForPca,
 };
 use crate::scms::params::{MaMode, ScmsNodes, ScmsParams};
 use crate::sizes::{CertificateSizes, WireSize};
@@ -49,6 +50,7 @@ pub use crl::{
     ComponentRevocation, CrlOrder, HashRefusal, IssuedCrl, component_authority, crl_bytes,
     crl_digest, device_check_crl, hash_crl_signer, linkage_revocations,
 };
+pub use revoke::chain_identifier;
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 const ECQV: PrimitiveId = PrimitiveId::ECQV_P256;
@@ -771,6 +773,11 @@ pub struct MaState {
     pub last_case: Option<FlowRun>,
     /// Devices it has concluded should be revoked, by request hash.
     pub decisions: Vec<[u8; 32]>,
+    /// The `[LA1, LA2]` linkage chain identifier pairs it has decided to revoke (SC-P3):
+    /// a later case whose chain the LAs name with a pair already here ends `linked`, with
+    /// no second blocklist request and no second seed release ([CAMP122] §5). The MA
+    /// knows a chain only by these identifiers, never by the device.
+    pub decided_chains: BTreeSet<([u8; CHAIN_ID_BYTES], [u8; CHAIN_ID_BYTES])>,
     /// Revocation requests waiting for the operator (manual-review mode), by the run
     /// the request was given: `(report index, i_rev, jmax, two-report partner)`.
     pub awaiting_review: BTreeMap<FlowRun, (usize, u32, u32, Option<usize>)>,
@@ -786,6 +793,82 @@ pub struct MaState {
     /// Per entry of [`MaState::reports`] (same index): the run it reached the MA on, whose
     /// `report-received` stamp is when the MA had it (a case runs on a run of its own).
     pub report_runs: Vec<FlowRun>,
+    /// Per entry of [`MaState::reports`] (same index): the accused certificate as the MA
+    /// knows it, which every case it opens on the report looks up (SC-P1). For a real
+    /// report, read from the opened report's `suspect.signingCertificate`; the reporter's
+    /// clear [`ReportSubmission::subject_lv`] is not read.
+    pub report_subjects: Vec<MaReport>,
+    /// The accused certificate of reports still on their way over the MA-to-MA link, as
+    /// the forwarding MA read it, by their run ([`ScmsRun::shared_report_subject`]).
+    pub pending_subjects: BTreeMap<FlowRun, MaReport>,
+}
+
+impl MaState {
+    /// The accused certificate the MA holds for its report `index`.
+    #[must_use]
+    pub fn subject(&self, index: usize) -> Option<&MaReport> {
+        self.report_subjects.get(index)
+    }
+
+    /// The index of the report that reached the MA on `run` (its `report-received`
+    /// stamp's run): the latest, if several did.
+    #[must_use]
+    pub fn report_on_run(&self, run: FlowRun) -> Option<usize> {
+        self.report_runs.iter().rposition(|r| *r == run)
+    }
+
+    /// The latest report the MA holds whose accused certificate is `id8` (its
+    /// whole-certificate HashedId8, read from the opened report).
+    #[must_use]
+    pub fn report_about_cert(&self, id8: &[u8; 8]) -> Option<usize> {
+        self.report_subjects
+            .iter()
+            .rposition(|s| s.cert.as_ref() == Some(id8))
+    }
+}
+
+/// Where the MA learned a report's accused certificate (SC-P1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubjectFrom {
+    /// The opened report's `suspect.signingCertificate`: its `linkageData` and its
+    /// issuer ([SM-MBR] §3; [CAMP122] §5). The US path.
+    SuspectCertificate,
+    /// A report another provider's MA shared: the subject the forwarding MA read from
+    /// the certificate, carried over the MA-to-MA link. **Modelled** (no published format).
+    Shared,
+    /// A report on the modelled path (no secured report, so no certificate to read):
+    /// the subject the engine's map gave it. **Modelled.**
+    EngineMap,
+}
+
+impl SubjectFrom {
+    /// The record label.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubjectFrom::SuspectCertificate => "suspect-certificate",
+            SubjectFrom::Shared => "shared-report (modelled)",
+            SubjectFrom::EngineMap => "engine-map (modelled report)",
+        }
+    }
+}
+
+/// The accused certificate behind one report the MA holds (SC-P1): what a case sends to
+/// the issuing ACA for its lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaReport {
+    /// The certificate's `iCert`.
+    pub subject_i: u32,
+    /// Its linkage value.
+    pub subject_lv: LinkageValue,
+    /// The HashedId8 of the ACA certificate that issued it (its `issuer`), when the MA
+    /// read the certificate: the routing key for the PCA lookup. `None` off the real path.
+    pub issuer: Option<[u8; 8]>,
+    /// The accused certificate's own whole-certificate HashedId8 (the digest its BSMs
+    /// are signed under), when the MA read the certificate.
+    pub cert: Option<[u8; 8]>,
+    /// Where the subject came from.
+    pub from: SubjectFrom,
 }
 
 /// What one received report's evidence was, as the MA decoded it ([SM-MBR] §2.3: the
@@ -841,10 +924,16 @@ pub struct Case {
     pub crl_run: FlowRun,
     /// The two reports being correlated.
     pub subjects: [(u32, LinkageValue); 2],
+    /// The issuing ACA's HashedId8 per subject, as the MA read it from the accused
+    /// certificate (SC-P1): the lookup goes to that ACA. `None` off the real path.
+    pub issuers: [Option<[u8; 8]>; 2],
     /// What the PCA answered, in order.
     pub lookups: Vec<PcaLookup>,
     /// What the two LAs answered.
     pub same: [Option<bool>; 2],
+    /// The linkage chain identifier each LA returned for the reported certificate's
+    /// chain (SC-P2): `[LA1, LA2]`, the pair the MA links cases by.
+    pub chain_ids: [Option<[u8; CHAIN_ID_BYTES]>; 2],
     /// The seeds the LAs released for the reported chain (the first of [`Self::chains`]).
     pub seeds: [Option<(LaId, LinkageSeed)>; 2],
     /// Every `[LA1, LA2]` chain pair the RA returned for the device's enrolment (B4):
@@ -858,10 +947,16 @@ pub struct Case {
     pub jmax: u32,
     /// Whether the resolution succeeded.
     pub resolved: bool,
-    /// A single-subject revocation ([BRECHT §VI-D]): the MA's decision names one
-    /// pseudonym certificate, so there is no "same device?" question to put to the Linkage
-    /// Authorities; the PCA lookup identifies the request, the RA blocklists it and both
-    /// LAs must release their seeds before the CRL Generator can append an entry.
+    /// Whether the case ended because both LAs named a chain pair the MA had already
+    /// decided ([`MaState::decided_chains`], SC-P3): the device is already being revoked,
+    /// and this case adds evidence, not a second revocation.
+    pub linked: bool,
+    /// A single-subject revocation: the MA's decision names one pseudonym certificate.
+    /// The PCA lookup returns the request hash and the two sealed chain pointers, each LA
+    /// names its chain (`chain-id-request`/`-response`, SC-P2; [CAMP122] §5, [BRECHT]
+    /// §VI-C), and only then does the RA blocklist the request and both LAs release their
+    /// seeds. `false` for the two-report research API ([`ScmsRun::investigate`],
+    /// [`ScmsRun::request_link`]), which keeps the one-bit "same device?" exchange.
     pub direct: bool,
     /// Whether the case has finished, either by an appended CRL entry or by a refusal
     /// somewhere on the path (an unknown linkage value, an unknown request, an LA that
@@ -874,6 +969,47 @@ pub struct Case {
     /// manual review the operator's decision follows the review time later (realism.md
     /// R-CORR: the case board stamped `corroborated` at the decision).
     pub opened: SimTime,
+}
+
+/// How a case ended (SC-P3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaseOutcome {
+    /// The MA asked the RA to blocklist and the LAs to release seeds.
+    Revoked,
+    /// The LAs named a chain the MA had already decided: no second revocation.
+    Linked,
+    /// Refused somewhere on the path (an unknown linkage value, chain or request, or
+    /// "different devices").
+    Unresolved,
+}
+
+impl CaseOutcome {
+    /// The record label.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaseOutcome::Revoked => "revoked",
+            CaseOutcome::Linked => "linked",
+            CaseOutcome::Unresolved => "unresolved",
+        }
+    }
+}
+
+impl Case {
+    /// How the case ended, or `None` while it is in progress. A resolved case is
+    /// `revoked` from the moment the MA asked for the blocklist.
+    #[must_use]
+    pub fn outcome(&self) -> Option<CaseOutcome> {
+        if self.linked {
+            Some(CaseOutcome::Linked)
+        } else if self.resolved {
+            Some(CaseOutcome::Revoked)
+        } else if self.done {
+            Some(CaseOutcome::Unresolved)
+        } else {
+            None
+        }
+    }
 }
 
 /// The CRL Generator's and the CRL Store's state.
@@ -1583,6 +1719,19 @@ impl ScmsRun {
         );
     }
 
+    /// The accused certificate the forwarding MA read from the report it shared as `run`
+    /// ([`ScmsRun::shared_report_at_ma`]'s return): this MA holds it with the report on
+    /// arrival, labelled [`SubjectFrom::Shared`]. **Modelled**, like the shared report.
+    pub fn shared_report_subject(&mut self, run: FlowRun, subject: MaReport) {
+        self.state.ma.pending_subjects.insert(
+            run,
+            MaReport {
+                from: SubjectFrom::Shared,
+                ..subject
+            },
+        );
+    }
+
     /// What is known of the evidence of a report on the modelled path (no secured report
     /// for the MA to open), sent as `run`: why the device sent no real SM-MBR report, and
     /// the detector checks that fired. The MA records it with the report on arrival.
@@ -2287,6 +2436,8 @@ impl ScmsState {
             | ScmsMsg::PcaLookupResponse { .. }
             | ScmsMsg::SameDeviceRequest { .. }
             | ScmsMsg::SameDeviceResponse { .. }
+            | ScmsMsg::ChainIdRequest { .. }
+            | ScmsMsg::ChainIdResponse { .. }
             | ScmsMsg::BlocklistRequest { .. }
             | ScmsMsg::BlocklistResponse { .. }
             | ScmsMsg::SeedRequest { .. }

@@ -22,24 +22,18 @@ impl ScmsRun {
         jmax: u32,
     ) -> Option<(FlowRun, FlowRun)> {
         let (ra, rb) = {
-            let reports = &self.state.ma.reports;
-            (reports.get(a)?.clone(), reports.get(b)?.clone())
+            let ma = &self.state.ma;
+            (*ma.subject(a)?, *ma.subject(b)?)
         };
-        self.open_case(
-            [(ra.subject_i, ra.subject_lv), (rb.subject_i, rb.subject_lv)],
-            false,
-            i_rev,
-            jmax,
-            Duration::ZERO,
-            vec![a, b],
-        )
+        self.open_case([ra, rb], i_rev, jmax, Duration::ZERO, vec![a, b])
     }
 
     /// Revokes the device behind the report the MA holds at `index`, from period `i_rev`
     /// forward: the revocation sequence of [BRECHT §VI-D] for one reported certificate.
     ///
-    /// MA → PCA (`lv` → request hash), MA → RA (hash → blocklist, LCIs), MA → LA1 and LA2
-    /// (LCI → `ls(i_rev)`), MA → CRLG. **Both** Linkage Authorities must answer with a seed
+    /// MA → PCA (`lv` → request hash and the two sealed chain pointers), MA → LA1 and LA2
+    /// (pointer → linkage chain identifier, SC-P2), MA → RA (hash → blocklist, LCIs),
+    /// MA → LA1 and LA2 (LCI → `ls(i_rev)`), MA → CRLG ([CAMP122] §5; [BRECHT §VI-C/D]). **Both** Linkage Authorities must answer with a seed
     /// before an entry exists: a CRL entry is the pair of seeds, and one LA alone can
     /// neither issue nor refuse on the other's behalf.
     ///
@@ -51,15 +45,8 @@ impl ScmsRun {
     /// is held or the MA's case table is full ([`crate::scms::params::MaPolicy::max_open_cases`]); cases run
     /// concurrently, each message naming its case by run (gap row 27).
     pub fn revoke(&mut self, index: usize, i_rev: u32, jmax: u32) -> Option<(FlowRun, FlowRun)> {
-        let r = self.state.ma.reports.get(index)?.clone();
-        self.open_case(
-            [(r.subject_i, r.subject_lv), (r.subject_i, r.subject_lv)],
-            true,
-            i_rev,
-            jmax,
-            Duration::ZERO,
-            vec![index],
-        )
+        let r = *self.state.ma.subject(index)?;
+        self.open_case([r, r], i_rev, jmax, Duration::ZERO, vec![index])
     }
 
     /// A revocation the MA's pipeline asks for, carried out under the MA's decision mode
@@ -72,16 +59,9 @@ impl ScmsRun {
         i_rev: u32,
         jmax: u32,
     ) -> Option<(FlowRun, FlowRun)> {
-        let r = self.state.ma.reports.get(index)?.clone();
+        let r = *self.state.ma.subject(index)?;
         let delay = self.review_delay();
-        self.open_case(
-            [(r.subject_i, r.subject_lv), (r.subject_i, r.subject_lv)],
-            true,
-            i_rev,
-            jmax,
-            delay,
-            vec![index],
-        )
+        self.open_case([r, r], i_rev, jmax, delay, vec![index])
     }
 
     /// [`ScmsRun::investigate`] under the MA's decision mode.
@@ -93,18 +73,11 @@ impl ScmsRun {
         jmax: u32,
     ) -> Option<(FlowRun, FlowRun)> {
         let (ra, rb) = {
-            let reports = &self.state.ma.reports;
-            (reports.get(a)?.clone(), reports.get(b)?.clone())
+            let ma = &self.state.ma;
+            (*ma.subject(a)?, *ma.subject(b)?)
         };
         let delay = self.review_delay();
-        self.open_case(
-            [(ra.subject_i, ra.subject_lv), (rb.subject_i, rb.subject_lv)],
-            false,
-            i_rev,
-            jmax,
-            delay,
-            vec![a, b],
-        )
+        self.open_case([ra, rb], i_rev, jmax, delay, vec![a, b])
     }
 
     fn review_delay(&self) -> Duration {
@@ -114,10 +87,12 @@ impl ScmsRun {
         }
     }
 
+    /// Opens a case on the reports at `reports`: one report is a single-subject
+    /// revocation (the chain-id flow, SC-P2), two are a link (the research API's
+    /// "same device?" exchange).
     fn open_case(
         &mut self,
-        subjects: [(u32, LinkageValue); 2],
-        direct: bool,
+        held: [MaReport; 2],
         i_rev: u32,
         jmax: u32,
         delay: Duration,
@@ -127,6 +102,9 @@ impl ScmsRun {
         if self.state.ma.open_cases() >= cap {
             return None;
         }
+        let direct = reports.len() == 1;
+        let subjects = held.map(|h| (h.subject_i, h.subject_lv));
+        let issuers = held.map(|h| h.issuer);
         let run = self.new_run();
         let crl_run = self.new_run();
         let opened_at = self.kernel.now();
@@ -136,14 +114,17 @@ impl ScmsRun {
                 run,
                 crl_run,
                 subjects,
+                issuers,
                 lookups: Vec::new(),
                 same: [None, None],
+                chain_ids: [None, None],
                 seeds: [None, None],
                 chains: Vec::new(),
                 chain_seeds: Vec::new(),
                 i_rev,
                 jmax,
                 resolved: false,
+                linked: false,
                 direct,
                 done: false,
                 reports,
@@ -172,10 +153,30 @@ impl ScmsRun {
 }
 
 impl ScmsState {
-    /// Handles every message of this flow; [`ScmsState::handle`] routes here.
-    /// The ACA that issued the certificate of `(i, lv)`: the issuer its certificate names
-    /// (a further ACA instance, audit-gov GOV.D1.acas), else the core one.
-    fn issuing_aca(&self, i: u32, lv: &v2xw_sec::linkage::LinkageValue) -> NodeId {
+    /// The ACA the MA asks about the certificate of `(i, lv)`: the one whose certificate
+    /// the accused certificate's `issuer` names, as the MA read it from the report
+    /// ([CAMP122] §5; [BRECHT] §VI-D; a further ACA instance, audit-gov GOV.D1.acas).
+    /// Without that digest (a shared or modelled report, or an issuer this provider does
+    /// not hold), the instance that issued it by the issuance records, else the core one.
+    fn issuing_aca(
+        &self,
+        issuer: Option<[u8; 8]>,
+        i: u32,
+        lv: &v2xw_sec::linkage::LinkageValue,
+    ) -> NodeId {
+        if let (Some(id8), Some(pki)) = (issuer, self.pki.as_deref()) {
+            for (k, &node) in self.aca_extra.iter().enumerate() {
+                let inst = u32::try_from(k).unwrap_or(u32::MAX).saturating_add(1);
+                let a = pki.aca_at(inst);
+                if !core::ptr::eq(a, &pki.aca) && a.id8() == id8 {
+                    return node;
+                }
+            }
+            // The core ACA, or the certificate a root rollover superseded.
+            if pki.is_role(&pki.aca, &id8) {
+                return self.nodes.pca;
+            }
+        }
         self.pca
             .issued_by
             .get(&(i, *lv.as_bytes()))
@@ -183,6 +184,23 @@ impl ScmsState {
             .unwrap_or(self.nodes.pca)
     }
 
+    /// Whether one of this provider's ACAs holds the certificate `id8` (the core one, the
+    /// certificate a root rollover superseded, or a further instance): the issuer digest
+    /// an accused certificate names says which provider can resolve it (Provider Req.
+    /// §2.2; SC-P1).
+    #[must_use]
+    pub fn issues_under(&self, id8: &[u8; 8]) -> bool {
+        let Some(pki) = self.pki.as_deref() else {
+            return false;
+        };
+        pki.is_role(&pki.aca, id8)
+            || (1..=self.aca_extra.len()).any(|k| {
+                let a = pki.aca_at(u32::try_from(k).unwrap_or(u32::MAX));
+                !core::ptr::eq(a, &pki.aca) && a.id8() == *id8
+            })
+    }
+
+    /// Handles every message of this flow; [`ScmsState::handle`] routes here.
     #[allow(unused_variables)]
     pub(super) fn handle_revoke(
         &mut self,
@@ -194,8 +212,9 @@ impl ScmsState {
         match d.msg {
             ScmsMsg::PcaLookupRequest { i, lv } if to == n.ma => {
                 out.stage_at(StageId::Decision, to, None, flow, run);
+                let issuer = self.ma.cases.get(&run).and_then(|c| c.issuers[0]);
                 out.send(
-                    self.issuing_aca(i, &lv),
+                    self.issuing_aca(issuer, i, &lv),
                     ScmsMsg::PcaLookupRequest { i, lv },
                     "pca-lookup-request",
                     self.sizes.pca_lookup_request(),
@@ -229,25 +248,26 @@ impl ScmsState {
                 };
                 case.lookups.push(found);
                 if case.direct {
-                    // One certificate names one enrolment: the PCA's answer is the
-                    // request hash, which is the device ([BRECHT §VI-D]).
-                    case.resolved = true;
-                    let hash = found.handle;
-                    self.ma.decisions.push(hash);
-                    out.stage_at(StageId::Resolved, to, None, flow, run);
-                    out.send(
-                        n.ra,
-                        ScmsMsg::BlocklistRequest { handle: hash },
-                        "blocklist-request",
-                        self.sizes.blocklist_request(),
-                        Transport::BackendNet,
-                        flow,
-                        run,
-                    );
+                    // The PCA's answer is the request hash and one sealed pointer per LA.
+                    // Each LA names the chain its pointer opens to, so the MA can link the
+                    // case to earlier ones before it acts ([CAMP122] §5; Whyte et al.,
+                    // VNC 2013, §V; [BRECHT §VI-C]); only then the RA and the seeds.
+                    for (la, lci) in [(LaIndex::One, found.lci1), (LaIndex::Two, found.lci2)] {
+                        out.send(
+                            self.nodes.la(la),
+                            ScmsMsg::ChainIdRequest { la, lci },
+                            "chain-id-request",
+                            self.sizes.chain_id_request(),
+                            Transport::BackendNet,
+                            flow,
+                            run,
+                        );
+                    }
                 } else if case.lookups.len() == 1 {
                     let (i, lv) = case.subjects[1];
+                    let issuer = case.issuers[1];
                     out.send(
-                        self.issuing_aca(i, &lv),
+                        self.issuing_aca(issuer, i, &lv),
                         ScmsMsg::PcaLookupRequest { i, lv },
                         "pca-lookup-request",
                         self.sizes.pca_lookup_request(),
@@ -292,6 +312,68 @@ impl ScmsState {
                     ScmsMsg::SameDeviceResponse { la, same },
                     "same-device-response",
                     self.sizes.same_device_response(),
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::ChainIdRequest { la, lci } => {
+                // The LA opens its sealed pointer (only it can) and answers with its own
+                // identifier for the chain: a keyed hash under the chain's secret initial
+                // seed, which only this LA holds. It is stable for the chain, the other LA
+                // cannot compute or compare it, and it names neither the seed nor the
+                // device ([BRECHT §VI-C]; SC-P2).
+                let nodes = self.nodes;
+                let st = &self.la[la.idx()];
+                let chain = lci
+                    .open(to, &nodes)
+                    .and_then(|l| st.chains.get(&l).copied())
+                    .map(|ls0| chain_identifier(st.la_id, &ls0));
+                Self::hashes(out, 1);
+                out.send(
+                    n.ma,
+                    ScmsMsg::ChainIdResponse { la, chain },
+                    "chain-id-response",
+                    self.sizes.chain_id_response(),
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::ChainIdResponse { la, chain } => {
+                let Some(case) = self.ma.cases.get_mut(&run) else {
+                    return Ok(());
+                };
+                if case.done || case.resolved {
+                    return Ok(());
+                }
+                let Some(chain) = chain else {
+                    // An LA that holds no such chain: the MA cannot name it, and the case
+                    // ends unresolved.
+                    case.done = true;
+                    return Ok(());
+                };
+                case.chain_ids[la.idx()] = Some(chain);
+                let [Some(c1), Some(c2)] = case.chain_ids else {
+                    return Ok(());
+                };
+                // The MA links the case by the pair: a chain it has already decided is
+                // being revoked, so a second pseudonym on it adds evidence, not a second
+                // blocklist request or seed release ([CAMP122] §5; SC-P3).
+                if !self.ma.decided_chains.insert((c1, c2)) {
+                    case.linked = true;
+                    case.done = true;
+                    return Ok(());
+                }
+                case.resolved = true;
+                let hash = case.lookups[0].handle;
+                self.ma.decisions.push(hash);
+                out.stage_at(StageId::Resolved, to, None, flow, run);
+                out.send(
+                    n.ra,
+                    ScmsMsg::BlocklistRequest { handle: hash },
+                    "blocklist-request",
+                    self.sizes.blocklist_request(),
                     Transport::BackendNet,
                     flow,
                     run,
@@ -566,4 +648,24 @@ impl ScmsState {
         }
         Ok(())
     }
+}
+
+/// An LA's linkage chain identifier for the chain whose initial seed is `ls0` (SC-P2):
+/// SHA-256 over a domain tag, the LA's identifier and the seed, truncated to
+/// [`CHAIN_ID_BYTES`]. Keyed by the seed, which never leaves the LA, so nobody else can
+/// compute it and the two LAs' identifiers for one device are unrelated. **Modelled**:
+/// the LA-MA format is unpublished (09 §6).
+#[must_use]
+pub fn chain_identifier(la_id: LaId, ls0: &LinkageSeed) -> [u8; CHAIN_ID_BYTES] {
+    let d = sha256(
+        &[
+            &b"v2xw/la/chain-id/v1"[..],
+            &la_id.to_be_bytes(),
+            ls0.as_bytes(),
+        ]
+        .concat(),
+    );
+    let mut out = [0u8; CHAIN_ID_BYTES];
+    out.copy_from_slice(&d[..CHAIN_ID_BYTES]);
+    out
 }

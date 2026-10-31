@@ -1420,7 +1420,8 @@ impl v2xw_proto::net::PathOracle for InternetLeg {
 struct Case {
     /// The provider whose MA decides (the one that issued the accused certificate).
     provider: usize,
-    subject: NodeId,
+    /// The accused device by the engine's map (ground truth, records only; SC-P1).
+    subject: Option<NodeId>,
     subject_digest: String,
     /// The triggering report's backend run.
     report_run: FlowRun,
@@ -1433,6 +1434,9 @@ struct Case {
     /// Every vehicle that has installed the entry, in install order, with the instant
     /// (the PKI view's per-vehicle `enforced` stamps).
     enforcers: Vec<(NodeId, SimTime)>,
+    /// Whether the MA closed the case because both LAs named a chain it had already
+    /// decided (SC-P3): counted once in `decisions_linked`.
+    linked: bool,
 }
 
 /// An ETSI decision carried out as the EA's blocklist.
@@ -1446,11 +1450,25 @@ struct Block {
     blocked: Option<SimTime>,
 }
 
+/// A test hook on [`Phase2::truth_subject`], the engine's ground-truth join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TruthHook {
+    /// The map as provisioned.
+    None,
+    /// The map names no device.
+    Forgotten,
+    /// The map names a device of another provider.
+    OtherProvider,
+}
+
 /// A report on its way to the authority, keyed by its backend run.
 #[derive(Debug, Clone)]
 struct InFlightReport {
     report: MisbehaviourReport,
-    subject: NodeId,
+    /// The accused device by the engine's map: ground truth for the records and the run
+    /// report only (SC-P1). The MA learns the subject from the report itself; `None`
+    /// when the map names no device.
+    subject: Option<NodeId>,
 }
 
 /// A device's misbehaviour-report store, [SM-MBR] §2.2 ([`MbrQueue`]): each report
@@ -1990,9 +2008,10 @@ pub struct Phase2Report {
     pub revocations_repeated: u64,
     /// Decisions about a certificate the published list already revoked.
     pub decisions_already_covered: u64,
-    /// Revoke verdicts about a pseudonym of a device the authority had already decided:
-    /// the linkage authorities put both pseudonyms on one linkage chain, so the device is
-    /// revoked once and the verdict is not a second decision.
+    /// Cases the MA closed because the chain was already decided: both linkage
+    /// authorities named a chain pair a revoking case had already named, so the device is
+    /// revoked once (SC-P3). Under the ETSI model, verdicts about an already-decided
+    /// device by the engine's map (modelled).
     pub decisions_linked: u64,
     /// The most corroborated events any pseudonym the authority did not revoke reached
     /// (`threat/ma/corroborated` only): the margin an honest fleet leaves to the threshold.
@@ -2220,6 +2239,9 @@ pub struct Phase2 {
     access: BackendAccess,
     creds: BTreeMap<NodeId, Vec<ProvisionedCred>>,
     by_digest: BTreeMap<[u8; 8], (NodeId, u32, u32)>,
+    /// Test hooks on the truth join ([`Phase2::forget_digest_map_for_test`],
+    /// [`Phase2::misattribute_providers_for_test`]).
+    truth_hook: TruthHook,
     rsus: Vec<RsuSpec>,
     rsu_nodes: Vec<NodeId>,
     /// The SCMS (`protocol/scms/camp`) runs this backend: roadside units then join the
@@ -2376,8 +2398,8 @@ pub struct Phase2 {
     /// device's `MbrQueue` counters leave with it, and the run report's
     /// `reports_evicted` / `reports_expired` sum the devices present plus these.
     retired_store_deletions: (u64, u64),
-    /// The devices the authority has decided to revoke, as the PCA and linkage
-    /// authorities resolve a reported pseudonym (joint 2): one decision per device.
+    /// The devices the ETSI model's authority has decided to block, by the engine's map
+    /// (modelled; the US MA links by chain identifiers, `MaState::decided_chains`).
     ma_decided_devices: BTreeSet<NodeId>,
     /// The positional accuracy each safety message stated on the air, as a 95 % radius in
     /// metres, by signer and generation time: `None` when the message said "unavailable".
@@ -3219,6 +3241,7 @@ impl Phase2 {
             access,
             creds: BTreeMap::new(),
             by_digest: BTreeMap::new(),
+            truth_hook: TruthHook::None,
             rsus,
             rsu_nodes: Vec::new(),
             camp: protocol.as_deref() == Some(CAMP_SCMS),
@@ -5104,16 +5127,59 @@ impl Phase2 {
         }
     }
 
-    /// Resolves a report's subject to `(node, i, lv)` — the PCA's table (joint 2).
-    fn resolve_subject(&self, digest_hex: &str) -> Option<(NodeId, u32, LinkageValue)> {
+    /// The device behind a reported certificate digest, `(node, i, lv)`, by the engine's
+    /// own provisioning map: **ground truth** for the records and the run report
+    /// (`log_fate`, `log_received`, the attacker tallies). The decision path does not
+    /// read it (SC-P1): the MA reads the accused certificate from the report, and the
+    /// issuing ACA resolves it from its own table. The modelled report path (no bytes)
+    /// takes its subject from here, labelled `engine-map (modelled report)`; the decision
+    /// de-duplication still does until SC-P3 keys it by linkage chain.
+    fn truth_subject(&self, digest_hex: &str) -> Option<(NodeId, u32, LinkageValue)> {
+        if self.truth_hook == TruthHook::Forgotten {
+            return None;
+        }
         let bytes = decode_hex8(digest_hex)?;
         let (node, i, j) = *self.by_digest.get(&bytes)?;
+        if self.truth_hook == TruthHook::OtherProvider {
+            // Some device of another provider: the first in digest order.
+            let own = self.provider_of_device(device_of(node));
+            let other = self
+                .by_digest
+                .values()
+                .map(|v| v.0)
+                .find(|n| self.provider_of_device(device_of(*n)) != own)?;
+            return Some((other, i, LinkageValue::new([0; 9])));
+        }
         let cred = self
             .creds
             .get(&node)?
             .iter()
             .find(|c| c.i == i && c.j == j)?;
         Some((node, cred.i, cred.lv))
+    }
+
+    /// **A test hook, not a model parameter** (SC-P1): from now on the engine's map
+    /// ([`Phase2::truth_subject`]) names no device for any reported certificate, so
+    /// whatever still reached the decision through it stops. The reporter-side evidence
+    /// rebuild ([`Phase2::real_mbr`], which stands in for the frame the reporter heard)
+    /// keeps the provisioning records it reads.
+    #[doc(hidden)]
+    pub fn forget_digest_map_for_test(&mut self) {
+        self.truth_hook = TruthHook::Forgotten;
+    }
+
+    /// **A test hook, not a model parameter** (SC-P1): from now on the engine's map
+    /// names, for every reported certificate, a device of another provider than the one
+    /// that holds it, so a report routed by the map's device goes to the wrong MA.
+    #[doc(hidden)]
+    pub fn misattribute_providers_for_test(&mut self) {
+        self.truth_hook = TruthHook::OtherProvider;
+    }
+
+    /// The provider whose ACA certificate is `issuer` (SC-P1): the one that can resolve
+    /// a certificate naming it as issuer ([CAMP122] §5; Provider Req. §2.2).
+    fn provider_of_issuer(&self, issuer: &[u8; 8]) -> Option<usize> {
+        self.runs.iter().position(|r| r.state.issues_under(issuer))
     }
 
     /// Stores a report the vehicle could not upload yet in its report store; over the
@@ -5247,7 +5313,7 @@ impl Phase2 {
         if self.report_log.is_none() {
             return;
         }
-        let subject_node = self.resolve_subject(&r.subject_cert_digest).map(|x| x.0);
+        let subject_node = self.truth_subject(&r.subject_cert_digest).map(|x| x.0);
         let subject_attacker = subject_node.is_some_and(|s| self.attackers.contains_key(&s));
         let Some(log) = self.report_log.as_mut() else {
             return;
@@ -5289,8 +5355,9 @@ impl Phase2 {
         &mut self,
         k: usize,
         t: SimTime,
+        run: FlowRun,
         r: &MisbehaviourReport,
-        subject: NodeId,
+        subject: Option<NodeId>,
         set_aside: Option<&str>,
     ) {
         if let Some(reporter) = r.reporter {
@@ -5299,7 +5366,7 @@ impl Phase2 {
         if self.report_log.is_none() {
             return;
         }
-        let row = self.ma_view_row(k, t, r, subject, set_aside);
+        let row = self.ma_view_row(k, t, run, r, subject, set_aside);
         if let Some(log) = self.report_log.as_mut() {
             log.received.push(row);
         }
@@ -5311,12 +5378,12 @@ impl Phase2 {
         &self,
         k: usize,
         t: SimTime,
+        run: FlowRun,
         r: &MisbehaviourReport,
-        subject: NodeId,
+        subject: Option<NodeId>,
         set_aside: Option<&str>,
     ) -> crate::report_records::MaReceived {
-        let issuer = format!("provider-{}", self.provider_of_device(device_of(subject)));
-        let la_link = crate::report_records::la_link(subject, self.params.scms.master_seed);
+        let (issuer, la_link, subject_from) = self.ma_learns(k, run, r, subject);
         // The phase is the judged BSM's own `secMark`, as the evidence carries it: the
         // 1609.2 `generationTime` is the device's clock with its own jitter (28 ms sd on
         // the CV pilots, `bsm-timing-cvpilot.yaml`), which put a locked device's phase off
@@ -5343,8 +5410,38 @@ impl Phase2 {
             secmark_phase_ms,
             issuer,
             la_link,
+            subject_from,
             set_aside: set_aside.map(str::to_string),
         }
+    }
+
+    /// What provider `k`'s MA learns about the subject of the report that reached it on
+    /// `run`: the provider whose ACA issued the accused certificate (by the issuer the
+    /// certificate names, SC-P1), the LAs' link token, and where the MA's subject came
+    /// from (`suspect-certificate` for a real report). **Modelled:** the link token is
+    /// the device's own (the LA linking of SC-P2 replaces it); without the map's device
+    /// it is the certificate's, which links nothing.
+    fn ma_learns(
+        &self,
+        k: usize,
+        run: FlowRun,
+        r: &MisbehaviourReport,
+        subject: Option<NodeId>,
+    ) -> (String, String, String) {
+        let ma = &self.runs[k].state.ma;
+        let held = ma.report_on_run(run).and_then(|x| ma.subject(x));
+        let issuing = held
+            .and_then(|s| s.issuer)
+            .and_then(|id8| self.provider_of_issuer(&id8))
+            .or_else(|| subject.map(|n| self.provider_of_device(device_of(n))))
+            .unwrap_or(k);
+        let seed = self.params.scms.master_seed;
+        let link = subject.map_or_else(
+            || crate::report_records::cert_link(&r.subject_cert_digest, seed),
+            |n| crate::report_records::la_link(n, seed),
+        );
+        let from = held.map_or("engine-map (modelled report)", |s| s.from.as_str());
+        (format!("provider-{issuing}"), link, from.to_string())
     }
 
     /// A report taken from `node`'s store left it for good (sent, or refused for ever):
@@ -5830,20 +5927,26 @@ impl Phase2 {
             "report-uu"
         };
         self.access.note_exchange(kind, sent_at, arrive_at);
-        let Some((subject, i, lv)) = self.resolve_subject(&report.subject_cert_digest) else {
-            return;
-        };
+        // Ground truth for the records only: the report goes to the RA and the MA whatever
+        // the engine's map says (SC-P1). Only a report without bytes (the modelled path,
+        // and the ETSI model) takes its subject from the map.
+        let truth = self.truth_subject(&report.subject_cert_digest);
+        let subject = truth.map(|t| t.0);
         if self.runs.len() > 1 {
             let names = &self.runs[0].state.deployment.providers;
             let of = |n: NodeId| self.device_provider.get(&device_of(n)).copied();
-            if let (Some(a), Some(b)) = (of(reporter), of(subject)) {
+            if let (Some(a), Some(b)) = (of(reporter), subject.and_then(of)) {
                 let key = format!("{}<-{}", names[a].name, names[b].name);
                 *self.report.reports_by_provider.entry(key).or_insert(0) += 1;
             }
         }
         if let Some(etsi) = self.etsi.as_mut() {
             // TS 103 759: the report goes to the MA, signed with the reporter's ticket and
-            // encrypted to the authority — no RA shuffle in the ETSI system.
+            // encrypted to the authority — no RA shuffle in the ETSI system. **Modelled**:
+            // the ETSI MA is handed the accused device by the engine's map.
+            let Some(subject) = subject else {
+                return;
+            };
             let run = etsi.report_at_ma(
                 device_of(reporter),
                 device_of(subject),
@@ -5853,8 +5956,13 @@ impl Phase2 {
                 transport,
                 report_bytes(),
             );
-            self.in_flight
-                .insert((0, run), InFlightReport { report, subject });
+            self.in_flight.insert(
+                (0, run),
+                InFlightReport {
+                    report,
+                    subject: Some(subject),
+                },
+            );
             return;
         }
         // The reporter's own provider's RA and MA receive it (WP-D1), after the internet
@@ -5935,6 +6043,11 @@ impl Phase2 {
         let run = match run {
             Some(run) => run,
             None => {
+                // A report with no bytes carries no certificate for the MA to read: its
+                // subject is the engine map's (`engine-map (modelled report)`).
+                let Some((_, i, lv)) = truth else {
+                    return;
+                };
                 let run = self.runs[kr].report_at_proxy(
                     device_of(reporter),
                     i,
@@ -6108,6 +6221,7 @@ impl Phase2 {
                         stamps_emitted: BTreeSet::new(),
                         enforced_first: None,
                         enforcers: Vec::new(),
+                        linked: false,
                     });
                 }
             }
@@ -6132,6 +6246,15 @@ impl Phase2 {
             };
             let run = &self.runs[case.provider];
             let log = &run.kernel.stages;
+            // The MA's own outcome (SC-P3): both LAs named a chain it had already decided.
+            if !case.linked
+                && run.state.ma.cases.get(&resolution).is_some_and(|c| {
+                    c.outcome() == Some(v2xw_proto::scms::run::CaseOutcome::Linked)
+                })
+            {
+                case.linked = true;
+                self.report.decisions_linked += 1;
+            }
             // The case's own entries: cases run concurrently (gap row 27), so the list's
             // last entry may be another case's appended on the same step. A case appends
             // one entry per chain pair in one issuance, its reported chain's first; the
@@ -6163,9 +6286,16 @@ impl Phase2 {
                     .or_insert(0) += 1;
                 // The ground-truth join, for the run report only: whether the device the
                 // authority revoked was the one that lied.
-                if !self.revoked_devices.insert(case.subject) {
+                if case.subject.is_none() {
+                    // No device by the engine's map (a test hook): nothing to score.
+                } else if let Some(subject) = case.subject
+                    && !self.revoked_devices.insert(subject)
+                {
                     self.report.revocations_repeated += 1;
-                } else if self.attackers.contains_key(&case.subject) {
+                } else if case
+                    .subject
+                    .is_some_and(|s| self.attackers.contains_key(&s))
+                {
                     self.report.revoked_attackers += 1;
                 } else {
                     self.report.revoked_honest += 1;
@@ -6210,7 +6340,7 @@ impl Phase2 {
         let unresolved = self
             .cases
             .iter()
-            .filter(|c| c.runs.is_some() && c.entry.is_none())
+            .filter(|c| c.runs.is_some() && c.entry.is_none() && !c.linked)
             .count() as u64;
         if self.runs.iter().all(|r| !r.case_open()) {
             self.report.cases_unresolved = unresolved;
@@ -7080,33 +7210,44 @@ impl Phase2 {
         k: usize,
         stamps: &[v2xw_proto::stage::StageStamp],
         tick: &mut BackendTick,
-    ) -> (Vec<(NodeId, String, FlowRun, SimTime)>, bool) {
+    ) -> (Vec<(Option<NodeId>, String, FlowRun, SimTime)>, bool) {
         let mut arrived: Vec<(SimTime, FlowRun, InFlightReport)> = Vec::new();
         let mut forwarded = false;
         for s in stamps {
             if s.stage == StageId::ReportReceived
                 && let Some(f) = self.in_flight.remove(&(k, s.run))
             {
-                let ks = self.provider_of_device(device_of(f.subject));
-                if self.etsi.is_some() || ks == k {
+                if self.etsi.is_some() {
                     arrived.push((s.t, s.run, f));
                     continue;
                 }
-                let Some((_, i, lv)) = self.resolve_subject(&f.report.subject_cert_digest) else {
+                // The report as this MA holds it, and the accused certificate it read from
+                // it (SC-P1): the issuer that certificate names is the provider whose ACA
+                // and LAs can resolve it, so that provider's MA decides ([CAMP122] §5;
+                // Provider Req. §2.2). A report with no certificate to read (modelled)
+                // goes by the engine map's device.
+                let held = self.runs[k].state.ma.report_on_run(s.run);
+                let Some(subj) = held.and_then(|x| self.runs[k].state.ma.subject(x)).copied()
+                else {
                     continue;
                 };
+                let ks = match subj.issuer {
+                    Some(id8) => self.provider_of_issuer(&id8).unwrap_or(k),
+                    None => f
+                        .subject
+                        .map_or(k, |n| self.provider_of_device(device_of(n))),
+                };
+                if ks == k {
+                    arrived.push((s.t, s.run, f));
+                    continue;
+                }
+                let (i, lv) = (subj.subject_i, subj.subject_lv);
                 if !self.home().state.deployment.ma_report_sharing {
                     self.runs[k].state.shared.unresolvable += 1;
                     continue;
                 }
-                // The report as this MA holds it: its real length when it was a real
-                // report, re-encrypted to the accused's provider's MA.
-                let held = self.runs[k]
-                    .state
-                    .ma
-                    .reports
-                    .iter()
-                    .rposition(|r| r.subject_lv == lv);
+                // Its real length when it was a real report, re-encrypted to the accused's
+                // provider's MA.
                 let ma_k = &self.runs[k].state.ma;
                 let bytes = held
                     .and_then(|x| ma_k.reports[x].secured.as_ref().map(|s| s.report.len()))
@@ -7120,6 +7261,7 @@ impl Phase2 {
                 if let Some(e) = evidence {
                     self.runs[ks].shared_report_evidence(run, e);
                 }
+                self.runs[ks].shared_report_subject(run, subj);
                 self.runs[k].state.shared.forwarded += 1;
                 // The report's history before the sharing leg (detection, upload, the
                 // RA's shuffle) carries over to the deciding provider's log, so its
@@ -7162,12 +7304,12 @@ impl Phase2 {
             let rows: Vec<crate::ma_hook::MaHookRow> = arrived
                 .iter()
                 .filter(|(_, _, f)| ma_accepts(&f.report))
-                .map(|(t, _, f)| {
+                .map(|(t, run, f)| {
                     let MaHost::External(m) = &self.ma[k] else {
                         unreachable!("checked")
                     };
                     crate::ma_hook::MaHookRow {
-                        view: self.ma_view_row(k, *t, &f.report, f.subject, None),
+                        view: self.ma_view_row(k, *t, *run, &f.report, f.subject, None),
                         observed: f.report.detection_time,
                         reporter_infrastructure: m
                             .is_infrastructure(&f.report.reporter_cert_digest),
@@ -7198,7 +7340,7 @@ impl Phase2 {
                 } else {
                     None
                 };
-                self.log_received(k, t, &r, f.subject, set_aside);
+                self.log_received(k, t, run, &r, f.subject, set_aside);
             }
             // Evidence the authority cannot verify is not evidence against anyone. A report
             // whose only reason is that the accused's signature failed carries messages
@@ -7238,8 +7380,7 @@ impl Phase2 {
             // device link, the issuing provider and the judged BSM's secMark phase, as
             // `ma.received` records them.
             let action = if matches!(self.ma[k], MaHost::Policy(_)) {
-                let link = crate::report_records::la_link(f.subject, self.params.scms.master_seed);
-                let issuer = format!("provider-{}", self.provider_of_device(device_of(f.subject)));
+                let (issuer, link, _) = self.ma_learns(k, run, &r, f.subject);
                 let secmark_phase_ms = self
                     .report_log
                     .as_ref()
@@ -7257,10 +7398,10 @@ impl Phase2 {
             } else {
                 self.ma[k].ingest_evidence(&r, r.detection_time)
             };
-            if self.attackers.contains_key(&f.subject) {
-                *self.attacker_at_ma.entry(f.subject).or_insert(0) += 1;
+            if let Some(subject) = f.subject.filter(|n| self.attackers.contains_key(n)) {
+                *self.attacker_at_ma.entry(subject).or_insert(0) += 1;
                 if let Some(events) = self.ma[k].corroborated_events(&r.subject_cert_digest) {
-                    let peak = self.attacker_peak_events.entry(f.subject).or_insert(0);
+                    let peak = self.attacker_peak_events.entry(subject).or_insert(0);
                     *peak = (*peak).max(events);
                 }
             }
@@ -7272,7 +7413,13 @@ impl Phase2 {
                 // VNC 2013, §V); a second pseudonym on a chain already decided adds
                 // evidence, not a second revocation. It used to open one case per
                 // pseudonym: 22 decisions for 12 attackers in a 300 s run.
-                if let Some((device, _, _)) = self.resolve_subject(&subject)
+                // Under the US SCMS the MA does exactly that inside the case: both LAs name
+                // the chain and a pair already decided ends the case `linked` (SC-P3,
+                // `MaState::decided_chains`), counted in `advance`'s case loop. Only the
+                // ETSI model (no linkage authorities) still de-duplicates here, by the
+                // engine's device (**modelled**: the EA knows the enrolment).
+                if self.etsi.is_some()
+                    && let Some((device, _, _)) = self.truth_subject(&subject)
                     && !self.ma_decided_devices.insert(device)
                 {
                     self.report.decisions_linked += 1;
@@ -7297,7 +7444,9 @@ impl Phase2 {
             }
         }
         for (subject, _, _, t) in &decisions {
-            self.note_decision_truth(*subject, *t);
+            if let Some(subject) = subject {
+                self.note_decision_truth(*subject, *t);
+            }
         }
         (decisions, forwarded)
     }
@@ -7369,6 +7518,10 @@ impl Phase2 {
             }
         }
         for (subject, subject_digest, run, t) in self.ingest_arrivals(0, &stamps, &mut tick).0 {
+            // The ETSI model's report always names its device (`report_at_proxy`).
+            let Some(subject) = subject else {
+                continue;
+            };
             if self.blocks.iter().any(|b| b.subject == subject) {
                 self.report.decisions_already_covered += 1;
                 continue;
@@ -7569,20 +7722,23 @@ impl Phase2 {
                 return;
             };
             // The report the authority holds about the decided certificate: the latest
-            // one, which is the one the decision came in on.
-            let Some((_, i, lv)) = self.resolve_subject(&case.subject_digest) else {
+            // one, which is the one the decision came in on. The MA knows it by the
+            // certificate it read from the report (SC-P1); a report on the modelled path
+            // has none, and is found by the subject it carried (the engine map's).
+            let ma = &self.runs[k].state.ma;
+            let index = decode_hex8(&case.subject_digest)
+                .and_then(|d| ma.report_about_cert(&d))
+                .or_else(|| {
+                    let (_, _, lv) = self.truth_subject(&case.subject_digest)?;
+                    ma.report_subjects
+                        .iter()
+                        .rposition(|s| s.cert.is_none() && s.subject_lv == lv)
+                });
+            let Some((index, held)) = index.and_then(|x| ma.subject(x).map(|s| (x, *s))) else {
                 self.report.cases_unresolved += 1;
                 continue;
             };
-            let Some(index) = self.runs[k]
-                .state
-                .ma
-                .reports
-                .iter()
-                .rposition(|r| r.subject_lv == lv)
-            else {
-                continue;
-            };
+            let (i, lv) = (held.subject_i, held.subject_lv);
             let _ = now;
             // A certificate the Generator's list already revokes needs no second case: the
             // authority holds the list and checks it before spending lookups [BRECHT §VI-D:
@@ -8433,15 +8589,18 @@ impl Phase2 {
         let Some(case) = self.cases.iter().find(|c| c.enforced_first.is_some()) else {
             return;
         };
-        let (Some((resolution, issuance)), Some((entry, version)), Some(enforced)) =
-            (case.runs, case.entry.clone(), case.enforced_first)
-        else {
+        let (Some((resolution, issuance)), Some((entry, version)), Some(enforced), Some(subject)) = (
+            case.runs,
+            case.entry.clone(),
+            case.enforced_first,
+            case.subject,
+        ) else {
             return;
         };
         let log = &self.runs[case.provider].kernel.stages;
         let latency = RevocationLatency::assemble(
             log,
-            device_of(case.subject),
+            device_of(subject),
             Transport::CellularUu,
             case.report_run,
             resolution,
@@ -8462,7 +8621,7 @@ impl Phase2 {
             stages,
             latency: total,
             bytes: crl_bytes(&self.home().state.sizes, version).bytes(),
-            subject: case.subject,
+            subject,
             subject_digest: case.subject_digest.clone(),
         });
     }

@@ -166,3 +166,100 @@ fn a_linkage_value_the_pca_never_issued_resolves_to_nothing() {
     assert!(!case.resolved);
     assert!(run.state.ra.blocklist.is_empty());
 }
+
+/// A real report whose accused certificate is `accused`'s `(0, 0)` pseudonym.
+fn speeding_report(
+    run: &v2xw_proto::scms::run::ScmsRun,
+    accused: v2xw_core::ids::NodeId,
+) -> v2xw_proto::scms::mbr::MisbehaviorReport {
+    use v2xw_proto::scms::mbr::{self, Evidence, MbrType, MisbehaviorReport, SignedBsms, Subtype};
+    let c = run.state.devices[&accused].credentials[&(0, 0)]
+        .implicit
+        .as_ref()
+        .expect("an implicit pseudonym");
+    let cert = (*c.certificate).clone();
+    let key = v2xw_sec::sig1609::Signer1609::p256(&v2xw_sec::ec::scalar_to_be32(&c.private))
+        .expect("a P-256 key");
+    let bsm = mbr::sign_bsm(&[0x5a; 40], 1_000_000, &cert, &key).expect("signs");
+    MisbehaviorReport {
+        generation_time: 600_000,
+        location: v2xw_sec::envelope::GenerationLocation {
+            lat_tenth_microdeg: 407_440_000,
+            lon_tenth_microdeg: -739_900_000,
+            elevation: 4_096,
+        },
+        mbr_type: MbrType::Implausible,
+        subtypes: vec![Subtype::MaxSpeed { threshold_mps: 90 }],
+        evidence: Evidence::Suspect(SignedBsms {
+            bsms: vec![bsm],
+            cert,
+        }),
+    }
+}
+
+/// SC-P1 ([SM-MBR] §3; [CAMP122] §5; [BRECHT] §VI-D): the MA learns the accused
+/// certificate from the report it opened (`suspect.signingCertificate`'s `linkageData`
+/// and issuer), not from the subject the reporter put beside the encrypted bytes. A
+/// secured report whose clear `subject_lv` is wrong still resolves the true device.
+/// Fault: read `r.subject_lv` instead of the opened certificate -> the PCA finds
+/// nothing and the test goes red.
+#[test]
+fn the_ma_reads_the_subject_from_the_suspect_certificate() {
+    use v2xw_proto::scms::run::SubjectFrom;
+    use v2xw_sec::linkage::LinkageValue;
+    let mut run = deployment(2);
+    provisioned(&mut run, DEVICE_A, 0, 1, 2);
+    provisioned(&mut run, DEVICE_B, 0, 1, 2);
+    let report = speeding_report(&run, DEVICE_A);
+    let now = run.kernel.now();
+    let (i, lv, secured) = run.secure_mbr(DEVICE_B, &report, now).expect("secures");
+    let truth = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
+    assert_eq!(lv, truth, "the device names the accused certificate");
+    let wrong = LinkageValue::new([0xab; 9]);
+    run.submit_secured(DEVICE_B, i, wrong, secured);
+    run.run().expect("runs");
+    let st = &run.state;
+    assert!(st.pdu_rejections.is_empty(), "{:?}", st.pdu_rejections);
+    assert_eq!(st.ma.reports.len(), 1);
+    assert_eq!(
+        st.ma.reports[0].subject_lv, wrong,
+        "the clear field as sent"
+    );
+    let held = st.ma.subject(0).expect("the MA's row");
+    assert_eq!(held.subject_lv, truth, "read from the opened certificate");
+    assert_eq!(held.from, SubjectFrom::SuspectCertificate);
+    assert_eq!(held.from.as_str(), "suspect-certificate");
+    let aca = st.pki.as_ref().expect("the PDU layer").aca.id8();
+    assert_eq!(held.issuer, Some(aca), "the issuer the certificate names");
+    let accused = v2xw_proto::scms::pdu::cert_id8(&report.evidence.suspect().cert);
+    assert_eq!(
+        held.cert,
+        Some(accused),
+        "the accused certificate's own digest"
+    );
+    assert_eq!(st.ma.report_about_cert(&accused), Some(0));
+    run.revoke(0, 0, 2).expect("held");
+    run.run().expect("runs");
+    let case = run.state.ma.case().expect("a case");
+    assert_eq!(case.lookups.len(), 1, "the PCA found the certificate");
+    assert!(case.resolved);
+    assert!(run.state.ra.blocklist.contains(&DEVICE_A));
+    assert!(!run.state.ra.blocklist.contains(&DEVICE_B));
+}
+
+/// A report on the modelled path (no secured report) has no certificate to read, so
+/// the MA keeps the subject it carries, labelled as the engine's map.
+#[test]
+fn a_modelled_report_keeps_its_carried_subject_and_says_so() {
+    use v2xw_proto::scms::run::SubjectFrom;
+    let mut run = deployment(2);
+    provisioned(&mut run, DEVICE_B, 0, 1, 2);
+    let lv = run.state.devices[&DEVICE_B].credentials[&(0, 0)].lv;
+    run.submit_report(DEVICE_A, 0, lv);
+    run.run().expect("runs");
+    let held = run.state.ma.subject(0).expect("the MA's row");
+    assert_eq!((held.subject_i, held.subject_lv), (0, lv));
+    assert_eq!(held.issuer, None);
+    assert_eq!(held.from, SubjectFrom::EngineMap);
+    assert_eq!(held.from.as_str(), "engine-map (modelled report)");
+}

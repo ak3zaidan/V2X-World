@@ -686,3 +686,70 @@ fn a_second_aca_on_an_iss_pattern_provider_builds_and_signs() {
         "the same permission and SSP choice as the core ACA"
     );
 }
+
+/// SC-P1 ([CAMP122] §5; [BRECHT] §VI-D): the MA sends its lookup to the ACA whose
+/// certificate the accused certificate's `issuer` names, read from the opened report,
+/// not to the instance the issuance records name. A pseudonym `aca/1` issued is looked
+/// up at `aca/1` with those records cleared. Fault: route by the issuance records only
+/// (drop the issuer) -> the lookup goes to the core ACA and the test goes red.
+#[test]
+fn the_ma_asks_the_aca_its_accused_certificates_issuer_names() {
+    use v2xw_proto::scms::mbr::{self, Evidence, MbrType, MisbehaviorReport, SignedBsms, Subtype};
+    let mut d = Deployment::preset(Preset::UsProduction2025);
+    d.providers[0].components.insert("aca".to_string(), 2);
+    let mut home = ScmsRun::new_deployed(ScmsParams::default().quick(), 0, d).expect("builds");
+    let (accused, reporter) = (NodeId::new(5_000_201), NodeId::new(5_000_202));
+    home.preload(accused, 0, 1, 2).expect("provisions");
+    home.preload(reporter, 0, 1, 2).expect("provisions");
+    let id1 = home.state.pki.as_ref().unwrap().aca_at(1).id8();
+    let (cert, key) = {
+        let imp = home.state.devices[&accused]
+            .credentials
+            .values()
+            .filter_map(|c| c.implicit.as_ref())
+            .find(|i| i.aca_id8 == id1)
+            .expect("aca/1 issued one of the pair");
+        (
+            (*imp.certificate).clone(),
+            v2xw_sec::sig1609::Signer1609::p256(&v2xw_sec::ec::scalar_to_be32(&imp.private))
+                .expect("a P-256 key"),
+        )
+    };
+    let bsm = mbr::sign_bsm(&[0x5a; 40], 1_000_000, &cert, &key).expect("signs");
+    let report = MisbehaviorReport {
+        generation_time: 600_000,
+        location: v2xw_sec::envelope::GenerationLocation {
+            lat_tenth_microdeg: 407_440_000,
+            lon_tenth_microdeg: -739_900_000,
+            elevation: 4_096,
+        },
+        mbr_type: MbrType::Implausible,
+        subtypes: vec![Subtype::MaxSpeed { threshold_mps: 90 }],
+        evidence: Evidence::Suspect(SignedBsms {
+            bsms: vec![bsm],
+            cert,
+        }),
+    };
+    home.submit_mbr(reporter, &report).expect("a real report");
+    home.run().expect("runs");
+    assert!(
+        home.state.pdu_rejections.is_empty(),
+        "{:?}",
+        home.state.pdu_rejections
+    );
+    assert_eq!(home.state.ma.subject(0).and_then(|s| s.issuer), Some(id1));
+    // The issuance records no longer say which instance issued it.
+    home.state.pca.issued_by.clear();
+    let (res, _) = home.revoke(0, 0, 2).expect("held");
+    home.run().expect("runs");
+    let (ma, aca1) = (home.state.nodes.ma, home.state.aca_extra[0]);
+    let asked: Vec<NodeId> = home
+        .kernel
+        .steps
+        .iter()
+        .filter(|s| s.run == res && s.step == "pca-lookup-request" && s.from == ma)
+        .map(|s| s.to)
+        .collect();
+    assert_eq!(asked, vec![aca1], "the ACA the issuer names");
+    assert!(home.state.ra.blocklist.contains(&accused));
+}

@@ -354,6 +354,7 @@ mod tests {
                 secmark_phase_ms: 0,
                 issuer: String::new(),
                 la_link: String::new(),
+                subject_from: String::new(),
                 set_aside: None,
             },
             observed: 0,

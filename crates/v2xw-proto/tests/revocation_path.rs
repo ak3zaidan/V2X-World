@@ -352,3 +352,86 @@ fn the_published_crl_size_dominates_the_delivery_time_on_both_paths() {
     assert!(cellular.delay(one) > air.delay(one));
     assert!(air.delay(full) > cellular.delay(full));
 }
+
+/// SC-P2: every case the MA's pipeline opens runs the PCA lookup **and** the LA linking
+/// before anything is blocklisted ([CAMP122] §5; Whyte et al., VNC 2013, §V; [BRECHT]
+/// §VI-C/D). The MA sends each LA its sealed chain pointer, each LA names its chain with an
+/// identifier of its own, and only then does the RA blocklist and the LAs release seeds.
+/// There is no `direct` shortcut from the PCA's answer to the RA.
+#[test]
+fn every_case_asks_both_las_for_the_chain_before_the_blocklist() {
+    let mut run = deployment(2);
+    provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
+    let (lv0, lv1) = {
+        let d = &run.state.devices[&DEVICE_A];
+        (d.credentials[&(0, 0)].lv, d.credentials[&(0, 1)].lv)
+    };
+    run.submit_report(DEVICE_B, 0, lv0);
+    run.run().expect("the report runs");
+    let (resolution, _) = run
+        .request_revocation(0, 0, JMAX)
+        .expect("a report is held");
+    run.run().expect("the case runs");
+
+    let names: Vec<&str> = run
+        .kernel
+        .steps
+        .iter()
+        .filter(|s| s.run == resolution)
+        .map(|s| s.step)
+        .collect();
+    let at = |n: &str| -> Vec<usize> {
+        names
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| **s == n)
+            .map(|(k, _)| k)
+            .collect()
+    };
+    let (req, resp, block) = (
+        at("chain-id-request"),
+        at("chain-id-response"),
+        at("blocklist-request"),
+    );
+    assert_eq!(req.len(), 2, "one chain-id request to each LA: {names:?}");
+    assert_eq!(resp.len(), 2, "one chain-id answer from each LA: {names:?}");
+    assert_eq!(block.len(), 1, "one blocklist request: {names:?}");
+    let lookup = at("pca-lookup-response");
+    assert!(
+        lookup.iter().all(|l| req.iter().all(|r| l < r)),
+        "the chain pointers come from the PCA's answer: {names:?}"
+    );
+    assert!(
+        req.iter().chain(&resp).all(|k| *k < block[0]),
+        "both LAs name the chain before the RA blocklists: {names:?}"
+    );
+    assert!(
+        at("same-device-request").is_empty(),
+        "a single-subject case asks no yes/no question: {names:?}"
+    );
+
+    let case = run.state.ma.case().expect("a case");
+    let [Some(c1), Some(c2)] = case.chain_ids else {
+        panic!("both LAs must have named the chain: {:?}", case.chain_ids);
+    };
+    assert_ne!(c1, c2, "the two LAs' identifiers are unrelated");
+    assert!(case.resolved && case.done, "the case completes");
+    assert!(run.state.ra.blocklist.contains(&DEVICE_A));
+    assert_eq!(
+        case.seeds.iter().filter(|s| s.is_some()).count(),
+        2,
+        "both LAs still release their seeds"
+    );
+
+    // The identifier is the chain's, not the certificate's: a second pseudonym of the same
+    // request batch names the same pair, which is what the MA links decisions by (SC-P3).
+    run.submit_report(DEVICE_B, 0, lv1);
+    run.run().expect("the second report runs");
+    run.request_revocation(1, 0, JMAX).expect("held");
+    run.run().expect("the second case runs");
+    assert_eq!(
+        run.state.ma.case().expect("a second case").chain_ids,
+        [Some(c1), Some(c2)],
+        "one chain, one identifier per LA"
+    );
+}
