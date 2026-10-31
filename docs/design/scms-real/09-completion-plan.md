@@ -482,3 +482,23 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   unpublished); the decision reaches the Generator as an empty `crl-append`, so the
   business-day SLA applies. Test `crl_issuance::a_revoked_pca_appears_on_its_component_crl`
   (red with the loop left at {3, 4}). Off unless a component is revoked; no golden moves.
+- 2026-10-31 (wave C R2, P8.2, agent C3): **distribution and effects.** The hash CRLs of
+  a publication travel with the series-1 list to the CRL Store and the roadside path
+  (`CrlState::hash_crls`; every hop and the download charged their bytes), and the device
+  verifies each on its own (`device_check_crl` now accepts hash CRLs: the signer's issuer
+  is the authority it names, so the root's `isCraca` series-256 list verifies) and
+  installs it (`DeviceState::hash_held`, with the same stale-replay rule as series 1).
+  Effects: `ScmsState::device_refuses` (a pseudonym of a revoked PCA is issuer-revoked,
+  the PCA itself revoked by hash); `ScmsState::device_ma` skips a revoked MA, and
+  `secure_mbr_as` uses it; the provisioning ack of a revoked RA is refused
+  (`ee_check_ack`). `ScmsRun::crl_component_entries` counts the series-2 and 256 entries
+  per provider. Test `crl_issuance::a_device_refuses_pseudonyms_of_a_revoked_pca_after_install`
+  (red with the component CRL signed under a wrong CRACA: the device refuses the lists and
+  accepts the pseudonym). No golden moves (no list without a revocation). Left to P8.3
+  (D1): the engine composite must chain `crl_store.hash_crls`/`crl_broadcast.hash_crls`
+  beside `secured_retired` (`phase2.rs` crl_feeds and `broadcast_secured_crls`), and
+  `run.rs` `sort_composite_entries` must consider linkage CRLs only (a verified hash CRL's
+  `signed_form` is `None`, which today keeps an entry no linkage CRL signs); the
+  `component_revoked*` keys, the RunReport leaf and the engine test. `mbr::select_ma`
+  (unused) is unchanged; app-certificate devices (`apps.devices`) download no CRL in the
+  proto and are not covered.

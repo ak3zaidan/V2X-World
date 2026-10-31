@@ -46,8 +46,8 @@ mod revoke;
 
 use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
 pub use crl::{
-    ComponentRevocation, CrlOrder, IssuedCrl, component_authority, crl_bytes, crl_digest,
-    hash_crl_signer, linkage_revocations,
+    ComponentRevocation, CrlOrder, HashRefusal, IssuedCrl, component_authority, crl_bytes,
+    crl_digest, device_check_crl, hash_crl_signer, linkage_revocations,
 };
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
@@ -106,6 +106,9 @@ pub struct DeviceState {
     /// ([`CrlOrder`]), so a replay of an earlier, validly signed
     /// list cannot roll a revocation back.
     pub crl_held: BTreeMap<([u8; 8], u16), (CrlOrder, [u8; 32])>,
+    /// Per `(crlCraca, crlSeries)` of a hash CRL it installed: the `HashedId10`s it
+    /// lists (series 2, 3, 4, 256; SC-P8.2). Replaced whole by each newer list.
+    pub hash_held: BTreeMap<([u8; 8], u16), Vec<[u8; 10]>>,
     /// Its real enrolment credential (WP-B1 PDU layer): the implicit certificate the ECA
     /// issued and the key reconstructed from `privateKeyInfo`. `None` when the layer is
     /// off or the device was enrolled out of band ([`ScmsRun::set_enrolment`]).
@@ -286,6 +289,7 @@ impl DeviceState {
             crls_rejected: 0,
             crls_stale: 0,
             crl_held: BTreeMap::new(),
+            hash_held: BTreeMap::new(),
             enrolment_credential: None,
             request_hash8: None,
             name: None,

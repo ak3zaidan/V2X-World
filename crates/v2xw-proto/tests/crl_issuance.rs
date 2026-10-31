@@ -7,7 +7,7 @@
 
 mod common;
 
-use common::{DEVICE_A, DEVICE_B, deployment, provisioned};
+use common::{DEVICE_A, DEVICE_B, DEVICE_C, deployment, provisioned};
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::NS_PER_S;
 use v2xw_msg::scms_types::WireEdition;
@@ -521,4 +521,110 @@ fn a_revoked_pca_appears_on_its_component_crl() {
     let (opened, ok) = component_list(&iss, 256, &pki.root, None);
     assert!(ok, "the root-signed series-256 list verifies");
     assert!(crl::revokes(&opened.contents, &pki.crlg.cert));
+}
+
+/// SC-P8.2: the component CRLs travel with the series-1 list to the CRL Store and the
+/// roadside path, a device verifies each itself (`device_check_crl`) and installs it,
+/// and from then on:
+/// - every pseudonym the revoked PCA issued is refused as issuer-revoked (the PCA's
+///   own certificate as revoked by hash), while a certificate no list names is not;
+/// - the device no longer encrypts reports to the revoked MA (`device_ma`, what
+///   `secure_mbr_as` uses);
+/// - the device refuses the revoked RA's signed provisioning ack.
+///
+/// A device that has not downloaded the lists refuses nothing.
+///
+/// Fault: the component CRL signed under the wrong CRACA. The device installs nothing,
+/// accepts the pseudonym, and the test goes red.
+#[test]
+fn a_device_refuses_pseudonyms_of_a_revoked_pca_after_install() {
+    use v2xw_proto::scms::run::{HashRefusal, device_check_crl};
+    let mut run = deployment(3);
+    provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
+    run.enrol(DEVICE_B);
+    run.run().expect("enrolment runs");
+    let pki = run.state.pki.clone().expect("layer on");
+    let pseudonym = implicit(&run, DEVICE_A, 0);
+    assert_eq!(run.crl_component_entries(), 0);
+    for role in ["pca", "ra", "ma"] {
+        run.revoke_component(role, 0).expect("revocable");
+    }
+    run.run().expect("runs");
+    assert_eq!(run.crl_component_entries(), 3, "PCA and RA on 2, MA on 256");
+    let store = &run.state.crl_store;
+    assert_eq!(
+        store.hash_crls.keys().copied().collect::<Vec<_>>(),
+        vec![crl::SERIES_SCMS_COMPONENTS, crl::SERIES_ROOT_SIGNED],
+        "the store serves both component lists"
+    );
+    assert_eq!(run.state.crl_broadcast.hash_crls, store.hash_crls);
+    let full = store.secured.as_ref().expect("the series-1 list").len();
+    let total = full + store.hash_crls.values().map(|p| p.len()).sum::<u32>();
+    assert_eq!(
+        run.state.device_refuses(DEVICE_A, &pseudonym),
+        None,
+        "nothing held yet"
+    );
+    run.distribute_crl(DEVICE_A);
+    run.distribute_crl(DEVICE_B);
+    run.run().expect("runs");
+    let st = &run.state;
+    assert_eq!(
+        st.device_refuses(DEVICE_A, &pseudonym),
+        Some(HashRefusal::IssuerRevoked),
+        "a pseudonym of the revoked PCA, after install ({:?})",
+        st.pdu_rejections
+    );
+    for j in 1..JMAX {
+        assert_eq!(
+            st.device_refuses(DEVICE_A, &implicit(&run, DEVICE_A, j)),
+            Some(HashRefusal::IssuerRevoked)
+        );
+    }
+    assert_eq!(
+        st.device_refuses(DEVICE_A, &pki.aca.cert),
+        Some(HashRefusal::RevokedByHash)
+    );
+    assert_eq!(
+        st.device_refuses(DEVICE_A, &pki.eca.cert),
+        None,
+        "not listed"
+    );
+    assert_eq!(
+        st.device_refuses(DEVICE_C, &pseudonym),
+        None,
+        "C downloaded nothing"
+    );
+    assert_eq!(st.devices[&DEVICE_A].crls_rejected, 0);
+    assert!(st.pdu_rejections.is_empty(), "{:?}", st.pdu_rejections);
+    for p in st.crl_store.hash_crls.values() {
+        device_check_crl(&pki, p.bytes(), &[]).expect("the device accepts the list");
+    }
+    // The download carried every list.
+    assert!(
+        run.kernel
+            .steps
+            .iter()
+            .filter(|s| s.step == "crl-download")
+            .all(|s| s.bytes == total)
+    );
+    // The MA: no unrevoked MA certificate is left to write to.
+    assert!(
+        st.device_ma(DEVICE_A, &pki).is_none(),
+        "the revoked MA is skipped"
+    );
+    assert!(st.device_ma(DEVICE_C, &pki).is_some());
+    // The RA: B holds the list and refuses the RA's ack, so it never downloads a batch.
+    run.provision(DEVICE_B, 0, 1, JMAX);
+    let horizon = run.kernel.now() + 120 * NS_PER_S;
+    run.run_until(horizon).expect("runs");
+    let st = &run.state;
+    assert!(
+        st.pdu_rejections
+            .iter()
+            .any(|r| r.kind == SpduKind::RaEeCertAck && r.at_node == DEVICE_B.index()),
+        "{:?}",
+        st.pdu_rejections
+    );
+    assert!(st.devices[&DEVICE_B].credentials.is_empty());
 }

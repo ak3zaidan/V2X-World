@@ -494,6 +494,10 @@ impl ScmsState {
         if !pki.is_role(&pki.ra, &pdu::cert_id8(&signer)) {
             return Err(PduError::Signer("an ack is signed by the RA"));
         }
+        // SC-P8.2: an RA on a component CRL the device holds is not answered.
+        if self.device_refuses(device, &signer).is_some() {
+            return Err(PduError::Policy("the RA's certificate is revoked"));
+        }
         let ScmsPduContent::ee_ra(EeRaInterfacePdu::raEeCertAck(a)) = p.content else {
             return Err(PduError::Shape("expected ee-ra.raEeCertAck"));
         };
