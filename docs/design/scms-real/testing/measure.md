@@ -70,7 +70,8 @@ already right. On R-FS40 the 2,873 claims are now all `privacy_links_spurious`.
 
 The engine was right and the records were silent. Every device joined holding both
 providers' t0 lists (`scms_deployment::every_provider_publishes_its_crl_at_the_start`), but
-`crl_version` counts entries, which is 0 for an empty list.
+`crl_version` counts entries, which is 0 for an empty list. (Fixed 2026-10-30, SC-D14 `4f5bd447`:
+the record now carries the publication count of the composite CRL the node holds.)
 
 - `node.security` rows carry `crls`, the signed CRLs the node's own receiver verified and
   holds: `{craca, series, counter, issue_date, next_crl}` per `(crlCraca, crlSeries)`
