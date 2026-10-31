@@ -160,3 +160,67 @@ fn a_blocklisted_device_is_refused_a_top_up() {
         "no certificate may be issued to a blocklisted enrolment certificate"
     );
 }
+
+/// proto B5: [CAMP122] §5.2.8.3 SCMS-521 asks the RA to acknowledge a request within 1 s.
+/// A fleet starting up together on a one-server RA queues behind itself, and the misses
+/// are counted (`ra_ack_over_1s`) with a p99; the same exchange for one device on an idle
+/// RA misses nothing. Nothing is refused: no deployed RA figure exists.
+///
+/// Fault injected: the delay recorded from admission (when a server took the request up)
+/// rather than arrival, so the wait drops out -> the overloaded count is 0 and this test
+/// goes red.
+#[test]
+fn an_overloaded_ra_misses_the_one_second_ack() {
+    use v2xw_proto::scms::params::ScmsParams;
+    use v2xw_proto::scms::run::ScmsRun;
+    const FLEET: u32 = 1_024;
+    let mut params = ScmsParams::default().quick();
+    params.backend_servers = 1;
+    let mut run = ScmsRun::new(params).expect("certificates encode");
+    for k in 0..FLEET {
+        run.add_device(v2xw_core::ids::NodeId::new(1_000 + k));
+    }
+    for k in 0..FLEET {
+        run.enrol(v2xw_core::ids::NodeId::new(1_000 + k));
+    }
+    run.run().expect("enrolment runs");
+    for k in 0..FLEET {
+        run.provision(v2xw_core::ids::NodeId::new(1_000 + k), 0, 1, 20);
+    }
+    run.run().expect("provisioning runs");
+    let ra = run.state.nodes.ra;
+    let busy = *run.kernel.acks(ra).expect("the RA is hosted");
+    println!(
+        "fleet of {FLEET} on c = 1: {} requests, {} over 1 s, p99 {} ms, max {} ns, buckets {:?}",
+        busy.count,
+        busy.over_1s,
+        busy.p99_ms(),
+        busy.max_ns,
+        busy.buckets
+    );
+    assert!(
+        busy.count >= u64::from(FLEET),
+        "every device's request is measured"
+    );
+    assert!(
+        busy.over_1s > 0,
+        "{FLEET} devices at once on one RA server must miss the 1 s acknowledgement"
+    );
+    assert!(
+        busy.p99_ms() > 1_000,
+        "and the tail shows it: p99 {} ms",
+        busy.p99_ms()
+    );
+    assert_eq!(
+        busy.buckets.iter().sum::<u64>(),
+        busy.count,
+        "every measured request is in one bucket"
+    );
+
+    let mut idle = deployment(1);
+    provisioned(&mut idle, DEVICE_A, 0, 1, 20);
+    let quiet = *idle.kernel.acks(idle.state.nodes.ra).expect("hosted");
+    assert!(quiet.count > 0, "the idle RA's requests are measured too");
+    assert_eq!(quiet.over_1s, 0, "an idle RA answers within 1 s: {quiet:?}");
+    assert!(quiet.p99_ms() <= 1_000);
+}

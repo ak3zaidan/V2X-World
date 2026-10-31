@@ -658,11 +658,46 @@ impl<M> Kernel<M> {
     /// defects: refusing is the point, since the alternative is a message that arrives for
     /// free and a measurement that means nothing.
     pub fn dispatch(&mut self, at: SimTime, node: NodeId, out: Outbox<M>) -> Result<SimTime> {
+        self.dispatch_admitted(at, node, out, false)
+    }
+
+    /// [`Kernel::dispatch`] for a request from outside the entity's provider (a device's,
+    /// or one the proxy relays), which is owed an acknowledgement within 1 s ([CAMP122]
+    /// §5.2.8.3 SCMS-521): its `done - arrival` is recorded in the entity's
+    /// [`ServiceQueue::acks`] (proto B5). Nothing is refused for a late answer.
+    ///
+    /// # Errors
+    /// As [`Kernel::dispatch`].
+    pub fn dispatch_request(
+        &mut self,
+        at: SimTime,
+        node: NodeId,
+        out: Outbox<M>,
+    ) -> Result<SimTime> {
+        self.dispatch_admitted(at, node, out, true)
+    }
+
+    /// How long `node` took to answer the requests [`Kernel::dispatch_request`] gave it.
+    pub fn acks(&self, node: NodeId) -> Option<&crate::service::AckDelays> {
+        self.queues.get(&node).map(ServiceQueue::acks)
+    }
+
+    fn dispatch_admitted(
+        &mut self,
+        at: SimTime,
+        node: NodeId,
+        out: Outbox<M>,
+        request: bool,
+    ) -> Result<SimTime> {
         let queue = self
             .queues
             .get_mut(&node)
             .ok_or(ProtoError::NoEntity { node })?;
-        let done = queue.admit(at, out.work);
+        let done = if request {
+            queue.admit_request(at, out.work)
+        } else {
+            queue.admit(at, out.work)
+        };
 
         for ((primitive, kind), count) in out.ops {
             *self.ops.entry((node, primitive, kind)).or_insert(0) += count;

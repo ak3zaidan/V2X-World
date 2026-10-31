@@ -29,6 +29,69 @@
 
 use v2xw_core::time::{Duration, SimTime};
 
+/// The upper bounds, in milliseconds, of the fixed buckets of [`AckDelays`]. A delay
+/// above the last bound goes in the overflow bucket. Integer bounds, so the histogram is
+/// the same on every platform.
+pub const ACK_BUCKETS_MS: [u64; 16] = [
+    1, 2, 5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 300_000,
+];
+
+/// The [CAMP122] §5.2.8.3 SCMS-521 bound: a request is acknowledged within 1 s.
+pub const ACK_SLA_NS: u64 = 1_000_000_000;
+
+/// How long an entity took to answer the requests it received from outside its provider
+/// (proto B5): `done - arrival` per request, where `arrival` is when the request reached
+/// the entity and `done` when its answer left, so the wait for a free server counts.
+///
+/// [CAMP122] §5.2.8.3 SCMS-521 asks the RA to acknowledge a request within 1 s. No
+/// deployed RA figure exists, so nothing is refused for missing it: the delays are
+/// measured, `over_1s` counts the misses and [`AckDelays::p99_ms`] reads the tail.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AckDelays {
+    /// Requests per bucket of [`ACK_BUCKETS_MS`]; the last entry is the overflow bucket.
+    pub buckets: [u64; ACK_BUCKETS_MS.len() + 1],
+    /// Requests measured.
+    pub count: u64,
+    /// Requests answered later than [`ACK_SLA_NS`].
+    pub over_1s: u64,
+    /// The longest delay measured, in nanoseconds.
+    pub max_ns: u64,
+}
+
+impl AckDelays {
+    /// Records one request answered `ns` after it arrived.
+    pub fn record(&mut self, ns: u64) {
+        let ms_ceil = ns.div_ceil(1_000_000);
+        let b = ACK_BUCKETS_MS.partition_point(|&ub| ub < ms_ceil);
+        self.buckets[b] += 1;
+        self.count += 1;
+        if ns > ACK_SLA_NS {
+            self.over_1s += 1;
+        }
+        self.max_ns = self.max_ns.max(ns);
+    }
+
+    /// The 99th-percentile delay in milliseconds, as the upper bound of the bucket the
+    /// 99th percentile falls in (the longest delay, rounded up to a millisecond, when that
+    /// is the overflow bucket or below the bound). Zero when nothing was measured.
+    pub fn p99_ms(&self) -> u64 {
+        if self.count == 0 {
+            return 0;
+        }
+        // The rank of the 99th percentile, 1-based: ceil(0.99 * count), in integers.
+        let rank = (self.count * 99).div_ceil(100);
+        let max_ms = self.max_ns.div_ceil(1_000_000);
+        let mut seen = 0;
+        for (i, &n) in self.buckets.iter().enumerate() {
+            seen += n;
+            if seen >= rank {
+                return ACK_BUCKETS_MS.get(i).map_or(max_ms, |&ub| ub.min(max_ms));
+            }
+        }
+        max_ms
+    }
+}
+
 /// The batching windows of 06-node-models §4: release when either bound is reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatchPolicy {
@@ -315,6 +378,9 @@ pub struct ServiceQueue {
     seed: u64,
     /// The entity its service-time draws are keyed by: its node index once hosted.
     entity: u64,
+    /// How long it took to answer the requests that came from outside its provider
+    /// ([`ServiceQueue::admit_request`], proto B5).
+    acks: AckDelays,
 }
 
 impl ServiceQueue {
@@ -334,6 +400,7 @@ impl ServiceQueue {
             service_time: spec.service_time,
             seed: 0,
             entity: 0,
+            acks: AckDelays::default(),
         }
     }
 
@@ -406,6 +473,25 @@ impl ServiceQueue {
     /// Returns the instant the entity finishes it — which is when its outgoing messages
     /// leave and when its stages are stamped.
     pub fn admit(&mut self, arrival: SimTime, work: Duration) -> SimTime {
+        self.admit_at(arrival, work).1
+    }
+
+    /// [`ServiceQueue::admit`] for a request from outside the entity's provider, which is
+    /// owed an acknowledgement ([CAMP122] SCMS-521): also records `done - arrival`, the
+    /// wait for a server included, in [`ServiceQueue::acks`].
+    pub fn admit_request(&mut self, arrival: SimTime, work: Duration) -> SimTime {
+        let (_start, done) = self.admit_at(arrival, work);
+        self.acks.record(done - arrival);
+        done
+    }
+
+    /// How long it took to answer the requests [`ServiceQueue::admit_request`] admitted.
+    pub const fn acks(&self) -> &AckDelays {
+        &self.acks
+    }
+
+    /// Admits a request: returns when a server took it up and when it finished.
+    fn admit_at(&mut self, arrival: SimTime, work: Duration) -> (SimTime, SimTime) {
         let (index, free) = self
             .free_at
             .iter()
@@ -434,7 +520,7 @@ impl ServiceQueue {
         // Kept sorted: with several servers a later request can finish earlier.
         let at = self.finishing.partition_point(|&t| t <= done);
         self.finishing.insert(at, done);
-        done
+        (start, done)
     }
 
     /// The latest instant any of this entity's servers becomes free.

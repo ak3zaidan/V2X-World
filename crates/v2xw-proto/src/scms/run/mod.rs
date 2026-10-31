@@ -2108,10 +2108,9 @@ impl ScmsRun {
         // (SCMS-522/523, `EeRetryTimer`). Only a request from outside the provider is
         // turned away (a device's, or one the proxy relays); one component's message to
         // another waits in the queue as before.
-        if d.from != d.to
-            && (d.from == state.nodes.lop || state.devices.contains_key(&d.from))
-            && kernel.is_full_at(d.to, d.at)
-        {
+        let external =
+            d.from != d.to && (d.from == state.nodes.lop || state.devices.contains_key(&d.from));
+        if external && kernel.is_full_at(d.to, d.at) {
             kernel.refuse(d.to);
             return Ok(());
         }
@@ -2120,7 +2119,13 @@ impl ScmsRun {
         let (at, to) = (d.at, d.to);
         let (pdu0, step0) = (state.pdus.len(), kernel.steps_since(usize::MAX).1);
         state.handle(d, &mut out)?;
-        kernel.dispatch(at, to, out)?;
+        // The same requests are owed an acknowledgement within 1 s (SCMS-521, proto B5):
+        // their delay is measured, never enforced.
+        if external {
+            kernel.dispatch_request(at, to, out)?;
+        } else {
+            kernel.dispatch(at, to, out)?;
+        }
         let (steps, _) = kernel.steps_since(step0);
         attribute_pdus(&mut state.pdus[pdu0..], steps, step0);
         Ok(())

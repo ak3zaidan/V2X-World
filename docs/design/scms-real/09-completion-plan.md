@@ -885,3 +885,22 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   deferral disabled (today's saturation). No golden moves (only past 255 publications in
   one i-period). Left to D1: the RunReport leaf `crl_index_exhausted`, read from
   `state.crlg.index_exhausted`.
+
+### proto B5
+
+- 2026-10-31 (wave D R3, agent D3): **the RA's 1 s acknowledgement is measured, never
+  enforced.** Cause: `ServiceQueue::admit` (`v2xw-proto/src/service.rs`) returned only
+  `done`, and `Kernel::dispatch` (`kernel.rs`) recorded no per-request delay. Now
+  `ServiceQueue::admit_request` records `done - arrival` (the wait for a server included)
+  in `AckDelays`: 17 fixed integer buckets (`ACK_BUCKETS_MS`, 1 ms to 300 s plus overflow),
+  `over_1s` ([CAMP122] §5.2.8.3 SCMS-521) and `p99_ms` (the bucket bound, capped by the
+  longest delay). `Kernel::dispatch_request` uses it, and `ScmsRun`'s delivery loop
+  (`run/mod.rs`, D1's file, additive) calls it for the same requests the queue limit can
+  turn away: from a device or the LOP to another entity. Internal messages and timers are
+  not measured. `Kernel::acks(node)` reads one entity's delays; the RA's are
+  `kernel.acks(nodes.ra)`. Nothing is refused, because no deployed RA figure exists. Test
+  `provisioning::an_overloaded_ra_misses_the_one_second_ack`: 1,024 devices enrol and
+  provision together on c = 1: 3,096 requests, 344 over 1 s, p99 1,498 ms. One device on
+  an idle RA misses none. Red with the delay taken from admission (count 0, p99 2 ms). No
+  golden moves (a counter only; no record carries it). Left to D1: the RunReport leaves
+  `ra_ack_over_1s` and `ra_ack_p99_ms`, read from `kernel.acks(nodes.ra)`.
