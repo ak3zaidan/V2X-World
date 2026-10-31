@@ -10,8 +10,12 @@
 //!   `vehicles_sign_under_the_runs_aca` fails.
 //! * `Real::import_reconstructed` (the independent verifier) given the wrong issuer — the
 //!   signature check in the same test fails (see the sec crate's own equivalence test).
+//! * SC-P10.1: `Phase2::provision` runs a joiner's pre-run exchange at 0 instead of
+//!   `aged.valid_from.min(now)` — the RA refuses it (`EnrolmentExpired`), the joiner is
+//!   counted unprovisioned and
+//!   `a_vehicle_joining_after_a_period_boundary_holds_that_periods_pseudonyms` fails.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use v2xw_core::ctx::OwnedRecord;
@@ -21,6 +25,7 @@ use v2xw_engine::{Engine, MemoryRecorder, RunRecorder, Scenario};
 use v2xw_msg::sec_types::ieee1609_dot2::{CertificateId, CertificateType, IssuerIdentifier};
 use v2xw_sec::crypto::{CryptoBackend, SigToken};
 use v2xw_sec::envelope::{Envelope, ParsedSigner, SecurityEnvelopeInfo};
+use v2xw_world::model::LaneKind;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
@@ -30,6 +35,8 @@ fn root() -> PathBuf {
 struct Tapping {
     inner: MemoryRecorder,
     taps: BTreeMap<u64, (NodeId, Vec<u8>)>,
+    /// When each node's first tapped frame went out.
+    first_tx: BTreeMap<NodeId, SimTime>,
 }
 
 impl RunRecorder for Tapping {
@@ -39,7 +46,8 @@ impl RunRecorder for Tapping {
     fn write_wire_frame(&mut self, frame: &v2xw_record::wire::Frame) {
         self.inner.write_wire_frame(frame);
     }
-    fn tap_frame(&mut self, _at: SimTime, node: NodeId, msg: u64, spdu: &[u8]) {
+    fn tap_frame(&mut self, at: SimTime, node: NodeId, msg: u64, spdu: &[u8]) {
+        self.first_tx.entry(node).or_insert(at);
         self.taps.insert(msg, (node, spdu.to_vec()));
     }
 }
@@ -64,6 +72,10 @@ struct Tapped {
     acas: Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
     scms_aca: bool,
     wall: v2xw_core::time::WallClock,
+    first_tx: BTreeMap<NodeId, SimTime>,
+    /// Per node (ids are handed out in creation order), how many of its due messages it
+    /// could not sign for want of a credential.
+    uncredentialed: BTreeMap<NodeId, u64>,
 }
 
 fn tapped(s: Scenario) -> Tapped {
@@ -74,10 +86,19 @@ fn tapped(s: Scenario) -> Tapped {
     let mut rec = Tapping {
         inner: MemoryRecorder::new(),
         taps: BTreeMap::new(),
+        first_tx: BTreeMap::new(),
     };
     let report = engine.run(&mut rec).expect("runs");
+    let uncredentialed = (0..report.nodes_created)
+        .map(|k| {
+            let id = NodeId::new(u32::try_from(k).expect("fits"));
+            (id, engine.node_tx_uncredentialed(id))
+        })
+        .collect();
     Tapped {
         report,
+        first_tx: rec.first_tx,
+        uncredentialed,
         taps: rec.taps,
         aca,
         acas,
@@ -264,4 +285,200 @@ fn real_and_modelled_runs_agree_with_scms_credentials() {
     assert_eq!(real.report.credentials_refused, 0);
     // Every count the run reports, receptions and verdicts included, is mode-independent.
     assert_eq!(real.report, modelled.report);
+}
+
+/// `credential-lifecycle.yaml` (60 s i-periods, two held, a top-up when one is left) with
+/// `n` vehicles departing at t = 0 and one more departing at `join_s`, each on its own
+/// driving lane and bound for the farthest lane its origin can reach. The joiner is the
+/// node created last.
+fn lifecycle_fleet(n: usize, join_s: f64, duration_s: f64) -> Scenario {
+    let mut s = load("credential-lifecycle.yaml", duration_s);
+    let world = v2xw_engine::wiring::build_world(&s).expect("world");
+    let roads = &world.roads;
+    let driving: Vec<_> = roads
+        .lanes()
+        .iter()
+        .filter(|l| l.kind == LaneKind::Driving && l.junction.is_none() && l.length_m > 40.0)
+        .collect();
+
+    let mid = |l: &v2xw_world::model::Lane| l.centreline[l.centreline.len() / 2];
+    let dist = |a: &v2xw_world::model::Lane, b: &v2xw_world::model::Lane| {
+        (mid(a).x - mid(b).x).hypot(mid(a).y - mid(b).y)
+    };
+    // An origin from which no destination can be reached (an edge lane) is skipped.
+    let pairs: Vec<_> = driving
+        .iter()
+        .filter_map(|o| {
+            let mut seen = BTreeSet::from([o.id]);
+            let mut queue = VecDeque::from([o.id]);
+            while let Some(l) = queue.pop_front() {
+                for c in roads.successors(l) {
+                    for next in [c.via, Some(c.to_lane)].into_iter().flatten() {
+                        if seen.insert(next) {
+                            queue.push_back(next);
+                        }
+                    }
+                }
+            }
+            driving
+                .iter()
+                .filter(|l| {
+                    l.id != o.id && seen.contains(&l.id) && !roads.successors(l.id).is_empty()
+                })
+                .max_by(|a, b| dist(a, o).total_cmp(&dist(b, o)).then(b.id.cmp(&a.id)))
+                .map(|dest| (o.id, dest.id))
+        })
+        .take(n + 1)
+        .collect();
+    assert_eq!(pairs.len(), n + 1, "the grid has too few routable lanes");
+    let trips: Vec<_> = pairs
+        .iter()
+        .enumerate()
+        .map(|(i, (o, d))| {
+            let depart = if i == n { join_s } else { 0.0 };
+            serde_json::json!({"id": i, "depart_s": depart, "origin": o, "destination": d})
+        })
+        .collect();
+    let body = serde_json::json!({
+        "schema": "v2xw/trips/1",
+        "world_hash": v2xw_world::hash::content_hash_hex(&world),
+        "source": {"test": "credential_handoff"},
+        "trips": trips,
+    })
+    .to_string();
+    // Named by content and published by rename: the target's temporary directory is
+    // shared by this binary's tests and by every worktree building into it.
+    let name = format!(
+        "credential-handoff-{}.json",
+        &v2xw_core::hash::sha256_hex(body.as_bytes())[..16]
+    );
+    let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    if std::fs::read(&path).ok().as_deref() != Some(body.as_bytes()) {
+        let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+        std::fs::write(&tmp, &body).expect("writes the trip file");
+        std::fs::rename(&tmp, &path).expect("publishes the trip file");
+    }
+    s.actors.vehicles.demand.kind = "mobility/demand/trips".into();
+    s.actors.vehicles.demand.rate_veh_per_h = None;
+    s.actors.vehicles.demand.params = serde_json::json!({ "path": path });
+    s
+}
+
+/// Every `(signer digest, certificate)` the run put on the air, and each node's frames as
+/// the certificate it signed under (a digest-signed frame resolved through a certificate
+/// an earlier frame carried; unresolved ones are left out).
+fn frames_by_node(t: &Tapped) -> BTreeMap<NodeId, Vec<v2xw_msg::sec_types::Certificate>> {
+    let env = Envelope::ieee1609(t.wall);
+    let mut certs: BTreeMap<[u8; 8], v2xw_msg::sec_types::Certificate> = BTreeMap::new();
+    let mut out: BTreeMap<NodeId, Vec<_>> = BTreeMap::new();
+    for (node, spdu) in t.taps.values() {
+        let parsed = env.parse(spdu).expect("every tapped SPDU parses");
+        let cert = match &parsed.signer {
+            ParsedSigner::Certificate {
+                certificate,
+                digest,
+            } => {
+                let c = (**certificate).clone();
+                certs.insert(v2xw_sec::hashedid::id8_bytes(digest), c.clone());
+                c
+            }
+            ParsedSigner::Digest(d) => match certs.get(&v2xw_sec::hashedid::id8_bytes(d)) {
+                Some(c) => c.clone(),
+                None => continue,
+            },
+            ParsedSigner::SelfSigned => panic!("node {node:?} signed self"),
+        };
+        out.entry(*node).or_default().push(cert);
+    }
+    out
+}
+
+/// The `cracaId` a factory-issued (bootstrap stand-in) certificate carries: its own ACA's
+/// HashedId3, where an SCMS batch names the CRACA (the ICA since WP-B4).
+fn factory_cracas(t: &Tapped) -> Vec<v2xw_msg::sec_types::HashedId3> {
+    std::iter::once(&t.aca)
+        .chain(t.acas.iter())
+        .map(|a| {
+            let coer = v2xw_sec::cert::encode(a).expect("encodes");
+            v2xw_sec::hashed_id3(&coer)
+        })
+        .collect()
+}
+
+/// SC-P10.1: a vehicle that joins two seconds after an i-period boundary (60 s i-periods)
+/// holds that period's pseudonyms, signed by its provider's ACA, from its first frame.
+///
+/// The enrolment lifetime is cut to 60 s so the joiner's enrolment certificate (its age
+/// drawn uniformly over the lifetime) began inside the run, after t = 0: its pre-run
+/// exchange runs when that certificate began (`Phase2::provision`,
+/// `aged.valid_from.min(now)`). At t = 0 the RA refuses the request as signed by a
+/// certificate not yet valid and the vehicle joins with no certificate.
+///
+/// The defect the 2026-09-30 note in `Phase2::provision` names ("vehicles joining a few
+/// seconds after a period boundary get no certificate", 4 of 55 at 1,500 veh/h) was the
+/// RA's request shuffle: the joiner's pre-run job joined the run's queue, whose timer was
+/// armed on the run's kernel. `ScmsRun::preload_at` has run the pool on an empty shuffle
+/// since `750e7956`, and in-run top-ups no longer enter that shuffle at all (`ra-maxReqs`
+/// = 1: a top-off is `.info` plus a download), so no default run reaches it now:
+/// `credential-lifecycle` for 130 s at 3,000 and 6,000 veh/h left 0 vehicles unprovisioned.
+#[test]
+fn a_vehicle_joining_after_a_period_boundary_holds_that_periods_pseudonyms() {
+    let mut s = lifecycle_fleet(6, 62.0, 70.0);
+    if let Some(p) = s.security.protocol.as_mut() {
+        p.params["enrolment_lifetime_s"] = 60.into();
+        p.params["reenrol_lead_s"] = 20.into();
+    }
+    let t = tapped(s);
+    assert!(t.scms_aca, "an SCMS run issues under its own ACA");
+    assert_eq!(
+        t.report.phase2.vehicles_unprovisioned, 0,
+        "a vehicle joined without a certificate"
+    );
+    // The joiner is the one node whose first frame went out after it joined at 62 s.
+    let late: Vec<_> = t
+        .first_tx
+        .iter()
+        .filter(|(_, at)| **at >= 62_000_000_000)
+        .collect();
+    let [(&joiner, &first)] = late[..] else {
+        panic!("one joiner expected, first frames {:?}", t.first_tx);
+    };
+    assert!(
+        first < 65_000_000_000,
+        "the joiner first transmitted at {first} ns"
+    );
+    assert_eq!(
+        t.uncredentialed.get(&joiner).copied(),
+        Some(0),
+        "the joiner had messages it could not sign"
+    );
+    let factory = factory_cracas(&t);
+    let frames = frames_by_node(&t);
+    let signed = frames.get(&joiner).map_or(&[][..], Vec::as_slice);
+    assert!(
+        !signed.is_empty(),
+        "no frame of the joiner could be resolved"
+    );
+    // Period 1 begins at 60 s; the joiner's certificates are that period's, not period
+    // 0's (which began at t = 0) and not the stand-in.
+    let (lo, hi) = (
+        t.wall.time32(59_000_000_000).expect("time32"),
+        t.wall.time32(62_000_000_000).expect("time32"),
+    );
+    for cert in signed {
+        assert!(
+            matches!(cert.0.to_be_signed.id, CertificateId::linkageData(_)),
+            "the joiner signed under {:?}",
+            cert.0.to_be_signed.id
+        );
+        assert!(
+            !factory.contains(&cert.0.to_be_signed.craca_id),
+            "the joiner signed under a factory (stand-in) certificate"
+        );
+        let start = cert.0.to_be_signed.validity_period.start.0.0;
+        assert!(
+            (lo..=hi).contains(&start),
+            "the joiner's certificate starts at {start}, not in period 1 [{lo}, {hi}]"
+        );
+    }
 }

@@ -463,3 +463,25 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   interval (Req_588, time slot 0): 199 WSAs, 0 outside it. The separate 178 channel is kept as modelled (§6). Left to wave E:
   the P19.5 `live-rsu.yaml` rows and the `sch` default (release city runs).
 - 2026-10-31 (wave B merge): merged to main (`d22ed5ac`). msg lib (209), `wsa_oracle` (2), node `rsu_runtime` (12) and engine `foundations` (15) pass; no golden moved. Still open: the P19.5 `live-rsu.yaml` rows and the `sch` default (wave E).
+
+### SC-P10
+
+- 2026-10-31 (wave C, C2, P10.1): the joiner-at-boundary cause, found to file:line. The
+  2026-09-30 note in `Phase2::provision` (`phase2.rs` ~4211-4216: "vehicles joining a few
+  seconds after a period boundary get no certificate", 4 of 55 at 1,500 veh/h) was the RA's
+  request shuffle: in-run top-ups, then full requests, sat in the run's shuffle right after
+  each boundary, and a joiner's pre-run job joined that queue, whose timer was armed on the
+  run's kernel. Fixed on 2026-09-30 by `750e7956` (`ScmsRun::preload_at`,
+  `v2xw-proto/src/scms/run/provision.rs:385-420`: the scratch run gets an empty shuffle and
+  the run's queue and timer are put back). Since `ra-maxReqs` = 1 a top-up is `.info` plus a
+  download (`provision.rs:1281-1290`) and never enters the shuffle, so no default run reaches
+  it: `credential-lifecycle` without attackers left 0 vehicles unprovisioned at 1,500 veh/h
+  (190 s, 77 nodes), 3,000 (130 s, 108) and 6,000 (130 s, 211). The window the spec
+  suspected is right: `start = period_at(now)` gives the joiner its current period, and
+  `aged.valid_from.min(now)` (`3471f2fc`) runs the exchange when its enrolment began. No
+  code change; no golden moves. New test `credential_handoff::a_vehicle_joining_after_a_period_boundary_holds_that_periods_pseudonyms`
+  (60 s i-periods, six vehicles from 0 and one joining at 62 s with a 60 s enrolment
+  lifetime, so its enrolment began inside the run): 0 unprovisioned, every frame of the
+  joiner under an SCMS batch certificate (linkageData, cracaId not the ACA's own) whose
+  validity starts in period 1. Fault: the exchange at 0 instead of
+  `aged.valid_from.min(now)` -> the RA refuses it `EnrolmentExpired`, 1 unprovisioned, red.
