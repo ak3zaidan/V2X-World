@@ -485,3 +485,28 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   joiner under an SCMS batch certificate (linkageData, cracaId not the ACA's own) whose
   validity starts in period 1. Fault: the exchange at 0 instead of
   `aged.valid_from.min(now)` -> the RA refuses it `EnrolmentExpired`, 1 unprovisioned, red.
+- 2026-10-31 (wave C, C2, P10.2): no bootstrap stand-in under an SCMS. `run.rs` installed
+  what `Phase2::provision` returned only `if !creds.is_empty()`, so a vehicle left with no
+  certificate kept the factory pool (`wiring::bootstrap_credentials`, no linkage value) and
+  signed with it. Under a credential system it now always installs: an empty batch gives an
+  empty store (`install_provisioned` / `hosted::install_credentials`), the vehicle sends
+  nothing signed and its due messages count in `tx_uncredentialed`. A run without an SCMS
+  (no `Phase2`) keeps the bootstrap pool. `vehicles_unprovisioned` keeps its name and is
+  documented as "vehicles unable to sign". The spec's forcing (`pca` offline from 0) did not
+  reach a pre-run pool: `ScmsRun::preload_at` takes the run's faults off it ("issued long
+  before the run"). Since `3471f2fc` a joiner whose enrolment began inside the run asks for
+  its pool at that instant (`at` > 0), so `preload_at` now checks the pool's path there
+  (`pool_path_down`, `provision.rs`): when the LOP, RA, either LA or the ACA is offline at
+  `at` and not back by the run's clock, no pool is issued. A pool at 0 (the pre-run fleet)
+  and an outage that ended before the join are unchanged. ASSUMPTION: such a device does
+  not retry its first request in the run (left open). New test
+  `credential_handoff::a_vehicle_whose_provisioning_fails_cannot_sign` (the P10.1 fleet,
+  both providers' ACA offline from 0): 1 unprovisioned, no linkageData frame under a
+  factory certificate, no node first transmitting after the join, exactly one node with
+  `tx_uncredentialed` > 0 and it never transmitted. Faults: `if !creds.is_empty()`
+  restored -> node 6 signs under a factory certificate, red; `pool_path_down` forced false
+  -> 0 unprovisioned, red. No golden moves: `phase2-path` (ae92e07b698d, 736a1216d48e),
+  `i-s1-phase2-60s` (d590fd1b6f58, 648b5200541c) and `ttc-triggered-brake` (5047d6fccac9,
+  ba01d4823379) reproduce; no G-SCMS case has a backend failure, and an unchanged digest
+  means none of their vehicles was unprovisioned before or after (one would have signed
+  with the stand-in before and stayed silent after).

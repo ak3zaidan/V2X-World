@@ -482,3 +482,67 @@ fn a_vehicle_joining_after_a_period_boundary_holds_that_periods_pseudonyms() {
         );
     }
 }
+
+/// SC-P10.2: under an SCMS a vehicle the SCMS did not provision cannot sign. It joins with
+/// an empty store (no bootstrap stand-in), sends no signed frame and counts its due
+/// messages as `tx_uncredentialed` (1609.2: an unprovisioned device has no signing
+/// credential).
+///
+/// The fleet of the SC-P10.1 test with both providers' ACA offline for the whole run. The
+/// vehicles on the road from t = 0 hold the pool they were issued before the run (its
+/// faults do not apply to it), which lasts past the run's 70 s. The joiner's enrolment
+/// began inside the run, so it asked for its pool then, with the ACA down and never back
+/// (`ScmsRun::preload_at`): it is the one vehicle left unprovisioned.
+#[test]
+fn a_vehicle_whose_provisioning_fails_cannot_sign() {
+    let mut s = lifecycle_fleet(6, 62.0, 70.0);
+    if let Some(p) = s.security.protocol.as_mut() {
+        p.params["enrolment_lifetime_s"] = 60.into();
+        p.params["reenrol_lead_s"] = 20.into();
+    }
+    // The fleet is split between the deployment's two providers; the joiner's is either.
+    s.actors.backend.failures = ["pca", "provider-b/pca"]
+        .into_iter()
+        .map(|node| v2xw_engine::scenario::schema::BackendFailureSpec {
+            node: node.to_string(),
+            mode: "offline".to_string(),
+            from_s: 0.0,
+            to_s: None,
+            extra_ms: None,
+        })
+        .collect();
+    let t = tapped(s);
+    assert!(t.scms_aca, "an SCMS run issues under its own ACA");
+    assert_eq!(
+        t.report.phase2.vehicles_unprovisioned, 1,
+        "the joiner, and only it, is left unprovisioned"
+    );
+    // No pseudonym on the air is a factory-issued stand-in.
+    let factory = factory_cracas(&t);
+    for (node, certs) in frames_by_node(&t) {
+        for cert in certs {
+            if matches!(cert.0.to_be_signed.id, CertificateId::linkageData(_)) {
+                assert!(
+                    !factory.contains(&cert.0.to_be_signed.craca_id),
+                    "node {node:?} signed under a factory (stand-in) certificate"
+                );
+            }
+        }
+    }
+    // The joiner sent nothing: every node that transmitted did so from the start.
+    assert!(
+        t.first_tx.values().all(|at| *at < 62_000_000_000),
+        "a node first transmitted after the join: {:?}",
+        t.first_tx
+    );
+    let unable: Vec<_> = t.uncredentialed.iter().filter(|(_, n)| **n > 0).collect();
+    assert_eq!(
+        unable.len(),
+        1,
+        "one node had due messages it could not sign: {unable:?}"
+    );
+    assert!(
+        !t.first_tx.contains_key(unable[0].0),
+        "the node that could not sign transmitted"
+    );
+}

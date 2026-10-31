@@ -358,6 +358,7 @@ impl ScmsRun {
         if !self.state.devices.contains_key(&device) {
             self.add_device(device);
         }
+        let pool_blocked = self.pool_path_down(at);
         let mut scratch: Kernel<ScmsMsg> = Kernel::new_at(self.kernel.net().clone(), at);
         let p = self.state.params;
         for (node, spec) in self.state.backend_hosts() {
@@ -399,7 +400,7 @@ impl ScmsRun {
         let run_generation = self.state.ra.shuffle_generation;
         self.enrol_at(device, at);
         let mut outcome = Self::drain_into(&mut self.state, &mut self.kernel);
-        if outcome.is_ok() {
+        if outcome.is_ok() && !pool_blocked {
             let at = self.kernel.now();
             self.start_provisioning(device, at, start_i, periods, jmax, FlowId::Provisioning);
             outcome = Self::drain_into(&mut self.state, &mut self.kernel);
@@ -421,6 +422,27 @@ impl ScmsRun {
         self.state.ra.shuffle_generation = run_generation;
         self.state.faults = run_faults;
         outcome
+    }
+
+    /// Whether a pool asked for at `at` finds its path down (SC-P10.2): `at` lies inside
+    /// the run (a mid-run joiner whose enrolment certificate began after t = 0 asked for
+    /// its pool then), a server the request and its batch pass through (LOP, RA, both
+    /// LAs, the ACA) is offline at `at`, and that outage has not ended by the run's clock.
+    /// The device joins holding no pseudonym and cannot sign (1609.2: no signing
+    /// credential). A pool asked for at 0 is the pre-run one, issued long before the
+    /// run's faults, which do not apply to it; an outage that ended before the device
+    /// joined would have been ridden out by its retries (SCMS-522), so it does not block.
+    /// ASSUMPTION: the device does not retry the first request in the run.
+    fn pool_path_down(&self, at: SimTime) -> bool {
+        if at == 0 {
+            return false;
+        }
+        let n = self.state.nodes;
+        let now = self.kernel.now();
+        let faults = &self.state.faults;
+        [n.lop, n.ra, n.la1, n.la2, n.pca].into_iter().any(|node| {
+            faults.offline(node, at) && faults.back_online(node, at).is_none_or(|up| up > now)
+        })
     }
 }
 
