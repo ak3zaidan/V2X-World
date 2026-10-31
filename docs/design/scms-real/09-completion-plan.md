@@ -171,6 +171,7 @@ Dated notes go under each id as its wave lands.
   row cites `resolve_subject` (re-grepped), so none closes; live-scms
   `LS.MA.subject-from-cert` added, `verdict: open` (wave E, needs `live_scms.py` to read
   `subject_from`). Still modelled: the Policy MA's `la_link` is the device's (SC-P2).
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`789f7afa`, track c1). Proto `resolution`, `provider_runs`, `ma_cases` and engine `report_signing`, `scms_providers` pass on the merged tree. The phase2-path golden was re-blessed once on the merged tree (`107b0232`, -> `64f8489024f3`) with P1, P2/P3 and SC-D12 as causes. The cli `ma_replay` test row needed the new `subject_from` (`71b3f8dc`). Still open: the dedup through `truth_subject` (SC-P3 leaves it to the ETSI model only), `LS.MA.subject-from-cert` for wave E.
 
 ### SC-P2
 
@@ -198,6 +199,7 @@ Dated notes go under each id as its wave lands.
 - 2026-10-31 (P2/P3.2): engine suites pass on the joint change: `report_signing` (4),
   `scms_providers` (3), `scms_deployment` (5), engine `pki_view` (9), `phase2` (16, the
   re-blessed digest), `trigger_ttc` and `bsm_timing` golden checks, proto lib (84).
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`789f7afa`, track c1). Proto `revocation_path` and engine `report_signing`, `sensitivity_security` pass on the merged tree; phase2-path re-blessed once on the merged tree (`107b0232`; records 10,243,407). The Studio `modelledMessages.ts`/`pkiCases.ts` entries were not typechecked in the merge. Still open: the Policy MA ingest-time `la_link` stays modelled.
 
 ### SC-P3
 
@@ -231,6 +233,7 @@ Dated notes go under each id as its wave lands.
   device's (it is read before any case runs, where no LA has answered), and a device's
   second request's chain is not linked to its first (the LA knows chains, not devices;
   B4 revokes both chains in the first case, and SC-P4's list check covers it after).
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`789f7afa`, track c1), with SC-P2. `report_signing::a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation` passes on the merged tree. Still open: SC-P4 will move the covered/linked split; `LS.MA.linked-by-chain` for wave E.
 
 ### SC-D1
 
@@ -473,6 +476,7 @@ Dated notes go under each id as its wave lands.
   only (pki.state counter values; frames and record counts unchanged; checked on the parent
   `ed49ff75`, where phase2-path still reproduced `ae92e07b`): phase2-path `ae92e07b ->
   3746e52f`, i-s1-phase2-60s `d590fd1b -> a6864706`; ttc-triggered-brake unchanged.
+- 2026-10-31 (wave C R1-R4 merge): the c3 leftovers merged to main (`7ed278f6`). Their re-bless (`59ae5fc6`: phase2-path `3746e52f`, i-s1-phase2-60s `a6864706`) interacted with c1's on phase2-path, which was re-blessed once on the merged tree (`107b0232`, -> `64f8489024f3`); i-s1-phase2-60s holds `a6864706` (`scms_scale`, `bsm_timing` pass). Still open: the PV.m.issued-counters rerun (wave E).
 
 ### SC-D13
 
@@ -559,6 +563,7 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `Engine::build` fails with the component named. Test
   `pdu::tests::a_pki_missing_a_components_issuer_is_refused`; the faulted hierarchy test
   now fails in 0.06 s. The unbounded scratch drain itself is C3's file and stays as it is.
+- 2026-10-31 (wave C R1-R4 merge): the c2 issuer check merged to main (`af28d882`). `scms_hierarchy` and proto `pdu_tests` pass on the merged tree; `Engine::build` refuses a PKI missing a component's issuer. Still open: `preload_app_cert`'s scratch drain still has no horizon (appcert.rs).
 ### SC-M3
 
 - 2026-10-30 (wave B): merged `worktree-wf_0343ab94-a4a-1` (13ae0463) and finished it.
@@ -642,6 +647,7 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   ba01d4823379) reproduce; no G-SCMS case has a backend failure, and an unchanged digest
   means none of their vehicles was unprovisioned before or after (one would have signed
   with the stand-in before and stayed silent after).
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`af28d882`, track c2, first). `credential_handoff` passes on the merged tree; no golden moved. Still open: an unprovisioned joiner never retries its first request (ASSUMPTION).
 
 ### SC-P7
 
@@ -672,6 +678,7 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   in `live-atk.yaml`: `P7.TSU.maxaccel-reads-accel-set` (RandomSpeed lies only in the speed
   field: predicted down from 14262 to under 1 %; supersedes `TSU.maxaccel`) and
   `P7.B0U.no-honest-brake-acceleration` (eq 0).
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`af28d882`, track c2). node `runtime_behaviour` and the v2xw-threat binaries pass on the merged tree; no golden moved. Still open: the `brakeAcceleration` report subtype (SC-P6), `detect/brakeAcceleration` in `RULE_KEYS`, the two `live-atk.yaml` rows for wave E (old `TSU.maxaccel` expected to fail after P7).
 
 ### SC-P11
 
@@ -698,6 +705,7 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   its fault. G-SCMS does not move: phase2-path, i-s1-phase2-60s and ttc-triggered-brake
   reproduce, since US BSMs carry no `generationLocation`. Records: veh R10 marked fixed in
   06; `LS.region-unchecked` (eq 0, verdict open) in `live-scms.yaml`.
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`af28d882`, track c2). node lib and `rx_validation` pass on the merged tree; no golden moved (US BSMs carry no generationLocation). Still open: `LS.region-unchecked` for wave E; Puerto Rico outside 840.
 
 ### SC-P8
 
@@ -737,6 +745,7 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `component_revoked*` keys, the RunReport leaf and the engine test. `mbr::select_ma`
   (unused) is unchanged; app-certificate devices (`apps.devices`) download no CRL in the
   proto and are not covered.
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3). Proto `crl_issuance` passes on the merged tree; no golden moved. Still open for P8.3 (D1): the engine composite must chain `hash_crls`, and `sort_composite_entries` must count linkage CRLs only.
 
 ### SC-P9
 
@@ -758,6 +767,7 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   issued certificates left off the list). Not called by the engine yet (P9.2 C2, P9.3 D1),
   so no golden moves. Not shown red: the enrolment-kept assert alone (the PSID fault fails
   the same test first).
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3; P9.1 only). Proto `appcert` passes on the merged tree. Still open: P9.2 (C2) and P9.3 (D1); the scratch kernel starts at 0 for a back-dated enrolment.
 
 ### SC-P12
 
@@ -782,3 +792,4 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   run.state.faults, seed, horizon)` after hosting, the RunReport leaves, and the
   `scms-knobs.yaml` rows. Note: the engine's `scms_topology.rs` `with_capacity` rebuilds
   the spec with `ServiceModelSpec::new`, which drops a model, so P12.3 must keep it there.
+- 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3; P12.1 only). Proto `availability` passes on the merged tree. Still open: P12.2 not started; P12.3 (D1) wiring and the `scms_topology.rs` `with_capacity` drop of the model.

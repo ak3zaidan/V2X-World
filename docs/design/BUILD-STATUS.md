@@ -17,6 +17,83 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-31 — SCMS completion wave C, rounds R1-R4 (to M-C1)
+
+Three tracks from `f09d4e1d`. Each was merged `--no-ff` onto main in the order c2
+(`af28d882`), c3 (`7ed278f6`), c1 (`789f7afa`). None of the tracks had uncommitted work, so
+no wip snapshot was needed. `cargo fmt --all` then changed one file (own commit `fbf65807`).
+
+- **First, the 4 wave A failures on main** (`1502b703`). In each case the test was the
+  stale side; no code changed.
+  - `scms_knobs` x2: the test knew 30 lifecycle moves, but the A1 menus publish 39. It now
+    has moves for the nine keys that used to be params-only. `crl_background_entries` is
+    compared through `lifecycle_param`, and `modelled_reports` is written as true or 1.
+    The root events have no default by design (absent means they never happen), and a
+    switch has no unit.
+  - `sensitivity_catalogue` and `sensitivity_expectations`: the A5 guide row (`b3f36b93`)
+    tops `full_cert_every_ms` at its 1000 ms default, and the parser reads a 1 out of
+    "J2945/1". So no high end was planned. The catalogue `values:` table now names
+    500 and 2000 ms, the ends the rows were written for.
+- **Merged items.**
+  - c2: SC-P10.1 and P10.2 (provisioning, with `preload_at` refusing a pool whose path is
+    down), SC-P7 (the SM-MBR speed gate, MaxAcceleration from accel-set, BrakeAcceleration),
+    SC-P11.1 and P11.2 (`regions.bin` and identifiedRegion placement), and the SC-M2
+    leftover (`check_issuers`).
+  - c3: SC-P8.1 and P8.2 (component hash CRLs, issued and installed), SC-P9.1
+    (identification certificates and `revoke_identification`), SC-P12.1
+    (`AvailabilityModel`) and the SC-D12 leftovers (per-ACA-instance `certs_issued`, aca-1
+    re-certified at root rollover).
+  - c1: SC-P1 (the MA reads the subject from the accused certificate), SC-P2 (every case
+    makes the chain-id exchange with both LAs) and SC-P3 (`decided_chains`, the `linked`
+    outcome).
+- **Conflicts.**
+  - `09-completion-plan.md` §7 tail, in two merges: both sides kept.
+  - `live-scms.yaml`: both rows kept.
+  - `run/mod.rs` re-exports: c3's CRL exports plus c1's `chain_identifier`.
+  - `phase2-path.json`: re-blessed (see Goldens).
+  - One compile break: the cli `ma_replay` test row lacked `MaReceived.subject_from`
+    (`71b3f8dc`).
+- **Checks.** `cargo check --workspace --tests` is clean. I ran 184 test binaries: the lib
+  and every test binary of engine, proto, node, threat, cli, core and py, which includes
+  the engine's publish (lib), scenario, sensitivity and regression tests. Each binary had
+  its own heavy.sh call with a 30-minute cap, and `build.rs` and `schema.rs` were touched
+  first.
+
+  **Result: 1,914 pass, 0 fail, 16 ignored.** Per crate (pass/fail/ignored): engine
+  691/0/16, proto 362/0/0, node 320/0/0, threat 273/0/0, core 209/0/0, cli 40/0/0,
+  py 19/0/0. `scms_knobs_runs` hit the cap after 12 of 20 tests; the other 8 passed in one
+  more call (1,137 s). The Studio typecheck passes, covering c1's `modelledMessages.ts` and
+  `pkiCases.ts`.
+- **Goldens.**
+  - c2 declared none. c3 declared `59ae5fc6` (SC-D12: phase2-path `3746e52f`,
+    i-s1-phase2-60s `a6864706`). c1 declared `79737dfe` and `1873d0d6` (phase2-path
+    `f159c9ba`, records 10,243,407).
+  - On the merged tree, phase2-path matched neither branch. That is expected, because
+    c1's `subject_from` column and chain-id rows and c3's per-instance `certs_issued` are
+    all in the same records. I re-blessed it once (`107b0232`), naming all three causes:
+    `64f8489024f3`, records 10,243,407, frame `736a1216` unchanged.
+  - i-s1-phase2-60s keeps c3's `a6864706`, and ttc-triggered-brake did not move:
+    `scms_scale`, `bsm_timing` and `trigger_ttc` pass without a bless.
+  - G-ML and G-LEG are untouched.
+- **Release and boot.** `cargo build --release -j 2 -p v2xw-cli --bins` succeeded in 12 min 2 s.
+  `v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8758 --paused --speed 0` was
+  listening after 3 s and was stopped by PID.
+- **Still open.**
+  - SC-P1 and SC-P3: the engine decision dedup through `truth_subject` now only in the
+    ETSI model. The `LS.MA.subject-from-cert` and `LS.MA.linked-by-chain` rows wait for
+    wave E. SC-P4 will move the covered/linked split.
+  - SC-P2: the Policy MA's ingest-time `la_link` is still modelled.
+  - SC-P7: the `brakeAcceleration` report subtype (SC-P6), `RULE_KEYS`, and two
+    `live-atk.yaml` rows. The old `TSU.maxaccel` row is expected to fail.
+  - SC-P8.3 (D1): the engine composite must chain `hash_crls`, and
+    `sort_composite_entries` must count linkage CRLs only.
+  - SC-P9.2 and P9.3, SC-P12.2 and P12.3 (wire `apply_availability`, and stop
+    `with_capacity` dropping the model).
+  - SC-P10: an unprovisioned joiner never retries.
+  - SC-P11: `LS.region-unchecked`, and Puerto Rico is outside 840.
+  - SC-M2: the `preload_app_cert` scratch drain has no horizon.
+  - The PV.m.issued-counters rerun (wave E).
+
 ## 2026-10-31 — SCMS completion wave B merge (mapolicy, topology, relay)
 
 Three tracks from `5c5dfc4e`, merged `--no-ff` onto wave A's `24cd9c68` in the order
