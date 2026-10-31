@@ -96,10 +96,10 @@ rows:
   expect: eq
   value: 0
   fault: upload-oldest-first
-  measured: 282
-  verdict: open
-  note: "Not observable from the records: 282 of 578 apparent violations are all relay-only devices whose newest reports were sent first but confirmed later (a unit missed the frame; the RFC 6298 retry confirmed it after older ones). A relayed frame's node.tx row carries no report id, so transmission order cannot be joined to the store. The engine sorts weight desc, seq desc (mbr.rs take_upload_order; unit test phase2::report_store_tests). Record gap: put the report id on the relayed frame's node.tx row."
   source: 'upload highest weight first, newer first on ties ([SM-MBR] §2.2; proto F7, veh M8): when a device with several reports pending uploads one, it is the newest of the highest weight'
+  measured: '0'
+  verdict: 'pass'
+  note: '2026-10-30 (AUD on an opt-level-2 dev build of a595d518): 0 of 614 sends. The record gap is closed (a relayed frame''s node.tx row carries its report id since 2026-10-25), and the checker now takes a relayed report as sent at its first frame on the air whether or not a unit confirmed it: the 22 left by the first reading were all one relay-only reporter (19) that put its newest reports on the air first at 196,208.909-.912 s (stored 196,202-196,207 s), one of them never confirmed and later evicted, so it was counted as still pending. The engine''s order (weight, then newest) was right throughout. The row''s fault (upload-oldest-first) turns it red (1)'
 - id: AU.STORE.engine
   run: AUD
   area: metrics
@@ -360,10 +360,11 @@ rows:
   expect: eq
   value: 0
   fault: rsu-list-dropped
-  measured: 2
-  verdict: open
-  note: "Record gap: no record shows a unit installing a CRL (no node.security row for RSUs, no proto.revocation stage, no pki.flow message); only the engine counter rsu_crls_installed (8) and the 1,188 unit refusals of the revoked sender (rsu_revoked_receptions) say it happened. Suggested: a proto.revocation `processed`/`enforced` row for the unit, or node.security rows for RSUs."
   source: 'every RSU installs its RA''s composite CRL over its backhaul (WP-B3b) and holds each published list'
+  measured: '0'
+  verdict: 'fixed'
+  test: 'phase2::without_either_distribution_path_the_revocation_never_reaches_a_vehicle'
+  note: 'Record gap fixed at dc0c0250: each unit install is a proto.revocation row rsu_installed (Phase2::rsu_crl_records). AUD re-made 2026-10-30 on an opt-level-2 dev build of a595d518 (693 s, 66 MB): 0 of 2 (unit, publication) pairs without the list'
 - id: AU.DIST.engine
   run: AUD
   area: metrics

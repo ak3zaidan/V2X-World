@@ -111,7 +111,9 @@ rows:
 # ---------------------------------------------------------------- (4) run sanity
 - {id: RS.time-order, runs: [S, Q, L], check: time_order, expect: pass,
    source: "ADR 0004 / the kernel: no event in the past; each channel's records in nondecreasing log time, no record after the run's end, a record's own t not after its log time", fault: swap two records' log times,
-   verdict: open, measured: "logs in order, none after the end; but privacy.link claims stamped up to 11.7 ms after their log time (S 219 of 643: the observer reads a frame at build time, before it is on the air), the preload flow logged at 0 with stamps to 0.42 s, and on Q net.bytes (8.8 us) and proto.revocation (118 ms) stamped after their backend tick"}
+   verdict: fixed, test: "security_lifecycle::link_claims_and_pseudonym_changes_follow_the_frames_on_the_air",
+   measured: "S on a595d518 (2026-10-30, 147 s, 158 MB): 223,001 records in order, none after the end, no record t after its log time. Q and L not re-made",
+   note: "The two defects are fixed (eaf1260f): the passive observer reads a frame when it goes on the air (Engine::start_frame), so no privacy.link claim is stamped before the frame was sent, and the preload flow is stamped at its own instants. Q's net.bytes and proto.revocation stamps after their backend tick are kept by the owner's decision (09 completion plan 5: a logging artefact, no effect on results); that part of the row stays as measured on 10-28"}
 - {id: RS.cost-S, runs: [S], check: cost, expect: pass, bound: {wall_s: 300, peak_mb: 600},
    source: "realism base: 95 devices 300 s live in about 180 s and 229 MB (realism.md V8); 240 s here", fault: halve the bound,
    verdict: pass, measured: "138 s, 138 MB"}

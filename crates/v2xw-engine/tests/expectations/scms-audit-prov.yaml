@@ -189,9 +189,10 @@ rows:
   behaviour: the RSU application certificate is implicit, hours(169), crlSeries 3, no linkageData
   spec: '[CAMP122] Table 3; [SMP] 6.3.3'
   expect: {bad: 0}
-  measured: '0 series-3 application certificates in the stores; off 0'
-  verdict: open
-  note: no record carries an RSU application certificate (node.credentials is vehicles only; the PCA response is sealed and recorded without plaintext). Open, audit-prov.md 4.3; library capture check_appcerts.py covers the format
+  measured: 'conf on 4f5bd447 (2026-10-30): 6 series-3 application certificates in the stores; off 0'
+  verdict: 'fixed'
+  test: 'rsu_certs::every_units_application_certificates_are_on_the_record'
+  note: 'SC-D13, fixed at 59d558a1: each roadside unit writes node.credentials rows (device rsu/<node>) with its application certificates'' COER (Phase2::rsu_credentials). All 6 are implicit, hours(169), crlSeries 3, no linkageData. The checker leaves rsu/ rows out of its vehicle set, and its fault (one certificate re-encoded as 168 h) turns the row red (off 1)'
 # ---- metrics integrity (engine values against the records)
 - id: PV.m.topups
   run: conf

@@ -132,3 +132,56 @@ Dated notes go under each id as its wave lands.
 - Left: F4.B0L.untouched and F5.k1-untouched need a one-commit binary pair (both
   unchanged by construction: `signer_validity` is set only for an attacker's out-of-window
   frame, and `k = 1.0 x scale` equals `scale` exactly, so the branch is the old one).
+
+### SC-D12
+
+- 2026-10-30 (wave A, `d65cf1c4`, golden `39a89468`): **one certificate per component**
+  was already fixed (`dc0c0250`: the PDU layer is the governance's own certificates); the
+  conformance run on `a595d518` shows GOV.L.onecert 8 with both, 0 differ (red under its
+  fault). **Provider-b's ICA count, fixed.** Cause: its second ACA (`aca-1`) is issued by
+  the PDU layer under its ICA (`ScmsPki::issue_aca_instance`), outside the set
+  `Governance::rehome` counts: 7 against 8 recorded. `ScmsRun::new_peer` now adds
+  `ScmsPki::aca_instances()`. Test `provider_runs::each_providers_root_and_ica_count_their_own_certificates`
+  (red at 7 with the count removed). Conformance on `4f5bd447`: GOV.L.counters pass
+  (8 against 8+3). Digests moved: phase2-path 11561088 -> c74166f8, i-s1 a24806dc -> 597d1a78.
+- Left: PV.m.issued-counters (audit-prov) still reads provider-b's aca/0 `certs_issued`
+  1,566 against 786 in its records (the instance counter counts both ACAs' issuance), and
+  a root rollover re-certifies the governance set but not `aca-1` (code reading).
+
+### SC-D13
+
+- 2026-10-30 (wave A, `59d558a1`, golden `454986c6`): **RSU application certificate on the
+  record, fixed.** Cause: `node.credentials` was vehicles only and the ACA response to a
+  unit is sealed. `Phase2::rsu_credentials` writes rows of device `rsu/<node>` with each
+  certificate's COER; the server keeps them for `inspect.cert`, not in the Vehicles table.
+  Test `rsu_certs::every_units_application_certificates_are_on_the_record` (red with the
+  emission off). PV.rsu-cert on `4f5bd447`: 6 certificates, all implicit 169 h series 3.
+  Checkers updated: audit_prov leaves `rsu/` rows out of its vehicle set and gained a
+  PV.rsu-cert fault. Digests: phase2-path c74166f8 -> 79f056d2, i-s1 597d1a78 -> 009e3a87
+  (+19 records each). Follow-up (the rows mark the active certificate and keep the history,
+  as a vehicle's do; pki_view's contract test): phase2-path 974aa547 -> d590fd1b, i-s1
+  18962362 -> ae92e07b.
+- Already fixed in code and re-measured on `a595d518`: RSU CRL installs (`dc0c0250`,
+  AU.DIST.rsu 0 of 2), privacy.link and preload stamps (`eaf1260f`, RS.time-order on S:
+  223,001 records in order), the unverified-with-certificate reception (`eaf1260f`, a
+  vehicle discards an overheard relayed MBR; OA.RX.cached-verifies 0, red under its fault).
+  AU.STORE.order: 282 -> 0. The record gap was closed on 10-25; the last 22 were a checker
+  reading (a relayed report sent and never confirmed counted as pending), corrected in
+  audit_mbpipe. Q's late `net.bytes` / `proto.revocation` stamps stay (§5).
+
+### SC-D14
+
+- 2026-10-30 (wave A, `4f5bd447`, golden `bd59e324`): **sub-hour enrolment lifetime,
+  fixed** (`lifetime_duration`: minutes when exact, else seconds; an hour and over
+  byte-identical). **`crl_version`, fixed**: the record carries the publication count of
+  the composite CRL the vehicle holds (`NodeSec::crl_held_serial`), not its entry count;
+  the engine's freshness logic is unchanged. Digests: phase2-path 79f056d2 -> 974aa547,
+  i-s1 009e3a87 -> 18962362. **Server memory, bounded.** A serve of scms-audit-mbpipe
+  (`--speed 0 --retain 300 --retain-mb 32`, malloc stack logging) grew 176 -> 406 MB; about
+  150 MB of the 313 MB live heap was the PKI store's `pki.flow` absorption (SPDU hex and
+  plaintext, flow records as `serde_json::Value`), bounded only by counts. Now SPDUs are
+  held to 48 MiB and flow records to 32 MiB as compact JSON; the same serve peaks at
+  351 MB (406 before) and ends at 276 MB (332). Each fix has a test red under its fault.
+- Left: the metric breakdown store is capped at 1,000,000 entries (about 120 MB by its own
+  note) and still grows toward that cap on long runs; a UI client's feed adds to it. Not
+  changed (it merges old samples, it does not lose them).
