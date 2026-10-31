@@ -188,7 +188,9 @@ pub struct NodeSecurityView {
     pub reports_uploaded: u32,
     /// CRL entries installed.
     pub crl_entries: u32,
-    /// The CRL version (entry count of the published list) this node last installed.
+    /// The version of the composite CRL this node holds whole: the publication count of
+    /// its providers' lists, summed (a re-issue at `nextCrl` is a new version), as
+    /// `pki.state`'s CRL heads count them. It was the list's entry count (SC-D14).
     pub crl_version: u32,
     /// Whether this node found itself on the CRL and stopped transmitting.
     pub self_revoked: bool,

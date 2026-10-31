@@ -934,3 +934,43 @@ fn the_tabs_fixture_is_what_the_server_answers() {
         .expect("json");
     assert_eq!(got, want, "regenerate with V2XW_PKI_FIXTURES=1");
 }
+
+/// SC-D14: the SPDU store is bounded by what it holds, not only by how many: 2,000 SPDUs
+/// of 64 KiB hex each (125 MiB) keep the newest under `PDU_BYTES_CAP`, and the oldest no
+/// longer answers. Counts alone (200,000 SPDUs) let a long `scms-audit-mbpipe` serve
+/// outgrow the 450 MB run slot (BUILD-STATUS 2026-10-29 engine request 14). Fault: the
+/// byte condition removed from the SPDU eviction makes the oldest still answer.
+#[test]
+fn the_pdu_store_is_bounded_by_bytes() {
+    use v2xw_server::pki::PDU_BYTES_CAP;
+    let hex = "ab".repeat(32 * 1024);
+    let mut store = PkiStore::default();
+    let n = 2_000u64;
+    for i in 0..n {
+        let rec = serde_json::json!({
+            "schema": 1, "kind": "pdu", "id": format!("f{i}"), "t": i * 1_000_000,
+            "provider": "provider-a", "flow": "provisioning", "instance": format!("i{i}"),
+            "name": "AcaEeCertResponsePrivateSpdu", "from": "aca", "to": "ee/1",
+            "pdus": [{"id": format!("provider-a/pdu/{i}"), "type": "AcaEeCertResponsePrivateSpdu",
+                      "len": 32768, "from": "aca", "to": "ee/1", "t": i * 1_000_000,
+                      "hex": hex}],
+        });
+        assert!(store.absorb("pki.flow", &serde_json::to_vec(&rec).unwrap()));
+    }
+    assert!(store.undecodable.is_empty(), "{:?}", store.undecodable);
+    let pdu = |i: u64| {
+        store.answer(&PkiQuery::Pdu {
+            id: format!("provider-a/pdu/{i}"),
+            view: "ground-truth".into(),
+        })
+    };
+    assert!(pdu(n - 1).is_some(), "the newest SPDU answers");
+    assert!(pdu(0).is_none(), "the oldest SPDU went with the byte budget");
+    let kept = (0..n).filter(|i| pdu(*i).is_some()).count();
+    let each = hex.len() + 192;
+    assert!(
+        kept * each <= PDU_BYTES_CAP + each,
+        "{kept} SPDUs of {each} B kept against {PDU_BYTES_CAP} B"
+    );
+    assert!(kept > 100, "the budget still holds a working set ({kept})");
+}

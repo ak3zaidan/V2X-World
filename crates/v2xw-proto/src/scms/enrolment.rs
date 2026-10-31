@@ -91,9 +91,21 @@ pub struct EnrolmentRequest<'a> {
 }
 
 /// A lifetime as a 1609.2 `Duration`: whole hours while they fit a `Uint16` (up to about
-/// 7.5 years, which covers CAMP's 6 and 7 years exactly), else whole years.
+/// 7.5 years, which covers CAMP's 6 and 7 years exactly), else whole years. A lifetime
+/// under an hour (a compressed-calendar `enrolment_lifetime_s`) is whole minutes when it
+/// is exact, else seconds: it was `hours(0)`, a certificate that expires as it starts
+/// (BUILD-STATUS 2026-10-29 engine request 1, SC-D14).
 #[must_use]
 pub fn lifetime_duration(lifetime_s: u64) -> Ieee1609Duration {
+    if lifetime_s < 3_600 {
+        // Below 3,600 both fit a `Uint16`.
+        let v = u16::try_from(lifetime_s).unwrap_or(u16::MAX);
+        return if lifetime_s >= 60 && lifetime_s % 60 == 0 {
+            Ieee1609Duration::minutes(Uint16(v / 60))
+        } else {
+            Ieee1609Duration::seconds(Uint16(v))
+        };
+    }
     match u16::try_from(lifetime_s / 3_600) {
         Ok(h) => Ieee1609Duration::hours(Uint16(h)),
         Err(_) => Ieee1609Duration::years(Uint16(

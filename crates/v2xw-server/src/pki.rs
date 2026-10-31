@@ -34,6 +34,14 @@ use v2xw_proto::scms::pki_view::{self, CrlHead, Knowledge, PduRef};
 
 /// SPDUs kept, newest last.
 pub const PDU_CAP: usize = 200_000;
+/// Bytes the kept SPDUs may take (their hex and opened plaintext, `pdu_cost`): the
+/// oldest go first. Counts alone did not bound memory: 200,000 SPDUs of 1-3 kB hex each
+/// are several hundred MB, and a long `scms-audit-mbpipe` serve grew past the 450 MB run
+/// slot (BUILD-STATUS 2026-10-29 engine request 14, SC-D14).
+pub const PDU_BYTES_CAP: usize = 48 << 20;
+/// Bytes the flow instances' records may take (`FlowLog::text_bytes`): the oldest instances
+/// go first (SC-D14, as [`PDU_BYTES_CAP`]).
+pub const FLOW_BYTES_CAP: usize = 32 << 20;
 /// Certificates kept.
 pub const CERT_CAP: usize = 400_000;
 /// `pki.state` snapshots kept for `inspect.trust`: five minutes at one a second.
@@ -64,16 +72,39 @@ struct FlowLog {
     pdus: u32,
     devices: BTreeSet<String>,
     last_stage: Option<String>,
-    /// The records, without SPDU bytes or plaintext, in arrival order.
-    records: Vec<Value>,
+    /// The records, without SPDU bytes or plaintext, in arrival order, each as its
+    /// compact JSON text: a `serde_json::Value` tree took about three times the bytes
+    /// (SC-D14). Parsed back when `inspect.flow` asks.
+    records: Vec<Box<str>>,
+    /// What `records` take, bytes.
+    text_bytes: usize,
     dropped: u32,
+}
+
+/// What one kept SPDU costs the store, bytes: its strings (the hex and the opened
+/// plaintext are nearly all of it) and a fixed allowance for the rest.
+fn pdu_cost(p: &PduRef) -> usize {
+    let opt = |o: &Option<String>| o.as_ref().map_or(0, String::len);
+    192 + p.id.len()
+        + p.kind.len()
+        + p.from.len()
+        + p.to.len()
+        + opt(&p.id8)
+        + opt(&p.hex)
+        + opt(&p.sealed_to)
+        + p.opened
+            .as_ref()
+            .map_or(0, |o| o.by.len() + opt(&o.hex) + opt(&o.error))
 }
 
 /// What the PKI view's queries are answered from.
 #[derive(Debug, Default)]
 pub struct PkiStore {
     pdus: BTreeMap<String, PduRef>,
-    pdu_order: VecDeque<String>,
+    /// Kept SPDU ids, oldest first, with what each costs ([`pdu_cost`]).
+    pdu_order: VecDeque<(String, usize)>,
+    /// What the kept SPDUs cost, bytes.
+    pdu_bytes: usize,
     certs: BTreeMap<String, String>,
     cert_order: VecDeque<String>,
     crl_hex: BTreeMap<String, String>,
@@ -88,6 +119,8 @@ pub struct PkiStore {
     flows: BTreeMap<String, FlowLog>,
     /// Flow instance ids in the order they first appeared.
     flow_order: VecDeque<String>,
+    /// What every kept instance's records take, bytes.
+    flow_bytes: usize,
     /// The newest [`RECENT_CAP`] messages (`kind: "msg"` flow records, lean), in arrival
     /// order, for `inspect.trust`'s `messages`.
     recent: VecDeque<Value>,
@@ -324,14 +357,18 @@ impl PkiStore {
                     self.absorb_step(&f);
                     for p in f.pdus {
                         let id = p.id.clone();
+                        let cost = pdu_cost(&p);
                         if self.pdus.insert(id.clone(), p).is_none() {
-                            self.pdu_order.push_back(id);
+                            self.pdu_order.push_back((id, cost));
+                            self.pdu_bytes += cost;
                         }
                     }
-                    while self.pdu_order.len() > PDU_CAP {
-                        if let Some(old) = self.pdu_order.pop_front() {
-                            self.pdus.remove(&old);
-                        }
+                    while self.pdu_order.len() > PDU_CAP || self.pdu_bytes > PDU_BYTES_CAP {
+                        let Some((old, cost)) = self.pdu_order.pop_front() else {
+                            break;
+                        };
+                        self.pdus.remove(&old);
+                        self.pdu_bytes = self.pdu_bytes.saturating_sub(cost);
                     }
                 })
                 .is_ok(),
@@ -370,7 +407,7 @@ impl PkiStore {
             self.flow_order.push_back(f.instance.clone());
             while self.flow_order.len() > FLOW_CAP {
                 if let Some(old) = self.flow_order.pop_front() {
-                    self.flows.remove(&old);
+                    self.drop_flow(&old);
                 }
             }
         }
@@ -429,8 +466,24 @@ impl PkiStore {
                 o.hex = None;
             }
         }
-        if let Ok(v) = serde_json::to_value(&lean) {
-            log.records.push(v);
+        if let Ok(text) = serde_json::to_string(&lean) {
+            log.text_bytes += text.len();
+            self.flow_bytes += text.len();
+            log.records.push(text.into_boxed_str());
+        }
+        // The newest instance stays, whatever it holds.
+        while self.flow_bytes > FLOW_BYTES_CAP && self.flow_order.len() > 1 {
+            let Some(old) = self.flow_order.pop_front() else {
+                break;
+            };
+            self.drop_flow(&old);
+        }
+    }
+
+    /// Forgets flow instance `id` and what its records took.
+    fn drop_flow(&mut self, id: &str) {
+        if let Some(log) = self.flows.remove(id) {
+            self.flow_bytes = self.flow_bytes.saturating_sub(log.text_bytes);
         }
     }
 
@@ -617,9 +670,10 @@ impl PkiStore {
     /// `inspect.flow`: one instance's records in time order (ties in arrival order).
     fn flow_detail(&self, instance: &str, t_ns: Option<u64>) -> Option<Value> {
         let log = self.flows.get(instance)?;
-        let mut records: Vec<&Value> = log
+        let mut records: Vec<Value> = log
             .records
             .iter()
+            .filter_map(|r| serde_json::from_str::<Value>(r).ok())
             .filter(|r| t_ns.is_none_or(|t| r["t"].as_u64().unwrap_or(0) <= t))
             .collect();
         records.sort_by_key(|r| r["t"].as_u64().unwrap_or(0));

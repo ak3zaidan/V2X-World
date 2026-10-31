@@ -46,6 +46,18 @@ fn six_years_is_whole_hours() {
     );
 }
 
+/// A lifetime under an hour keeps its length: minutes when exact, else seconds. It was
+/// written `hours(0)` (SC-D14). Fault: the sub-hour branch removed makes this fail.
+#[test]
+fn a_lifetime_under_an_hour_is_not_zero_hours() {
+    assert_eq!(lifetime_duration(1_800), Ieee1609Duration::minutes(Uint16(30)));
+    assert_eq!(lifetime_duration(90), Ieee1609Duration::seconds(Uint16(90)));
+    assert_eq!(lifetime_duration(59), Ieee1609Duration::seconds(Uint16(59)));
+    assert_eq!(lifetime_duration(3_599), Ieee1609Duration::seconds(Uint16(3_599)));
+    // An hour and over is unchanged (byte-identical certificates).
+    assert_eq!(lifetime_duration(3_600), Ieee1609Duration::hours(Uint16(1)));
+}
+
 #[test]
 fn a_canonical_request_verifies_only_under_the_registered_canonical_key() {
     let mut g = Drbg::new(1, b"t");

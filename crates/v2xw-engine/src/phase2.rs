@@ -1530,6 +1530,10 @@ struct NodeSec {
     /// ones its poll in flight asked for: a re-issue with no new entry is fetched too.
     crl_serial: u64,
     crl_serial_asked: u64,
+    /// The publication count (summed over the providers' lists, re-issues included) of the
+    /// composite CRL this vehicle holds whole: its `node.security` `crl_version`. Read by
+    /// the record only (SC-D14: the record carried `crl_version`, the entry count).
+    crl_held_serial: u64,
     /// It joined holding a list newer than the `t0` ones (R-JOINCRL), fetched on its RA
     /// connection before it was switched on.
     crl_at_join: bool,
@@ -8062,6 +8066,9 @@ impl Phase2 {
         Vec<crate::sec_records::ProtoRevocation>,
     ) {
         let records = Vec::new();
+        // What the vehicle's RA serves now (version, publication count), so a list held
+        // whole is named by its publication count (`NodeSec::crl_held_serial`).
+        let served = (self.crl_version_for(node), self.crl_serial_for(node));
         // WP-C2: with the PDU layer on, the vehicle verified the signed CRL itself
         // (`ObuRuntime::install_secured_crl`) before this is called, and refused a frame
         // carrying an entry the CRL does not sign. Only the modelled path (PDU layer off:
@@ -8092,6 +8099,14 @@ impl Phase2 {
         n.crl_installed.extend(fresh.iter().cloned());
         if n.crl_installed.len() >= version as usize {
             n.crl_version = n.crl_version.max(version);
+            // The list it holds is the one its RA serves when the versions agree; else
+            // (a roadside copy behind the RA) the one its own fetch or join named.
+            let held = if served.0 == version {
+                served.1
+            } else {
+                n.crl_serial
+            };
+            n.crl_held_serial = n.crl_held_serial.max(held);
         }
         let size = u64::from(crl_bytes(&self.home().state.sizes, version).bytes());
         self.report.crls_installed += fresh.len() as u64;
@@ -8387,11 +8402,19 @@ impl Phase2 {
             outbox_reports: n.outbox.0.len() as u32,
             reports_uploaded: n.reports_uploaded,
             crl_entries,
-            crl_version: n.crl_version,
+            crl_version: Self::record_crl_version(n),
             self_revoked: n.self_revoked,
             // The node's own store holds them (`Engine::emit_node_security`).
             crls: Vec::new(),
         })
+    }
+
+    /// The `crl_version` of a vehicle's `node.security` row: the publication count of the
+    /// composite CRL it holds whole ([`NodeSec::crl_held_serial`]), as `pki.state`'s CRL
+    /// heads count versions. It was the list's entry count, so a re-issue at `nextCrl`
+    /// read as no new version and an empty list as version 0 (SC-D14; measure.md OF-3).
+    fn record_crl_version(n: &NodeSec) -> u32 {
+        u32::try_from(n.crl_held_serial).unwrap_or(u32::MAX)
     }
 
     /// Notes that the roadside put a CRL frame on the air.
@@ -9934,6 +9957,74 @@ mod join_crl_tests {
         assert_eq!(
             p.nodes[&early].crl_serial, s0,
             "an earlier joiner is untouched"
+        );
+    }
+}
+
+#[cfg(test)]
+mod crl_record_tests {
+    use super::*;
+
+    /// SC-D14: a vehicle's `node.security` `crl_version` is the publication count of the
+    /// composite CRL it holds (the `t0` lists of both providers, then provider 0's next
+    /// publication), not the list's entry count. Fault: `record_crl_version` back to
+    /// `n.crl_version` reads 1 (one entry) for the late joiner.
+    #[test]
+    fn the_security_record_names_the_crl_publication_the_vehicle_holds() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        let serial = |p: &Phase2, k: usize| p.runs[k].state.crl_store.versions;
+        let (a0, b0) = (serial(&p, 0), serial(&p, 1));
+        for (k, v, at, ser) in [(1, 0u32, 0, b0), (0, 0, 0, a0)] {
+            p.crl_feeds[k].push(CrlVersion {
+                at,
+                version: v,
+                entries: Vec::new(),
+                secured: Vec::new(),
+                serial: ser,
+            });
+        }
+        let early = NodeId::new(9_001);
+        p.nodes.insert(early, NodeSec::default());
+        let (v, e, _) = p.prerun_crl(early, 0).expect("the t0 lists");
+        let _ = p.install_crl(early, v, &e, 0, false, true);
+        let t0 = u32::try_from(p.nodes[&early].crl_held_serial).expect("small");
+        assert!(t0 >= 1, "the t0 lists are publications ({t0})");
+        assert_eq!(Phase2::record_crl_version(&p.nodes[&early]), t0);
+        let device = v2xw_sec::linkage::DeviceLinkageContext::new(
+            v2xw_sec::linkage::LaId(1),
+            v2xw_sec::linkage::LaId(2),
+            v2xw_sec::linkage::LinkageSeed::new([7; 16]),
+            v2xw_sec::linkage::LinkageSeed::new([9; 16]),
+        );
+        let entry = CrlLinkageEntry::from_device(&device, 615, v2xw_sec::linkage::DEFAULT_JMAX);
+        let published: SimTime = 191_400_000_000_000;
+        p.crl_feeds[0].push(CrlVersion {
+            at: published,
+            version: 1,
+            entries: vec![entry],
+            secured: Vec::new(),
+            serial: a0 + 1,
+        });
+        p.backend_now = published + 3_600_000_000_000;
+        let late = NodeId::new(9_002);
+        p.nodes.insert(late, NodeSec::default());
+        let now = p.backend_now;
+        let (v, e, _) = p.prerun_crl(late, now).expect("the lists its RA serves");
+        let _ = p.install_crl(late, v, &e, now, false, true);
+        assert_eq!(
+            Phase2::record_crl_version(&p.nodes[&late]),
+            a0 + 1 + b0,
+            "the record names the publication it holds, not its one entry"
         );
     }
 }
