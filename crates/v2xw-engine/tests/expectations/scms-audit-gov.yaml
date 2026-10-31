@@ -82,11 +82,11 @@ rows:
   verdict: pass
 - id: GOV.C9.effective
   area: spec
-  check: CTL 1 effectiveDate (Time32) against the Time32 of its publication instant, and greater than CTL 0's
-  source: gov C-9 (DOCUMENTED DEVIATION) - the engine sets effectiveDate to the publication deadline; SCMS Manager's is the ballot date
-  expect: effective == Time32(t_pub) > effective(CTL 0)
-  measured: 'A PASS: effective 719830325, Time32(publication) 719830325, CTL0 719571005 | B PASS: effective 719830325, Time32(publication) 719830325, CTL0 719571005'
-  verdict: pass
+  check: CTL 1 effectiveDate (Time32) against the Time32 of the EAC vote (120 s) and of its publication instant, and greater than CTL 0's
+  source: gov C-9 (fixed 2026-10-31) - effectiveDate is the ballot date, as SCMS Manager's production sequence 1 (effective 2025-07-16, published 2025-08-13); was the publication deadline
+  expect: effective(CTL 0) < effective == Time32(vote) < Time32(t_pub)
+  measured: 'before C-9 (deviation pinned): A PASS: effective 719830325, Time32(publication) 719830325, CTL0 719571005 | B PASS: same'
+  verdict: open
 - id: GOV.C12.monotone
   area: invariant
   check: per device, node.credentials ctl_sequence never decreases and never names a CTL before pki.state publishes it

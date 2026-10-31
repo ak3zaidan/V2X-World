@@ -305,12 +305,17 @@ def r_C6(R):
 
 
 def r_C9(R):
+    # gov C-9: effectiveDate is the EAC vote (the rollover decided at 120 s, as r_C6),
+    # before the publication instant; SCMS Manager's production sequence 1 is effective
+    # 2025-07-16 and was published 2025-08-13.
     ch = ctl_changes(R)
     if len(ch) < 2:
         return False, 'no CTL 1'
     pub32 = time32(R['t0'] + ch[1][0] / 1e9)
+    vote32 = time32(R['t0'] + 120)
     e0, e1 = ch[0][2]['effective'], ch[1][2]['effective']
-    return e1 == pub32 and e1 > e0, f'effective {e1}, Time32(publication) {pub32}, CTL0 {e0}'
+    return e1 == vote32 and e0 < e1 < pub32, \
+        f'effective {e1}, Time32(vote) {vote32}, Time32(publication) {pub32}, CTL0 {e0}'
 
 
 def r_C12m(R):
@@ -804,8 +809,15 @@ def m_C1(R):
     R['states'][0] = (t, v, dict(c, roots=c['roots'][:1] + ['00' * 32]))
 
 
+def second_sequence(R):
+    # The CTL after genesis: genesis is the production series' sequence at t0 (gov C-10),
+    # 1 from 2025-07-16, so the next one is not always 1.
+    return ctl_changes(R)[1][2]['sequence']
+
+
 def m_L6(R):
-    _m_states(R, lambda c: dict(c, roots=c['roots'][1:]) if c['sequence'] == 1 else c)
+    s1 = second_sequence(R)
+    _m_states(R, lambda c: dict(c, roots=c['roots'][1:]) if c['sequence'] == s1 else c)
 
 
 def m_C6(R):
@@ -816,7 +828,8 @@ def m_C6(R):
 
 
 def m_C9(R):
-    _m_states(R, lambda c: dict(c, effective=c['effective'] + 1) if c['sequence'] == 1 else c)
+    s1 = second_sequence(R)
+    _m_states(R, lambda c: dict(c, effective=c['effective'] + 1) if c['sequence'] == s1 else c)
 
 
 def m_C12m(R):
