@@ -24,8 +24,10 @@
 //! observable event, not a silent drop.
 //!
 //! Sizes: a message that carries a PDU is charged the PDU's encoded length
-//! ([`crate::sizes::WireSize::real`]), so invariant I-S3 holds as equality by
-//! construction; `tests/pdu_layer.rs` checks the charged size against the bytes.
+//! ([`crate::sizes::WireSize::real`]), inside the HTTP framing of the EE-RA exchange it
+//! rides on ([`crate::scms::http`], proto B9a), so invariant I-S3 holds as equality by
+//! construction; `tests/pdu_layer.rs` checks the charged size against the bytes and
+//! `tests/http_framing.rs` the framing against the literal request text.
 //!
 //! Randomness: keys, ECIES ephemerals, data keys and nonces come from [`Drbg`], a SHA-256
 //! counter generator keyed by the run's master seed and a label. It is separate from the
