@@ -1755,15 +1755,16 @@ mod tests {
     /// step for a number; and the module's own status, refused until it is built.
     #[test]
     fn module_keys_publish_menus_ranges_and_status() {
+        let owned_by = |entry: &str, p: &str| {
+            p == entry
+                || p.strip_prefix(entry)
+                    .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+        };
         let owned = |p: &str| {
             crate::ma_policy::KEY_STATUS
                 .iter()
                 .chain(crate::scms_topology::KEY_STATUS)
-                .any(|k| {
-                    p == k.path
-                        || p.strip_prefix(k.path)
-                            .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
-                })
+                .any(|k| owned_by(k.path, p))
         };
         let mut seen = Vec::new();
         let mut bad = Vec::new();
@@ -1774,8 +1775,19 @@ mod tests {
             }
             seen.push(path.to_string());
             let s = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-            if s("x-status") != "refused" {
-                bad.push(format!("{path}: status {}, not refused", s("x-status")));
+            // The status the owning module declares (its longest row), which a key's
+            // builder flips from `refused` when the key goes live (08 §11).
+            let declared = crate::ma_policy::KEY_STATUS
+                .iter()
+                .chain(crate::scms_topology::KEY_STATUS)
+                .filter(|k| owned_by(k.path, path))
+                .max_by_key(|k| k.path.len())
+                .map(|k| json!(k.status));
+            if declared.as_ref().and_then(Value::as_str) != Some(s("x-status").as_str()) {
+                bad.push(format!(
+                    "{path}: status {}, not its module's {declared:?}",
+                    s("x-status")
+                ));
             }
             if options::title(path).is_none() {
                 bad.push(format!("{path}: no title"));

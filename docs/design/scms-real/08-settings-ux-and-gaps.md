@@ -416,6 +416,51 @@ The `scms_deployment` goldens are re-run, with no re-bless.
 * C1a: the catalogue, keys, parser, latency and tests 1, 3 and 4.
 * C1b: per-role sites, test 2, guide and option words.
 
+**Status, C1a (2026-10-29): built.** `deployment::SITES` holds the 28 catalogue sites
+(`Site`: id, cloud, published location, source URL, point, `PointSource`), and `custom`
+takes `lat_deg`/`lon_deg`. Today's six regions keep their coordinates as sites. Google's
+nine and Azure westus3 are `published-city` points, each the 2024 Census Gazetteer place
+internal point (`2024_Gaz_place_national.zip`, read 2026-10-29). Example: The Dalles city,
+OR, GEOID 4172950, 45.598386, -121.152411. The state-only listings are `assumed-metro`
+(§9 rule). AWS's four take today's point in that state, so us-east-1 is Ashburn as in
+`us-east`. Azure's take the metro of the campus the trade press reports for the region.
+eastus and eastus2 are Boydton VA (Data Center Knowledge and Data Center Map, which list
+Microsoft's Boydton campus under East US / East US 2). centralus is West Des Moines,
+northcentralus Chicago, southcentralus San Antonio, westcentralus Cheyenne, westus Santa
+Clara and westus2 Quincy WA. Each is an ASSUMPTION and the manifest says so.
+`Provider::place` moves the provider's point, so its city leg and its MA-to-MA links are
+measured from the site. The loader and `deployment_of` both refuse: `site` together with
+`region` (at `.site`), coordinates without `site: custom`, and `custom` without both
+coordinates (each at its own path). An unknown site or a coordinate out of range is
+refused as malformed. The manifest prints each placed provider's site, published location,
+point, `point_source` and source, plus one line for the 30 km / 0.150 ms error bound.
+`site`, `lat_deg` and `lon_deg` are now `wired` in `scms_topology::KEY_STATUS`, and their
+site menu is available. `sites.<role>` stays refused, and its menu says so, until C1b. The
+`publish` module-keys test now checks each key's status against its module's own row
+instead of `refused` everywhere. Tests: `tests/scms_sites.rs` (accept tests 1, 3 and 4,
+plus "today's regions as sites and the default are unchanged") and
+`deployment::tests::the_site_catalogue_is_unique_cited_and_in_the_us`. No golden moved: a
+provider with no site prints today's manifest line and builds today's `Deployment`. Left
+for A3: guide rows, and the schema doc comments in `schema.rs` that still say "Not built
+yet".
+
+**Status, C1b (2026-10-29): built.** `Provider::sites` (role → `Site`), `Provider::point(role)`
+and `Deployment::between(a, role_a, b, role_b)` carry per-role sites. In the run
+(`scms::run`), every link between two of a provider's nodes costs the leg between their
+roles' points (`role_link`): the backend links, the governance links, the extra ACA links
+and the peer hubs. `inter_provider_latency` is now the MA-to-MA leg between the MAs' points,
+which is what its doc always said, and `city_latency` is measured to the RA, the device's
+front door. With no per-role site every link is the `backend` link itself, so the default
+topology does not change. A role takes a catalogue site. `custom` is refused per role,
+because coordinates are one pair per provider, and its menu row says why. A role the
+provider does not run is refused by `deployment_of` (for example "provider-a runs no
+lop"). The manifest lists each role's site. Test 2 (`scms_sites`): with `sites: {ma:
+us-west}`, a report reaches provider-a's MA 17,525,023 ns later than in the base run
+(Ashburn to Boardman at 2/3 c, less the in-region hop), within 1 µs. Left for A (it is
+`phase2.rs`): the CRL feed's cross-provider lag still uses `inter_provider_latency`, now
+the MA-to-MA leg, instead of a CRL-Generator-to-RA leg. The two differ only when a
+provider places its MA, its CRL Generator or its RA at separate sites.
+
 ---
 
 ## 6. Gap 2: server capacity as settings
@@ -487,6 +532,57 @@ Each role takes:
 
 * C2a: keys, `ServiceQueue` limit, refusal and retry path, tests 2 and 4.
 * C2b: per-provider wiring for peer entities, tests 1, 3 and 5, and the form words.
+
+**Status, C2a (2026-10-29): built.** `ServiceModelSpec::queue_limit` and
+`ServiceQueue::is_full_at`/`refuse`/`refused`/`spec`, plus `Kernel::is_full_at`/`refuse`,
+carry the limit. `ScmsRun::step` turns a request away when it comes from outside the
+provider (a device's, or one the proxy relays) and arrives with every worker busy and
+`queue_limit` requests already waiting. It is dropped, as an overloaded HTTP front end
+answers 503, and the device finds out through its existing SCMS-522 timeout and retries
+within the SCMS-523 cap. A message from one component to another still waits. Choice
+(§9 rule): the plan leaves open what happens to a component's message at a full queue.
+Dropping it would lose protocol state that real services keep in their own retry queues
+(the `fault` model's edge case 3d), so it waits. The count is `refused_busy` on the
+entity's `QueueView` (`backend.state`), left out of the record while zero.
+`apply_capacity` (now `pub`) re-hosts every named role's servers on every provider's run,
+with the block's fields over the present model and profile. The loader refuses three
+combinations: `capacity.<role>.service` together with that role's
+`actors.backend.entities.*.service_model` (naming both), `fifo-1` with `workers` other than
+1, and any capacity under `nodes.backend_tier: abstract`. The plan had the form only grey
+these fields, but a setting silently overridden is a check that cannot fail, so the loader
+refuses it instead. A role no provider runs is refused at build. `providers[].capacity`
+stays refused until C2b. Defaults are unchanged: 4 workers, 1 ms, unlimited (ASSUMPTION).
+Tests: `tests/scms_capacity.rs` (accept tests 2 and 4). Test 2 uses a 44-request burst in 20
+ms against 1 worker and 10 places. The plan's 500-request burst went past the machine's
+4.5 GB memory cap. Each device starts at its own keyed offset.
+
+Finding: with every device starting at the same instant on identical links, 40 of 44
+devices were turned away for 6 h. SCMS-522 retries carry no jitter, so the devices retried
+in lockstep and reached the RA in the same order every time. Real access legs desynchronise
+devices, so the test jitters the start. A lockstep fleet (for example, every vehicle waking
+at one CRL or top-up boundary) would show this herd. Adding access-latency jitter to the run
+is a candidate for a later piece.
+
+**Status, C2b (2026-10-29): built.** `providers[].capacity.<role>` is live. For each
+provider's run, `apply_capacity` lays that provider's fields over the deployment's block,
+role by role, so only its own servers change, peers included. A role the provider does not
+run is refused at build. The `fifo-1`/`workers` and abstract-tier conflicts apply per
+provider. The `entities.*.service_model` conflict applies only to the home provider, the
+only one `actors.backend.entities` shapes.
+
+Test 1 (`the_workers_serve_as_an_m_m_c_queue`) takes provider-b's RA spec as the run
+built it, with `workers` 1 or 4 and `overhead_ms: 0`, so the service time is the work
+alone. It feeds that spec one keyed Poisson stream of 400,000 requests with exponential
+work (λ = 50/s, mean 10 ms). Each mean sojourn is within 5 % of the Erlang-C figure for
+the measured λ and μ (Kleinrock, *Queueing Systems* I, §3.5). Choice: the plan says "the
+RA sojourn in `backend.state` for the measured arrivals". A protocol run's RA service is
+the fixed crypto cost plus 1 ms, not exponential, so Erlang-C does not apply to it. The
+test therefore drives the RA's own queue model with exponential work.
+
+Test 3: provider-b's `crlg.overhead_ms: 5000`, over the deployment's `crlg.workers: 2`,
+makes a CRL job take 5 s at provider-b, while provider-a keeps 1 ms. Both run 2 workers.
+Test 5: `the_phase_2_path_reproduces_its_regression_digest` passes, so no golden moved.
+The form words are the `SERVICE_MENU` rows and the `WORDS` titles, units and steps.
 
 ---
 
@@ -734,6 +830,79 @@ every digest must stay the same.
 
 * C3a: governance issuance at depth n, the permissions, tests 1, 3 and 5.
 * C3b: the chain file, P2PCD, `is_us`, manifest, failure-node names, tests 2 and 4.
+
+**Status, C3a (2026-10-29): built in the governance; the key stays refused in the loader
+until C3b.** `Provider::ica_levels` (1 by default) is set from the deployment, and
+`Deployment::validate` refuses values outside 1..=`MAX_ICA_LEVELS` (5), naming the
+8-certificate chain limit. `GovernanceConfig::ica_levels` (home) and
+`PeerProvider::ica_levels` (each peer) are filled from the deployment, and `rehome` swaps
+them.
+
+What the governance builds: the ceremony (`certify_hierarchy`, `certify_levels`,
+`certify_peer`) and an ICA re-key issue `ica-2` … `ica-n`, each from the level above. The
+last level issues every ICA-issued role, and root-issued roles stay root-issued. Level `k`
+of `n` carries the ICA's groups with `{minChainLength 2 + (n − k), chainLengthRange 0}`
+(`ica_issue_permissions`). Each deeper level has:
+
+* the ICA's profile (`CertProfile::spec` maps `ica-k` to the ICA's row) and its own name
+  `ica-k.<provider>`;
+* its issuer as CRACA, with CRL series `SCMS_COMPONENTS`;
+* the ICA's region;
+* a key from its own stream on the ICA's (offline) node, so level 1's key and bytes are
+  today's.
+
+Where the levels land: the chain files carry every level, because `chain_certs` lists
+every authority. `pdu_pki` adds levels 2…n to `ScmsPki::extra`, so a node resolves and
+validates the deeper chain.
+
+Tests (`tests/scms_hierarchy.rs`):
+
+* Test 1: with 3 levels at provider-a, a pseudonym's chain is 6 long and validates under
+  `v2xw_sec::chain` with no error. A `DeviceTrust` installs the local chain file, which
+  holds both providers (provider-b at 2 levels) and every level.
+* Test 3: 6 levels and 0 levels are refused, and 5 levels load.
+* Test 5: the default run's local chain file is pinned (length and FNV-1a), and
+  `ica_levels: 1` set explicitly builds the same certificates and files. The phase-2
+  regression digest is unchanged.
+
+Left for C3b: a run with `ica_levels > 1` (the loader still refuses it), P2PCD learning
+each level, `is_us` and the manifest, and failure-node names.
+
+**Status, C3b (2026-10-29): partly built.**
+
+What is live:
+
+* `providers[].ica_levels` 1 to 5 loads. `scms_topology::ica_levels` sets
+  `Provider::ica_levels`, and the `KEY_STATUS` row is `wired`. Every value in the menu is
+  available except "6 or more", which is disabled with the chain-limit reason.
+* `Deployment::is_us` is false when any provider has more than one level.
+  `Deployment::assumptions` prints "NOT the US system: provider-b has 3 ICA levels …".
+  The manifest's deployment line also says "NOT the US system".
+* The chain files carry every level (C3a). Under the default `all-providers` chain file a
+  node holds every level in its pool (`trust_bundle`, through `ScmsPki::extra`).
+* `provider_chain_files` (`home-provider`) gives each provider's own levels.
+
+Test 2 (`a_deeper_hierarchy_runs_and_is_flagged_not_us`) uses `connected-intersections`
+with provider-b at 3 levels:
+
+* the scenario loads;
+* `is_us` is false and the manifest names the level count;
+* both providers' ACAs validate through the nodes' pool;
+* the chains are 3 long (provider-a) and 5 long (provider-b).
+
+The scms_topology unit test `every_non_default_value_is_refused` became
+`every_well_formed_value_loads`, because no topology value is refused as unbuilt any more.
+It also checks that no `KEY_STATUS` row says `refused`.
+
+Not built:
+
+* Test 4: a device under `chain_file: home-provider` making n + 1 P2PCD exchanges for a
+  peer's levels. It needs a city run with P2PCD counting (`run.rs`, `hosted.rs`), which
+  this piece's budget did not cover.
+* The extra verification per level on a foreign chain's first sight.
+* `failures[].node` accepting `ica-2` … `ica-n`. The role list lives in
+  `crypto_config.rs`, which belongs to A.
+* The default phase-2 digest is unchanged.
 
 ---
 
