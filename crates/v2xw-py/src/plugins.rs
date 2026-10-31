@@ -318,7 +318,7 @@ pub fn uncited_parameters(card: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 }
 
 /// Reads a `ModelCard` out of a Python object, which may be a `dict` or a JSON string.
-fn card_from_py(card: &Bound<'_, PyAny>) -> PyResult<ModelCard> {
+pub(crate) fn card_from_py(card: &Bound<'_, PyAny>) -> PyResult<ModelCard> {
     let json: String = if let Ok(s) = card.extract::<String>() {
         s
     } else {
@@ -834,6 +834,7 @@ pub fn module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_class::<DetectorCtx>()?;
     m.add_class::<PyReferenceDetector>()?;
     m.add_class::<Observation>()?;
+    crate::ma_policy::register(&m)?;
     m.add_function(wrap_pyfunction!(validate_card, &m)?)?;
     m.add_function(wrap_pyfunction!(uncited_parameters, &m)?)?;
     m.add("PROBABILITY_QUANTUM", PROBABILITY_QUANTUM)?;

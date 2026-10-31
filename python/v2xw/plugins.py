@@ -61,6 +61,10 @@ __all__ = [
     "CarFollowingModel",
     "DetectorModel",
     "ReferenceDetector",
+    "MaPolicy",
+    "MaCtx",
+    "MaBatch",
+    "MA_BATCH_COLUMNS",
     "card",
     "equation",
     "parameter",
@@ -79,6 +83,9 @@ Observation = _p.Observation
 CarFollowingModel = _p.CarFollowingModel
 DetectorModel = _p.DetectorModel
 ReferenceDetector = _p.ReferenceDetector
+MaCtx = _p.MaCtx
+MaBatch = _p.MaBatch
+MA_BATCH_COLUMNS = _p.MA_BATCH_COLUMNS
 validate_card = _p.validate_card
 uncited_parameters = _p.uncited_parameters
 PROBABILITY_QUANTUM = _p.PROBABILITY_QUANTUM
@@ -296,3 +303,45 @@ class Detector(abc.ABC):
     def attach(self) -> Any:
         """This detector behind the engine's trait, as a :class:`DetectorModel` handle."""
         return DetectorModel(self)
+
+
+class MaPolicy(abc.ABC):
+    """A Misbehaviour Authority decision rule (08-settings-ux-and-gaps.md §7, B4).
+
+    Pass an instance as ``v2xw.run(scenario, ma_policy=obj)``: it decides for every
+    provider MA that would run the deployment-wide rule (a scenario that already sets
+    ``detection.ma`` or ``security.scms.ma_policy`` is refused). A scenario file cannot
+    name it. Attach the class attribute ``card``, built with :func:`card` and
+    ``family="ma-pipeline"``, and define the class in a module file: the manifest pins it
+    as ``ma_policy:python:<module>.<class>`` with the SHA-256 of the module's source.
+
+    Unlike the other families, an MA keeps evidence between calls. Its state must be a
+    function of the calls it received (no randomness, wall clock, platform libm or
+    hash-ordered iteration reaching a decision); the engine makes the calls the same on
+    every run of a seed.
+    """
+
+    #: The model card. Required.
+    card: Dict[str, Any]
+
+    @abc.abstractmethod
+    def decide(self, ctx: Any, batch: Any) -> List[Any]:
+        """What the MA decides over one step's new evidence.
+
+        Args:
+            ctx: a :class:`MaCtx`: the step's instant ``t_ns``, the deciding MA's provider
+                index ``ma`` and its ``provider`` name. Keep a separate state per ``ma``.
+            batch: a :class:`MaBatch` of the reports the MA took as evidence this step, in
+                ingest order, with the ``ma.received`` columns (:data:`MA_BATCH_COLUMNS`)
+                plus ``observed_ns`` (the instant a built-in policy dates evidence by) and
+                ``reporter_infrastructure``. Read it as ``batch.to_pyarrow()``,
+                ``batch.column(name)`` or ``batch.rows()``. It never carries ground truth.
+
+        Returns:
+            ``(subject, revoke)`` or ``(subject, revoke, row)`` tuples: ``subject`` a
+            pseudonym certificate digest, ``row`` the batch row whose evidence decided it
+            (default: the last row about ``subject``). A revoke is the MA's
+            recommendation; the run carries it out through the provider's decision mode
+            and the CRL, as for a built-in policy. If something went wrong, raise:
+            ``v2xw.run`` raises the traceback when the run ends.
+        """

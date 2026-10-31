@@ -109,3 +109,20 @@ relabels of rule-gap-specs §3).
 ## 7. Status
 
 Dated notes go under each id as its wave lands.
+
+### SC-M1
+
+* 2026-10-30 (wave B): merged `worktree-wf_ab880052-ba6-4` (B1-B3) onto 5c5dfc4e. One
+  conflict in meaning, none in text: main's A-wave settings menus (`options.rs`
+  `key_values`) offered the five SM-MBR subtypes of the B0 stub as the
+  `evidence.rules` keys, while B2 widened the key set to the 21 of
+  `v2xw_threat::ma_policy::RULE_KEYS` (the subtypes plus every `detect/<check>`); the
+  menu now offers all 21, a check's row naming the subtype it files as. Every test of
+  B1-B3 passes on the merged tree and every fault named in their commits turns its test
+  red again (the merge commit lists them). B4 built (08 §7 status B4): the Python MA
+  policy hook through `Engine::attach_ma_policy` and `v2xw.run(..., ma_policy=obj)`,
+  test 7 on `credential-lifecycle`. Kept as a note (§6 rule): a hook decides once per
+  backend step over that step's evidence, which is the same decision as a per-report
+  rule because the loop takes it on the report it names; no `run_twice` determinism
+  check for a Python policy (it would need a fresh policy object per run). No golden
+  moved: `ma_policy` and the hook are absent by default.

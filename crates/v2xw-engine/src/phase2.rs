@@ -149,6 +149,12 @@ pub fn evidence_time_plausible(r: &MisbehaviourReport) -> bool {
     ev <= made.saturating_add(w.max_future_ns) && made.saturating_sub(ev) <= w.max_age_ns
 }
 
+/// Whether the MA takes report `r` as evidence: the two set-asides of `ingest_arrivals`
+/// (a report whose only reason is a failed signature; an implausible evidence time).
+fn ma_accepts(r: &MisbehaviourReport) -> bool {
+    !r.reason_codes.iter().all(|c| c == SIGNATURE_VERIFICATION) && evidence_time_plausible(r)
+}
+
 /// The strict US misbehaviour profile's id ([SM-MBR] v1.0 §2.3 PSID-0x20 subtypes and
 /// default thresholds, `v2xw_threat::us_mbr`), as `detection.local` names it.
 pub const US_SM_MBR: &str = "detect/us-sm-mbr";
@@ -288,6 +294,9 @@ pub(crate) enum MaHost {
     /// `security.scms.ma_policy` (or a provider's own): a declarative policy
     /// (08-settings-ux-and-gaps §7), [`crate::ma_policy::PolicyMa`].
     Policy(crate::ma_policy::PolicyMa),
+    /// A rule the host program supplies (`Engine::attach_ma_policy`, 08 §7 B4), decided
+    /// once per step over the step's evidence ([`crate::ma_hook`]).
+    External(crate::ma_hook::ExternalMa),
 }
 
 impl MaHost {
@@ -296,14 +305,16 @@ impl MaHost {
             MaHost::Legacy(m) => m.ingest_evidence(r, at),
             MaHost::Corroborated(m) => m.ingest_evidence(r, at),
             MaHost::Policy(m) => m.ingest_evidence(r, at),
+            MaHost::External(m) => m.ingest_evidence(&r.report_id),
         }
     }
 
-    fn id(&self) -> &'static str {
+    fn id(&self) -> &str {
         match self {
             MaHost::Legacy(_) => MA_LEGACY_WINDOW,
             MaHost::Corroborated(_) => MA_CORROBORATED,
             MaHost::Policy(_) => crate::ma_policy::MODEL_ID,
+            MaHost::External(m) => m.id(),
         }
     }
 
@@ -312,6 +323,7 @@ impl MaHost {
             MaHost::Legacy(m) => m.subjects(),
             MaHost::Corroborated(m) => m.subjects(),
             MaHost::Policy(m) => m.subjects(),
+            MaHost::External(m) => m.subjects(),
         }
     }
 
@@ -322,6 +334,7 @@ impl MaHost {
             MaHost::Legacy(_) => None,
             MaHost::Corroborated(m) => Some(m.summary(subject).corroborated_events),
             MaHost::Policy(m) => m.corroborated_events(subject),
+            MaHost::External(_) => None,
         }
     }
 
@@ -330,6 +343,7 @@ impl MaHost {
             MaHost::Legacy(_) => None,
             MaHost::Corroborated(m) => Some(m.peak_unrevoked_events()),
             MaHost::Policy(m) => m.peak_unrevoked_events(),
+            MaHost::External(_) => None,
         }
     }
 
@@ -338,6 +352,7 @@ impl MaHost {
             MaHost::Legacy(m) => m.trust_infrastructure(digest),
             MaHost::Corroborated(m) => m.trust_infrastructure(digest),
             MaHost::Policy(m) => m.trust_infrastructure(digest),
+            MaHost::External(m) => m.trust_infrastructure(digest),
         }
     }
 
@@ -3254,6 +3269,26 @@ impl Phase2 {
         &self.runs
     }
 
+    /// Each provider's MA, in deployment order (`crate::ma_hook::attach`).
+    pub(crate) fn ma_hosts_mut(&mut self) -> &mut [MaHost] {
+        &mut self.ma
+    }
+
+    /// The providers' names, in deployment order (empty without a provider run).
+    pub(crate) fn provider_names(&self) -> Vec<String> {
+        self.runs
+            .first()
+            .map(|r| {
+                r.state
+                    .deployment
+                    .providers
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The run of the provider that serves `node` (a vehicle once provisioned, or a
     /// roadside unit in the certificate cycle); `None` before.
     #[must_use]
@@ -5092,22 +5127,39 @@ impl Phase2 {
         if let Some(reporter) = r.reporter {
             self.log_fate(t, reporter, r, Fate::Delivered, None);
         }
+        if self.report_log.is_none() {
+            return;
+        }
+        let row = self.ma_view_row(k, t, r, subject, set_aside);
+        if let Some(log) = self.report_log.as_mut() {
+            log.received.push(row);
+        }
+    }
+
+    /// The `ma.received` row of report `r` about `subject` at MA `k`: what the MA reads
+    /// from the report and learns through the protocol.
+    fn ma_view_row(
+        &self,
+        k: usize,
+        t: SimTime,
+        r: &MisbehaviourReport,
+        subject: NodeId,
+        set_aside: Option<&str>,
+    ) -> crate::report_records::MaReceived {
         let issuer = format!("provider-{}", self.provider_of_device(device_of(subject)));
         let la_link = crate::report_records::la_link(subject, self.params.scms.master_seed);
-        let Some(log) = self.report_log.as_mut() else {
-            return;
-        };
         // The phase is the judged BSM's own `secMark`, as the evidence carries it: the
         // 1609.2 `generationTime` is the device's clock with its own jitter (28 ms sd on
         // the CV pilots, `bsm-timing-cvpilot.yaml`), which put a locked device's phase off
         // the epoch on most reports. A report with no BSM evidence keeps the evidence time.
-        let secmark_phase_ms = log
-            .secmark
-            .get(&r.report_id)
+        let secmark_phase_ms = self
+            .report_log
+            .as_ref()
+            .and_then(|log| log.secmark.get(&r.report_id))
             .map_or(((r.st_tend / 1_000_000) % 50) as u32, |sm| {
                 u32::from(*sm) % 50
             });
-        log.received.push(crate::report_records::MaReceived {
+        crate::report_records::MaReceived {
             t,
             report_id: r.report_id.clone(),
             ma: k as u32,
@@ -5123,7 +5175,7 @@ impl Phase2 {
             issuer,
             la_link,
             set_aside: set_aside.map(str::to_string),
-        });
+        }
     }
 
     /// A report taken from `node`'s store left it for good (sent, or refused for ever):
@@ -6934,6 +6986,30 @@ impl Phase2 {
             (a.2.report.detection_time, &a.2.report.report_id)
                 .cmp(&(b.2.report.detection_time, &b.2.report.report_id))
         });
+        // A host program's rule (08 §7 B4) decides once over the step's evidence: the rows
+        // the loop below ingests, in its order; the loop then takes each decision on the
+        // report it was taken on, exactly where a built-in policy's would be.
+        if matches!(self.ma[k], MaHost::External(_)) {
+            let rows: Vec<crate::ma_hook::MaHookRow> = arrived
+                .iter()
+                .filter(|(_, _, f)| ma_accepts(&f.report))
+                .map(|(t, _, f)| {
+                    let MaHost::External(m) = &self.ma[k] else {
+                        unreachable!("checked")
+                    };
+                    crate::ma_hook::MaHookRow {
+                        view: self.ma_view_row(k, *t, &f.report, f.subject, None),
+                        observed: f.report.detection_time,
+                        reporter_infrastructure: m
+                            .is_infrastructure(&f.report.reporter_cert_digest),
+                    }
+                })
+                .collect();
+            let now = arrived.iter().map(|a| a.0).max().unwrap_or(0);
+            if let MaHost::External(m) = &mut self.ma[k] {
+                m.decide(now, &rows);
+            }
+        }
         let mut decisions = Vec::new();
         for (t, run, f) in arrived {
             self.report.reports_at_ma += 1;

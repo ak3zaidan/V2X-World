@@ -753,6 +753,36 @@ every digest must stay the same.
   revocations counted. Each is red under its named fault (commit message).
 * B4 (optional): `PyMaPolicy` and test 7.
 
+  **Status, B4 (2026-10-30): built.** The engine side is a seam any host program can
+  use: `v2xw_engine::ma_hook::MaPolicyHook` (`pin`, `decide`) and
+  `Engine::attach_ma_policy`, called after `Engine::build` and before `run`. The hook
+  takes every provider MA that would run the deployment-wide rule (`MaHost::External`;
+  a provider with its own `ma_policy` keeps it) and the manifest pins it as
+  `ma_policy:<id>` with its version and content hash. A scenario that already chooses the
+  rule (`detection.ma`, `security.scms.ma_policy`), a run with no SCMS, and a deployment
+  whose every provider has its own policy are refused. Each backend step in which an MA
+  receives evidence, `ingest_arrivals` makes one call with the rows its loop will ingest
+  (after the two set-asides, in the loop's order), and the loop then takes each decision
+  on the report it named, where a built-in policy's decision is taken, so the decision
+  mode, the LAs' one-case-per-device rule and the CRL apply unchanged. The Python side,
+  `v2xw-py` `ma_policy.rs`: `PyMaPolicy` (an `ma-pipeline` card, a callable
+  `decide(ctx, batch)`, and a module whose source `inspect.getsource` can read, hashed
+  with SHA-256 for the pin), `MaCtx` (`t_ns`, `ma`, `provider`) and `MaBatch` (the
+  `ma.received` columns plus `observed_ns` and `reporter_infrastructure`, as
+  `to_pyarrow()`, `column(name)` or `rows()`); `v2xw.run(..., ma_policy=obj)` and the
+  `v2xw.plugins.MaPolicy` base class. A rule that raises decides nothing for that call,
+  and `v2xw.run` raises its first traceback when the run ends. Choices (§9 rule): the
+  batch also answers in plain Python values, because `pyarrow` is optional for the
+  package; one object serves every MA it decides for, with `ctx.ma` to keep their states
+  apart; a decision may name its row, else it is taken on the last row about its subject.
+  Not built: a two-run digest check through `v2xw.run_twice`, which would need a policy
+  factory (a fresh object per run); test 7 shows the decisions are those of the Rust
+  preset, which is deterministic. Tests: `crates/v2xw-py/tests/ma_policy_hook.rs` (test 7
+  on `credential-lifecycle`, 200 s: the same `ma.decision` instants and subjects as the
+  `pseudonym-k` preset through the seam and through `v2xw.run`, read back from its
+  recording; the refusals; the batch's columns and a raise) and `ma_hook::tests` (a
+  verdict lands on its row once; a failure is kept and decides nothing).
+
 ---
 
 ## 8. Gap 4: deeper CA hierarchies (several ICA levels), marked not US
