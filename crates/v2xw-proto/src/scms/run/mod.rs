@@ -28,8 +28,9 @@ use crate::net::{BackendNet, Link, Transport};
 use crate::pseudonym::{CertEvent, PseudonymStore, PseudonymStrategy};
 use crate::scms::governance::{DeviceTrust, Governance, Policy};
 use crate::scms::msg::{
-    CertRequestItem, EnrolmentCert, IssuedCredential, LaIndex, Lci, PcaLookup, PreLinkageBatch,
-    ProvisioningRequest, Refusal, ReportSubmission, ScmsMsg, ScmsSizes, SealedForLa, SealedForPca,
+    CHAIN_ID_BYTES, CertRequestItem, EnrolmentCert, IssuedCredential, LaIndex, Lci, PcaLookup,
+    PreLinkageBatch, ProvisioningRequest, Refusal, ReportSubmission, ScmsMsg, ScmsSizes,
+    SealedForLa, SealedForPca,
 };
 use crate::scms::params::{MaMode, ScmsNodes, ScmsParams};
 use crate::sizes::{CertificateSizes, WireSize};
@@ -46,6 +47,7 @@ mod revoke;
 
 use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
 pub use crl::{CrlOrder, IssuedCrl, crl_bytes, crl_digest, linkage_revocations};
+pub use revoke::chain_identifier;
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 const ECQV: PrimitiveId = PrimitiveId::ECQV_P256;
@@ -913,6 +915,9 @@ pub struct Case {
     pub lookups: Vec<PcaLookup>,
     /// What the two LAs answered.
     pub same: [Option<bool>; 2],
+    /// The linkage chain identifier each LA returned for the reported certificate's
+    /// chain (SC-P2): `[LA1, LA2]`, the pair the MA links cases by.
+    pub chain_ids: [Option<[u8; CHAIN_ID_BYTES]>; 2],
     /// The seeds the LAs released for the reported chain (the first of [`Self::chains`]).
     pub seeds: [Option<(LaId, LinkageSeed)>; 2],
     /// Every `[LA1, LA2]` chain pair the RA returned for the device's enrolment (B4):
@@ -926,10 +931,12 @@ pub struct Case {
     pub jmax: u32,
     /// Whether the resolution succeeded.
     pub resolved: bool,
-    /// A single-subject revocation ([BRECHT §VI-D]): the MA's decision names one
-    /// pseudonym certificate, so there is no "same device?" question to put to the Linkage
-    /// Authorities; the PCA lookup identifies the request, the RA blocklists it and both
-    /// LAs must release their seeds before the CRL Generator can append an entry.
+    /// A single-subject revocation: the MA's decision names one pseudonym certificate.
+    /// The PCA lookup returns the request hash and the two sealed chain pointers, each LA
+    /// names its chain (`chain-id-request`/`-response`, SC-P2; [CAMP122] §5, [BRECHT]
+    /// §VI-C), and only then does the RA blocklist the request and both LAs release their
+    /// seeds. `false` for the two-report research API ([`ScmsRun::investigate`],
+    /// [`ScmsRun::request_link`]), which keeps the one-bit "same device?" exchange.
     pub direct: bool,
     /// Whether the case has finished, either by an appended CRL entry or by a refusal
     /// somewhere on the path (an unknown linkage value, an unknown request, an LA that
@@ -2349,6 +2356,8 @@ impl ScmsState {
             | ScmsMsg::PcaLookupResponse { .. }
             | ScmsMsg::SameDeviceRequest { .. }
             | ScmsMsg::SameDeviceResponse { .. }
+            | ScmsMsg::ChainIdRequest { .. }
+            | ScmsMsg::ChainIdResponse { .. }
             | ScmsMsg::BlocklistRequest { .. }
             | ScmsMsg::BlocklistResponse { .. }
             | ScmsMsg::SeedRequest { .. }

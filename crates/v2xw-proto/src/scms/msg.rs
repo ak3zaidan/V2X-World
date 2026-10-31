@@ -110,6 +110,10 @@ impl<T> core::fmt::Debug for SealedForLa<T> {
 )]
 pub struct Lci(pub u64);
 
+/// The size of a Linkage Authority's linkage chain identifier (SC-P2): a keyed hash
+/// truncated to 128 bits. **ASSUMPTION**: the LA-MA formats are unpublished.
+pub const CHAIN_ID_BYTES: usize = 16;
+
 /// Which of the two Linkage Authorities.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
@@ -504,6 +508,26 @@ pub enum ScmsMsg {
         la: LaIndex,
         /// Whether the two chains belong to one device.
         same: bool,
+    },
+    /// MA → LA: which linkage chain is this? (SC-P2; [CAMP122] §5, [BRECHT] §VI-C.) The
+    /// MA forwards the LA's own sealed pointer from the PCA's lookup answer. **Modelled**:
+    /// the MA-LA interface is a `NULL` placeholder in IEEE 1609.2.1, so the encoding is
+    /// unpublished and the size is derived (09 §6).
+    ChainIdRequest {
+        /// Which LA.
+        la: LaIndex,
+        /// The chain, as the PCA stored it (sealed for this LA).
+        lci: SealedForLa<Lci>,
+    },
+    /// LA → MA: the LA's linkage chain identifier for that chain: a keyed hash under the
+    /// LA's own secret, stable for the chain and never comparable across the two LAs. It
+    /// names neither the device nor the seed. `None` when the LA cannot open the pointer
+    /// or holds no such chain.
+    ChainIdResponse {
+        /// Which LA answered.
+        la: LaIndex,
+        /// The identifier.
+        chain: Option<[u8; CHAIN_ID_BYTES]>,
     },
     /// MA → RA: blocklist the enrolment certificate behind this RA→ACA request.
     BlocklistRequest {
@@ -1048,6 +1072,24 @@ impl ScmsSizes {
         )
     }
 
+    /// MA → LA: "which chain?", one sealed chain pointer (SC-P2).
+    pub const fn chain_id_request(&self) -> WireSize {
+        WireSize::parameter(
+            self.env_digest() + self.params.linkage_chain_identifier_bytes,
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// LA → MA: the 16-byte linkage chain identifier, in an envelope like
+    /// [`ScmsSizes::same_device_response`]'s. **ASSUMPTION**: the format is unpublished.
+    pub const fn chain_id_response(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + CHAIN_ID_BYTES as u32,
+            "envelope(digest) + linkage chain identifier (16)",
+            DERIVATION,
+        )
+    }
+
     /// MA → RA: a request hash.
     pub const fn blocklist_request(&self) -> WireSize {
         WireSize::derived(
@@ -1304,6 +1346,8 @@ impl ScmsSizes {
             ("pca-lookup-response", self.pca_lookup_response()),
             ("same-device-request", self.same_device_request()),
             ("same-device-response", self.same_device_response()),
+            ("chain-id-request", self.chain_id_request()),
+            ("chain-id-response", self.chain_id_response()),
             ("blocklist-request", self.blocklist_request()),
             ("blocklist-response", self.blocklist_response()),
             ("seed-request", self.seed_request()),

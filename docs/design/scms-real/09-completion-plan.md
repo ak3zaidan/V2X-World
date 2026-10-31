@@ -172,6 +172,30 @@ Dated notes go under each id as its wave lands.
   `LS.MA.subject-from-cert` added, `verdict: open` (wave E, needs `live_scms.py` to read
   `subject_from`). Still modelled: the Policy MA's `la_link` is the device's (SC-P2).
 
+### SC-P2
+
+- 2026-10-31 (wave C, P2/P3.1, proto): **every case runs the PCA lookup and the LA
+  linking.** Cause: `request_revocation` and `revoke` opened their case with
+  `open_case(..., direct: true, ...)` (`run/revoke.rs:69-86` on `f09d4e1d`), and in a
+  `direct` case the PCA's answer went straight to the RA blocklist (`revoke.rs:244-259`);
+  the LAs were asked only for seeds afterwards. Now `open_case` has no `direct` argument
+  (one report is a single-subject case, two a link), and the PCA's answer sends each LA its
+  sealed pointer (`ScmsMsg::ChainIdRequest`); each LA answers with a linkage chain
+  identifier (`ChainIdResponse`, `chain_identifier`: SHA-256 over a tag, its `la_id` and
+  the chain's initial seed, 16 bytes), and only when both are in does the case resolve,
+  stamp `resolved` and ask the RA to blocklist ([CAMP122] §5; Whyte et al., VNC 2013, §V;
+  [BRECHT] §VI-C/D). The identifier is the chain's: certificates of one request batch
+  share it, and two LAs' identifiers are unrelated. Sizes (modelled, 09 §6):
+  `chain-id-request` = envelope + one LCI, `chain-id-response` = envelope + 16 (ASSUMPTION).
+  `Case.chain_ids` holds the pair. The two-report research API (`investigate`,
+  `request_link`) keeps the one-bit "same device?" exchange. Test:
+  `revocation_path::every_case_asks_both_las_for_the_chain_before_the_blocklist` (red with
+  the `direct` shortcut restored: no chain steps). Proto `revocation_path` (5), `ma_cases`
+  (7), `resolution` (7), `provider_runs` (17), `crl_issuance` (8), `lockstep` (5),
+  `threshold` (18), `redteam_pki` (5), `pki_view` (12), `mbr` (12) pass. The UI's message
+  card and case diagram name the two new steps. G-SCMS moves in the joint P2/P3 golden
+  commit (see SC-P3). Protocol row G2 updated.
+
 ### SC-D1
 
 - 2026-10-30 (wave A): fixed in code before this wave (run.rs `on_flow_timer`, 2026-10-27:
