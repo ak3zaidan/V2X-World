@@ -736,6 +736,9 @@ struct RsuCycle {
     cred_digest: u64,
     /// The application certificates a `node.credentials` record already carried.
     certs_carried: std::collections::BTreeSet<[u8; 8]>,
+    /// The application certificates the unit has signed with (each one active in a
+    /// record): the row's `history`, as a vehicle's pseudonyms are.
+    certs_used: std::collections::BTreeSet<[u8; 8]>,
 }
 
 /// One roadside unit the scenario declared.
@@ -3481,10 +3484,15 @@ impl Phase2 {
             let Ok(id8) = v2xw_sec::sig1609::cert_hashed_id8(&c.cred.cert) else {
                 continue;
             };
+            // The certificate of the current i-period signs now: `active`, as a
+            // vehicle's pseudonym in use (the `node.credentials` contract: `active` is
+            // marked in the grid and in the history).
             let state = if now < c.from {
                 "downloaded"
             } else if now >= c.until {
                 "expired"
+            } else if c.cred.period == current_i {
+                "active"
             } else {
                 "valid"
             };
@@ -3518,17 +3526,19 @@ impl Phase2 {
                 c.certs_carried.insert(id8);
                 certificates.insert(hex(&id8), hex(&coer));
             }
-            if state == "valid" && i == current_i {
+            if state == "active" {
                 active = Some(hex(&id8));
+                c.certs_used.insert(id8);
             }
             cells.push(CredCell {
                 i,
                 j: 0,
                 state: state.to_string(),
                 id8: Some(hex(&id8)),
-                used: false,
+                used: c.certs_used.contains(&id8),
             });
         }
+        let history = c.certs_used.iter().map(|d| hex(d)).collect();
         Some(NodeCredentials {
             schema: PKI_VIEW_SCHEMA,
             t: now,
@@ -3541,7 +3551,7 @@ impl Phase2 {
             jmax: 1,
             active,
             cells,
-            history: Vec::new(),
+            history,
             ctl_sequence: None,
             revoked: false,
             certificates,

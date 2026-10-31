@@ -61,6 +61,8 @@ struct Outcome {
     /// Per unit node: the application certificates its `node.credentials` rows carried
     /// (id8 -> COER hex) and how many rows it had.
     rsu_creds: std::collections::BTreeMap<u64, (std::collections::BTreeMap<String, String>, usize)>,
+    /// Every unit row: node, `active`, the grid's (id8, state) cells, `history`.
+    rsu_active: Vec<(u64, Option<String>, Vec<(String, String)>, Vec<String>)>,
 }
 
 fn outcome() -> &'static Outcome {
@@ -70,6 +72,7 @@ fn outcome() -> &'static Outcome {
         let mut rec = MemoryRecorder::new();
         let report = engine.run(&mut rec).expect("runs");
         let mut rsu_creds = std::collections::BTreeMap::new();
+        let mut rsu_active = Vec::new();
         for (_, r) in rec.records() {
             if r.channel != "node.credentials" {
                 continue;
@@ -78,6 +81,29 @@ fn outcome() -> &'static Outcome {
             if !v["device"].as_str().is_some_and(|d| d.starts_with("rsu/")) {
                 continue;
             }
+            let cells = v["cells"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| {
+                    (
+                        c["id8"].as_str().unwrap_or("").to_string(),
+                        c["state"].as_str().unwrap_or("").to_string(),
+                    )
+                })
+                .collect();
+            let history = v["history"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|h| h.as_str().map(str::to_string))
+                .collect();
+            rsu_active.push((
+                v["node"].as_u64().expect("a node"),
+                v["active"].as_str().map(str::to_string),
+                cells,
+                history,
+            ));
             let e = rsu_creds
                 .entry(v["node"].as_u64().expect("a node"))
                 .or_insert_with(|| (std::collections::BTreeMap::new(), 0));
@@ -109,6 +135,7 @@ fn outcome() -> &'static Outcome {
             units,
             backhaul_messages,
             rsu_creds,
+            rsu_active,
         }
     })
 }
@@ -154,6 +181,20 @@ fn every_units_application_certificates_are_on_the_record() {
         held as u64,
         p2.rsu_app_certs_preloaded + p2.rsu_app_certs_renewed,
         "every certificate the units were issued, once"
+    );
+    // The `node.credentials` contract a vehicle's rows keep: an `active` certificate is
+    // marked `active` in the grid and is in the history.
+    for (node, active, cells, history) in &o.rsu_active {
+        let Some(a) = active else { continue };
+        assert!(
+            cells.iter().any(|(id, st)| id == a && st == "active"),
+            "unit {node}: the grid marks its active certificate"
+        );
+        assert!(history.contains(a), "unit {node}: the history holds it");
+    }
+    assert!(
+        o.rsu_active.iter().any(|(_, a, _, _)| a.is_some()),
+        "some unit signs with a certificate of this week"
     );
     for (certs, rows) in o.rsu_creds.values() {
         assert!(*rows >= 1);
