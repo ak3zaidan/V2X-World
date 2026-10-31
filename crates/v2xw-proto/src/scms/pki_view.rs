@@ -1808,8 +1808,10 @@ fn ma_case_truth(run: &ScmsRun, limit: usize) -> Vec<Value> {
                 })
                 .collect();
             let mut reporters: BTreeMap<String, u32> = BTreeMap::new();
-            for rep in &st.ma.reports {
-                if subjects.contains(rep.subject_lv.as_bytes()) {
+            for (k, rep) in st.ma.reports.iter().enumerate() {
+                // The accused certificate as the MA read it (SC-P1), not the clear field.
+                let lv = st.ma.subject(k).map_or(rep.subject_lv, |s| s.subject_lv);
+                if subjects.contains(lv.as_bytes()) {
                     *reporters
                         .entry(format!("ee/{}", rep.reporter.index()))
                         .or_insert(0) += 1;

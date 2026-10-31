@@ -775,6 +775,60 @@ pub struct MaState {
     /// Per entry of [`MaState::reports`] (same index): the run it reached the MA on, whose
     /// `report-received` stamp is when the MA had it (a case runs on a run of its own).
     pub report_runs: Vec<FlowRun>,
+    /// Per entry of [`MaState::reports`] (same index): the accused certificate as the MA
+    /// knows it, which every case it opens on the report looks up (SC-P1). For a real
+    /// report, read from the opened report's `suspect.signingCertificate`; the reporter's
+    /// clear [`ReportSubmission::subject_lv`] is not read.
+    pub report_subjects: Vec<MaReport>,
+}
+
+impl MaState {
+    /// The accused certificate the MA holds for its report `index`.
+    #[must_use]
+    pub fn subject(&self, index: usize) -> Option<&MaReport> {
+        self.report_subjects.get(index)
+    }
+}
+
+/// Where the MA learned a report's accused certificate (SC-P1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubjectFrom {
+    /// The opened report's `suspect.signingCertificate`: its `linkageData` and its
+    /// issuer ([SM-MBR] §3; [CAMP122] §5). The US path.
+    SuspectCertificate,
+    /// A report another provider's MA shared: the subject the forwarding MA read from
+    /// the certificate, carried over the MA-to-MA link. **Modelled** (no published format).
+    Shared,
+    /// A report on the modelled path (no secured report, so no certificate to read):
+    /// the subject the engine's map gave it. **Modelled.**
+    EngineMap,
+}
+
+impl SubjectFrom {
+    /// The record label.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubjectFrom::SuspectCertificate => "suspect-certificate",
+            SubjectFrom::Shared => "shared-report (modelled)",
+            SubjectFrom::EngineMap => "engine-map (modelled report)",
+        }
+    }
+}
+
+/// The accused certificate behind one report the MA holds (SC-P1): what a case sends to
+/// the issuing ACA for its lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaReport {
+    /// The certificate's `iCert`.
+    pub subject_i: u32,
+    /// Its linkage value.
+    pub subject_lv: LinkageValue,
+    /// The HashedId8 of the ACA certificate that issued it (its `issuer`), when the MA
+    /// read the certificate: the routing key for the PCA lookup. `None` off the real path.
+    pub issuer: Option<[u8; 8]>,
+    /// Where the subject came from.
+    pub from: SubjectFrom,
 }
 
 /// What one received report's evidence was, as the MA decoded it ([SM-MBR] §2.3: the
@@ -830,6 +884,9 @@ pub struct Case {
     pub crl_run: FlowRun,
     /// The two reports being correlated.
     pub subjects: [(u32, LinkageValue); 2],
+    /// The issuing ACA's HashedId8 per subject, as the MA read it from the accused
+    /// certificate (SC-P1): the lookup goes to that ACA. `None` off the real path.
+    pub issuers: [Option<[u8; 8]>; 2],
     /// What the PCA answered, in order.
     pub lookups: Vec<PcaLookup>,
     /// What the two LAs answered.

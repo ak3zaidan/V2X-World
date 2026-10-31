@@ -128,6 +128,27 @@ Dated notes go under each id as its wave lands.
 - Specs only: no code was changed and nothing was run.
 - 2026-10-31 (wave A merge): merged to main 2026-10-31 (wave A integration, side track `e6d4cf05`); docs only.
 
+### SC-P1
+
+- 2026-10-31 (wave C, P1.1, proto): **the MA reads the accused certificate from the
+  report it opened.** Cause: the MA arm of `handle_report` (`run/report.rs`) opened the
+  report but kept the reporter's clear `ReportSubmission.subject_i/lv`, and every case
+  (`run/revoke.rs` `investigate`/`revoke`/`request_*`) looked up those clear fields; the
+  lookup went to the ACA the PCA's own issuance records named (`issuing_aca`, from
+  `pca.issued_by`), not the one the certificate names. Now the MA takes `(iCert, linkage
+  value, issuer HashedId8)` from `suspect.signingCertificate` ([SM-MBR] §3) into
+  `MaState::report_subjects` (`MaReport`, `subject_from`: `suspect-certificate`; a shared
+  or modelled report keeps its carried subject, labelled), and the case's PCA lookup goes
+  to the ACA whose certificate the issuer names ([CAMP122] §5, [BRECHT] §VI-D), the
+  issuance records only off the real path. A report whose accused certificate has no
+  `linkageData` is refused at the MA. Tests: `resolution::the_ma_reads_the_subject_from_the_suspect_certificate`
+  (clear `subject_lv` deliberately wrong, the device still resolves),
+  `resolution::a_modelled_report_keeps_its_carried_subject_and_says_so`,
+  `provider_runs::the_ma_asks_the_aca_its_accused_certificates_issuer_names` (a second
+  ACA, `issued_by` cleared). No golden moved (engine `phase2`, 16 passed, digests held):
+  the device fills the clear fields from the same certificate and the issuer names the
+  same ACA the records did. `pki_view` counts a case's reporters by the MA-held subject.
+
 ### SC-D1
 
 - 2026-10-30 (wave A): fixed in code before this wave (run.rs `on_flow_timer`, 2026-10-27:

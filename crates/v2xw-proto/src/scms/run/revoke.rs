@@ -22,17 +22,10 @@ impl ScmsRun {
         jmax: u32,
     ) -> Option<(FlowRun, FlowRun)> {
         let (ra, rb) = {
-            let reports = &self.state.ma.reports;
-            (reports.get(a)?.clone(), reports.get(b)?.clone())
+            let ma = &self.state.ma;
+            (*ma.subject(a)?, *ma.subject(b)?)
         };
-        self.open_case(
-            [(ra.subject_i, ra.subject_lv), (rb.subject_i, rb.subject_lv)],
-            false,
-            i_rev,
-            jmax,
-            Duration::ZERO,
-            vec![a, b],
-        )
+        self.open_case([ra, rb], false, i_rev, jmax, Duration::ZERO, vec![a, b])
     }
 
     /// Revokes the device behind the report the MA holds at `index`, from period `i_rev`
@@ -51,15 +44,8 @@ impl ScmsRun {
     /// is held or the MA's case table is full ([`crate::scms::params::MaPolicy::max_open_cases`]); cases run
     /// concurrently, each message naming its case by run (gap row 27).
     pub fn revoke(&mut self, index: usize, i_rev: u32, jmax: u32) -> Option<(FlowRun, FlowRun)> {
-        let r = self.state.ma.reports.get(index)?.clone();
-        self.open_case(
-            [(r.subject_i, r.subject_lv), (r.subject_i, r.subject_lv)],
-            true,
-            i_rev,
-            jmax,
-            Duration::ZERO,
-            vec![index],
-        )
+        let r = *self.state.ma.subject(index)?;
+        self.open_case([r, r], true, i_rev, jmax, Duration::ZERO, vec![index])
     }
 
     /// A revocation the MA's pipeline asks for, carried out under the MA's decision mode
@@ -72,16 +58,9 @@ impl ScmsRun {
         i_rev: u32,
         jmax: u32,
     ) -> Option<(FlowRun, FlowRun)> {
-        let r = self.state.ma.reports.get(index)?.clone();
+        let r = *self.state.ma.subject(index)?;
         let delay = self.review_delay();
-        self.open_case(
-            [(r.subject_i, r.subject_lv), (r.subject_i, r.subject_lv)],
-            true,
-            i_rev,
-            jmax,
-            delay,
-            vec![index],
-        )
+        self.open_case([r, r], true, i_rev, jmax, delay, vec![index])
     }
 
     /// [`ScmsRun::investigate`] under the MA's decision mode.
@@ -93,18 +72,11 @@ impl ScmsRun {
         jmax: u32,
     ) -> Option<(FlowRun, FlowRun)> {
         let (ra, rb) = {
-            let reports = &self.state.ma.reports;
-            (reports.get(a)?.clone(), reports.get(b)?.clone())
+            let ma = &self.state.ma;
+            (*ma.subject(a)?, *ma.subject(b)?)
         };
         let delay = self.review_delay();
-        self.open_case(
-            [(ra.subject_i, ra.subject_lv), (rb.subject_i, rb.subject_lv)],
-            false,
-            i_rev,
-            jmax,
-            delay,
-            vec![a, b],
-        )
+        self.open_case([ra, rb], false, i_rev, jmax, delay, vec![a, b])
     }
 
     fn review_delay(&self) -> Duration {
@@ -116,7 +88,7 @@ impl ScmsRun {
 
     fn open_case(
         &mut self,
-        subjects: [(u32, LinkageValue); 2],
+        held: [MaReport; 2],
         direct: bool,
         i_rev: u32,
         jmax: u32,
@@ -127,6 +99,8 @@ impl ScmsRun {
         if self.state.ma.open_cases() >= cap {
             return None;
         }
+        let subjects = held.map(|h| (h.subject_i, h.subject_lv));
+        let issuers = held.map(|h| h.issuer);
         let run = self.new_run();
         let crl_run = self.new_run();
         let opened_at = self.kernel.now();
@@ -136,6 +110,7 @@ impl ScmsRun {
                 run,
                 crl_run,
                 subjects,
+                issuers,
                 lookups: Vec::new(),
                 same: [None, None],
                 seeds: [None, None],
@@ -172,10 +147,30 @@ impl ScmsRun {
 }
 
 impl ScmsState {
-    /// Handles every message of this flow; [`ScmsState::handle`] routes here.
-    /// The ACA that issued the certificate of `(i, lv)`: the issuer its certificate names
-    /// (a further ACA instance, audit-gov GOV.D1.acas), else the core one.
-    fn issuing_aca(&self, i: u32, lv: &v2xw_sec::linkage::LinkageValue) -> NodeId {
+    /// The ACA the MA asks about the certificate of `(i, lv)`: the one whose certificate
+    /// the accused certificate's `issuer` names, as the MA read it from the report
+    /// ([CAMP122] §5; [BRECHT] §VI-D; a further ACA instance, audit-gov GOV.D1.acas).
+    /// Without that digest (a shared or modelled report, or an issuer this provider does
+    /// not hold), the instance that issued it by the issuance records, else the core one.
+    fn issuing_aca(
+        &self,
+        issuer: Option<[u8; 8]>,
+        i: u32,
+        lv: &v2xw_sec::linkage::LinkageValue,
+    ) -> NodeId {
+        if let (Some(id8), Some(pki)) = (issuer, self.pki.as_deref()) {
+            for (k, &node) in self.aca_extra.iter().enumerate() {
+                let inst = u32::try_from(k).unwrap_or(u32::MAX).saturating_add(1);
+                let a = pki.aca_at(inst);
+                if !core::ptr::eq(a, &pki.aca) && a.id8() == id8 {
+                    return node;
+                }
+            }
+            // The core ACA, or the certificate a root rollover superseded.
+            if pki.is_role(&pki.aca, &id8) {
+                return self.nodes.pca;
+            }
+        }
         self.pca
             .issued_by
             .get(&(i, *lv.as_bytes()))
@@ -183,6 +178,7 @@ impl ScmsState {
             .unwrap_or(self.nodes.pca)
     }
 
+    /// Handles every message of this flow; [`ScmsState::handle`] routes here.
     #[allow(unused_variables)]
     pub(super) fn handle_revoke(
         &mut self,
@@ -194,8 +190,9 @@ impl ScmsState {
         match d.msg {
             ScmsMsg::PcaLookupRequest { i, lv } if to == n.ma => {
                 out.stage_at(StageId::Decision, to, None, flow, run);
+                let issuer = self.ma.cases.get(&run).and_then(|c| c.issuers[0]);
                 out.send(
-                    self.issuing_aca(i, &lv),
+                    self.issuing_aca(issuer, i, &lv),
                     ScmsMsg::PcaLookupRequest { i, lv },
                     "pca-lookup-request",
                     self.sizes.pca_lookup_request(),
@@ -246,8 +243,9 @@ impl ScmsState {
                     );
                 } else if case.lookups.len() == 1 {
                     let (i, lv) = case.subjects[1];
+                    let issuer = case.issuers[1];
                     out.send(
-                        self.issuing_aca(i, &lv),
+                        self.issuing_aca(issuer, i, &lv),
                         ScmsMsg::PcaLookupRequest { i, lv },
                         "pca-lookup-request",
                         self.sizes.pca_lookup_request(),
