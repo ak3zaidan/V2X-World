@@ -965,7 +965,10 @@ fn the_pdu_store_is_bounded_by_bytes() {
         })
     };
     assert!(pdu(n - 1).is_some(), "the newest SPDU answers");
-    assert!(pdu(0).is_none(), "the oldest SPDU went with the byte budget");
+    assert!(
+        pdu(0).is_none(),
+        "the oldest SPDU went with the byte budget"
+    );
     let kept = (0..n).filter(|i| pdu(*i).is_some()).count();
     let each = hex.len() + 192;
     assert!(

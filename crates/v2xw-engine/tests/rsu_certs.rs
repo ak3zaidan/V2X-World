@@ -175,7 +175,12 @@ fn every_unit_joins_with_its_providers_certificates_and_renews_over_its_backhaul
 fn every_units_application_certificates_are_on_the_record() {
     let o = outcome();
     let p2 = &o.report.phase2;
-    assert_eq!(o.rsu_creds.len(), 4, "a row for each unit: {:?}", o.rsu_creds.keys());
+    assert_eq!(
+        o.rsu_creds.len(),
+        4,
+        "a row for each unit: {:?}",
+        o.rsu_creds.keys()
+    );
     let held: usize = o.rsu_creds.values().map(|(c, _)| c.len()).sum();
     assert_eq!(
         held as u64,

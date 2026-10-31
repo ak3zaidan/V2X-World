@@ -1221,7 +1221,10 @@ impl ScmsPki {
     /// certificates its ICA signed beside the governance's own set.
     #[must_use]
     pub fn aca_instances(&self) -> usize {
-        self.extra.iter().filter(|a| a.name.starts_with("aca-")).count()
+        self.extra
+            .iter()
+            .filter(|a| a.name.starts_with("aca-"))
+            .count()
     }
 
     /// The ACA that signs at instance `inst`: the core one at 0, else its

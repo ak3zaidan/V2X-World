@@ -9412,7 +9412,11 @@ impl Engine {
             }
             // The unit's application certificates, with their bytes (PV.rsu-cert): the
             // preloaded ones on the first tick, then each change.
-            if let Some(c) = self.phase2.as_mut().and_then(|p| p.rsu_credentials(rsu, now)) {
+            if let Some(c) = self
+                .phase2
+                .as_mut()
+                .and_then(|p| p.rsu_credentials(rsu, now))
+            {
                 self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
             }
         }

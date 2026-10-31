@@ -368,7 +368,10 @@ fn each_providers_root_and_ica_count_their_own_certificates() {
         "provider-b's root: itself, ICA, PG, MA"
     );
     let extra = peer.state.pki.as_ref().map_or(0, |k| k.aca_instances());
-    assert_eq!(extra, 1, "provider-b runs a second ACA with its own certificate");
+    assert_eq!(
+        extra, 1,
+        "provider-b runs a second ACA with its own certificate"
+    );
     assert_eq!(
         p.ica_certs_issued, 8,
         "provider-b's ICA: ECA, PCA, RA, LA1, LA2, DCM, CRLG and the second ACA"
