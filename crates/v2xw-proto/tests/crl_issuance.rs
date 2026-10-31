@@ -628,3 +628,70 @@ fn a_device_refuses_pseudonyms_of_a_revoked_pca_after_install() {
     );
     assert!(st.devices[&DEVICE_B].credentials.is_empty());
 }
+
+/// proto H10: `indexWithinI` is a Uint8 (`Ieee1609Dot2CrlBaseTypes`), and a device orders
+/// a CRACA's linkage CRLs by `(iRev, indexWithinI)` (`CrlOrder`).
+/// 300 revocations published on decision in one i-period would need 300 indices at one
+/// `iRev`. No two CRLs may share a counter: past 255 the publications coalesce into one
+/// CRL, issued at the next i-period with index 0 and carrying every entry decided
+/// meanwhile, and each coalesced publication is counted (ASSUMPTION, labelled in
+/// `ScmsState::publish_crl`). Saturating at 255 gave 45 different lists one counter.
+#[test]
+fn no_two_crls_share_an_index_within_a_period() {
+    use std::collections::BTreeSet;
+    use v2xw_msg::sec_types::ieee1609_dot2_crl_base_types::TypeSpecificCrlContents as T;
+    let mut run = deployment(0);
+    assert!(
+        !run.state.params.crl.business_day_sla && !run.state.params.publish_on_cadence,
+        "publication on decision"
+    );
+    let before = run.state.crlg.issued.len();
+    // One identification revocation a minute for five hours, inside i-period 0.
+    for k in 0..300u32 {
+        run.revoke_identification(NodeId::new(5_000 + k), u64::from(k) * 60 * NS_PER_S)
+            .expect("the PDU layer signs series 3");
+    }
+    run.run().expect("runs");
+    let st = &run.state;
+    let series1: Vec<_> = st.crlg.issued[before..]
+        .iter()
+        .filter(|c| c.series == 1)
+        .collect();
+    let counters: Vec<(u16, u8)> = series1
+        .iter()
+        .map(|c| {
+            match crl::decode_crl(c.pdu.bytes())
+                .unwrap()
+                .contents
+                .type_specific
+            {
+                T::fullLinkedCrl(t) => (t.i_rev.0.0, t.index_within_i.0),
+                other => panic!("a full linkage CRL, not {other:?}"),
+            }
+        })
+        .collect();
+    let distinct: BTreeSet<_> = counters.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        counters.len(),
+        "two CRLs share an (iRev, indexWithinI)"
+    );
+    let at_zero = counters.iter().filter(|(i, _)| *i == 0).count();
+    assert_eq!(at_zero, 256, "every index of iRev 0 is used once");
+    // The rest coalesced into one CRL at the start of the next i-period, index 0.
+    assert_eq!(counters.last(), Some(&(1, 0)));
+    // Signed when the next i-period begins, after the Generator's service time.
+    let start = st.params.period_start(1);
+    let signed = series1.last().unwrap().at;
+    assert!(
+        signed >= start && signed - start < NS_PER_S,
+        "issued at {signed} ns, not as i-period 1 begins at {start} ns"
+    );
+    assert_eq!(counters.len(), 257);
+    assert_eq!(st.crlg.index_exhausted, 300 - 256);
+    // The store distributes the coalesced list.
+    assert_eq!(
+        st.crl_store.secured.as_ref().map(|p| p.bytes()),
+        Some(series1.last().unwrap().pdu.bytes())
+    );
+}

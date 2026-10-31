@@ -863,3 +863,25 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   moves: all three G-SCMS scenarios use the `time` strategy (no distance condition), so
   the check was not re-run. Row `LS.PT30.changes-c6` (`live-scms.yaml`, `le 150`, verdict:
   open) is for wave E.
+
+### proto H10
+
+- 2026-10-31 (wave D R2, agent D3): **no two linkage CRLs share an `(iRev, indexWithinI)`.**
+  Cause: `issue_secured_crls`'s `next_index` (`v2xw-proto/src/scms/run/crl.rs`, was
+  `:628-633`) saturated the Uint8 at 255, so from the 256th publication at one `iRev`
+  every CRL carried 255. A device ordering lists by that counter (`CrlOrder`) saw
+  different lists under one counter. ASSUMPTION (labelled in `ScmsState::publish_crl`;
+  what happens at 256 is unpublished): a publication whose `iRev` has no index left
+  (`crl_indices_spent`: one for the full list, plus one for a delta when deltas are on)
+  is not issued. Each one is counted in `CrlState::index_exhausted`. The first arms one
+  `CrlPublishTimer` for the start of i-period `iRev + 1`. The coalesced CRL is issued
+  there with index 0 and carries every entry decided meanwhile. `crls_at_i` now counts in
+  `u16` (`run/mod.rs`, D1's file, additive). Under `business_day_sla` (about one
+  publication per business day) the ceiling is never reached. Publication on decision
+  needs 256 decisions in one i-period. The deferral delay then shows in each case's
+  `published` stamp. Test `crl_issuance::no_two_crls_share_an_index_within_a_period`:
+  300 identification revocations in one week give 256 CRLs at `iRev` 0, then one at
+  `(1, 0)` just after `period_start(1)`, with `index_exhausted` = 44. Red with the
+  deferral disabled (today's saturation). No golden moves (only past 255 publications in
+  one i-period). Left to D1: the RunReport leaf `crl_index_exhausted`, read from
+  `state.crlg.index_exhausted`.

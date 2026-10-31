@@ -1040,8 +1040,14 @@ pub struct CrlState {
     pub delta: Option<crate::scms::pdu::Pdu>,
     /// Every CRL the Generator signed, in order (CRL Generator only).
     pub issued: Vec<crl::IssuedCrl>,
-    /// CRLs signed per `iRev`, for `indexWithinI`.
-    pub crls_at_i: BTreeMap<u16, u8>,
+    /// CRLs signed per `iRev`, for `indexWithinI` (the next index; 256 once spent).
+    pub crls_at_i: BTreeMap<u16, u16>,
+    /// Publications that found every `indexWithinI` of their `iRev` used and were
+    /// coalesced into one CRL issued at the next i-period (proto H10; the RunReport leaf
+    /// `crl_index_exhausted`).
+    pub index_exhausted: u32,
+    /// Whether that coalesced CRL is already scheduled (CRL Generator only).
+    pub index_deferred: bool,
     /// Entries already covered by the previous publication (the delta's base).
     pub published_entries: usize,
     /// Certificates revoked by hash, by series (2: SCMS components; 3: RSU application
