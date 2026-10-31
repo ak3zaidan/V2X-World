@@ -228,3 +228,32 @@ The Rust check is `crates/v2xw-msg/tests/wsa_oracle.rs`: the hand-written codec
 (`v2xw_msg::wsa`) writes each vector's octets exactly and decodes asn1tools' octets to the
 same value. The script's `check FILE` mode has asn1tools decode and re-encode octets the
 Rust codec wrote. Encoding rule UPER and PSID 0x23 as `PROVENANCE.md` records them.
+
+## SC-P11: country and state polygons (`crates/v2xw-node/data/regions.bin`)
+
+Built 2026-10-31 by `tools/regions/build.py` (standard library only, run with `python3 -I`
+on the unpacked downloads in their own directory). Both sources are public domain; neither
+is vendored, only the derived rings and grid.
+
+| Source | Where (fetched 2026-10-31) | sha256 of the zip | Field read |
+|---|---|---|---|
+| Natural Earth admin-0 countries, 1:50m, v5.1.1 | <https://naciscdn.org/naturalearth/50m/cultural/ne_50m_admin_0_countries.zip> | `5fed433373581fa648920435f937d95f2d3c0200e067409c6478dcdf1b853139` | `ISO_N3` 124, 484 |
+| US Census cartographic boundary states, 1:20m, 2020 | <https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_state_20m.zip> | `1d872779cbfa2c2bf828850664aa9593a35844205e2e4bed5aeb78affb8da050` | `STATEFP` (2010 FIPS), `STUSPS` for the city check |
+
+- Output: `regions.bin`, 232,749 bytes, sha256
+  `ee018bd0e894e5cb4646b4fa44cb8ee97bd9ed779d0f3645145c2290b4af3e9f`. Two runs give the
+  same bytes.
+- Content: Canada 11,432 vertices in 141 rings, Mexico 999 in 16, and 52 Census regions (50
+  states, DC, Puerto Rico); a 0.25° inside/outside/border grid per region.
+- **Deviations from 10-completion-specs SC-P11, measured:**
+  - **No simplification.** Douglas-Peucker to the spec's 2,000 vertices needs a 0.107°
+    tolerance for Canada (up to about 12 km, more than Detroit to Windsor). `regions.rs`
+    indexes edges by grid row instead, so a border-cell lookup reads only its band's edges.
+  - **840 is the union of the Census states (not 72), not Natural Earth's polygon.**
+    `build.py --check worlds/cities.yaml` found Natural Earth 1:50m's United States missing
+    corners of Manhattan, Miami, San Francisco, Honolulu, Bridgeport and Portland ME (16 of
+    315 city points). With the Census states, all 315 points of the 63 US city boxes lie
+    in 840 and in their own state.
+- Known imprecision (negligible here): the two sources are generalised differently, so the
+  border is about 1 km wide at 1:20m. Windsor, Ontario (42.3149, −83.0364) is in both Canada
+  and Michigan. Puerto Rico (FIPS 72) is ISO 3166-1 630, so it is not part of 840.
