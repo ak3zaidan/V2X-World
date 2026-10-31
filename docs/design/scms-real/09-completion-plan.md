@@ -944,3 +944,6 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   D2. Found: the RA's `provisioning-ack` to the LOP is sent `Transport::CellularUu`
   (`run/provision.rs`, both ack sends), so the engine counts that backend hop in the
   cellular downlink bucket (`phase2.rs` `ByteBucket`); not changed here.
+  G-SCMS (own commit `b777bf75`): `phase2-path` record `55883bf70fb3…` to
+  `12702cc72d40…`; its frame digest, `i-s1-phase2-60s` and `ttc-triggered-brake`
+  unmoved (checked under the bless). B9a moved something, so B9b re-blesses on its own.
