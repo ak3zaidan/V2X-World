@@ -127,5 +127,7 @@ fn provisioning_gives_the_same_bytes_on_any_number_of_threads() {
 /// both, `99f8481a…` on `8becf72a`. Re-pinned 2026-10-27 for the RA's past-due weeks
 /// (`ScmsRun::generate_past_due`: the top-offs' weeks are generated at their due instant
 /// on a scratch kernel, so their SPDUs come first, as pre-run ones, and the top-offs are
-/// .info + download); `783c2b49…` before, one thread = four still.
-const PINNED: &str = "c6e1e2bb1107fc07862ad5807bc0a7829cbc54fce891cebf8913b940e1ca813d";
+/// .info + download); `783c2b49…` before, one thread = four still. Re-pinned 2026-10-31
+/// for proto B9a (every EE-RA hop is charged its HTTP framing, so each later SPDU is sent,
+/// and stamped, later); `c6e1e2bb…` before, one thread = four still.
+const PINNED: &str = "75016779717bda60a26c7d1838caee7845334f83c08bb40b0e172adedd001078";

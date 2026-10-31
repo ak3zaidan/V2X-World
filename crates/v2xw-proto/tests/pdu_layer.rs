@@ -47,6 +47,36 @@ fn kind_of(step: &str) -> Option<SpduKind> {
     })
 }
 
+/// What a hop carrying an `len`-byte SPDU is charged: the SPDU, inside the HTTP framing of
+/// the EE-RA exchange it rides (proto B9a, `scms/http.rs`; the literal texts are checked
+/// in `tests/http_framing.rs`). The DCM and ECA hops are not HTTP exchanges with the RA.
+fn framed(run: &ScmsRun, step: &str, len: u32) -> u32 {
+    use v2xw_proto::scms::http::{self, Status, path};
+    let host = http::host(
+        &format!("ra.{}", run.state.gov.config.provider),
+        http::RA_PORT,
+    );
+    match step {
+        "provisioning-request" | "provisioning-request-proxied" => {
+            http::post_bytes(host, path::PROVISION_PSEUDONYM_BATCH, len)
+        }
+        "successor-enrol-request" => http::post_bytes(host, path::REENROL_REQUEST, len),
+        "batch-download-request" | "batch-download-request-proxied" => {
+            http::download_bytes(host, path::DOWNLOAD_BATCH, len, None)
+        }
+        "successor-enrol-download-request" => {
+            http::download_bytes(host, path::REENROL_DOWNLOAD, len, None)
+        }
+        "provisioning-ack"
+        | "provisioning-ack-proxied"
+        | "successor-enrol-ack"
+        | "successor-enrol-response"
+        | "batch-download"
+        | "batch-download-proxied" => http::answer_bytes(Status::Ok, len, &[]),
+        _ => len,
+    }
+}
+
 #[test]
 fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
     let mut run = run_with_bytes();
@@ -82,8 +112,9 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
     assert!(dev.enrolment_credential.is_some());
     assert_eq!(dev.credentials.len(), 3, "the batch still installs");
 
-    // I-S3 as equality: every hop that carried an SPDU was charged its length, matched
-    // hop by hop on (kind, from, to, time).
+    // I-S3 as equality: every hop that carried an SPDU was charged its length (inside its
+    // HTTP framing on the EE-RA exchanges, proto B9a), matched hop by hop on (kind, from,
+    // to, time).
     let mut matched = 0;
     for step in &run.kernel.steps {
         let Some(kind) = kind_of(step.step) else {
@@ -94,7 +125,7 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
             .iter()
             .find(|p| p.kind == kind && p.from == step.from.index() && p.to == step.to.index())
             .unwrap_or_else(|| panic!("no SPDU recorded for step {}", step.step));
-        assert_eq!(step.bytes, p.len, "{}", step.step);
+        assert_eq!(step.bytes, framed(&run, step.step, p.len), "{}", step.step);
         assert_eq!(p.bytes.as_ref().map(pdu::Pdu::len), Some(p.len));
         matched += 1;
     }
@@ -132,7 +163,11 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
         .collect();
     assert_eq!(
         charged("batch-download"),
-        v2xw_proto::scms::pdu_prov::stored_zip_len(&entries)
+        framed(
+            &run,
+            "batch-download",
+            v2xw_proto::scms::pdu_prov::stored_zip_len(&entries)
+        )
     );
     // The RA's folder: one `<requestHash>_<i>.zip` holding `0_0`, `0_1`, `0_2`.
     let files = st.ra.batch_files(DEVICE_A);
@@ -269,7 +304,14 @@ fn the_layer_off_falls_back_to_the_modelled_sizes() {
         .iter()
         .find(|s| s.step == "provisioning-request")
         .unwrap();
-    assert_eq!(req.bytes, run.state.sizes.provisioning_request().bytes());
+    assert_eq!(
+        req.bytes,
+        framed(
+            &run,
+            "provisioning-request",
+            run.state.sizes.provisioning_request().bytes()
+        )
+    );
 }
 
 fn hex(b: &[u8]) -> String {

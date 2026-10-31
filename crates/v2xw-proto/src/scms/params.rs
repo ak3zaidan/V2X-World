@@ -201,6 +201,10 @@ pub struct ScmsParams {
     /// How many valid elector signatures a device requires of a trust list: any 3 of the
     /// 5 (Elector Technical Specification v1.1 §2.2; the published CTLs' `quorum` 3).
     pub elector_quorum: u32,
+    /// The sequence number of the run's first trust list (gov C-10): `None` reads it from
+    /// the run's wall clock as the production series stands
+    /// ([`crate::scms::governance::genesis_ctl_sequence`]); `Some(n)` states it.
+    pub ctl_genesis_sequence: Option<u32>,
     /// The RA's certificate-request shuffle window: the maximum age of a request in the
     /// aggregator, 2 days by default ([CAMP122] Table 67 `max_cert_request_age`;
     /// [`ShufflePreset`]).
@@ -579,6 +583,7 @@ impl Default for ScmsParams {
             reenrol_download_delay: Duration::from_secs(5 * 60),
             electors: crate::scms::deployment::US_ELECTORS,
             elector_quorum: crate::scms::deployment::US_QUORUM,
+            ctl_genesis_sequence: None,
             shuffle_window: BatchPolicy::CAMP_122_CERT_SHUFFLE.max_delay,
             report_shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
             shuffle_threshold: BatchPolicy::CAMP_122_CERT_SHUFFLE.max_items,

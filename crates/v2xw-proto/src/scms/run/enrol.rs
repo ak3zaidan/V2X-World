@@ -473,16 +473,27 @@ impl ScmsState {
         run: FlowRun,
     ) {
         Self::sign(out, 1);
-        let transport = if self.devices.contains_key(&dest) {
+        let to_device = self.devices.contains_key(&dest);
+        let transport = if to_device {
             Transport::CellularUu
         } else {
             Transport::BackendNet
+        };
+        // The RA's answer to the device's HTTPS request is framed (proto B9a); an ECA's
+        // refusal to the RA is a backend message.
+        let size = if to_device {
+            self.http_answer(
+                crate::scms::http::Status::InternalServerError,
+                self.sizes.refusal(),
+            )
+        } else {
+            self.sizes.refusal()
         };
         out.send(
             dest,
             ScmsMsg::EnrolRefused { device, reason },
             "enrol-refused",
-            self.sizes.refusal(),
+            size,
             transport,
             flow,
             run,
@@ -743,6 +754,7 @@ impl ScmsState {
                     ),
                     None => self.sizes.successor_request(),
                 };
+                let size = self.http_post(crate::scms::http::path::REENROL_REQUEST, size);
                 out.send(
                     n.ra,
                     ScmsMsg::SuccessorEnrolRequest {
@@ -840,6 +852,7 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::RaEeEnrollmentCertAck, to, device, at, p),
                     None => self.sizes.provisioning_ack(),
                 };
+                let size = self.http_answer(crate::scms::http::Status::Ok, size);
                 out.send(
                     device,
                     ScmsMsg::SuccessorEnrolAck {
@@ -1059,6 +1072,8 @@ impl ScmsState {
                     Some(p) => self.emit_pdu(SpduKind::EeRaDownloadRequest, device, n.ra, at, p),
                     None => self.sizes.batch_download_request(),
                 };
+                let size =
+                    self.http_download(crate::scms::http::path::REENROL_DOWNLOAD, size, None);
                 out.send(
                     n.ra,
                     ScmsMsg::SuccessorEnrolDownload { device, pdu },
@@ -1090,6 +1105,7 @@ impl ScmsState {
                             }
                             None => self.sizes.enrol_response(),
                         };
+                        let size = self.http_answer(crate::scms::http::Status::Ok, size);
                         out.send(
                             device,
                             ScmsMsg::SuccessorEnrolResponse {
@@ -1115,6 +1131,7 @@ impl ScmsState {
                             }
                             None => self.sizes.provisioning_ack(),
                         };
+                        let size = self.http_answer(crate::scms::http::Status::Ok, size);
                         out.send(
                             device,
                             ScmsMsg::SuccessorEnrolAck {

@@ -201,7 +201,9 @@ pub struct Ctl {
     /// The `tbsCtl` bytes as transmitted (inside the open-type length): what
     /// `tbsCtlHash` covers.
     pub tbs_coer: Vec<u8>,
-    /// The `unsigned` certificates (the root CA certificates the CTL approves).
+    /// The `unsigned` certificates: the root CA certificates the CTL approves, and in a
+    /// CTL that removes a root, as SCMS Manager's 2025-07-17 test CTL does, the dropped
+    /// one too (gov C-11). Only roots `rootCaApprove` names are trusted.
     pub certificates: Vec<Certificate>,
     /// The elector signatures.
     pub signatures: Vec<CtlSignature>,

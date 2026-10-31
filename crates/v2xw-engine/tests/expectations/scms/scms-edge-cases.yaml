@@ -146,6 +146,12 @@
   source: "Elector Policy v1.0 §2.2.4 (48 h); IEEE 1609.2 §5.1.2 (chain to a CTL-approved root); 1609.2.1 CompositeCrlSpdu"
   measured: "new3 panicked in Governance::home_root (fixed, provider_runs test). new5: window 0 identical; Thursday unchanged (the CTL due at 173,100 s was published at the next backend tick, after that tick's polls); Saturday 16 installs, 16 anchors removed, 42,132 chain-untrusted-root = verified provider-b drop 34,476 + revoked refusals turned untrusted 7,656; 21 CRL frames refused whole"
   verdict: "pass on the mechanism; open: CTL publication timing inside a fast-forward, whole-frame CRL refusal"
+- id: E8.peer-root-removed-carried
+  run: edge/peer-root-removed vs edge/peer-root-removed before gov C-11
+  expect: "the removal CTL (published at 173,100 s) and every chain file and composite CRL download that carries it are one root certificate larger than before C-11 (provider-b's root carried once in unsigned, rootCaRemove empty); the next CTL drops it; trust outcomes identical (devices keep only rootCaApprove roots)"
+  source: "SCMS Manager test CTL 2025-07-17, sequence 3 (decoded, validation/governance-deployment.md C-11); governance::tests::a_removal_ctl_carries_the_dropped_root_once"
+  measured: ""
+  verdict: "open"
 - id: E6.composite-crl-10k-rerun
   run: edge/standing-crl-10k (new3) vs scms-conformance (new3)
   expect: "about 0.33 MB per composite download (33 B an entry with the provider's own LA pair), not 0.45 MB (first binary) or 0.40 MB (estimate)"

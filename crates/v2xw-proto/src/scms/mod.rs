@@ -16,6 +16,7 @@ pub mod calendar;
 pub mod deployment;
 pub mod enrolment;
 pub mod governance;
+pub mod http;
 pub mod inspect;
 pub mod mbr;
 pub mod msg;

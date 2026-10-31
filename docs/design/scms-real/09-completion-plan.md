@@ -794,3 +794,157 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `scms-knobs.yaml` rows. Note: the engine's `scms_topology.rs` `with_capacity` rebuilds
   the spec with `ServiceModelSpec::new`, which drops a model, so P12.3 must keep it there.
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3; P12.1 only). Proto `availability` passes on the merged tree. Still open: P12.2 not started; P12.3 (D1) wiring and the `scms_topology.rs` `with_capacity` drop of the model.
+
+### gov C-9
+
+- 2026-10-31 (wave D R1, agent D2): **a CTL's `effectiveDate` is the EAC vote.** `decide`
+  (`governance.rs`, was `:2447`) set `effective = clock.time32(at)` with `at` the
+  publication deadline, so a CTL was effective 0 to 28 days after SCMS Manager's practice
+  (production sequence 1 effective 2025-07-16, published 2025-08-13). It is now
+  `clock.time32(decided_at)`; publication stays at the deadline. Test
+  `governance::tests::a_ctl_is_effective_at_its_vote_and_published_by_the_deadline` (an
+  add-root vote on Friday 2026-01-09: effective at the vote, published Wednesday, 5 days
+  later), red with `time32(at)` restored (effective 695466005 against 695034005). G-SCMS
+  unmoved: none of the three cases issues a CTL after genesis, whose deadline is its vote.
+  `validation/governance-deployment.md` C-9 is now MATCHES.
+
+### gov C-10
+
+- 2026-10-31 (wave D R1, agent D2): **the genesis CTL takes the production series'
+  sequence.** The ceremony built it as sequence 0 (`governance.rs`, was `:1524`, `:1580`,
+  log `:1588`). `genesis_ctl_sequence(t0_unix_s, stated)` now gives 1 from 2025-07-16
+  00:00 UTC (`PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S`, the day sequence 1 became effective)
+  and 0 before, read from the run's wall clock; `ScmsParams::ctl_genesis_sequence`
+  (`Option<u32>`, default `None` = auto) states it. `next_sequence` counts on from it.
+  Test `governance::tests::the_genesis_sequence_follows_the_production_series` (2026 gives
+  1, 2024 gives 0, the boundary second, both stated overrides, the signed bytes, the log,
+  a bootstrapped device, and the next list 2), red with the genesis hard-coded to 0. Tests
+  that named sequence numbers absolutely now count from the genesis
+  (`governance/tests.rs` x5, `tests/governance.rs`, engine `scms_wiring.rs` rollover
+  1 and 2, `conformance.rs` "a list after genesis" is `> seqs[0]`, not `>= 1`, which a
+  sequence-1 genesis would have passed without a new list). G-SCMS record digests moved (genesis bytes and sequence numbers in every record that carries a CTL): `i-s1-phase2-60s` `a68647061795…` to `815e9652af18…`, `phase2-path` `64f8489024f3…` to `73742934ef9a…`; frame digests and `ttc-triggered-brake` unmoved.
+  Left to D1 (R5): the scenario key `security.scms.lifecycle.ctl_genesis_sequence`
+  (`auto` "By date, as the production series", `0`, `1`; "The sequence number of the
+  run's first trust list") mapped to `ScmsParams::ctl_genesis_sequence`.
+
+### gov C-11
+
+- 2026-10-31 (wave D R2, agent D2): **a CTL that removes a root carries it once.**
+  `build_ctl` (`governance.rs`, was `:2205-2208`) put only the approved roots in
+  `unsigned`. It now takes `removed_root: Option<&Certificate>` and carries it after the
+  approved ones; `decide` threads `Option<Certificate>`, and only `remove_root` passes
+  `Some` (the dropped slot's certificate). `rootCaRemove` stays empty, as in the test CTL.
+  Labelled "seen in the test CTL only; production practice unknown" (`constants.md`
+  `ctl_removal_carries_root`). Test `governance::tests::a_removal_ctl_carries_the_dropped_root_once`
+  (approve entries + 1 certificates, the extra one the dropped root; a device still drops
+  it; the next CTL carries exactly the approved roots), red with no carry (left 1, right
+  2). G-SCMS unmoved (checked unblessed): no golden case removes a root. Cases that do:
+  `scenarios/edge/peer-root-removed.yaml` (E8.peer-root-removed) and any scenario setting
+  `root_removal_at_s` or `peer_root_removal_at_s`; their removal CTL, and the chain files
+  and composite CRL downloads that carry it, grow by one root certificate until the next
+  CTL. The E8 row's re-run is wave E (verdict open).
+
+### gov L-11
+
+- 2026-10-31 (wave D R2, agent D2): **ISS's LAs carry `LaSsp` version 1 with `laId` 4
+  and 5.** Both LA certificates were `LaSsp::new(Uint8(2), Uint16(1|2))` in the PDU PKI
+  (`pdu.rs`, was `:832`, `:842`) for every profile, and the governance ones
+  (`governance.rs` `security_mgmt_ssp_v`, was `:673-674`) were version 1 under ISS but
+  with ids 1 and 2; the LA states were `LaId(1)`, `LaId(2)` (`run/mod.rs`, was `:1495`,
+  `:1670`). Now `governance::la_ids(profile)` gives `[4, 5]` under `CertProfile::Iss`
+  and `[1, 2]` otherwise; `ssp_bytes` (now public) encodes the provider's ids and
+  version; the PDU PKI writes those bytes over the typed SSP through `Form::ssp`
+  (the 2022 type fixes version 2, so the constraint check is kept and the version byte
+  is written after encoding, as the governance PKI already did); both `LaState`
+  constructors take the provider's ids, so the linkage seeds, the PLVs and every
+  linkage CRL `LAGroup` name them. Tests `pki_profile::iss_la_ssp::*` (both PKIs' LA
+  bytes equal `88 00 01 00 04`/`05`; the LA states 4 and 5; a standing CRL entry's
+  `LAGroup` 4 and 5; provider-b version 2 with 1 and 2; and, with the artefact cache, the
+  decoded ISS LA certificates of the 2025-07-17 test chain equal the engine's bytes), red
+  with the ISS LA version at 2 and red with the LA states at 1 and 2. G-SCMS record digests moved (the provider-a LA certificates in the chain files and the linkage seeds, PLVs and CRL entries under ids 4 and 5): `i-s1-phase2-60s` `815e9652af18…` to `701c9c09634f…`, `phase2-path` `73742934ef9a…` to `55883bf70fb3…`; frame digests and `ttc-triggered-brake` unmoved.
+  `tools/realworld/audit_gov.py` GOV.L10.ssp now compares ISS LA bytes in full (row
+  verdict open for wave E). Left: the PDU PKI's other ISS components are still version 2
+  (the governance PKI's are version 1); not in L-11's scope, recorded for the wave E
+  register. `phase2.rs` (D1) forges RSU false-CRL entries with `LaId(1)`, `LaId(2)`
+  (`:3935`): an attacker's choice, no effect on matching.
+
+### gov G-2
+
+- 2026-10-31 (wave D R3, agent D2): **the API.** `governance_due` (`phase2.rs`, D1)
+  takes the `*_at_s` keys as votes; nothing gave the Board's review. New
+  `governance::review_vote_at(kind, requested_at, clock)`: request + 10 Eastern business
+  days for an addition (a root, a rollover's new root, an elector replacement, which adds
+  an elector; Elector Policy v1.0 §2.4.2), + 24 h for a removal (§2.4.4-2.4.5), the
+  vote at the end of the window. The business-day walk of `ctl_publication_deadline` is
+  now the shared `add_business_days`. `Governance::request(kind, at, detail)` logs
+  `eac-request` and returns the vote instant. Test
+  `governance::tests::a_request_before_a_holiday_votes_ten_business_days_later` (Thursday
+  2026-07-02 votes Friday 17 July, skipping the observed Independence Day and two
+  weekends), red with a delay of 0. Constants `review_add_business_days`,
+  `review_removal_hours`. Left for D1 R5: the `eac_review` key and reading the `*_at_s`
+  keys as requests. No golden moves (off by default; nothing calls it yet).
+
+### gov L-8
+
+- 2026-10-31 (wave D R3, agent D2): **the API.** `remove_root` (`governance.rs`) removed
+  any approved root at once. New `Governance::termination_notice(root, at)` logs
+  `provider-termination-notice` and returns notice + 365 d; `remove_root` for that root
+  before then returns `None` and counts the new `GovernanceCounters::early_root_removal_refused`
+  (a second notice keeps the first; a root without a notice is removed at once, as
+  before). Test `governance::tests::a_root_removal_waits_for_its_notice` (refused at
+  notice + 200 d, published at + 366 d), red with the check skipped. The transfer vote is
+  not modelled (unpublished, as G-1); whether an emergency removal overrides a running
+  notice is unpublished, so a noticed root waits (constants.md
+  `root_termination_notice_days`). Left for D1 R5: the
+  `root_termination_notice_at_s` key. No golden moves.
+
+### gov G-10
+
+- 2026-10-31 (wave D R3, agent D2): **the API.** `Governance::test_ballot` existed, but
+  nothing could tell when one was due. New `Governance::last_signature_at(slot)` (the
+  latest logged ballot, genesis, EAC vote or test ballot, whose signers include the slot)
+  and `test_ballot_due(now, max_idle)` (an approved elector idle that long since its last
+  signature, or since it joined: `ElectorSlot` now records its joining instant). The
+  ballot's log kind is now `eac-test-ballot` (was `test-ballot`; nothing outside the unit
+  test read it). Test `governance::tests::an_electors_last_signature_is_its_latest_ballot`,
+  red with the first signature taken for the last. Found on the way: a test ballot held
+  before an elector replacement's CTL is published fails the new elector's signature
+  (the endorsed CTL keeps the published `effectiveDate`, before the new certificate's
+  start); a scheduler should ballot on the published list. Left for D1 R5: the scheduler
+  in `governance_due`, the key `test_ballot_interval_days` and the engine accept test
+  `security_lifecycle::a_long_run_holds_a_test_ballot_each_year` (D1's file). No golden
+  moves.
+
+### proto B9
+
+- 2026-10-31 (wave D R4, agent D2): **B9a, the EE-RA framing.** No request line, header
+  or status line was charged: each hop carried the bare SPDU (`run/provision.rs`,
+  `run/enrol.rs` sends; `pdu_layer` asserted step bytes = SPDU length). New
+  `scms/http.rs`: `request_bytes(method, path, headers, body_len)`,
+  `response_bytes(status, headers, body_len)` and the exchange forms built on them
+  (`post_bytes`, `download_bytes` with the Base64 `Download-Req` and an optional `Range`,
+  `conditional_get_bytes`, `upload_bytes`, `answer_bytes`, `content_range`), the
+  [CAMP122] Table 79 paths, and `reframed` (the payload's size provenance is kept). Used on
+  both hops (device-LOP and LOP-RA) of the provisioning request, its ack, the `.info`
+  request and answer, the batch download request and the batch (a resumed batch is a `206`
+  of the remainder; the device's held bytes start with the first answer's headers), every
+  `provisioning-refused` (`500`), the session's file check (two conditional `GET`s
+  answered `200` or `304`, replacing the modelled envelope), and the re-enrolment request,
+  ack, download and response. The misbehaviour upload (`run/report.rs`, a small change)
+  is a `POST` whose `Download-Req` header carries the 315 B authentication Base64, once,
+  not again as body. Enrolment at manufacture (device-DCM-ECA) is not an RA exchange
+  and stays unframed. The minimal header set is an ASSUMPTION (constants.md
+  `http_header_set`); its 412 answer is the engine's 92 B `CRL_NOT_MODIFIED_BYTES`, so
+  B9b (the CRL poll in `phase2.rs`, D1) can take it from `http::answer_bytes`. Tests
+  `tests/http_framing.rs` (six: literal request and answer texts with the file's own
+  Base64), red with the Base64 expansion dropped; `pdu_layer`, `ee_retry` (the 206
+  remainder) and `pregeneration` (the `.info` answer) assert the framed counts exactly;
+  `provisioning_parallel`'s pinned digest re-pinned (`c6e1e2bb…` to `75016779…`, one
+  thread = four still: the SPDUs are sent and stamped later). Left: B9b, and
+  `run/appcert.rs` (identification and RSU application certificates), whose owner is not
+  D2. Found: the RA's `provisioning-ack` to the LOP is sent `Transport::CellularUu`
+  (`run/provision.rs`, both ack sends), so the engine counts that backend hop in the
+  cellular downlink bucket (`phase2.rs` `ByteBucket`); not changed here.
+  G-SCMS (own commit `b777bf75`): `phase2-path` record `55883bf70fb3…` to
+  `12702cc72d40…`; its frame digest, `i-s1-phase2-60s` and `ttc-triggered-brake`
+  unmoved (checked under the bless). B9a moved something, so B9b re-blesses on its own.

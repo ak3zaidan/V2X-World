@@ -299,7 +299,8 @@ fn a_scheduled_root_rollover_is_decided_and_waits_for_its_sla() {
     assert_eq!(report.phase2.ctls_published, 0);
     let gov = &engine.phase2().expect("phase 2").scms().state.gov;
     assert_eq!(gov.counters.roots_added, 1);
-    assert_eq!(gov.ctl.sequence, 0, "published before its deadline");
+    // A 2026 t0 starts at the production series' sequence 1 (gov C-10).
+    assert_eq!(gov.ctl.sequence, 1, "published before its deadline");
     let pending: Vec<(u64, u32)> = gov.pending.iter().map(|(t, c)| (*t, c.sequence)).collect();
-    assert_eq!(pending, vec![((5 * 86_400 + 1) * 1_000_000_000, 1)]);
+    assert_eq!(pending, vec![((5 * 86_400 + 1) * 1_000_000_000, 2)]);
 }

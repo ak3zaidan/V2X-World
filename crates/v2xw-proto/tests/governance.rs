@@ -40,8 +40,9 @@ fn the_dcm_bootstrap_installs_the_trust_list_chain_and_policy() {
     let d = &run.state.devices[&DEVICE_A];
     assert_eq!(
         d.trust.ctl_sequence,
-        Some(0),
-        "the electors' genesis list (sequence 0, as the published series began) is installed"
+        Some(1),
+        "the electors' genesis list is installed: a 2026 t0 starts at the production \
+         series' sequence 1 (gov C-10)"
     );
     assert_eq!(
         d.trust.anchors.len(),

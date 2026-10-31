@@ -58,7 +58,11 @@ fn a_bootstrapped_device_trusts_every_online_authority() {
     {
         assert!(t.trusts_role(role), "{role} not trusted");
     }
-    assert_eq!(t.ctl_sequence, Some(0));
+    assert_eq!(
+        t.ctl_sequence,
+        Some(1),
+        "a 2026 t0 starts at the production series' sequence 1 (gov C-10)"
+    );
     assert_eq!(t.policy().map(|p| p.certs_per_period), Some(20));
     assert_eq!(t.rejected, 0);
     assert_eq!(
@@ -111,7 +115,7 @@ fn the_quorum_can_only_be_lowered_by_a_quorum() {
     assert_eq!(t.install_ctl(&g.forge_next_ctl(1, &[0, 1, 2])), Ok(3));
     assert_eq!(t.ctl_trust.as_ref().map(|c| c.quorum), Some(1));
     let mut g2 = g.shadow();
-    g2.ctl.sequence = 1;
+    g2.ctl.sequence = g.ctl.sequence + 1;
     assert_eq!(t.install_ctl(&g2.forge_next_ctl(1, &[0])), Ok(1));
 }
 
@@ -200,7 +204,7 @@ fn root_removal_propagates_to_devices() {
     assert_eq!(at, decided + 2 * DAY, "removal within 48 h");
     assert_eq!(g.publish_due(at - 1), 0, "not before the deadline");
     assert_eq!(g.publish_due(at), 1);
-    assert_eq!(g.ctl.sequence, 1);
+    assert_eq!(g.ctl.sequence, 2, "the list after the sequence-1 genesis");
     assert!(g.ctl.roots.is_empty());
     assert_eq!(t.install_ctl(&g.ctl), Ok(5));
     assert!(t.roots.is_empty());
@@ -233,7 +237,7 @@ fn an_elector_replacement_is_installed_in_sequence() {
     assert_eq!(dec.elector_approve().len(), 5);
     assert_eq!(early.install_ctl(&c1), Ok(4));
     // CTL 2 signed by the new elector and two old ones.
-    let c2 = g.build_ctl(2, c1.effective, None, &[5, 1, 2]);
+    let c2 = g.build_ctl(c1.sequence + 1, c1.effective, None, None, &[5, 1, 2]);
     assert_eq!(early.install_ctl(&c2), Ok(3));
     assert_eq!(
         late.install_ctl(&c2),
@@ -247,7 +251,7 @@ fn an_elector_replacement_is_installed_in_sequence() {
     }
     assert_eq!(late.install_ctl(&c2), Ok(3));
     // The removed elector no longer counts.
-    let c3 = g.build_ctl(3, c1.effective, None, &[0, 1, 2]);
+    let c3 = g.build_ctl(c1.sequence + 2, c1.effective, None, None, &[0, 1, 2]);
     assert_eq!(
         early.install_ctl(&c3),
         Err(TrustError::CtlQuorum {
@@ -580,7 +584,10 @@ fn adding_a_provider_root_and_a_test_ballot_are_recorded() {
     assert_eq!(g.counters.test_ballots, 1);
     assert!(t.install_ctl(&g.ctl).is_err(), "already installed");
     let kinds: Vec<&str> = g.log.iter().map(|e| e.kind).collect();
-    assert_eq!(kinds, vec!["ctl-genesis", "eac-add-root", "test-ballot"]);
+    assert_eq!(
+        kinds,
+        vec!["ctl-genesis", "eac-add-root", "eac-test-ballot"]
+    );
 }
 
 /// Writes every artefact for the independent oracle (`oracle.py real`) when
@@ -632,4 +639,271 @@ fn devices_share_one_copy_of_each_governance_certificate() {
     for d in held {
         assert!(cert_hashed_id8(&b.chain[&d]).is_ok_and(|x| x == d));
     }
+}
+
+/// gov C-9: a CTL's `effectiveDate` is the EAC vote, and the list is published by the SLA
+/// deadline after it (production sequence 1: effective 2025-07-16, published 2025-08-13).
+#[test]
+fn a_ctl_is_effective_at_its_vote_and_published_by_the_deadline() {
+    let mut g = gov();
+    let clock = g.config.clock;
+    // t0 is Tuesday 2026-01-06 09:00 UTC; the vote is three days later, a Friday.
+    let decided = 3 * DAY;
+    let unix = clock.unix_seconds_at(decided);
+    let (y, m, d) = crate::scms::calendar::eastern_date(unix);
+    assert_eq!(
+        crate::scms::calendar::weekday(crate::scms::calendar::days_from_civil(y, m, d)),
+        5,
+        "the vote is on a Friday (0 = Sunday)"
+    );
+    let (_, at) = g.add_root(&rng(), "provider-b", decided);
+    // Three business days after a Friday: Monday, Tuesday, Wednesday.
+    assert_eq!(
+        at,
+        decided + 5 * DAY,
+        "published at the 3-business-day deadline"
+    );
+    let e = g.log.last().expect("the decision is logged");
+    assert_eq!((e.decided_at, e.published_at), (decided, Some(at)));
+    let vote32 = clock.time32(decided).expect("in range");
+    assert_eq!(g.publish_due(at), 1);
+    assert_eq!(g.ctl.effective, vote32, "effective at the vote");
+    let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    assert_eq!(
+        dec.effective_date(),
+        vote32,
+        "the signed effectiveDate is the vote"
+    );
+    assert!(dec.effective_date() < clock.time32(at).expect("in range"));
+}
+
+/// gov C-10: the genesis CTL takes the production series' sequence at the run's `t0`
+/// (sequence 0 of 2019-12-12, sequence 1 effective 2025-07-16), unless one is stated.
+#[test]
+fn the_genesis_sequence_follows_the_production_series() {
+    use crate::scms::calendar::days_from_civil;
+    assert_eq!(
+        PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S,
+        days_from_civil(2025, 7, 16) * 86_400,
+        "2025-07-16 00:00 UTC"
+    );
+    let at = |unix: i64, stated: Option<u32>| {
+        let p = ScmsParams {
+            ctl_genesis_sequence: stated,
+            ..params()
+        };
+        let config = GovernanceConfig {
+            clock: v2xw_core::time::WallClock::new(unix),
+            ..GovernanceConfig::default()
+        };
+        Governance::ceremony_with(&p, &ScmsNodes::default(), &rng(), 0, config)
+    };
+    let y2026 = days_from_civil(2026, 3, 2) * 86_400;
+    let y2024 = days_from_civil(2024, 3, 4) * 86_400;
+    for (unix, stated, want) in [
+        (y2026, None, 1),
+        (y2024, None, 0),
+        (PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S, None, 1),
+        (PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S - 1, None, 0),
+        (y2026, Some(0), 0),
+        (y2024, Some(1), 1),
+    ] {
+        let g = at(unix, stated);
+        assert_eq!(g.ctl.sequence, want, "t0 {unix}, stated {stated:?}");
+        let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+        assert_eq!(u32::from(dec.sequence()), want, "the signed sequence");
+        let e = g
+            .log
+            .iter()
+            .find(|e| e.kind == "ctl-genesis")
+            .expect("logged");
+        assert_eq!(e.ctl_sequence, Some(want));
+        // A device bootstraps from it.
+        assert_eq!(bootstrapped(&g).ctl_sequence, Some(want));
+    }
+    // The next decision counts on from a sequence-1 genesis.
+    let mut g = at(y2026, None);
+    let root = g.ctl.roots[0];
+    let published = g.remove_root(root, DAY).expect("approved");
+    g.publish_due(published);
+    assert_eq!(g.ctl.sequence, 2);
+}
+
+/// gov C-11: the CTL that removes a root carries the dropped root's certificate once in
+/// `unsigned` (the 2025-07-17 test CTL, sequence 3, still carries the root it stops
+/// approving), and the next CTL carries exactly the approved roots. A device trusts only
+/// the approved ones.
+#[test]
+fn a_removal_ctl_carries_the_dropped_root_once() {
+    let mut g = gov();
+    let mut t = bootstrapped(&g);
+    let (peer, at) = g.add_root(&rng(), "provider-b", 0);
+    g.publish_due(at);
+    assert_eq!(t.install_ctl(&g.ctl), Ok(5));
+    assert!(t.roots.contains_key(&peer));
+    // The removal: approve entries + 1 certificates, the extra one the dropped root.
+    let at = g.remove_root(peer, at + DAY).expect("approved");
+    g.publish_due(at);
+    let removal = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    let approved = removal.root_ca_approve();
+    assert_eq!(approved.len(), 1, "the home root only");
+    assert!(
+        removal.root_ca_remove().is_empty(),
+        "rootCaRemove stays empty"
+    );
+    assert_eq!(removal.certificates.len(), approved.len() + 1);
+    let carried: Vec<[u8; 32]> = removal
+        .certificates
+        .iter()
+        .map(|c| cert_hashed_id32(c).expect("encodes"))
+        .collect();
+    assert!(carried.contains(&peer), "the dropped root is carried");
+    assert!(approved.iter().all(|h| carried.contains(h)));
+    // A device installs it and drops the root all the same.
+    assert_eq!(t.install_ctl(&g.ctl), Ok(5));
+    assert!(!t.roots.contains_key(&peer), "carried is not approved");
+    assert_eq!(t.roots.len(), 1);
+    // The next CTL carries exactly the approved roots.
+    let (_, at) = g.add_root(&rng(), "provider-c", at + DAY);
+    g.publish_due(at);
+    let next = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    assert_eq!(next.root_ca_approve().len(), 2);
+    assert_eq!(next.certificates.len(), next.root_ca_approve().len());
+    assert!(
+        next.certificates
+            .iter()
+            .all(|c| cert_hashed_id32(c).expect("encodes") != peer),
+        "the dropped root is carried once only"
+    );
+}
+
+/// gov G-2: the Board reviews an addition within 10 business days before the vote
+/// (Elector Policy v1.0 §2.4.2) and investigates a removal within 24 h (§2.4.4-2.4.5).
+/// A request on Thursday 2026-07-02 skips Friday 2026-07-03 (Independence Day, observed,
+/// as 4 July is a Saturday) and two weekends: 6-10 and 13-17 July, a vote on Friday 17.
+#[test]
+fn a_request_before_a_holiday_votes_ten_business_days_later() {
+    let clock = GovernanceConfig::default().clock;
+    let thu = clock_at(clock, "2026-07-02T15:00:00Z");
+    for kind in [CtlChangeKind::AddRoot, CtlChangeKind::ReplaceElector] {
+        assert_eq!(
+            clock.to_rfc3339_at(review_vote_at(kind, thu, clock)),
+            "2026-07-17T15:00:00Z",
+            "{kind:?}: 10 business days, the observed holiday and weekends skipped"
+        );
+    }
+    assert_eq!(
+        clock.to_rfc3339_at(review_vote_at(CtlChangeKind::RemoveRoot, thu, clock)),
+        "2026-07-03T15:00:00Z",
+        "a removal is investigated within 24 h, holiday or not"
+    );
+    assert_eq!(review_vote_at(CtlChangeKind::Genesis, thu, clock), thu);
+    // The governance entry point logs the request and gives the same vote instant.
+    let mut g = gov();
+    let vote = g.request(CtlChangeKind::AddRoot, thu, "provider-b".into());
+    assert_eq!(vote, review_vote_at(CtlChangeKind::AddRoot, thu, clock));
+    let e = g.log.last().expect("logged");
+    assert_eq!((e.kind, e.decided_at), ("eac-request", thu));
+    assert!(e.signers.is_empty(), "a request is not a signature");
+    let (_, published) = g.add_root(&rng(), "provider-b", vote);
+    assert_eq!(
+        clock.to_rfc3339_at(published),
+        "2026-07-22T15:00:00Z",
+        "then the 3-business-day publication deadline runs from the vote"
+    );
+}
+
+/// gov L-8: a provider's root may leave the CTL only after its 365 days' notice
+/// ([SM-PROV] §3.5.6).
+#[test]
+fn a_root_removal_waits_for_its_notice() {
+    let mut g = gov();
+    let (peer, at) = g.add_root(&rng(), "provider-b", 0);
+    g.publish_due(at);
+    let notice = at + DAY;
+    assert_eq!(
+        g.termination_notice(peer, notice),
+        Some(notice + 365 * DAY),
+        "the earliest removal"
+    );
+    assert_eq!(
+        g.log.last().map(|e| (e.kind, e.detail.as_str())),
+        Some(("provider-termination-notice", "provider-b"))
+    );
+    assert_eq!(g.termination_notice([0; 32], notice), None, "no such root");
+    let ctls = g.counters.ctls_published;
+    assert_eq!(
+        g.remove_root(peer, notice + 200 * DAY),
+        None,
+        "refused early"
+    );
+    assert_eq!(g.counters.early_root_removal_refused, 1);
+    assert_eq!(g.counters.roots_removed, 0);
+    assert!(g.pending.is_empty(), "no CTL decided");
+    assert!(g.ctl.roots.contains(&peer), "still approved");
+    // A second notice does not restart the clock.
+    assert_eq!(
+        g.termination_notice(peer, notice + 300 * DAY),
+        Some(notice + 365 * DAY)
+    );
+    let at = g
+        .remove_root(peer, notice + 366 * DAY)
+        .expect("the notice has run out");
+    assert_eq!(g.publish_due(at), 1);
+    assert_eq!(g.counters.ctls_published, ctls + 1);
+    assert!(!g.ctl.roots.contains(&peer), "removed");
+    assert_eq!(g.counters.early_root_removal_refused, 1);
+    // A root without a notice is still removed at once (the home root after a rollover).
+    let (old, _, at) = g.rollover_root(&rng(), &ScmsNodes::default(), at + DAY);
+    g.publish_due(at);
+    assert!(g.remove_root(old, at + DAY).is_some(), "no notice, no wait");
+}
+
+/// gov G-10: the engine schedules a Test Ballot from each elector's last signature in
+/// the log (Elector Policy v1.0 §1.1, no elector idle for more than a year).
+#[test]
+fn an_electors_last_signature_is_its_latest_ballot() {
+    let year = TEST_BALLOT_MAX_IDLE_DAYS * DAY;
+    let mut g = gov();
+    for k in 0..5 {
+        assert_eq!(
+            g.last_signature_at(k),
+            Some(0),
+            "slot {k} signed the genesis CTL"
+        );
+    }
+    assert!(!g.test_ballot_due(year - S, year));
+    assert!(
+        g.test_ballot_due(year, year),
+        "a year since the genesis CTL"
+    );
+    // An EAC vote signed by every elector restarts every clock.
+    let (_, at) = g.add_root(&rng(), "provider-b", 100 * DAY);
+    g.publish_due(at);
+    assert_eq!(
+        g.last_signature_at(3),
+        Some(100 * DAY),
+        "the vote, not publication"
+    );
+    assert!(!g.test_ballot_due(year, year));
+    // A replacement: the removed elector is excluded from the vote, the new one has not
+    // signed and is idle from its joining.
+    let (new, at) = g.replace_elector(&rng(), 0, 200 * DAY).expect("approved");
+    g.publish_due(at);
+    assert_eq!(
+        g.last_signature_at(0),
+        Some(100 * DAY),
+        "excluded from the vote"
+    );
+    assert_eq!(g.last_signature_at(1), Some(200 * DAY));
+    assert_eq!(g.last_signature_at(new), None, "not signed yet");
+    assert!(
+        !g.test_ballot_due(100 * DAY + year, year),
+        "slot 0 is no longer approved, the new slot joined at day 200"
+    );
+    assert!(g.test_ballot_due(200 * DAY + year, year));
+    assert_eq!(g.test_ballot(250 * DAY).len(), 5);
+    assert_eq!(g.last_signature_at(new), Some(250 * DAY));
+    assert!(!g.test_ballot_due(250 * DAY + year - S, year));
+    assert!(g.test_ballot_due(250 * DAY + year, year));
 }

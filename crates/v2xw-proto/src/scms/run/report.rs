@@ -385,8 +385,20 @@ impl ScmsState {
         at: SimTime,
         record: bool,
     ) -> WireSize {
+        // The upload is an HTTPS POST to the RA ([SM-MBR] §4, [CAMP122] Table 79): the
+        // report is the body and the enrolment-signed authentication rides Base64 in the
+        // `Download-Req` header, counted once there (proto B9a).
+        let host = self.ra_host();
         let Some(s) = r.secured.as_ref() else {
-            return self.sizes.report();
+            let m = self.sizes.report();
+            return crate::scms::http::reframed(
+                m,
+                crate::scms::http::post_bytes(
+                    host,
+                    crate::scms::http::path::MISBEHAVIOR_REPORT,
+                    m.bytes(),
+                ),
+            );
         };
         let header = s.header.as_ref().map_or(0, crate::scms::pdu::Pdu::len);
         if record {
@@ -397,7 +409,7 @@ impl ScmsState {
             }
         }
         WireSize::real(
-            s.report.len() + header,
+            crate::scms::http::upload_bytes(host, s.report.len(), header),
             SpduKind::SecuredMisbehaviorReport.name(),
         )
     }
