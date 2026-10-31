@@ -173,3 +173,24 @@ Dated notes go under each id as its wave lands.
   polls of each cellular device, the 60 s jump cap and kernel events; R-FFSLOW does not
   reproduce after new3. FB2.honest-reports is `fixed` and FB2.ff-ticks a corrected
   expectation. Left for the validation wave: FB4.ff-stops (cost per stop).
+
+### SC-D10
+
+- **2026-10-30 (wave A).** TM-1 (the repeated secMark): already fixed in `cca82fcd`, the v2
+  BSM timing model (a free OBU's own BSM clock; a slip k > 0 moves the position k fixes
+  later and keeps the timestamp). Its re-run rows pass (`P1.TM1.sm-repeat` 0 against v1's
+  17 %, `P1.TM1.gt-vs-sm.v2` 5,318 -> 5,935); the three v1-engine rows
+  `P1.RP.gt-vs-sm.v10.*` are marked fixed and point at them.
+- VR-2 (26 VeReMi truth rows at (0, 0)): cause, `v2xw-record` `dataset/veremi.rs`
+  joined a reception to its sender's latest `gt.kinematics` record *at or before* it,
+  and a vehicle's node is created when the mobility step that spawns it is dispatched
+  (`Engine::absorb` -> `create_node(.., now)`), so it can send its first BSM inside that
+  step, before the vehicle's first record. Fix (exporter, no engine record moves): with no
+  record at or before the reception, the first record within 0.2 s after it
+  (`FORWARD_JOIN_NS`, two mobility steps, ASSUMPTION) is carried back along its own
+  velocity by the engine's published extrapolation rule (03-interfaces §3, I-M4), which is
+  where the engine itself placed the node. Test
+  `veremi::tests::a_first_bsm_before_the_first_kinematics_record_gets_the_carried_back_truth`;
+  fault (no forward branch) red. Recorded, not changed: the node is live up to one step
+  before its vehicle's first record; moving node creation would re-time every spawn and
+  move every golden for an effect only this export sees.

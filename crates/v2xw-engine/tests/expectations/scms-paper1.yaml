@@ -777,7 +777,8 @@ rows:
     ~40 ms adds v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute
     on the header time, Tampa 2-3x on rx (T3)'
   measured: 2164 -> 1731
-  verdict: open
+  verdict: fixed
+  closed: "SC-D10, 2026-10-30: TM-1 fixed in cca82fcd (v2 BSM timing model: a free OBU runs its own BSM clock, period = fix interval + per-device drift + per-BSM deviation, and a slip k > 0 moves the position k fixes later with the timestamp kept, so secMark never repeats). Re-measured on the v2 engine as P1.TM1.*: P1.TM1.sm-repeat 0 (v1 17 %), P1.TM1.sm-excess p50 7 ms, P1.TM1.gt-vs-sm.v2 5,318 -> 5,935 (up, pass). This v1-engine row is superseded by them"
   note: 'OPEN TM-1 (engine, bsm_timing.rs): a slip k > 0 moves the secMark k epochs back and keeps the
     position, so two consecutive BSMs carry the same secMark (E4F free class: secMark dt 0 ms in 17 %
     of consecutive pairs, 200 ms in 17 %) and the generationTime clock, which follows the device''s own
@@ -809,7 +810,8 @@ rows:
     ~40 ms adds v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute
     on the header time, Tampa 2-3x on rx (T3)'
   measured: 4722 -> 3941
-  verdict: open
+  verdict: fixed
+  closed: "SC-D10, 2026-10-30: TM-1 fixed in cca82fcd (v2 BSM timing model: a free OBU runs its own BSM clock, period = fix interval + per-device drift + per-BSM deviation, and a slip k > 0 moves the position k fixes later with the timestamp kept, so secMark never repeats). Re-measured on the v2 engine as P1.TM1.*: P1.TM1.sm-repeat 0 (v1 17 %), P1.TM1.sm-excess p50 7 ms, P1.TM1.gt-vs-sm.v2 5,318 -> 5,935 (up, pass). This v1-engine row is superseded by them"
   note: 'OPEN TM-1 (engine, bsm_timing.rs): a slip k > 0 moves the secMark k epochs back and keeps the
     position, so two consecutive BSMs carry the same secMark (E4F free class: secMark dt 0 ms in 17 %
     of consecutive pairs, 200 ms in 17 %) and the generationTime clock, which follows the device''s own
@@ -841,7 +843,8 @@ rows:
     ~40 ms adds v·|e| to every pair, firing locked devices too; Wyoming 0.0 on secMark vs 214 per ID-minute
     on the header time, Tampa 2-3x on rx (T3)'
   measured: 5097 -> 4179
-  verdict: open
+  verdict: fixed
+  closed: "SC-D10, 2026-10-30: TM-1 fixed in cca82fcd (v2 BSM timing model: a free OBU runs its own BSM clock, period = fix interval + per-device drift + per-BSM deviation, and a slip k > 0 moves the position k fixes later with the timestamp kept, so secMark never repeats). Re-measured on the v2 engine as P1.TM1.*: P1.TM1.sm-repeat 0 (v1 17 %), P1.TM1.sm-excess p50 7 ms, P1.TM1.gt-vs-sm.v2 5,318 -> 5,935 (up, pass). This v1-engine row is superseded by them"
   note: 'OPEN TM-1 (engine, bsm_timing.rs): a slip k > 0 moves the secMark k epochs back and keeps the
     position, so two consecutive BSMs carry the same secMark (E4F free class: secMark dt 0 ms in 17 %
     of consecutive pairs, 200 ms in 17 %) and the generationTime clock, which follows the device''s own
@@ -1194,9 +1197,16 @@ rows:
   value: 0
   source: the true position of every message is the sender's gt.kinematics, never the (0, 0) of a missing
     join
-  measured: '26'
-  verdict: open
-  note: 'OPEN VR-2: 26 of 9,035 truth rows still (0, 0): each vehicle''s first BSM is sent (e.g. 9.781
+  measured: '0'
+  verdict: fixed
+  remeasured: 'SC-D10, 2026-10-30: p1-attack cut to 60 s, --veremi veremi-ext, --record-level full.
+    Release binary of 5c5dfc4e on the scenario as it was: 15 of 8,293 truth rows at (0, 0); this
+    branch''s exporter (veremi.rs sender_truth: the first record within FORWARD_JOIN_NS 0.2 s after a
+    reception with none before it, carried back along its velocity): 0 of 8,293. The two recordings
+    have the same record digest (3c03d1ca...), so only the export moved. Test
+    veremi::tests::a_first_bsm_before_the_first_kinematics_record_gets_the_carried_back_truth (fault: no
+    forward branch, red)'
+  note: 'was OPEN VR-2: 26 of 9,035 truth rows still (0, 0): each vehicle''s first BSM is sent (e.g. 9.781
     s) before its first gt.kinematics record (9.9 s), and the join takes the last record at or before
     the reception. Needs a kinematics record at spawn (engine) or a bounded forward join (exporter)'
 - id: P1.BF.honest-zero

@@ -741,10 +741,8 @@ pub fn from_records_with(
         let pseudonym = tx
             .and_then(|t| t.pseudonym.clone())
             .unwrap_or_else(|| pseudonym_for(&certs, sender_node, v.t_start));
-        let truth = truth_at
-            .range((sender_actor, 0)..=(sender_actor, v.t_start))
-            .next_back()
-            .map(|(_, k)| k);
+        let truth = sender_truth(&truth_at, sender_actor, v.t_start);
+        let truth = truth.as_deref();
         let attacking = label
             .get(&sender_actor)
             .is_some_and(|l| l.labels(msg, generated));
@@ -833,6 +831,40 @@ pub fn from_records_with(
     out.truth.sort_by_key(|t| t.message_id);
     out.quantise();
     Ok(out)
+}
+
+/// How far after a reception the first `gt.kinematics` record of its sender may lie and
+/// still give that reception's truth, ns: two 100 ms mobility steps (ASSUMPTION). A node is
+/// created when the mobility step that spawns its vehicle is dispatched and may send its
+/// first BSM inside that step, before the vehicle's first record (VR-2: first BSM at
+/// 9.781 s, first record at 9.9 s).
+pub const FORWARD_JOIN_NS: u64 = 200_000_000;
+
+/// The sender's true state at `at`: its latest `gt.kinematics` record at or before `at`;
+/// else its first record within [`FORWARD_JOIN_NS`] after `at`, carried back to `at`
+/// along its own velocity by the engine's published extrapolation rule
+/// `pos(t') = pos(t) + vel(t)·(t' − t)` (03-interfaces.md §3, invariant I-M4), which is
+/// what the engine itself placed the node at. `None` beyond that: a reception whose
+/// sender has no record near it keeps the all-zero truth rather than an invented one.
+fn sender_truth(
+    truth_at: &BTreeMap<(u32, u64), v2xw_metrics::channels::GtKinematicsView>,
+    actor: u32,
+    at: u64,
+) -> Option<std::borrow::Cow<'_, v2xw_metrics::channels::GtKinematicsView>> {
+    use std::borrow::Cow;
+    if let Some((_, k)) = truth_at.range((actor, 0)..=(actor, at)).next_back() {
+        return Some(Cow::Borrowed(k));
+    }
+    let ((_, t), k) = truth_at
+        .range((actor, at)..=(actor, at.saturating_add(FORWARD_JOIN_NS)))
+        .next()?;
+    let back_s = (*t - at) as f64 * 1e-9;
+    let h = k.heading_rad.unwrap_or(0.0);
+    let mut early = k.clone();
+    early.t = at;
+    early.x_m -= k.speed_mps * math::cos(h) * back_s;
+    early.y_m -= k.speed_mps * math::sin(h) * back_s;
+    Some(Cow::Owned(early))
 }
 
 /// The true state as VeReMi vectors: velocity and acceleration along the heading.
@@ -1432,6 +1464,43 @@ mod tests {
         let v = reception_json(&reception());
         let report = crate::dataset::leakage::lint_rows("traceJSON-1.json", &[v]);
         assert!(report.is_clean(), "{}", report.summary());
+    }
+
+    /// VR-2: a vehicle's first BSM, received before its first `gt.kinematics` record, gets
+    /// that record carried back along its velocity, not the all-zero truth; a reception
+    /// with a record at or before it is unchanged, and one with none within
+    /// [`FORWARD_JOIN_NS`] keeps no truth.
+    ///
+    /// Fault injected (and reverted): `sender_truth` without its forward branch -> red.
+    #[test]
+    fn a_first_bsm_before_the_first_kinematics_record_gets_the_carried_back_truth() {
+        let rec = |t: u64, x: f64| v2xw_metrics::channels::GtKinematicsView {
+            t,
+            actor: v2xw_core::ids::ActorId::new(5),
+            x_m: x,
+            y_m: 50.0,
+            z_m: None,
+            speed_mps: 10.0,
+            acc_mps2: None,
+            heading_rad: Some(0.0),
+            lane: None,
+            lane_pos_m: None,
+            class: None,
+            node: None,
+            activity: None,
+            lamps: 0,
+        };
+        let mut truth_at = BTreeMap::new();
+        truth_at.insert((5, 9_900_000_000), rec(9_900_000_000, 100.0));
+        truth_at.insert((5, 10_000_000_000), rec(10_000_000_000, 101.0));
+        let first = sender_truth(&truth_at, 5, 9_781_000_000).expect("joined forward");
+        assert_eq!(first.t, 9_781_000_000);
+        assert!((first.x_m - (100.0 - 10.0 * 0.119)).abs() < 1e-9, "{}", first.x_m);
+        assert_eq!(first.y_m, 50.0);
+        let later = sender_truth(&truth_at, 5, 9_950_000_000).expect("at or before");
+        assert_eq!(later.x_m, 100.0);
+        assert!(sender_truth(&truth_at, 5, 9_600_000_000).is_none(), "0.3 s early");
+        assert!(sender_truth(&truth_at, 6, 9_950_000_000).is_none(), "another actor");
     }
 
     #[test]
