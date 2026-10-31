@@ -768,6 +768,30 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   so no golden moves. Not shown red: the enrolment-kept assert alone (the PSID fault fails
   the same test first).
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3; P9.1 only). Proto `appcert` passes on the merged tree. Still open: P9.2 (C2) and P9.3 (D1); the scratch kernel starts at 0 for a back-dated enrolment.
+- 2026-10-31 (wave C R5, P9.2, agent C2): **the identification signer slot.** Cause: a
+  node had one signer map, the pseudonym pool (`NodeSecurity::signers`, `secure.rs`), and
+  the transmit loop signed every message under the active pseudonym
+  (`ObuRuntime::generate`, `runtime.rs`, was `:2290-2306`), so an identification
+  certificate had nowhere to live and an SRM could only go out under a pseudonym. Now
+  `NodeSecurity` holds an identification slot beside the pool
+  (`install_identification`, `identification_signer`, `sign_identified`), filled through
+  `ObuRuntime::install_identification` and, from the engine, through
+  `wiring::install_identification_certs` (`IdentificationCred { valid_from, valid_until,
+  key }`, any `CredentialSink`). The slot is never rotated and `forget_credentials` keeps
+  it; a renewal is added beside the current certificate and the one valid at the node's
+  own time that opened last signs. Once the slot has been filled, an SRM is signed only
+  under it: the first SPDU under each identification certificate carries it whole, and
+  with none valid the SRM is not sent (`ObuRuntime::srm_no_identification`, also in
+  `tx_uncredentialed`), the source for P9.3's `srm_unsigned_no_ident`. The BSM stays on
+  pseudonyms (ASSUMPTION, unpublished for US emergency mode). A node never given one
+  signs SRMs under its pseudonym as before. The post-signature half of the loop moved,
+  unchanged, into `ObuRuntime::queue_signed`. Test
+  `runtime_behaviour::an_srm_is_signed_by_the_identification_slot` (red with
+  `sign_identified` signing under the active pseudonym: the SPDU's signer differs from the
+  identification digest). No golden moves: nothing in the engine fills the slot yet (P9.3,
+  D1: call `install_identification_certs` after `install_rsu_app_certs` for each
+  emergency-class vehicle's preloaded and renewed certificates; G-SCMS not re-run here).
+  Left: the SRM's requestor `VehicleID` is still the pseudonym-derived station id.
 
 ### SC-P12
 

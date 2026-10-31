@@ -1358,3 +1358,163 @@ fn a_braking_vehicles_bsm_carries_its_brake_status() {
     assert!(sent(Some(0.0)).iter().all(|&(b, _)| b == Some(false)));
     assert!(sent(None).iter().all(|&(b, a)| b.is_none() && a.is_none()));
 }
+
+// -------------------------------------------------------------------------------------
+// The identification signer slot (SC-P9.2)
+// -------------------------------------------------------------------------------------
+
+/// An OBU identification certificate for `node` valid from `valid_from_s`: implicit, from
+/// its own ACA, permitting the BSM (0x20) and the signal request (0x20_4096), as
+/// `AppCertKind::ObuIdentification` does ([CAMP122] Table 1 row 44).
+fn identification_key(node: NodeId, valid_from_s: u32) -> v2xw_sec::credential::ImplicitKey {
+    let psids = [0x20, 0x20_4096];
+    let iss =
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"node-tests/identification", 0, &psids)
+            .expect("issuer");
+    let mut secret = [0u8; 32];
+    secret[..4].copy_from_slice(&node.index().to_be_bytes());
+    secret[4..8].copy_from_slice(&valid_from_s.to_be_bytes());
+    secret[31] = 0x1d;
+    iss.issue_factory(
+        v2xw_sec::credential::FactoryProfile::RsuApplication,
+        &secret,
+        valid_from_s,
+        0,
+        valid_from_s,
+        &psids,
+    )
+    .expect("issues")
+}
+
+/// A digest's eight octets.
+fn id8(d: &v2xw_msg::sec_types::HashedId8) -> [u8; 8] {
+    v2xw_sec::hashedid::id8_bytes(d)
+}
+
+/// A MAP heard from a junction 100 m ahead, so the vehicle's priority service has a
+/// target to address an SRM to.
+fn map_ahead(k: u64) -> Vec<RxFrame> {
+    let mut f = frame(40, Vec3::new(100.0, 0.0, 0.0), k * 100 * NS_PER_MS, true);
+    f.msg_type = MsgType::Map;
+    vec![f]
+}
+
+/// Who signed each SRM and BSM a run sent, read back from the SPDU on the air:
+/// `(msg_type, generation time, signer digest, carried the certificate)`.
+fn signers_on_air(rt: &ObuRuntime, outs: &[StepOutcome]) -> Vec<(MsgType, SimTime, [u8; 8], bool)> {
+    outs.iter()
+        .flat_map(|o| o.transmissions.iter())
+        .filter(|t| matches!(t.msg_type, MsgType::Srm | MsgType::Bsm))
+        .map(|t| {
+            let spdu = &t.signed.as_ref().expect("signed").spdu;
+            let parsed = rt.security().parse(spdu).expect("parses");
+            let digest = v2xw_node::NodeSecurity::parsed_signer_digest(&parsed).expect("signer");
+            assert_eq!(digest, t.signer, "the record names the SPDU's own signer");
+            let attached = v2xw_node::NodeSecurity::attached_certificate(&parsed).is_some();
+            (t.msg_type, t.generation_time, id8(&digest), attached)
+        })
+        .collect()
+}
+
+/// The digests of a node's four pseudonyms (`node_on`'s pool, period 100).
+fn pseudonym_digests(rt: &ObuRuntime) -> std::collections::BTreeSet<[u8; 8]> {
+    (0..4)
+        .filter_map(|j| rt.security().signer_for_pseudonym(100, j))
+        .map(|s| id8(s.digest()))
+        .collect()
+}
+
+/// SC-P9.2: a privileged vehicle signs its SRMs under the identification certificate
+/// valid at the time, never under a pseudonym, and its BSMs stay on pseudonyms
+/// (ASSUMPTION: unpublished for US emergency mode). A renewal takes over when it opens,
+/// and the first SRM under each identification certificate carries it whole. A vehicle
+/// whose slot holds none valid sends no SRM at all, and one never given an
+/// identification certificate signs SRMs under its pseudonym, as before.
+///
+/// Fault injected (and reverted): `NodeSecurity::sign_identified` signing under the
+/// active pseudonym fails the signer digest assert.
+#[test]
+fn an_srm_is_signed_by_the_identification_slot() {
+    let services = ServiceSet {
+        bsm: true,
+        srm: true,
+        ..ServiceSet::NONE
+    };
+    let node = NodeId::new(1);
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+    // The current certificate, valid for the first 5 s, and its renewal from 4 s: the
+    // one-hour overlap of the 721 h CAMP profile, scaled down.
+    let first = rt
+        .install_identification(&identification_key(node, 0), 0, 5 * NS_PER_S)
+        .expect("the first installs");
+    let renewal = rt
+        .install_identification(&identification_key(node, 4), 4 * NS_PER_S, 20 * NS_PER_S)
+        .expect("the renewal installs");
+    assert_ne!(first, renewal);
+    assert_eq!(
+        rt.install_identification(&identification_key(node, 4), 4 * NS_PER_S, 20 * NS_PER_S)
+            .expect("again"),
+        renewal,
+        "a certificate already in the slot is the same signer"
+    );
+    let outs = run(&mut rt, 60, 100 * NS_PER_MS, map_ahead);
+    let pseudonyms = pseudonym_digests(&rt);
+    let seen = signers_on_air(&rt, &outs);
+    let srms: Vec<_> = seen.iter().filter(|s| s.0 == MsgType::Srm).collect();
+    assert!(srms.len() >= 5, "an SRM a second for 6 s: {}", srms.len());
+    for (_, at, digest, _) in &srms {
+        let want = if *at < 4 * NS_PER_S { &first } else { &renewal };
+        assert_eq!(
+            digest,
+            &id8(want),
+            "the SRM at {at} ns is signed by the identification certificate valid then"
+        );
+    }
+    let first_under = |d: &[u8; 8]| srms.iter().find(|s| &s.2 == d).map(|s| s.3);
+    assert_eq!(
+        first_under(&id8(&first)),
+        Some(true),
+        "the first SRM carries its certificate"
+    );
+    assert_eq!(
+        first_under(&id8(&renewal)),
+        Some(true),
+        "and so does the first under the renewal"
+    );
+    let bsms: Vec<_> = seen.iter().filter(|s| s.0 == MsgType::Bsm).collect();
+    assert!(!bsms.is_empty());
+    assert!(
+        bsms.iter().all(|b| pseudonyms.contains(&b.2)),
+        "every BSM stays on a pseudonym"
+    );
+    assert_eq!(rt.srm_no_identification(), 0);
+
+    // A slot whose only certificate has lapsed: no SRM goes out, under anything.
+    let mut lapsed = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+    lapsed
+        .install_identification(&identification_key(node, 0), 0, 50 * NS_PER_MS)
+        .expect("installs");
+    let outs = run(&mut lapsed, 30, 100 * NS_PER_MS, map_ahead);
+    let seen = signers_on_air(&lapsed, &outs);
+    assert!(
+        seen.iter().all(|s| s.0 != MsgType::Srm),
+        "no SRM without identification"
+    );
+    assert!(
+        lapsed.srm_no_identification() >= 2,
+        "{}",
+        lapsed.srm_no_identification()
+    );
+    assert!(
+        seen.iter().any(|s| s.0 == MsgType::Bsm),
+        "the BSMs carry on"
+    );
+
+    // No identification certificate ever: the pseudonym signs the SRM, as before.
+    let mut ordinary = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+    let outs = run(&mut ordinary, 30, 100 * NS_PER_MS, map_ahead);
+    let seen = signers_on_air(&ordinary, &outs);
+    let srm = seen.iter().find(|s| s.0 == MsgType::Srm).expect("an SRM");
+    assert!(pseudonym_digests(&ordinary).contains(&srm.2));
+    assert_eq!(ordinary.srm_no_identification(), 0);
+}
