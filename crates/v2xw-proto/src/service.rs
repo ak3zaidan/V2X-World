@@ -6,6 +6,12 @@
 //! overhead, and a request that arrives while every server is busy waits. That is the
 //! `medium` tier's structure with a deterministic service time.
 //!
+//! The `high` tier's variable service time is [`ServiceTimeModel::LogNormal`] (SC-P12.2):
+//! each request's `work + fixed_overhead` is multiplied by a log-normal draw with median 1
+//! and coefficient of variation `cv`, so the median service time is the deterministic one.
+//! Off by default ([`ServiceTimeModel::Deterministic`]), and its `cv` is a labelled
+//! ASSUMPTION for the sensitivity sweeps.
+//!
 //! The `high` tier's availability model is [`AvailabilityModel`] (SC-P12.1): a two-state
 //! alternating renewal process per entity (06-node-models §4), off by default. Its
 //! parameters are `todo-calibrate` in the design, so every value is a labelled
@@ -13,12 +19,13 @@
 //! Its down intervals are applied as `offline` faults ([`crate::fault`]), exactly as a
 //! scenario's `actors.backend.failures[]` window is.
 //!
-//! Determinism: no RNG stream, no float in the queue. Service times are sums of the
-//! integer nanosecond durations of `v2xw_sec::primitive`'s cost tables, and the server a
-//! request lands on is the lowest-indexed one that is free earliest, chosen by an
-//! explicit total order. The availability draws are keyed hashes ([`keyed_uniform`]):
-//! each interval is a pure function of `(seed, entity, k, kind)`, and takes no position
-//! in any stream.
+//! Determinism: no RNG stream, and no float in the deterministic queue. Service times are
+//! sums of the integer nanosecond durations of `v2xw_sec::primitive`'s cost tables, and
+//! the server a request lands on is the lowest-indexed one that is free earliest, chosen
+//! by an explicit total order. The availability and service-time draws are keyed hashes
+//! ([`keyed_uniform`]): each interval or multiplier is a pure function of `(seed, entity,
+//! k, kind)`, takes no position in any stream, and uses only `v2xw_core::math`'s
+//! transcendentals, which give the same bits on every platform.
 
 use v2xw_core::time::{Duration, SimTime};
 
@@ -97,7 +104,7 @@ impl AvailabilityModel {
     fn interval(mean: Duration, seed: u64, entity: u64, k: u64, kind: u64) -> u64 {
         let u = keyed_uniform(seed, entity, k, kind);
         #[allow(clippy::cast_precision_loss)]
-        let x = -(mean.as_nanos() as f64) * (1.0 - u).ln();
+        let x = -(mean.as_nanos() as f64) * v2xw_core::math::ln(1.0 - u);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let ns = x.round() as u64;
         ns.max(1)
@@ -136,6 +143,78 @@ impl AvailabilityModel {
     }
 }
 
+/// How an entity's service times vary (06-node-models §4; SC-P12.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ServiceTimeModel {
+    /// The cost table's time, exactly: `work + fixed_overhead` (the default).
+    #[default]
+    Deterministic,
+    /// `work + fixed_overhead` times a log-normal multiplier with median 1 and coefficient
+    /// of variation `cv_milli / 1000`: `μ = 0`, `σ = sqrt(ln(1 + cv²))`. ASSUMPTION
+    /// (labelled, `constants.md`): the shape and `cv` are not measured.
+    LogNormal {
+        /// The coefficient of variation, in thousandths (250 is 0.25).
+        cv_milli: u32,
+    },
+}
+
+/// Draw kinds of [`ServiceTimeModel::multiplier`]: the two uniforms of a Box-Muller
+/// normal.
+const SERVICE_RADIUS_DRAW: u64 = 0x7376_632d_72; // "svc-r"
+const SERVICE_ANGLE_DRAW: u64 = 0x7376_632d_61; // "svc-a"
+
+impl ServiceTimeModel {
+    /// The log-normal's `σ = sqrt(ln(1 + cv²))`; 0 when deterministic.
+    #[must_use]
+    pub fn sigma(&self) -> f64 {
+        match *self {
+            ServiceTimeModel::Deterministic => 0.0,
+            ServiceTimeModel::LogNormal { cv_milli } => {
+                let cv = f64::from(cv_milli) / 1000.0;
+                v2xw_core::math::sqrt(v2xw_core::math::ln(1.0 + cv * cv))
+            }
+        }
+    }
+
+    /// The multiplier of the `n`-th request (0-based) entity `entity` serves under `seed`:
+    /// `exp(σ·z)`, with `z` a standard normal from two keyed uniforms (Box-Muller,
+    /// `z = sqrt(−2·ln(1 − u₁))·cos(2π·u₂)`). Exactly 1 when deterministic.
+    #[must_use]
+    pub fn multiplier(&self, seed: u64, entity: u64, n: u64) -> f64 {
+        let sigma = self.sigma();
+        if sigma == 0.0 {
+            return 1.0;
+        }
+        let u1 = keyed_uniform(seed, entity, n, SERVICE_RADIUS_DRAW);
+        let u2 = keyed_uniform(seed, entity, n, SERVICE_ANGLE_DRAW);
+        let r = v2xw_core::math::sqrt(-2.0 * v2xw_core::math::ln(1.0 - u1));
+        let z = r * v2xw_core::math::cos(2.0 * core::f64::consts::PI * u2);
+        v2xw_core::math::exp(sigma * z)
+    }
+
+    /// `base` scaled by [`ServiceTimeModel::multiplier`], rounded to whole nanoseconds.
+    /// The deterministic model returns `base` untouched, with no float on its path.
+    #[must_use]
+    pub fn apply(&self, base: Duration, seed: u64, entity: u64, n: u64) -> Duration {
+        if matches!(self, ServiceTimeModel::Deterministic) {
+            return base;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let x = base.as_nanos() as f64 * self.multiplier(seed, entity, n);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let ns = if x >= u64::MAX as f64 {
+            u64::MAX
+        } else {
+            x.round() as u64
+        };
+        Duration::from_nanos(ns)
+    }
+}
+
 /// How an entity serves requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ServiceModelSpec {
@@ -152,6 +231,9 @@ pub struct ServiceModelSpec {
     /// as busy (`capacity.<role>.queue_limit`, 08-settings-ux-and-gaps §6). `None`:
     /// unlimited, the default.
     pub queue_limit: Option<u32>,
+    /// How its service times vary: [`ServiceTimeModel::Deterministic`] (the default) or
+    /// the log-normal multiplier (SC-P12.2).
+    pub service_time: ServiceTimeModel,
 }
 
 impl ServiceModelSpec {
@@ -163,6 +245,16 @@ impl ServiceModelSpec {
             batching: None,
             availability: None,
             queue_limit: None,
+            service_time: ServiceTimeModel::Deterministic,
+        }
+    }
+
+    /// The same, with service times varied under `model` (SC-P12.2).
+    #[must_use]
+    pub const fn varied(self, model: ServiceTimeModel) -> ServiceModelSpec {
+        ServiceModelSpec {
+            service_time: model,
+            ..self
         }
     }
 
@@ -217,6 +309,12 @@ pub struct ServiceQueue {
     refused: u64,
     /// Its availability model, if it fails at random.
     availability: Option<AvailabilityModel>,
+    /// How its service times vary.
+    service_time: ServiceTimeModel,
+    /// The run seed its service-time draws are keyed by ([`ServiceQueue::keyed`]).
+    seed: u64,
+    /// The entity its service-time draws are keyed by: its node index once hosted.
+    entity: u64,
 }
 
 impl ServiceQueue {
@@ -233,7 +331,31 @@ impl ServiceQueue {
             limit: spec.queue_limit,
             refused: 0,
             availability: spec.availability,
+            service_time: spec.service_time,
+            seed: 0,
+            entity: 0,
         }
+    }
+
+    /// The same queue with its service-time draws keyed by `(seed, entity)`: the `n`-th
+    /// request it serves gets [`ServiceTimeModel::multiplier`]`(seed, entity, n)`, whatever
+    /// any other entity serves. [`crate::Kernel::host`] keys each queue by its node index
+    /// and [`crate::Kernel::seed_service_times`] sets the run seed.
+    #[must_use]
+    pub const fn keyed(mut self, seed: u64, entity: u64) -> ServiceQueue {
+        self.seed = seed;
+        self.entity = entity;
+        self
+    }
+
+    /// Sets the run seed its service-time draws are keyed by.
+    pub const fn set_seed(&mut self, seed: u64) {
+        self.seed = seed;
+    }
+
+    /// How its service times vary.
+    pub const fn service_time(&self) -> ServiceTimeModel {
+        self.service_time
     }
 
     /// The model it was built from (without the batching, which its entity applies).
@@ -241,6 +363,7 @@ impl ServiceQueue {
         ServiceModelSpec::new(self.servers, self.fixed_overhead)
             .limited(self.limit)
             .available(self.availability)
+            .varied(self.service_time)
     }
 
     /// Its availability model, if it fails at random.
@@ -277,6 +400,9 @@ impl ServiceQueue {
 
     /// Admits a request that arrived at `arrival` and needs `work` of cryptographic time.
     ///
+    /// Its service time is `work + fixed_overhead`, scaled under a log-normal
+    /// [`ServiceTimeModel`] by the multiplier keyed by `(seed, entity, served)`.
+    ///
     /// Returns the instant the entity finishes it — which is when its outgoing messages
     /// leave and when its stages are stamped.
     pub fn admit(&mut self, arrival: SimTime, work: Duration) -> SimTime {
@@ -288,9 +414,14 @@ impl ServiceQueue {
             .min_by_key(|&(i, t)| (t, i))
             .unwrap_or((0, arrival));
         let start = free.max(arrival);
-        let service = Duration::from_nanos(
-            work.as_nanos()
-                .saturating_add(self.fixed_overhead.as_nanos()),
+        let service = self.service_time.apply(
+            Duration::from_nanos(
+                work.as_nanos()
+                    .saturating_add(self.fixed_overhead.as_nanos()),
+            ),
+            self.seed,
+            self.entity,
+            self.served,
         );
         let done = service.after(start);
         self.free_at[index] = done;

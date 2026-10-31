@@ -817,3 +817,26 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `scms-knobs.yaml` rows. Note: the engine's `scms_topology.rs` `with_capacity` rebuilds
   the spec with `ServiceModelSpec::new`, which drops a model, so P12.3 must keep it there.
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`7ed278f6`, track c3; P12.1 only). Proto `availability` passes on the merged tree. Still open: P12.2 not started; P12.3 (D1) wiring and the `scms_topology.rs` `with_capacity` drop of the model.
+- 2026-10-31 (wave C R5, P12.2, agent C3): **log-normal service times, off by default.**
+  Cause: `ServiceQueue::admit` (`service.rs`, was `:291-294`) served every request in
+  exactly `work + fixed_overhead`, and `ServiceModelSpec` had no field for anything else.
+  Now `ServiceModelSpec::service_time` is a `ServiceTimeModel` (`Deterministic`, the
+  default, or `LogNormal { cv_milli }`, set with `.varied(..)`, kept by
+  `ServiceQueue::spec`). Under the log-normal, `admit` multiplies the service time by
+  `exp(σ·z)`, `σ = sqrt(ln(1 + cv²))`, `μ = 0` (median 1), with `z` a Box-Muller normal
+  from two keyed hashes of `(seed, entity, served, kind)`, no stream position, rounded to
+  integer ns. `Kernel::host` keys each queue by its node index and
+  `Kernel::seed_service_times(seed)` sets the run seed (0 until called). The
+  deterministic path has no float and is unchanged. Also fixed: P12.1's exponential
+  interval called `f64::ln`, which `v2xw_core::math` forbids (platform libm); it now
+  calls `v2xw_core::math::ln` (off by default, so no golden). Parameters are rows in
+  `constants.md` §1.6 (ASSUMPTION). Tests `availability::service_times_are_lognormal_with_median_one`
+  (red with `σ = cv`: sample cv 1.318 against 1.0) and
+  `availability::the_same_seed_gives_the_same_service_times` (red with `Kernel::host`
+  keying every queue as entity 0: two entities shared draws). No golden moves: no entity
+  has a model. Left to P12.3 (D1): the `service_time.model` and `service_time.cv` keys
+  (menus in 10 §1 SC-P12), the `crypto_config.rs` mapping to `cv_milli`, the call
+  `kernel.seed_service_times(seed)` before the first dispatch, keeping the model in
+  `scms_topology.rs` `with_capacity` (it rebuilds the spec with `ServiceModelSpec::new`,
+  which drops both models), and the `scms-knobs.yaml` rows (`{service_time.cv, 0 -> 1,
+  report.topup_latency_p99_s, up}`, verdict: open).

@@ -359,6 +359,9 @@ pub struct Kernel<M> {
     heap: BinaryHeap<Reverse<Queued<M>>>,
     queues: BTreeMap<NodeId, ServiceQueue>,
     profiles: BTreeMap<NodeId, &'static str>,
+    /// The run seed every hosted queue's service-time draws are keyed by
+    /// ([`Kernel::seed_service_times`], SC-P12.2).
+    service_seed: u64,
     net: BackendNet,
     /// Every stage every flow stamped.
     pub stages: StageLog,
@@ -392,6 +395,7 @@ impl<M> Kernel<M> {
             heap: BinaryHeap::new(),
             queues: BTreeMap::new(),
             profiles: BTreeMap::new(),
+            service_seed: 0,
             net,
             stages: StageLog::new(),
             steps: Vec::new(),
@@ -473,9 +477,23 @@ impl<M> Kernel<M> {
             .sum()
     }
 
+    /// Keys every hosted entity's service-time draws ([`crate::service::ServiceTimeModel`],
+    /// SC-P12.2) by `seed`, and every entity hosted later too. Each entity's draws are
+    /// its own, keyed by its node index and its request count. Until called, the seed is
+    /// 0. Changes nothing for a deterministic entity.
+    pub fn seed_service_times(&mut self, seed: u64) {
+        self.service_seed = seed;
+        for q in self.queues.values_mut() {
+            q.set_seed(seed);
+        }
+    }
+
     /// Gives `node` a service model and a hardware profile.
     pub fn host(&mut self, node: NodeId, spec: &ServiceModelSpec, profile: &'static str) {
-        self.queues.insert(node, ServiceQueue::new(spec));
+        self.queues.insert(
+            node,
+            ServiceQueue::new(spec).keyed(self.service_seed, u64::from(node.index())),
+        );
         self.profiles.insert(node, profile);
     }
 
