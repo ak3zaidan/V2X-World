@@ -141,6 +141,10 @@ def load(run_dir):
                             'crls': [dict(c) for c in q.get('crls') or []]})
             elif t == 'node.credentials':
                 q = json.loads(m.data)
+                # A roadside unit's own rows (device rsu/<node>, since 2026-10-30) carry its
+                # application certificates; this audit's `cred` is the vehicles'.
+                if (q.get('device') or '').startswith('rsu/'):
+                    continue
                 c = cred.setdefault(q['node'], {'device': q.get('device'),
                                                 'provider': q.get('provider'), 'cells': {}})
                 for cell in q.get('cells') or []:
