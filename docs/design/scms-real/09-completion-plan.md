@@ -194,3 +194,27 @@ Dated notes go under each id as its wave lands.
   fault (no forward branch) red. Recorded, not changed: the node is live up to one step
   before its vehicle's first record; moving node creation would re-time every spawn and
   move every golden for an effect only this export sees.
+
+### SC-D5
+
+- **2026-10-30 (wave A): fixed (`146e87b1`).** The 88 full-scale cases were R-USFP (raw
+  GNSS white noise), fixed earlier by the smoothed receiver (testing/usfp.md). What was
+  left at full density: every honest `positionJump` compared two BSMs with lost ones
+  between them (memory-density.md §2.2: no pair as sent breaks the rule). That came from
+  `UsSmMbr::checks` (`crates/v2xw-threat/src/us_mbr.rs`), which paired a BSM with the
+  previous one *received* within `max_gap_s`. SM-MBR v1.0 judges "two consecutive BSMs"
+  and the ASN.1 v1.1 two BSMs "sent 0.1 seconds apart". Neither has a streak gate, so none
+  was added: one would leave the US rules. A receiver tells consecutive BSMs apart by J2735
+  `msgCnt`, so the sender now carries it (`BsmExtras::msg_cnt`) and the profile pairs only
+  `msgCnt` successors within `max_gap_s`. The new choice
+  `detection.local[].params.consecutive` takes `msg_count` (the default) or `received`
+  (the old reading). Every Paper 1 scenario sets `received`, so Paper 1 keeps the reading
+  it was measured on; its p1-attack recording is byte-identical to the release binary's.
+- Evidence: `stress/fs-40` (full fleet, 40 s live), same binary, received -> msg_count.
+  Verdicts went 8 -> 0 (positionJump 3, constantPositionFrozen 5) and reports about honest
+  devices 8 -> 0. Attackers are still caught: on p1-attack, reports about attackers went
+  126 -> 122, about the same attacker, with 2 cases in both. Fault: `in_sequence` always
+  true makes `us_mbr::tests::only_bsms_consecutive_on_the_air_are_a_pair` red. No golden
+  moved: the pinned runs use the research suite.
+- Left: the matrix, realism and live-atk US-profile rows were measured on the old reading,
+  so they are re-measured in the validation wave.
