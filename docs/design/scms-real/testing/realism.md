@@ -147,10 +147,13 @@ Run cost (wall / CPU s; backend ticks):
   gate.
 - Reports carry the profile's thresholds. The new check `implausibleSpeed` maps to
   MaxSpeed and has no fingerprint column, so `detnorm_*` is unchanged.
+- Since SC-P7 (2026-10-31) MaxAcceleration reads the BSM's `accelSet.long` (a single
+  BSM, [SM-MBR] §2.3.1.3.1/§2.3.1.3.3; `max_accel_reading: speed-difference` keeps the
+  implied acceleration, and a BSM without `accelSet` falls back to it), and
+  BrakeAcceleration (`brakeAcceleration`, US-only, no fingerprint column) fires on brakes on,
+  `accelSet.long` > 0 and a non-zero speed (§2.3.1.3.4's acute angle with the velocity).
+  The report subtype mapping for `brakeAcceleration` is SC-P6's.
 - Deviations:
-  - MaxAcceleration uses the implied acceleration, because the observation has no
-    `accelSet`.
-  - BrakeAcceleration is not checked, because there is no brake status.
   - "Consecutive" is ≤ 0.5 s apart (ASSUMPTION).
 - Engine option: `detection.local: [{id: detect/us-sm-mbr, params: {...}}]`. The profile
   must be listed alone.

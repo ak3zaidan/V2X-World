@@ -2397,7 +2397,7 @@ impl ObuRuntime {
         device.report(cal, &mut rng, &self.belief)
     }
 
-    /// A BSM's `secMark` and `accelSet.long` as its encoder fills them.
+    /// A BSM's `secMark`, `accelSet.long` and brake status as its encoder fills them.
     fn bsm_extras(
         &self,
         msg_type: MsgType,
@@ -2421,6 +2421,13 @@ impl ObuRuntime {
                 .own
                 .bus()
                 .map(|b| (b.a_long_mps2.clamp(-20.0, 20.0) * 100.0).round() / 100.0),
+            // `brakes.wheelBrakes` as `encode_payload` filled it from the bus (no bus: the
+            // status is not sent). The `unavailable` bit reads as unknown.
+            brakes_applied: self.own.bus().and_then(|_| {
+                let w = self.own.brakes().wheel_brakes.0;
+                (w & bsm::BrakeAppliedStatus::UNAVAILABLE.0 == 0)
+                    .then_some(w & bsm::BrakeAppliedStatus::ALL_WHEELS.0 != 0)
+            }),
         }
     }
 

@@ -2590,8 +2590,9 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
                                 format!(
                                     "is {value}; reading takes v1_0 or asn1_v1_1, time_base \
                                      takes generation_time or secmark, consecutive takes \
-                                     msg_count or received, and every other parameter a \
-                                     number"
+                                     msg_count or received, max_accel_reading takes \
+                                     accel-set or speed-difference, and every other \
+                                     parameter a number"
                                 ),
                             ));
                         }
@@ -2617,6 +2618,13 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
                                  report_interval_s, {}",
                                 v2xw_threat::us_mbr::PARAM_KEYS.join(", ")
                             ),
+                        ));
+                    } else if let Some((lo, hi)) = v2xw_threat::us_mbr::range(key)
+                        && !(lo..=hi).contains(&v)
+                    {
+                        return Err(conflict(
+                            &field,
+                            format!("is {value}; it takes {lo} to {hi}"),
                         ));
                     }
                 }

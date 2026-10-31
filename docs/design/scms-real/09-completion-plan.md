@@ -510,3 +510,33 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   ba01d4823379) reproduce; no G-SCMS case has a backend failure, and an unchanged digest
   means none of their vehicles was unprovisioned before or after (one would have signed
   with the stand-in before and stayed silent after).
+
+### SC-P7
+
+- 2026-10-31 (wave C, C2): BrakeAcceleration and MaxAcceleration read the BSM's own fields.
+  `BsmExtras` (`v2xw-core/src/bsm_fields.rs`) gains `brakes_applied`, filled by the sender
+  from the `brakes.wheelBrakes` it encodes (`runtime.rs` `bsm_extras`: a wheel bit ->
+  `Some(true)`, none -> `Some(false)`, `unavailable` or no bus -> `None`); the receiver's
+  copy is what the frame carried. [SM-MBR] v1.0 was read for the speed condition (the PDF,
+  extracted by hand): §2.3.1.3.1 "the evidence for this type is a single BSM"; §2.3.1.3.3
+  "the acceleration in a single BSM"; §2.3.1.3.4 "the vehicle is braking but … the
+  acceleration is not negative, i.e. that the acceleration vector makes an acute angle with
+  the velocity vector". The acute angle needs a velocity, so the speed gate
+  (`speed ≥ speed_resolution_mps`) is the text, not an ASSUMPTION, and an acute angle is a
+  strictly positive component, so `brake_accel_tolerance_mps2` defaults to 0 (the spec's
+  0.01, one LSB, is a menu value). New `DetectorId::BrakeAcceleration`
+  (`brakeAcceleration`), US-only, outside `DetectorId::ALL`: no `detnorm_*` column, G-ML
+  cannot move. MaxAcceleration under `max_accel_reading: accel-set` (default) fires on
+  `|accelSet.long| > max_accel_mps2` from one BSM; a BSM without `accelSet` falls back to
+  `|v₂ − v₁| / Δt` (`UsSmMbr::accel_unavailable_fallbacks`). Settings (model card,
+  `PARAM_KEYS` 17 -> 20, reference rows): `max_accel_reading` (`accel-set` "Reported
+  acceleration (SM-MBR)", `speed-difference` "From consecutive speeds"),
+  `brake_acceleration` (on/off), `brake_accel_tolerance_mps2` (0, 0.01, 0.1, 0.5 m/s²,
+  range 0-2 enforced by the loader, step 0.01). The stale deviation bullets are gone. No
+  golden moves: no G-SCMS scenario names `detect/us-sm-mbr` (phase2-manhattan, the
+  two-provider I-S1 case and ttc-triggered-brake use legacy-12). Left: the PSID-0x20
+  report subtype for `brakeAcceleration` (`phase2.rs` `us_subtype`) is SC-P6's (C1);
+  `ma_policy::RULE_KEYS` has no `detect/brakeAcceleration` yet. Wave E rows (verdict open)
+  in `live-atk.yaml`: `P7.TSU.maxaccel-reads-accel-set` (RandomSpeed lies only in the speed
+  field: predicted down from 14262 to under 1 %; supersedes `TSU.maxaccel`) and
+  `P7.B0U.no-honest-brake-acceleration` (eq 0).

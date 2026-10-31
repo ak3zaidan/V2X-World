@@ -9,7 +9,7 @@
 //! | 1VInconsistent / RandomPosition (2) | two consecutive BSMs: `|p₁ + v₁·Δt − p₂| > gpsDrift` | on, 1 m | [`DetectorId::PositionJump`] |
 //! | Implausible / MaxSpeed (1) | speed > threshold | on, 90 m/s | [`DetectorId::ImplausibleSpeed`] |
 //! | Implausible / MaxAcceleration (2) | acceleration > threshold | on, 10 m/s² | [`DetectorId::ImplausibleAcceleration`] |
-//! | Implausible / BrakeAcceleration (3) | brakes on, acceleration not negative | on | not modelled (below) |
+//! | Implausible / BrakeAcceleration (3) | brakes on, acceleration not negative | on | [`DetectorId::BrakeAcceleration`] |
 //! | ObsImplausible / Distance (1) | distance to the observer > threshold + gpsDrift | **off**, 3000 m + 10 m | [`DetectorId::AcceptanceRangeThreshold`] |
 //!
 //! What the profile does that the research suite ([`crate::detect::Legacy12`]) does not:
@@ -27,11 +27,25 @@
 //! certificate. Under `on-demand` verification that leaves the profile nearly blind, which
 //! the loader says in a warning (`scenario::detection_policy_warnings`).
 //!
+//! The Implausible type judges "a single BSM" ([SM-MBR] §2.3.1.3.1: "the evidence for this
+//! type is a single BSM"), from the fields the frame carried
+//! ([`v2xw_core::bsm_fields::BsmExtras`]), so a sender
+//! that forges the frame forges them:
+//! * **MaxAcceleration** (`max_accel_reading = accel-set`, the default): the BSM's
+//!   `|accelSet.long|` above the threshold ("the acceleration in a single BSM",
+//!   §2.3.1.3.3). A BSM without `accelSet` falls back to the acceleration two
+//!   consecutive speeds imply, `|v₂ − v₁| / Δt`, counted in
+//!   [`UsSmMbr::accel_unavailable_fallbacks`]; `speed-difference` keeps that reading for
+//!   every BSM (the reading before SC-P7).
+//! * **BrakeAcceleration** (§2.3.1.3.4): the BSM's `brakes.wheelBrakes` has a wheel bit
+//!   set and its acceleration "is not negative, i.e. … the acceleration vector makes an
+//!   acute angle with the velocity vector": `accelSet.long > brake_accel_tolerance_mps2`
+//!   (0 by default: an acute angle is a strictly positive component) and a velocity to
+//!   make the angle with, `speed ≥ speed_resolution_mps` (one J2735 LSB). A vehicle held
+//!   at a red light (brakes on, `accelSet.long` 0, speed 0) is therefore not reported.
+//!   An `unavailable` brake status or a missing `accelSet` is not judged.
+//!
 //! Deviations, each named in `docs/design/scms-real/testing/realism.md`:
-//! * **MaxAcceleration** reads the acceleration implied by two consecutive speeds,
-//!   `|v₂ − v₁| / Δt`: the receiver's observation does not carry the BSM's `accelSet`.
-//! * **BrakeAcceleration** never fires: the observation does not carry `brakes`. No
-//!   attack of the catalogue falsifies the brake status, so nothing is missed today.
 //! * **Consecutive** means consecutive *on the air*: the second BSM's `msgCnt` is the
 //!   first's plus one (J2735 `MsgCount`, mod 128), and the two are at most `max_gap_s`
 //!   apart (ASSUMPTION, 0.5 s: five BSM intervals). Both SM-MBR texts judge "two
@@ -96,6 +110,13 @@ pub struct UsMbrParams {
     pub max_acceleration: bool,
     /// `…-MaxAcceleration-Threshold`, m/s² (10).
     pub max_accel_mps2: f64,
+    /// Which acceleration MaxAcceleration judges (the BSM's `accelSet`).
+    pub max_accel_reading: AccelReading,
+    /// `mbr-Psid20-Implausible-BrakeAcceleration` (on).
+    pub brake_acceleration: bool,
+    /// How far above zero `accelSet.long` must be to count as "not negative" under brakes,
+    /// m/s² (0: [SM-MBR] §2.3.1.3.4's acute angle is a strictly positive component).
+    pub brake_accel_tolerance_mps2: f64,
     /// `mbr-Psid20-ObsImplausible-Distance` (**off**: a relay makes an innocent sender
     /// look far away).
     pub obs_distance: bool,
@@ -120,6 +141,28 @@ pub struct UsMbrParams {
     pub spacing_tolerance_s: f64,
     /// What makes two BSMs of one certificate consecutive (`msgCnt` successors).
     pub consecutive: Consecutive,
+}
+
+/// Which acceleration MaxAcceleration judges.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AccelReading {
+    /// The BSM's own `accelSet.long` ([SM-MBR] §2.3.1.3.3, "the acceleration in a single
+    /// BSM"); a BSM without one falls back to [`Self::SpeedDifference`].
+    #[default]
+    AccelSet,
+    /// `|v₂ − v₁| / Δt` from two consecutive BSMs (the reading before SC-P7).
+    SpeedDifference,
+}
+
+impl AccelReading {
+    /// The name the scenario uses.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AccelSet => "accel-set",
+            Self::SpeedDifference => "speed-difference",
+        }
+    }
 }
 
 /// What makes two BSMs from one certificate a consecutive pair.
@@ -196,6 +239,9 @@ impl Default for UsMbrParams {
             max_speed_mps: 90.0,
             max_acceleration: true,
             max_accel_mps2: 10.0,
+            max_accel_reading: AccelReading::AccelSet,
+            brake_acceleration: true,
+            brake_accel_tolerance_mps2: 0.0,
             obs_distance: false,
             obs_distance_m: 3000.0,
             obs_gps_drift_m: 10.0,
@@ -211,7 +257,7 @@ impl Default for UsMbrParams {
 }
 
 /// The parameter names [`UsMbrParams::apply`] reads.
-pub const PARAM_KEYS: [&str; 17] = [
+pub const PARAM_KEYS: [&str; 20] = [
     "constant_position",
     "random_position",
     "gps_drift_m",
@@ -219,6 +265,9 @@ pub const PARAM_KEYS: [&str; 17] = [
     "max_speed_mps",
     "max_acceleration",
     "max_accel_mps2",
+    "max_accel_reading",
+    "brake_acceleration",
+    "brake_accel_tolerance_mps2",
     "obs_distance",
     "obs_distance_m",
     "obs_gps_drift_m",
@@ -230,6 +279,16 @@ pub const PARAM_KEYS: [&str; 17] = [
     "spacing_tolerance_s",
     "consecutive",
 ];
+
+/// The bounds a numeric parameter must lie in, where the profile states any: the brake
+/// tolerance is 0 to 2 m/s² in 0.01 steps (the J2735 `Acceleration` LSB).
+#[must_use]
+pub fn range(key: &str) -> Option<(f64, f64)> {
+    match key {
+        "brake_accel_tolerance_mps2" => Some((0.0, 2.0)),
+        _ => None,
+    }
+}
 
 impl UsMbrParams {
     /// Sets one parameter by name (a switch is on when `v` is non-zero); false for a name
@@ -244,6 +303,15 @@ impl UsMbrParams {
             "max_speed_mps" => self.max_speed_mps = v,
             "max_acceleration" => self.max_acceleration = on,
             "max_accel_mps2" => self.max_accel_mps2 = v,
+            "max_accel_reading" => {
+                self.max_accel_reading = if on {
+                    AccelReading::SpeedDifference
+                } else {
+                    AccelReading::AccelSet
+                };
+            }
+            "brake_acceleration" => self.brake_acceleration = on,
+            "brake_accel_tolerance_mps2" => self.brake_accel_tolerance_mps2 = v,
             "obs_distance" => self.obs_distance = on,
             "obs_distance_m" => self.obs_distance_m = v,
             "obs_gps_drift_m" => self.obs_gps_drift_m = v,
@@ -288,6 +356,10 @@ impl UsMbrParams {
             ("time_base", "secmark") => self.time_base = TimeBase::SecMark,
             ("consecutive", "msg_count") => self.consecutive = Consecutive::MsgCount,
             ("consecutive", "received") => self.consecutive = Consecutive::Received,
+            ("max_accel_reading", "accel-set") => self.max_accel_reading = AccelReading::AccelSet,
+            ("max_accel_reading", "speed-difference") => {
+                self.max_accel_reading = AccelReading::SpeedDifference;
+            }
             _ => return false,
         }
         true
@@ -358,6 +430,9 @@ pub struct UsSmMbr {
     last: BTreeMap<[u8; 8], Last>,
     /// Inserts since the last sweep of `last`.
     since_sweep: u32,
+    /// MaxAcceleration checks that read two consecutive speeds because the BSM carried no
+    /// `accelSet` (under `max_accel_reading = accel-set`).
+    accel_unavailable_fallbacks: u64,
 }
 
 impl UsSmMbr {
@@ -369,7 +444,15 @@ impl UsSmMbr {
             params,
             last: BTreeMap::new(),
             since_sweep: 0,
+            accel_unavailable_fallbacks: 0,
         }
+    }
+
+    /// How many MaxAcceleration checks fell back to the speed difference of two
+    /// consecutive BSMs because the BSM carried no `accelSet` (`accel-set` reading only).
+    #[must_use]
+    pub fn accel_unavailable_fallbacks(&self) -> u64 {
+        self.accel_unavailable_fallbacks
     }
 
     /// The thresholds it reads.
@@ -393,9 +476,21 @@ impl UsSmMbr {
 
     /// The checks `m` fails against the previous BSM `prev` of its sender (if consecutive)
     /// and on its own.
-    fn checks(&self, prev: Option<Last>, m: &ObservedMessage, me: &SelfBelief) -> Vec<DetectorId> {
+    fn checks(
+        &mut self,
+        prev: Option<Last>,
+        m: &ObservedMessage,
+        me: &SelfBelief,
+    ) -> Vec<DetectorId> {
         let p = &self.params;
         let mut out = Vec::new();
+        // MaxAcceleration on the BSM's own accelSet, when that is the reading and the BSM
+        // carries one; otherwise on two consecutive speeds below.
+        let accel_set = match (p.max_accel_reading, m.bsm.accel_long_mps2) {
+            (AccelReading::AccelSet, Some(a)) => Some(a),
+            _ => None,
+        };
+        let mut fell_back = false;
         if let Some(r) = prev {
             // "The time between" two BSMs, on the configured clock (generationTime by
             // default, or secMark).
@@ -430,21 +525,38 @@ impl UsSmMbr {
                         out.push(DetectorId::PositionJump);
                     }
                 }
-                if p.max_acceleration
-                    && (m.claimed_speed_mps - r.speed).abs() / dt > p.max_accel_mps2
-                {
-                    out.push(DetectorId::ImplausibleAcceleration);
+                if p.max_acceleration && accel_set.is_none() {
+                    fell_back = p.max_accel_reading == AccelReading::AccelSet;
+                    if (m.claimed_speed_mps - r.speed).abs() / dt > p.max_accel_mps2 {
+                        out.push(DetectorId::ImplausibleAcceleration);
+                    }
                 }
             }
         }
+        if p.max_acceleration && accel_set.is_some_and(|a| a.abs() > p.max_accel_mps2) {
+            out.push(DetectorId::ImplausibleAcceleration);
+        }
         if p.max_speed && m.claimed_speed_mps > p.max_speed_mps {
             out.push(DetectorId::ImplausibleSpeed);
+        }
+        // §2.3.1.3.4: braking, and the acceleration makes an acute angle with a velocity.
+        if p.brake_acceleration
+            && m.bsm.brakes_applied == Some(true)
+            && m.bsm
+                .accel_long_mps2
+                .is_some_and(|a| a > p.brake_accel_tolerance_mps2)
+            && m.claimed_speed_mps >= p.speed_resolution_mps
+        {
+            out.push(DetectorId::BrakeAcceleration);
         }
         if p.obs_distance
             && math::hypot(m.claimed_x_m - me.x_m, m.claimed_y_m - me.y_m)
                 > p.obs_distance_m + p.obs_gps_drift_m
         {
             out.push(DetectorId::AcceptanceRangeThreshold);
+        }
+        if fell_back {
+            self.accel_unavailable_fallbacks += 1;
         }
         out
     }
@@ -577,7 +689,14 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
             "|p₁ + (v₁·Δt + ½·a₁·Δt²)·(cos ψ₁, sin ψ₁) − p₂| > gpsDrift, |Δt − 0.1 s| ≤ tol",
         ),
         Equation::new("MaxSpeed", "v > v_max"),
-        Equation::new("MaxAcceleration", "|v₂ − v₁| / Δt > a_max"),
+        Equation::new(
+            "MaxAcceleration",
+            "|accelSet.long| > a_max (accel-set; no accelSet, or speed-difference: |v₂ − v₁| / Δt > a_max)",
+        ),
+        Equation::new(
+            "BrakeAcceleration",
+            "wheelBrakes ≠ 0 ∧ accelSet.long > tol ∧ v ≥ 1 LSB",
+        ),
         Equation::new("ObsImplausible Distance", "|p − p_self| > d_max + gpsDrift"),
     ];
     card.parameters = vec![
@@ -588,6 +707,27 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
             "m/s²",
             json!(p.max_accel_mps2),
             "§2.3.1.3.3",
+        ),
+        param(
+            "max_accel_reading",
+            "-",
+            json!(p.max_accel_reading.as_str()),
+            "§2.3.1.3.1 (\"the evidence for this type is a single BSM\") and §2.3.1.3.3 \
+             (\"the acceleration in a single BSM\"): accel-set, the BSM's accelSet.long; \
+             speed-difference, |v₂ − v₁| / Δt of two consecutive BSMs",
+        ),
+        param(
+            "brake_acceleration",
+            "-",
+            json!(p.brake_acceleration),
+            "§2.3.1.3.4 mbr-Psid20-Implausible-BrakeAcceleration",
+        ),
+        param(
+            "brake_accel_tolerance_mps2",
+            "m/s²",
+            json!(p.brake_accel_tolerance_mps2),
+            "§2.3.1.3.4 (\"the acceleration vector makes an acute angle with the velocity \
+             vector\": a strictly positive component, 0; one J2735 LSB is 0.01)",
         ),
         param("obs_distance", "-", json!(p.obs_distance), "§2.3.1.4.2"),
         param("obs_distance_m", "m", json!(p.obs_distance_m), "§2.3.1.4.2"),
@@ -657,11 +797,9 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
             .to_string(),
     ];
     card.limitations = vec![
-        "MaxAcceleration reads the acceleration two consecutive speeds imply: the \
-         observation does not carry the BSM accelSet."
-            .to_string(),
-        "BrakeAcceleration is not checked: the observation does not carry the brake \
-         status."
+        "MaxAcceleration and BrakeAcceleration read the frame's accelSet.long, the \
+         longitudinal component; a vehicle reversing under brakes is judged as if moving \
+         forward (the transmission state is not read)."
             .to_string(),
     ];
     card.determinism = Determinism {
@@ -820,6 +958,99 @@ mod tests {
             UsMbrParams::default(),
         );
         assert!(soft[1].is_empty(), "{soft:?}");
+    }
+
+    /// A BSM with its brake status and `accelSet.long`.
+    fn braking(t_ms: u64, x: f64, speed: f64, brakes: Option<bool>, accel: f64) -> ObservedMessage {
+        let mut m = bsm(t_ms, x, speed);
+        m.bsm.brakes_applied = brakes;
+        m.bsm.accel_long_mps2 = Some(accel);
+        m
+    }
+
+    /// SC-P7: [SM-MBR] §2.3.1.3.4, brakes on and the acceleration not negative. Brakes on
+    /// with +0.5 m/s² at speed fires; brakes on while slowing (−3 m/s²) does not; a
+    /// vehicle held at a red light (brakes on, 0 m/s², standstill) does not, because the
+    /// rule's acute angle needs a velocity. Fault: drop the speed gate and the standstill
+    /// BSM with +0.3 m/s² fires.
+    #[test]
+    fn brake_acceleration_fires_on_brakes_with_positive_acceleration() {
+        let fired = |m: ObservedMessage| run(&[m], UsMbrParams::default()).remove(0);
+        assert_eq!(
+            fired(braking(0, 0.0, 10.0, Some(true), 0.5)),
+            vec!["brakeAcceleration"]
+        );
+        assert!(fired(braking(0, 0.0, 10.0, Some(true), -3.0)).is_empty());
+        assert!(
+            fired(braking(0, 0.0, 0.0, Some(true), 0.0)).is_empty(),
+            "a vehicle held at a red light"
+        );
+        // Standing still with the brakes on and a positive reading (the instant a held
+        // vehicle is released, or a sensor offset): no velocity to make the angle with.
+        assert!(
+            fired(braking(0, 0.0, 0.0, Some(true), 0.3)).is_empty(),
+            "a standstill with brakes on and +0.3 m/s²"
+        );
+        // Brakes off, or a status the sender marked unavailable, is not judged.
+        assert!(fired(braking(0, 0.0, 10.0, Some(false), 0.5)).is_empty());
+        assert!(fired(braking(0, 0.0, 10.0, None, 0.5)).is_empty());
+        // Zero is not an acute angle (the default tolerance, 0); a tolerance of one LSB
+        // lets 0.01 m/s² through.
+        assert!(fired(braking(0, 0.0, 10.0, Some(true), 0.0)).is_empty());
+        let one_lsb = UsMbrParams {
+            brake_accel_tolerance_mps2: 0.01,
+            ..UsMbrParams::default()
+        };
+        assert!(run(&[braking(0, 0.0, 10.0, Some(true), 0.01)], one_lsb)[0].is_empty());
+        let off = UsMbrParams {
+            brake_acceleration: false,
+            ..UsMbrParams::default()
+        };
+        assert!(run(&[braking(0, 0.0, 10.0, Some(true), 0.5)], off)[0].is_empty());
+        // US-only: no fingerprint column, so the detnorm_* contract cannot move.
+        assert!(!DetectorId::ALL.contains(&DetectorId::BrakeAcceleration));
+    }
+
+    /// SC-P7: MaxAcceleration judges the BSM's own `accelSet` under `accel-set` (the
+    /// default): 12 m/s² with equal consecutive speeds fires, and the single BSM is
+    /// enough. Under `speed-difference` the same pair is quiet. A BSM without `accelSet`
+    /// falls back to the speed difference and is counted. Fault: keep the speed-difference
+    /// test and the equal-speed pair does not fire.
+    #[test]
+    fn max_acceleration_reads_accel_set() {
+        let pair = [
+            braking(0, 0.0, 10.0, Some(false), 12.0),
+            braking(100, 1.0, 10.0, Some(false), 12.0),
+        ];
+        let got = run(&pair, UsMbrParams::default());
+        assert_eq!(got[0], vec!["implausibleAcceleration"], "{got:?}");
+        assert_eq!(got[1], vec!["implausibleAcceleration"], "{got:?}");
+        assert!(
+            run(
+                &[braking(0, 0.0, 10.0, Some(false), 9.9)],
+                UsMbrParams::default()
+            )[0]
+            .is_empty()
+        );
+        assert!(
+            run(
+                &[braking(0, 0.0, 10.0, Some(false), -12.0)],
+                UsMbrParams::default()
+            )[0]
+            .contains(&"implausibleAcceleration")
+        );
+        let mut by_speed = UsMbrParams::default();
+        assert!(by_speed.apply_str("max_accel_reading", "speed-difference"));
+        assert!(run(&pair, by_speed).iter().all(Vec::is_empty));
+        // No accelSet: two consecutive speeds, counted.
+        let mut d = UsSmMbr::new(UsMbrParams::default());
+        let mut ctx = CollectingCtx::new(1);
+        let mut fired = Vec::new();
+        for m in [bsm(0, 0.0, 10.0), bsm(100, 1.0, 11.1)] {
+            fired.push(d.on_message(&mut ctx, &me(), &m, &NoMap).fired.len());
+        }
+        assert_eq!(fired, vec![0, 1]);
+        assert_eq!(d.accel_unavailable_fallbacks(), 1);
     }
 
     #[test]

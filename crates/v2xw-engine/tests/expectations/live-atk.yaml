@@ -2411,3 +2411,33 @@ rows:
   measured: '5'
   verdict: pass
   source: 'the check does fire on RandomSpeed, rarely (C2L: 3)'
+
+# SC-P7 (2026-10-31, C2): MaxAcceleration reads the BSM's accelSet.long under
+# max_accel_reading = accel-set (the new default of detect/us-sm-mbr, [SM-MBR] 2.3.1.3.1:
+# the evidence is a single BSM), and BrakeAcceleration is checked (2.3.1.3.4). Written
+# before the run (wave E); TSU.maxaccel above (14262 on the old speed-difference reading)
+# is expected to fail on a build with SC-P7 and is superseded by the first row.
+- id: P7.TSU.maxaccel-reads-accel-set
+  base: TSU1p0
+  variant: TSU1p0
+  area: catalogue
+  measure: p2.verdicts.implausibleAcceleration
+  expect: le
+  value: 143
+  fault: honest-reported
+  absent_is_zero: true
+  measured: pending
+  verdict: open
+  source: 'RandomSpeed lies in the speed field only; the accelSet.long it sends is its bus reading, at most a few m/s2 under 10, so MaxAcceleration (accel-set) stays quiet: predicted down from 14262 to under 1 % of it (fallbacks only: BSMs without accelSet)'
+- id: P7.B0U.no-honest-brake-acceleration
+  base: B0U
+  variant: B0U
+  area: specificity
+  measure: p2.verdicts.brakeAcceleration
+  expect: eq
+  value: 0
+  fault: honest-reported
+  absent_is_zero: true
+  measured: pending
+  verdict: open
+  source: 'an honest BSM sets wheelBrakes only at a_long <= -0.7 m/s2 (vehicle.rs BRAKE_SWITCH_DECEL_MPS2) and sends the same a_long as accelSet.long, so brakes-on with a non-negative acceleration never occurs ([SM-MBR] 2.3.1.3.4)'
