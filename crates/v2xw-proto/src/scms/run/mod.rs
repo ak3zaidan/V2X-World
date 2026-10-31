@@ -30,7 +30,7 @@ use crate::scms::governance::{DeviceTrust, Governance, Policy};
 use crate::scms::msg::{
     CHAIN_ID_BYTES, CertRequestItem, EnrolmentCert, IssuedCredential, LaIndex, Lci, PcaLookup,
     PreLinkageBatch, ProvisioningRequest, Refusal, ReportSubmission, ScmsMsg, ScmsSizes,
-    SealedForLa, SealedForPca,
+    SealedForLa, SealedForPca, SecuredReport,
 };
 use crate::scms::params::{MaMode, ScmsNodes, ScmsParams};
 use crate::sizes::{CertificateSizes, WireSize};
@@ -783,12 +783,27 @@ pub struct MaState {
     pub awaiting_review: BTreeMap<FlowRun, (usize, u32, u32, Option<usize>)>,
     /// Real misbehaviour reports it opened (WP-B4), with what it learned.
     pub opened_reports: Vec<crate::scms::mbr::OpenedReport>,
+    /// Per entry of [`MaState::reports`] (same index): the index in
+    /// [`MaState::opened_reports`] of the opened report, or `None` for a report on the
+    /// modelled path. Sharing re-encrypts that report's inner SPDU (SC-P5).
+    pub report_opened: Vec<Option<usize>>,
+    /// The runs of reports another provider's MA shared with this one, still on their
+    /// way ([`ScmsRun::shared_report_at_ma`]): on arrival their subject is labelled
+    /// [`SubjectFrom::Shared`] and their evidence `shared`.
+    pub shared_runs: BTreeSet<FlowRun>,
+    /// Whether the BSM signatures on the air are modelled rather than real ECDSA (the
+    /// engine's `security.crypto_mode: modeled`): the evidence's signatures are then not
+    /// real, no evidence verifies ([`crate::scms::mbr::verify_evidence`]), and the MA
+    /// cannot refuse a shared report on its evidence (SC-P5). Set by the driver
+    /// ([`ScmsRun::set_evidence_signatures_modelled`]); off in the library.
+    pub evidence_signatures_modelled: bool,
     /// Per entry of [`MaState::reports`] (same index): the evidence type and subtypes the
     /// MA read from the opened report, or `None` for a report on the modelled path (no
     /// secured report, so no evidence to read).
     pub report_evidence: Vec<Option<ReportEvidence>>,
     /// The evidence of reports still on their way that carry no secured report to read it
-    /// from (shared over the MA-to-MA link, or modelled), by their run.
+    /// from (modelled, or a modelled report shared over the MA-to-MA link), by their run.
+    /// A real shared report is re-verified from its own bytes instead (SC-P5).
     pub pending_evidence: BTreeMap<FlowRun, ReportEvidence>,
     /// Per entry of [`MaState::reports`] (same index): the run it reached the MA on, whose
     /// `report-received` stamp is when the MA had it (a case runs on a run of its own).
@@ -833,8 +848,10 @@ pub enum SubjectFrom {
     /// The opened report's `suspect.signingCertificate`: its `linkageData` and its
     /// issuer ([SM-MBR] §3; [CAMP122] §5). The US path.
     SuspectCertificate,
-    /// A report another provider's MA shared: the subject the forwarding MA read from
-    /// the certificate, carried over the MA-to-MA link. **Modelled** (no published format).
+    /// A report another provider's MA shared. For a real report, this MA read the
+    /// subject from the re-encrypted report's `suspect.signingCertificate` itself (SC-P5);
+    /// for a modelled one, the subject the forwarding MA had travels with it. The MA-to-MA
+    /// envelope is **modelled** (no published format).
     Shared,
     /// A report on the modelled path (no secured report, so no certificate to read):
     /// the subject the engine's map gave it. **Modelled.**
@@ -847,7 +864,7 @@ impl SubjectFrom {
     pub fn as_str(self) -> &'static str {
         match self {
             SubjectFrom::SuspectCertificate => "suspect-certificate",
-            SubjectFrom::Shared => "shared-report (modelled)",
+            SubjectFrom::Shared => "shared-report (re-verified)",
             SubjectFrom::EngineMap => "engine-map (modelled report)",
         }
     }
@@ -883,9 +900,9 @@ pub struct ReportEvidence {
     pub type_name: Option<&'static str>,
     /// Each subtype's number inside the type and its name, in report order.
     pub subtypes: Vec<(u8, &'static str)>,
-    /// Whether every suspect BSM verified under the evidence's signing certificate (for a
-    /// shared report, as the forwarding MA verified it: this MA does not re-verify);
-    /// `None` for a modelled report (there was no evidence to verify).
+    /// Whether every suspect BSM verified under the evidence's signing certificate (a
+    /// shared real report is re-verified by the receiving MA, which refuses it when this
+    /// fails, SC-P5); `None` for a modelled report (there was no evidence to verify).
     pub verified: Option<bool>,
     /// Whether it arrived with a report another provider's MA shared (WP-D1).
     pub shared: bool,
@@ -1170,6 +1187,9 @@ pub struct ScmsState {
     pub pdu_rejections: Vec<crate::scms::pdu::RejectedPdu>,
     /// The layer's deterministic randomness (separate from the model streams).
     pdu_rng: crate::scms::pdu::Drbg,
+    /// The MA-to-MA re-encryption's own stream (SC-P5), so sharing draws no position of
+    /// `pdu_rng` and every other SPDU keeps its bytes.
+    ma_share_rng: crate::scms::pdu::Drbg,
     /// The keys each LA shares with the ACA (`None` with the layer off).
     pub la_aca: Option<crate::scms::pdu_prov::LaAcaKeys>,
     /// Simulated time 0 on the wall clock, for every `Time32` in a PDU.
@@ -1524,6 +1544,7 @@ impl ScmsRun {
                 pdus: Vec::new(),
                 pdu_rejections: Vec::new(),
                 pdu_rng: crate::scms::pdu::Drbg::new(params.master_seed, b"run"),
+                ma_share_rng: crate::scms::pdu::Drbg::new(params.master_seed, b"ma-share"),
                 la_aca: params.pdu.enabled.then(|| {
                     crate::scms::pdu_prov::LaAcaKeys::new(
                         params.master_seed,
@@ -1704,6 +1725,7 @@ impl ScmsRun {
                 pdus: Vec::new(),
                 pdu_rejections: Vec::new(),
                 pdu_rng: crate::scms::pdu::Drbg::new(seed, b"run"),
+                ma_share_rng: crate::scms::pdu::Drbg::new(seed, b"ma-share"),
                 la_aca: params.pdu.enabled.then(|| {
                     crate::scms::pdu_prov::LaAcaKeys::new(seed, params.pdu.la_aca_key_rotation_s)
                 }),
@@ -1762,18 +1784,62 @@ impl ScmsRun {
         );
     }
 
+    /// Declares that the BSM signatures the evidence carries are modelled (the driver's
+    /// crypto mode), so this MA does not refuse a shared report whose evidence cannot
+    /// verify ([`MaState::evidence_signatures_modelled`]).
+    pub fn set_evidence_signatures_modelled(&mut self, modelled: bool) {
+        self.state.ma.evidence_signatures_modelled = modelled;
+    }
+
+    /// This provider's MA certificate and its public encryption key: what another
+    /// provider's MA encrypts a report it shares with this one to (SC-P5). `None` without
+    /// the PDU layer's PKI.
+    #[must_use]
+    pub fn ma_share_target(
+        &self,
+    ) -> Option<(v2xw_msg::sec_types::ieee1609_dot2::Certificate, Point)> {
+        let pki = self.state.pki.as_ref()?;
+        Some((pki.ma.cert.clone(), pki.ma.enc_public()?))
+    }
+
+    /// The real report this MA holds as `index`, re-encrypted to another provider's MA
+    /// (`peer`: its certificate and encryption key, [`ScmsRun::ma_share_target`]) for the
+    /// MA-to-MA link (SC-P5): the reporter-signed inner SPDU this MA opened, byte for
+    /// byte, so the receiving MA checks the reporter's signature and the evidence itself.
+    /// No `Download-Req` header: the MA-to-MA leg does not pass the RA. `None` for a
+    /// report on the modelled path (nothing was opened) or when the encryption fails.
+    pub fn reencrypt_report_for(
+        &mut self,
+        index: usize,
+        peer: &(v2xw_msg::sec_types::ieee1609_dot2::Certificate, Point),
+    ) -> Option<SecuredReport> {
+        let st = &mut self.state;
+        let o = (*st.ma.report_opened.get(index)?)?;
+        let inner = &st.ma.opened_reports.get(o)?.signed;
+        let body =
+            crate::scms::mbr::reencrypt_for_ma(inner, &peer.0, &peer.1, &mut st.ma_share_rng)
+                .ok()?;
+        Some(SecuredReport {
+            report: crate::scms::pdu::Pdu::new(body),
+            header: None,
+        })
+    }
+
     /// A report another provider's MA (`from`, its node) shares with this provider's MA
     /// because the accused certificate is this provider's (WP-D1; Provider Req. §2.2:
     /// only the issuing provider's ACA and LAs can resolve its pseudonyms).
     ///
     /// The report about `(subject_i, subject_lv)` leaves `from` at `sent_at` (or this
-    /// kernel's clock, if later) and crosses the MA-to-MA link; `bytes` is what crosses
-    /// (the report re-encrypted to this MA: the length of the encrypted report the device
-    /// uploaded). **Modelled:** no published specification defines the MA-to-MA format,
-    /// so the shared report carries the accused `(iCert, linkage value)` and its length,
-    /// not new bytes, and this MA does not re-verify evidence the forwarding MA verified.
+    /// kernel's clock, if later) and crosses the MA-to-MA link. A real report travels as
+    /// `secured`: the forwarding MA's opened report re-encrypted to this MA
+    /// ([`ScmsRun::reencrypt_report_for`]), whose ciphertext length is what crosses; this
+    /// MA decrypts it, verifies the reporter's signature and the evidence, and refuses
+    /// what fails ([SM-MBR] §3; SC-P5). A modelled report (`secured` `None`) carries the
+    /// accused `(iCert, linkage value)` and `bytes`, and
+    /// [`ScmsRun::shared_report_evidence`] attaches what the forwarding MA knew of it.
+    /// **Modelled:** no published specification defines the MA-to-MA envelope.
     /// Returns the flow run whose `ReportReceived` stage marks its arrival here.
-    /// [`ScmsRun::shared_report_evidence`] attaches the forwarding MA's evidence reading.
+    #[allow(clippy::too_many_arguments)]
     pub fn shared_report_at_ma(
         &mut self,
         from: NodeId,
@@ -1782,8 +1848,11 @@ impl ScmsRun {
         observed_at: SimTime,
         sent_at: SimTime,
         bytes: u32,
+        secured: Option<SecuredReport>,
     ) -> FlowRun {
         let run = self.new_run();
+        let bytes = secured.as_ref().map_or(bytes, |s| s.report.len());
+        self.state.ma.shared_runs.insert(run);
         let flow = FlowId::Report;
         let ma = self.state.nodes.ma;
         let link = self.kernel.net().link(from, ma).unwrap_or(Link {
@@ -1815,7 +1884,7 @@ impl ScmsRun {
                     subject_i,
                     subject_lv,
                     observed_at,
-                    secured: None,
+                    secured,
                 })),
                 flow,
                 run,

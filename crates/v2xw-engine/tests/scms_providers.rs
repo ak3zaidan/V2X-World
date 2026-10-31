@@ -46,6 +46,27 @@ struct Outcome {
     providers: Vec<(usize, usize, u64, u64, usize)>,
     /// Per attacker: its provider and whether the authority decided on it.
     attackers: Vec<(usize, bool)>,
+    /// Per provider (SC-P5): reports its MA opened, shared reports it holds that came
+    /// on the modelled path (nothing to open), and shared reports still on the link.
+    opened: Vec<(usize, usize, usize)>,
+}
+
+/// Per provider: reports its MA opened, shared reports it holds without an opened report,
+/// and shared reports still on the MA-to-MA link at the end.
+fn opened_of(runs: &[v2xw_proto::scms::run::ScmsRun]) -> Vec<(usize, usize, usize)> {
+    use v2xw_proto::scms::run::SubjectFrom;
+    runs.iter()
+        .map(|r| {
+            let ma = &r.state.ma;
+            let modelled = ma
+                .report_subjects
+                .iter()
+                .zip(&ma.report_opened)
+                .filter(|(s, o)| s.from == SubjectFrom::Shared && o.is_none())
+                .count();
+            (ma.opened_reports.len(), modelled, ma.shared_runs.len())
+        })
+        .collect()
 }
 
 fn outcome() -> &'static Outcome {
@@ -80,10 +101,12 @@ fn outcome() -> &'static Outcome {
                 )
             })
             .collect();
+        let opened = opened_of(p2.scms_runs());
         Outcome {
             report,
             providers,
             attackers,
+            opened,
         }
     })
 }
@@ -254,4 +277,49 @@ fn a_report_routes_by_the_issuer_named_in_its_certificate() {
             "a report about provider {x}'s certificate never reached its MA"
         );
     }
+}
+
+/// SC-P5 ([SM-MBR] §3: the MA verifies the evidence it acts on): on the same seed, the
+/// MA-to-MA share is the same (every provider's `shared.received` is unchanged from a run
+/// that shares without the report's bytes, as before SC-P5), and each receiving MA now
+/// opens every real report shared with it itself: its `opened_reports` grows by
+/// `shared.received`, less the shared reports that were modelled and those still on the
+/// link at the end. No honest shared report is refused (the backend refused nothing).
+/// Fault: keep `secured: None` on the share -> nothing more is opened and the test goes
+/// red.
+#[test]
+fn the_receiving_ma_opens_every_report_shared_with_it() {
+    let o = outcome();
+    let mut engine = Engine::build(scenario(), "").expect("builds");
+    engine
+        .phase2_mut()
+        .expect("an SCMS run")
+        .share_unverified_for_test();
+    engine.run(&mut DigestRecorder::new()).expect("runs");
+    let before = engine.phase2().expect("an SCMS run").scms_runs();
+    let was = opened_of(before);
+    println!(
+        "opened {:?} (before SC-P5 {was:?}); providers {:?}",
+        o.opened, o.providers
+    );
+    let mut grew = 0;
+    for (k, run) in before.iter().enumerate() {
+        let received = o.providers[k].2;
+        assert_eq!(
+            received, run.state.shared.received,
+            "provider {k}: shared.received moved"
+        );
+        assert_eq!(o.providers[k].4, 0, "provider {k}'s backend refused SPDUs");
+        let (now, modelled, on_link) = o.opened[k];
+        let expect = usize::try_from(received).expect("fits") - modelled - on_link;
+        assert_eq!(
+            now,
+            was[k].0 + expect,
+            "provider {k}: opened {now}, was {}, shared {received} ({modelled} modelled, \
+             {on_link} on the link)",
+            was[k].0
+        );
+        grew += expect;
+    }
+    assert!(grew > 0, "no real report was shared and re-verified");
 }

@@ -287,7 +287,7 @@ fn linked_run(forget_map: bool) -> (RunReport, usize, usize) {
 /// decided under one pseudonym, then under the next while the first case is in review;
 /// the second case runs its PCA lookup and both LA calls, finds the chain pair already
 /// decided and ends `linked`: no second blocklist and no second entry (a decision after
-/// the entry is on the list is `decisions_already_covered`, as before). With the engine's
+/// the entry is published is `decisions_already_covered`, SC-P4). With the engine's
 /// digest map gone (SC-P1's hook) nothing changes, because the MA never read it. Fault:
 /// drop the `decided_chains` check in `run/revoke.rs` -> the second case revokes again
 /// (two entries, no linked case) and the test goes red.
@@ -311,8 +311,10 @@ fn a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation() {
     );
     // Every decision is accounted for once: the first revokes, the one taken while it is
     // in review is linked by the chain, and any taken after its entry is on the
-    // Generator's list is covered by the list (`start_cases_of`; SC-P4 moves that check
-    // to the published list). Measured on 476ab68d+: 4 = 1 + 1 linked + 2 covered.
+    // published list is covered by it (`start_cases_of`; the CRL Store's list since
+    // SC-P4, the Generator's before). Measured on 476ab68d+: 4 = 1 + 1 linked + 2
+    // covered, unchanged under SC-P4: the 10 s cadence publishes the entry before the
+    // later pseudonyms are decided.
     assert!(p.ma_revoke_decisions >= 2, "a second pseudonym was decided");
     assert_eq!(p.decisions_linked, 1, "the second is linked to the first");
     assert_eq!(
@@ -342,4 +344,117 @@ fn a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation() {
         (p.ma_revoke_decisions, p.decisions_linked, entries, linked),
         "the engine's map plays no part in the linking"
     );
+}
+
+/// [`one_attacker_changes_pseudonym`] on the real calendar from `t0` (RFC 3339): the US
+/// one-week i-period and the CRL Generator's "within 1 business day" rule, which publishes
+/// at the next 10:00 ET business-day slot after a change ([SM-PROV] §3.4.9), with the
+/// operator's review shortened to 30 s so the attacker is decided inside the run. Returns
+/// the report, the entries every provider's Generator holds, the entries its CRL Store
+/// has published, and the `linked` cases.
+fn real_calendar_run(t0: &str, duration_s: f64) -> (RunReport, usize, usize, usize) {
+    use serde_json::json;
+    use v2xw_engine::scenario::ModelChoice;
+    let mut s = one_attacker_changes_pseudonym();
+    s.time.calendar = v2xw_engine::scenario::Calendar::Real;
+    s.time.t0 = t0.to_string();
+    s.time.duration_s = duration_s;
+    // A new pseudonym every minute (the US week's certificates are concurrently valid),
+    // so the attacker is decided again under the next one.
+    s.security.pseudonym_change.period_s = Some(60.0);
+    let id = v2xw_engine::phase2::CAMP_SCMS.to_string();
+    s.security.protocol = Some(ModelChoice {
+        id,
+        params: json!({
+            "report_shuffle_window_s": 5,
+            "ma_review_s": 30
+        }),
+    });
+    let mut engine = Engine::build(s, "").expect("builds");
+    let report = engine.run(&mut NullRecorder::new()).expect("runs");
+    let p2 = engine.phase2().expect("an SCMS run");
+    let runs = p2.scms_runs();
+    let entries = runs.iter().map(|r| r.state.crlg.entries.len()).sum();
+    let published = runs.iter().map(|r| r.state.crl_store.entries.len()).sum();
+    let linked = runs
+        .iter()
+        .flat_map(|r| r.state.ma.cases.values())
+        .filter(|c| c.outcome() == Some(v2xw_proto::scms::run::CaseOutcome::Linked))
+        .count();
+    (report, entries, published, linked)
+}
+
+/// SC-P4 ([BRECHT] §VI-D: the MA consults the CRL; 09 §3): before it opens a case the MA
+/// checks the list its provider has **published** (the CRL Store's), not the CRL
+/// Generator's working set. On the real calendar a decision is published at the next
+/// business-day slot, so an entry stays pending for hours:
+/// - from 04:00 ET (the slot is six hours off), every later decision about the attacker
+///   finds nothing published: none is `decisions_already_covered`, and each opens a case
+///   that the LAs' chain identifiers end `linked` (SC-P3);
+/// - from 09:59 ET (the slot comes 60 s in, between the two decisions), the decision
+///   taken after the list is published is covered by it, with no case.
+///
+/// Fault: build `covered` from `crlg.entries` -> decisions are counted covered before
+/// publication and the test goes red.
+#[test]
+fn the_ma_counts_a_decision_covered_only_after_publication() {
+    let show = |name: &str, r: &RunReport, entries, published, linked| {
+        let p = &r.phase2;
+        println!(
+            "{name}: decisions {} linked {} covered {} cases {} unresolved {} entries {} \
+             published {} linked cases {} revoked attackers {} repeated {}",
+            p.ma_revoke_decisions,
+            p.decisions_linked,
+            p.decisions_already_covered,
+            p.cases_opened,
+            p.cases_unresolved,
+            entries,
+            published,
+            linked,
+            p.revoked_attackers,
+            p.revocations_repeated
+        );
+    };
+    // 2026-01-06 (a Tuesday) 04:00 ET: decided at about 19 s and again under the next
+    // pseudonym at about 75 s; the attacker has left the grid by 110 s.
+    let (r, entries, published, linked) = real_calendar_run("2026-01-06T09:00:00Z", 400.0);
+    show("pending", &r, entries, published, linked);
+    let p = &r.phase2;
+    assert_eq!(entries, 1, "the attacker's entry is at the Generator");
+    assert_eq!(published, 0, "nothing is published before 10:00 ET");
+    assert!(
+        p.ma_revoke_decisions >= 2,
+        "a later decision about the attacker"
+    );
+    assert_eq!(
+        p.decisions_already_covered, 0,
+        "a decision was counted covered by a list not yet published"
+    );
+    assert!(p.decisions_linked >= 1, "the later decision ends linked");
+    assert_eq!(linked as u64, p.decisions_linked);
+    assert_eq!(
+        p.ma_revoke_decisions,
+        1 + p.decisions_linked + p.decisions_already_covered
+    );
+    assert_eq!(p.revocations_repeated, 0);
+
+    // 2026-01-06 09:59 ET: the 10:00 slot publishes the entry 60 s into the run, after
+    // the first case (opened at about 19 s, resolved after the 30 s review) and before
+    // the decision about the next pseudonym (about 75 s).
+    let (r, entries, published, linked) = real_calendar_run("2026-01-06T14:59:00Z", 400.0);
+    show("published", &r, entries, published, linked);
+    let q = &r.phase2;
+    assert_eq!(entries, 1);
+    assert_eq!(published, 1, "the 10:00 ET slot published the entry");
+    assert_eq!(
+        q.decisions_already_covered, 1,
+        "the decision after publication is covered by the published list"
+    );
+    assert_eq!(q.decisions_linked, 0, "and opens no case");
+    assert_eq!(q.cases_opened, 1);
+    assert_eq!(
+        q.ma_revoke_decisions,
+        1 + q.decisions_linked + q.decisions_already_covered
+    );
+    assert_eq!(q.revocations_repeated, 0);
 }

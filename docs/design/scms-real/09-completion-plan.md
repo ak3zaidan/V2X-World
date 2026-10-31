@@ -235,6 +235,67 @@ Dated notes go under each id as its wave lands.
   B4 revokes both chains in the first case, and SC-P4's list check covers it after).
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`789f7afa`, track c1), with SC-P2. `report_signing::a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation` passes on the merged tree. Still open: SC-P4 will move the covered/linked split; `LS.MA.linked-by-chain` for wave E.
 
+### SC-P4
+
+- 2026-10-31 (wave C R6, C1): **the MA checks the published CRL.** Cause:
+  `start_cases_of` built `covered` from `self.runs[k].state.crlg.entries`
+  (`phase2.rs:7775` on `3fcd8a45`), the CRL Generator's working set, so a decision taken
+  while an entry waited for its publication slot was counted
+  `decisions_already_covered` by a list no device or MA could yet hold. Now `covered` is
+  the CRL Store's published list (`crl_store.entries`, set at the `Published` stage,
+  `run/crl.rs:1091`); a decision in that wait opens a case, which the LAs' chain
+  identifiers end `linked` (SC-P3) with no second entry ([BRECHT] §VI-D). Test:
+  `report_signing::the_ma_counts_a_decision_covered_only_after_publication` (grid, one
+  ConstPos attacker, real calendar and its one-business-day CRL rule, 30 s review, a new
+  pseudonym every 60 s; decided at about 19 s and again at about 75 s): from 04:00 ET
+  (slot six hours off) decisions 2 = 1 + 1 linked + 0 covered, 1 entry, 0 published;
+  from 09:59 ET (slot at 60 s) decisions 2 = 1 + 0 linked + 1 covered, 1 case, 1
+  published. Red with `crlg.entries` restored (pending run: covered 1, linked 0).
+  `a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation` is
+  unchanged (4 = 1 + 1 linked + 2 covered: its 10 s cadence publishes before the later
+  pseudonyms are decided). G-SCMS held: no case of the three goldens is opened between
+  a decision and its publication (phase2-path `1b62b1df4dd1`, i-s1 and ttc unchanged).
+  live-scms `LS.MA.covered-after-publication` added, `verdict: open`.
+  Seen, not changed (C3/D3 file): the store's `CrlPublish` arm copies
+  `self.crlg.entries` when the message arrives (`run/crl.rs:1081`), not the list
+  `publish_crl` signed, so an entry appended during the Generator-to-Store hop rides
+  along under the earlier signature; the hop is one backend link (milliseconds).
+
+### SC-P5
+
+- 2026-10-31 (wave C R5, C1): **the receiving MA re-verifies a shared report.** Cause:
+  `shared_report_at_ma` (`run/mod.rs:1761` on `3fcd8a45`) injected the share with
+  `secured: None`, and the forwarding MA's evidence reading travelled as
+  `pending_evidence` (`phase2.rs:7262`), so the deciding MA acted on evidence it never
+  saw. Now the forwarding MA keeps the decrypted inner SPDU (`OpenedReport::signed`,
+  indexed by `MaState::report_opened`), and `ingest_arrivals` re-encrypts it byte for
+  byte to the issuing provider's MA (`mbr::reencrypt_for_ma`, `ScmsRun::reencrypt_report_for`,
+  its own `ma-share` DRBG stream; no `Download-Req` header). `shared_report_at_ma` takes
+  `secured: Option<SecuredReport>` and charges the ciphertext length; the receiving MA's
+  report arm decrypts, verifies the reporter signature and the evidence, labels the
+  subject `shared-report (re-verified)` (read from the certificate itself), and refuses a
+  shared report whose evidence does not verify. `pending_evidence` and
+  `pending_subjects` remain only for modelled reports. The MA-to-MA envelope is
+  `constants.md` `ma_share_envelope` (ASSUMPTION, 09 §6).
+  Tests: `provider_runs::a_shared_report_is_reverified_by_the_receiving_ma` (a flipped
+  evidence-signature byte: one `SecuredMisbehaviorReport` rejection, no report held, no
+  case; intact: opened, subject `Shared` with its issuer, evidence `shared` and verified,
+  link bytes = ciphertext, the case opens) and
+  `scms_providers::the_receiving_ma_opens_every_report_shared_with_it` (Manhattan, same
+  seed with `Phase2::share_unverified_for_test`: `shared.received` 151 / 36 both ways;
+  opened 329 -> 480 and 166 -> 202, exactly + received; 0 refused). Both red with
+  `secured: None` kept on the share.
+  **Found, open:** under `security.crypto_mode: modeled` (the shipped Manhattan
+  scenarios) no evidence verifies at any MA: 514/514 and 262/262 opened reports had
+  `evidence_verified = false` in the first run, because on-air BSM signatures are
+  `v2xw_sec::Modeled` tags and `mbr::verify_evidence` checks real ECDSA. The home MA has
+  always acted on such reports (it records `verified: false` and does not weigh it), so
+  the receiving MA refuses a shared report on its evidence only when the run's signatures
+  are real (`MaState::evidence_signatures_modelled`, set by the engine from
+  `crypto_mode`). Closing it needs the MA to check modelled evidence through the node's
+  modelled backend (C2/D owner, `v2xw-node/src/secure.rs`), or the MA to refuse failed
+  evidence on both paths under real crypto (a G-SCMS move); proposed to the owner.
+
 ### SC-D1
 
 - 2026-10-30 (wave A): fixed in code before this wave (run.rs `on_flow_timer`, 2026-10-27:
@@ -537,6 +598,31 @@ Dated notes go under each id as its wave lands.
   moved: `ma_policy` and the hook are absent by default.
 - 2026-10-31 (wave B merge): merged to main after wave A (`ebe829f9`); the only conflict was this file's §7 appends, both sides kept. On the merged tree engine `tests/ma_policy` (4), cli `ma_policy_family` (3) and py `ma_policy_hook` (3) pass; no golden moved.
 
+- 2026-10-31 (wave C R7, C1): **the wave B test gaps are closed** (`crates/v2xw-py/tests/ma_policy_hook.rs`).
+  New `v2xw.run_twice(..., ma_policy_factory=f)` (`v2xw-py/src/run.rs`, stub in
+  `_v2xw.pyi`): the factory is called once per run, so each run gets a fresh rule (a rule
+  object keeps state). Four tests, each red under its fault:
+  * `a_python_rule_reproduces_its_run_with_a_fresh_rule_per_run`: the same digest twice
+    (`442934d4...`), two rules, 2 revocations each. Fault: one factory call reused for both
+    runs -> the digests differ (`2c0bc39d...`).
+  * `a_python_pseudonym_k_at_two_decides_as_the_rust_preset`: on a 20 % liar fleet the
+    port at k = 2 matches `pseudonym-k` with `min_distinct_reporters: 2`, with 12 decisions
+    (test 7 has 2), both MAs called, and 1,843 rows = the MA's evidence. Fault: drop each
+    batch's last row -> 1,827 rows, red. On this fleet the decisions survive the lost
+    rows, so the row count is the check that fails.
+  * `a_hook_decides_only_for_the_mas_without_their_own_policy`: provider-b keeps its own
+    `pseudonym-k` at 2; the hook is called for MA {0} only, and the decisions match the
+    Rust run (12). Fault: `ma_hook::attach` also hands over provider-b -> MAs {0, 1}, red.
+  * `set_aside_reports_never_reach_the_hook`: an `InvalidSignature` forger with
+    `modelled_reports: 1`. 802 at the MA, 510 set aside (all logged in `ma.received`), 292
+    hook rows, 0 leaked. Fault: drop the `ma_accepts` filter in `ingest_arrivals` -> 499
+    set-aside ids reach the hook, red.
+
+  Before this, the shipped 5 % fleet had only 2 liars, both under one provider. So k = 2
+  gave no more decisions than k = 3 (2 against 2), and provider-a's MA got no evidence.
+  The `busier` helper exists for that reason. No golden moved: the hook is absent by
+  default.
+
 ### SC-M2
 
 2026-10-30 (wave B): branch `worktree-wf_ab880052-ba6-5` (C1a-C3a, C3b snapshot
@@ -649,6 +735,45 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   means none of their vehicles was unprovisioned before or after (one would have signed
   with the stand-in before and stayed silent after).
 - 2026-10-31 (wave C R1-R4 merge): merged to main (`af28d882`, track c2, first). `credential_handoff` passes on the merged tree; no golden moved. Still open: an unprovisioned joiner never retries its first request (ASSUMPTION).
+
+### SC-P6
+
+- 2026-10-31 (wave C R7, C1): **`detect/us-sm-mbr` is the default under a US deployment.**
+  Cause, corrected from 10 §1 "Today": an empty `detection.local` did not run Legacy12;
+  it ran no local detector (`phase2.rs` `Phase2::build`, `detection_on:
+  wants_detection` with `wants_detection = !detection.local.is_empty()`; the shipped
+  SCMS scenarios that detect name `detect/legacy-12` themselves or through a `meta.base`,
+  e.g. `scms-conformance.yaml` from `credential-lifecycle.yaml`). Now
+  `phase2::us_default_detector` (empty list, credential protocol `protocol/scms/camp`,
+  `Deployment::is_us()`) makes `detection_params` set `us_profile =
+  UsMbrParams::default()` and `Phase2::build` arm the receivers (`detection_on: wants ||
+  default_us`). Every other case keeps the empty list's meaning (no detector): ETSI, the
+  CAMP reference, a non-US deployment, no credential protocol; an explicit list is kept as
+  written. New `report.phase2.local_suite` (`phase2::local_suite_id`) names the suite that
+  ran, or "" for none. `us_subtype` gains the `brakeAcceleration -> Subtype::BrakeAcceleration`
+  arm (Implausible, subtype 3, NULL parameters; [SM-MBR] §2.3.1.3.4), closing SC-P7's
+  leftover. Deviation from 10 §1 test 1: the CAMP reference gives `""` (no detector), not
+  `detect/legacy-12`, because that is what an empty list ran before; the test also
+  asserts an explicit `legacy-12` list under the US deployment is kept.
+  Tests (`scms_deployment`): `a_us_deployment_defaults_to_the_sm_mbr_profile` and
+  `a_us_device_files_brake_acceleration` (10-vehicle grid, 40 s, empty list, with
+  `Phase2::forge_brake_acceleration_for_test` because no honest vehicle brakes with a
+  non-negative acceleration: 3,440 real SM-MBRs, 955 opened at the MAs with subtype 3).
+  Faults: `is_us()` dropped -> the CAMP reference names SM-MBR (red); the arm removed ->
+  652 reports "no SM-MBR v1.1 subtype maps", 0 with subtype 3 (red).
+  Goldens: none moved. The three G-SCMS cases do not run the default: `phase2-manhattan`
+  (phase2-path and i-s1-phase2-60s) names `detect/legacy-12` and `ttc-triggered-brake`
+  has no credential protocol. G-ML and G-LEG come from `v2xw-threat`'s own harness
+  (`tests/common/sim.rs`, no engine dependency), which never reads `detection.local`.
+  Shipped SCMS scenarios that now gain SM-MBR detectors (empty list after bases, no
+  attackers): compare-signature-schemes, pq-certificate-cycle, pq-full-stack,
+  pq-signatures, pseudonym-strategies, scms-fix3/ci-scms(-cpm), scms-fix4/{bh-5, bh-200,
+  la-0, la-slow}. Wave E rows (verdict open) in `scms-final-bench.yaml`:
+  `FS.honest-reports.smmbr-default`, `FS.attackers-revoked.smmbr-default` (runs SMDL,
+  SMDU). Left for D1 (wave D, scenario files): the `detection.local` guide row, the
+  configuration reference and the `detect/us-sm-mbr` option text ("the default under a
+  US deployment"); `detection_policy_warnings` (`validate.rs`) still reads an empty list
+  as no detector; `ma_policy::RULE_KEYS` still has no `detect/brakeAcceleration`.
 
 ### SC-P7
 

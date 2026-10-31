@@ -341,3 +341,126 @@ fn a_device_records_the_t0_lists_it_holds_and_their_fetch() {
         "pre-run CRL fetches on pki.flow: one per list per device"
     );
 }
+
+/// SC-P6 ([SM-MBR] §2.3; 09 §3): under the US system an empty `detection.local` runs the
+/// US profile, because a US OBU detects and files the PSID-0x20 subtypes. The default
+/// deployment (`us-production-2025`) names `detect/us-sm-mbr` and arms its receivers; the
+/// CAMP reference design keeps the empty list's meaning (no local detector), and an
+/// explicit list is kept as written. Fault: drop the `is_us()` condition from
+/// `phase2::us_default_detector` -> the CAMP reference also names SM-MBR and the test
+/// goes red.
+#[test]
+fn a_us_deployment_defaults_to_the_sm_mbr_profile() {
+    let suite = |s: Scenario| {
+        assert!(s.detection.local.is_empty() || s.detection.local.len() == 1);
+        let engine = Engine::build(s, "").expect("builds");
+        let p2 = engine.phase2().expect("an SCMS run");
+        (p2.report().local_suite, p2.detection_on())
+    };
+    let us = load(Some(serde_json::json!({"preset": "us-production-2025"})));
+    assert!(us.detection.local.is_empty());
+    assert_eq!(
+        suite(us),
+        (v2xw_engine::phase2::US_SM_MBR.to_string(), true),
+        "the US deployment's default local detector"
+    );
+    assert_eq!(
+        suite(load(None)).0,
+        v2xw_engine::phase2::US_SM_MBR,
+        "no deployment block is the US deployment"
+    );
+    assert_eq!(
+        suite(load(Some(serde_json::json!({"preset": "camp-reference"})))),
+        (String::new(), false),
+        "the CAMP reference keeps the empty list: no local detector"
+    );
+    let mut named = load(Some(serde_json::json!({"preset": "us-production-2025"})));
+    named.detection.local = vec![v2xw_engine::scenario::ModelChoice::new(
+        v2xw_engine::phase2::LEGACY_12,
+    )];
+    assert_eq!(
+        suite(named),
+        (v2xw_engine::phase2::LEGACY_12.to_string(), true),
+        "an explicit list is kept"
+    );
+}
+
+/// SC-P6 with SC-P7's check ([SM-MBR] §2.3.1.3.4): a US device files BrakeAcceleration
+/// (Implausible, subtype 3) and the report reaches the MA. A small grid fleet on the
+/// compressed calendar under the default deployment and an empty `detection.local` (so
+/// the US default runs); every BSM a detector judges reads as brakes on at +0.5 m/s²
+/// (`forge_brake_acceleration_for_test`: no honest vehicle sends one). Fault: remove the
+/// `BrakeAcceleration` arm of `phase2::us_subtype` -> the reports are unmapped and not
+/// filed, none reaches the MA, and the test goes red.
+#[test]
+fn a_us_device_files_brake_acceleration() {
+    use serde_json::json;
+    use v2xw_engine::NullRecorder;
+    use v2xw_engine::scenario::ModelChoice;
+    let mut s = Scenario::load(root().join("scenarios/phase1-grid.yaml")).expect("loads");
+    s.time.duration_s = 40.0;
+    if let v2xw_world::WorldSourceSpec::Procedural { params, .. } = &mut s.world.source {
+        params["cols"] = json!(5);
+        params["rows"] = json!(8);
+    }
+    s.world.buildings.enabled = false;
+    s.actors.vehicles.demand.rate_veh_per_h = Some(3_600_000.0);
+    s.actors.vehicles.demand.params = json!({ "max_total_vehicles": 10 });
+    s.security.verification_policy = "verify-all".to_string();
+    let id = v2xw_engine::phase2::CAMP_SCMS.to_string();
+    s.actors.backend.protocol = Some(id.clone());
+    s.security.protocol = Some(ModelChoice {
+        id,
+        params: json!({
+            "i_period_s": 20,
+            "cert_lifetime_s": 21,
+            "certs_per_period": 3,
+            "pool_periods": 2,
+            "topup_below_periods": 1,
+            "cert_shuffle_window_s": 1,
+            "first_batch_delay_s": 1,
+            "download_poll_interval_s": 1,
+            "report_shuffle_window_s": 5,
+            "crl_cadence_s": 10,
+            "crl_fetch_interval_s": 30,
+            "ma_review_s": 30
+        }),
+    });
+    s.time.calendar = v2xw_engine::scenario::Calendar::Compressed;
+    s.net.uu = Some(ModelChoice {
+        id: "cellular/uu/fixed-latency".to_string(),
+        params: json!({"preset": "4g-east-coast"}),
+    });
+    s.threats.attackers.clear();
+    s.detection.local.clear();
+    let mut engine = Engine::build(s, "").expect("builds");
+    let p2 = engine.phase2_mut().expect("an SCMS run");
+    assert_eq!(p2.report().local_suite, v2xw_engine::phase2::US_SM_MBR);
+    p2.forge_brake_acceleration_for_test();
+    let r = engine.run(&mut NullRecorder::new()).expect("runs");
+    let p = &r.phase2;
+    let brake: usize = engine
+        .phase2()
+        .expect("an SCMS run")
+        .scms_runs()
+        .iter()
+        .flat_map(|run| run.state.ma.opened_reports.iter())
+        .filter(|o| {
+            o.report
+                .subtypes
+                .contains(&v2xw_proto::scms::mbr::Subtype::BrakeAcceleration)
+        })
+        .count();
+    println!(
+        "sent {} real {} unmapped {} not filed {:?} at MA {} brake-acceleration opened {brake}",
+        p.reports_sent,
+        p.reports_mbr_real,
+        p.reports_mbr_unmapped,
+        p.reports_not_filed_by,
+        p.reports_at_ma
+    );
+    assert!(
+        brake > 0,
+        "no SM-MBR with subtype 3 (BrakeAcceleration) reached an MA"
+    );
+}

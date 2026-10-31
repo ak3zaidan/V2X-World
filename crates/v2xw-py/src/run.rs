@@ -331,22 +331,46 @@ pub fn run(
 /// the bytes of every record, **in order**. Two runs that emit the same records in a
 /// different order are not the same run.
 ///
+/// `ma_policy_factory` is a callable that returns a fresh MA decision rule
+/// ([`crate::ma_policy`], as `run`'s `ma_policy`); it is called once per run, so each run
+/// starts from a rule with no memory of the other (a rule object is stateful: the same
+/// object twice would carry the first run's evidence into the second).
+///
 /// # Errors
-/// As [`run`].
+/// As [`run`]; a factory that raises, or a rule that will not attach or raised during a
+/// run.
 #[pyfunction]
-#[pyo3(signature = (scenario, *, build_utc))]
+#[pyo3(signature = (scenario, *, build_utc, ma_policy_factory=None))]
 pub fn run_twice(
     py: Python<'_>,
     scenario: &PyScenario,
     build_utc: &str,
+    ma_policy_factory: Option<Bound<'_, PyAny>>,
 ) -> PyResult<(String, String)> {
     let s = scenario.scenario().clone();
     let _ = py;
     let mut digests = Vec::with_capacity(2);
     for _ in 0..2 {
         let mut engine = Engine::build(s.clone(), build_utc).map_err(err::engine)?;
+        let ma_status = match &ma_policy_factory {
+            Some(factory) => {
+                let hook = crate::ma_policy::PyMaPolicy::attach(factory.call0()?)?;
+                Some(
+                    engine
+                        .attach_ma_policy(Box::new(hook))
+                        .map_err(err::engine)?,
+                )
+            }
+            None => None,
+        };
         let mut rec = v2xw_engine::MemoryRecorder::new();
         engine.run(&mut rec).map_err(err::engine)?;
+        if let Some(e) = ma_status
+            .as_ref()
+            .and_then(v2xw_engine::ma_hook::MaHookStatus::error)
+        {
+            return Err(err::V2xwError::new_err(e));
+        }
         digests.push(rec.digest_hex());
     }
     Ok((digests[0].clone(), digests[1].clone()))

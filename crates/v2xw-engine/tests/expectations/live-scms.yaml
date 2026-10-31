@@ -1600,13 +1600,57 @@ rows:
   value: 0
   source: 'SC-P1: the MA reads the accused certificate (linkageData, issuer) from the report it opened
     ([SM-MBR] 3; [CAMP122] 5), never from the engine map: every real report''s ma.received row has
-    subject_from "suspect-certificate", a shared one "shared-report (modelled)"'
+    subject_from "suspect-certificate", a shared one "shared-report (re-verified)" (SC-P5: the receiving
+    MA reads it from the re-encrypted report itself)'
   measured: pending
   verdict: open
   note: 'written 2026-10-31 (wave C, SC-P1.2), predicted 0; the measure counts ma.received rows whose
     subject_from is "engine-map (modelled report)" on a run with modelled_reports off, and needs
     live_scms.py to read the new subject_from column (wave E). In-tree:
     report_signing::a_report_is_decided_without_the_engine_map holds it on Manhattan'
+- id: LS.MA.shared-reverified
+  base: L
+  variant: L
+  area: scms
+  measure: x.ma.shared_refused
+  expect: eq
+  value: 0
+  source: 'SC-P5: a report another provider''s MA shares crosses the MA-to-MA link as the report it
+    opened, re-encrypted to the receiving MA (unpublished envelope, ASSUMPTION in constants.md
+    ma_share_envelope), which decrypts it and verifies the reporter''s signature and the evidence itself
+    ([SM-MBR] 3: the MA verifies the evidence it acts on) and refuses what fails. On an honest city run
+    no shared report is refused, every real shared report is opened at the receiving MA, and
+    p2.reports_shared is unchanged from the pre-SC-P5 path'
+  measured: pending
+  verdict: open
+  note: 'written 2026-10-31 (wave C, SC-P5), predicted 0 refused with opened_reports at the receiving MA
+    = its own real reports + the real shared ones; the measure counts SecuredMisbehaviorReport
+    rejections at an MA on a shared run and needs live_scms.py to read them (wave E). In-tree:
+    provider_runs::a_shared_report_is_reverified_by_the_receiving_ma (a corrupt evidence signature is
+    refused, no case) and scms_providers::the_receiving_ma_opens_every_report_shared_with_it (Manhattan,
+    same seed with and without re-verification)'
+- id: LS.MA.covered-after-publication
+  base: L
+  variant: L
+  area: scms
+  measure: x.ma.covered_before_publication
+  expect: eq
+  value: 0
+  source: 'SC-P4: before it opens a case the MA checks the list its provider has published (the CRL
+    Store''s), not the CRL Generator''s working set ([BRECHT] VI-D: the MA consults the CRL). On the real
+    calendar an entry waits for the next 10:00 ET business-day slot ([SM-PROV] 3.4.9), so a decision
+    about a decided device''s next pseudonym in that wait opens a case that ends linked by the chain
+    (SC-P3) instead of counting as decisions_already_covered; after publication it is covered'
+  measured: pending
+  verdict: open
+  note: 'written 2026-10-31 (wave C, SC-P4), predicted 0: the measure counts decisions counted
+    covered whose entry the CRL Store had not yet published, and needs live_scms.py to join the
+    covered decisions to the Published stamps (wave E). Predicted direction on a real-calendar city run: the
+    covered/linked split moves from covered to linked for decisions taken between an entry and its
+    publication (p2.decisions_linked up, p2.decisions_already_covered down, p2.revocations_repeated
+    still 0), with cases_opened up by the same count. In-tree:
+    report_signing::the_ma_counts_a_decision_covered_only_after_publication (grid, real calendar:
+    from 04:00 ET covered 0 and 1 linked case; from 09:59 ET covered 1, no linked case)'
 - id: LS.MA.linked-by-chain
   base: L
   variant: L

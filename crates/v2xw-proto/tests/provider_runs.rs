@@ -146,7 +146,7 @@ fn a_shared_report_crosses_the_inter_provider_link_and_is_decided_there() {
     let lv = c.lv;
     let from = home.state.nodes.ma;
     let sent = 1_000_000_000;
-    let run = peer.shared_report_at_ma(from, i, lv, sent, sent, 200);
+    let run = peer.shared_report_at_ma(from, i, lv, sent, sent, 200, None);
     peer.run_until(sent + 2_000_000_000).expect("runs");
     let at = peer
         .kernel
@@ -203,7 +203,7 @@ fn a_report_shared_with_a_down_ma_arrives_when_it_is_back() {
         from: sent,
         until: back,
     }]);
-    let run = peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200);
+    let run = peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200, None);
     peer.run_until(back + 30_000_000_000).expect("runs");
     assert!(
         peer.state.faults.held >= 1,
@@ -303,7 +303,7 @@ fn the_records_name_the_sharing_ma_as_the_other_providers() {
         .expect("a pseudonym");
     let lv = c.lv;
     let sent = 1_000_000_000;
-    peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200);
+    peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200, None);
     peer.run_until(sent + 2_000_000_000).expect("runs");
     let flows = pki_view::drain_flows(std::slice::from_ref(&peer), &mut PkiTracker::default());
     let into_ma: Vec<(Option<&str>, &str)> = flows
@@ -340,7 +340,7 @@ fn a_shared_report_is_recorded_as_sent_by_the_other_providers_ma() {
         .expect("a pseudonym");
     let lv = c.lv;
     let sent = 1_000_000_000;
-    peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200);
+    peer.shared_report_at_ma(home.state.nodes.ma, i, lv, sent, sent, 200, None);
     peer.run_until(sent + 2_000_000_000).expect("runs");
     let mut tracker = PkiTracker::default();
     let flows = pki_view::drain_flows(std::slice::from_ref(&peer), &mut tracker);
@@ -752,4 +752,167 @@ fn the_ma_asks_the_aca_its_accused_certificates_issuer_names() {
         .collect();
     assert_eq!(asked, vec![aca1], "the ACA the issuer names");
     assert!(home.state.ra.blocklist.contains(&accused));
+}
+
+/// A real report provider-a's MA opened about a provider-b certificate, shared with
+/// provider-b's MA as SC-P5 sends it (the opened report re-encrypted to the peer MA).
+/// With `corrupt`, one byte of the evidence BSM's signature is flipped before the device
+/// files it; with `modelled`, provider-b's MA is told the BSM signatures on the air are
+/// modelled (the engine's `crypto_mode: modeled`). Returns the peer run, the share's run
+/// and the re-encrypted length.
+fn share_a_real_report(
+    corrupt: bool,
+    modelled: bool,
+) -> (ScmsRun, v2xw_proto::stage::FlowRun, u32) {
+    use v2xw_proto::scms::mbr::{self, Evidence, MbrType, MisbehaviorReport, SignedBsms, Subtype};
+    let (mut home, mut peer) = runs();
+    peer.set_evidence_signatures_modelled(modelled);
+    let (accused, reporter) = (NodeId::new(5_000_301), NodeId::new(5_000_302));
+    peer.preload(accused, 0, 1, 2)
+        .expect("provider-b provisions the accused");
+    home.preload(reporter, 0, 1, 2)
+        .expect("provider-a provisions the reporter");
+    let (cert, key) = {
+        let imp = peer.state.devices[&accused]
+            .credentials
+            .values()
+            .find_map(|c| c.implicit.as_ref())
+            .expect("a pseudonym certificate");
+        (
+            (*imp.certificate).clone(),
+            v2xw_sec::sig1609::Signer1609::p256(&v2xw_sec::ec::scalar_to_be32(&imp.private))
+                .expect("a P-256 key"),
+        )
+    };
+    let mut bsm = mbr::sign_bsm(&[0x5a; 40], 1_000_000, &cert, &key).expect("signs");
+    if corrupt {
+        // The signature is the SignedData's last field: flip its last octet.
+        let mut b = rasn::coer::encode(&bsm).expect("encodes");
+        *b.last_mut().expect("bytes") ^= 0x01;
+        bsm = mbr::decode_signed_bsm(&b).expect("still decodes");
+    }
+    let report = MisbehaviorReport {
+        generation_time: 600_000,
+        location: v2xw_sec::envelope::GenerationLocation {
+            lat_tenth_microdeg: 407_440_000,
+            lon_tenth_microdeg: -739_900_000,
+            elevation: 4_096,
+        },
+        mbr_type: MbrType::Implausible,
+        subtypes: vec![Subtype::MaxSpeed { threshold_mps: 90 }],
+        evidence: Evidence::Suspect(SignedBsms {
+            bsms: vec![bsm],
+            cert,
+        }),
+    };
+    home.submit_mbr(reporter, &report).expect("a real report");
+    home.run().expect("runs");
+    assert!(
+        home.state.pdu_rejections.is_empty(),
+        "{:?}",
+        home.state.pdu_rejections
+    );
+    assert_eq!(
+        home.state.ma.opened_reports.len(),
+        1,
+        "provider-a's MA opened it"
+    );
+    assert_eq!(home.state.ma.opened_reports[0].evidence_verified, !corrupt);
+    let subj = *home.state.ma.subject(0).expect("a subject");
+    let target = peer.ma_share_target().expect("provider-b's MA certificate");
+    let secured = home
+        .reencrypt_report_for(0, &target)
+        .expect("the opened report re-encrypts");
+    assert!(
+        secured.header.is_none(),
+        "no Download-Req on the MA-to-MA leg"
+    );
+    let len = secured.report.len();
+    let sent = home.state.ma.report_arrived[0];
+    let run = peer.shared_report_at_ma(
+        home.state.nodes.ma,
+        subj.subject_i,
+        subj.subject_lv,
+        sent,
+        sent,
+        200,
+        Some(secured),
+    );
+    peer.run_until(sent + 2_000_000_000).expect("runs");
+    (peer, run, len)
+}
+
+/// SC-P5 ([SM-MBR] §3: the MA verifies the evidence it acts on): a report another
+/// provider's MA shares crosses the MA-to-MA link as the report it opened, re-encrypted
+/// to the receiving MA, which decrypts it and verifies the reporter's signature and the
+/// evidence itself. A report whose evidence BSM's signature was corrupted is refused
+/// there (a `SecuredMisbehaviorReport` rejection) and no case opens; the intact one is
+/// opened, read from its own certificate (labelled shared) and decided. Under modelled
+/// BSM signatures (no evidence can verify) the corrupt report is held and recorded as
+/// unverified, as the MA's own reports are. Fault: keep `secured: None` on the share ->
+/// the corrupt report is acted on and the test goes red.
+#[test]
+fn a_shared_report_is_reverified_by_the_receiving_ma() {
+    use v2xw_proto::scms::pdu::SpduKind;
+    let (mut bad, run, _) = share_a_real_report(true, false);
+    assert!(
+        bad.state
+            .pdu_rejections
+            .iter()
+            .any(|r| matches!(r.kind, SpduKind::SecuredMisbehaviorReport)),
+        "the corrupt shared report was not refused: {:?}",
+        bad.state.pdu_rejections
+    );
+    assert!(
+        bad.state.ma.reports.is_empty(),
+        "the corrupt report was held"
+    );
+    assert!(bad.state.ma.opened_reports.is_empty());
+    assert!(bad.kernel.stages.at(run, StageId::ReportReceived).is_none());
+    assert!(
+        bad.request_revocation(0, 0, 2).is_none(),
+        "a case opened on it"
+    );
+    assert_eq!(bad.state.shared.received, 1);
+
+    let (mut good, run, len) = share_a_real_report(false, false);
+    assert!(
+        good.state.pdu_rejections.is_empty(),
+        "{:?}",
+        good.state.pdu_rejections
+    );
+    assert_eq!(good.state.ma.reports.len(), 1);
+    assert_eq!(
+        good.state.ma.opened_reports.len(),
+        1,
+        "provider-b's MA opened the shared report itself"
+    );
+    assert!(
+        good.kernel
+            .stages
+            .at(run, StageId::ReportReceived)
+            .is_some()
+    );
+    let s = *good.state.ma.subject(0).expect("a subject");
+    assert_eq!(s.from, v2xw_proto::scms::run::SubjectFrom::Shared);
+    assert!(s.issuer.is_some_and(|id8| good.state.issues_under(&id8)));
+    let e = good.state.ma.report_evidence[0].clone().expect("evidence");
+    assert!(e.shared);
+    assert_eq!(e.verified, Some(true));
+    // The bytes on the link are the re-encrypted report's.
+    let step = good
+        .kernel
+        .steps
+        .iter()
+        .find(|s| s.run == run && s.step == "report-shared")
+        .expect("the sharing leg");
+    assert_eq!(step.bytes, len);
+    assert!(good.request_revocation(0, s.subject_i, 2).is_some());
+
+    let (modelled, _, _) = share_a_real_report(true, true);
+    assert!(modelled.state.pdu_rejections.is_empty());
+    let e = modelled.state.ma.report_evidence[0]
+        .clone()
+        .expect("evidence");
+    assert_eq!((e.shared, e.verified), (true, Some(false)));
 }

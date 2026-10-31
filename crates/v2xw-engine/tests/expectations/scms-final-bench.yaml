@@ -27,6 +27,13 @@ runs:
   PQHM: {scenario: scenarios/real-world/stress/pq-hybrid-mldsa44.yaml, base: PQ0, note: "4 rayon threads"}
   PQHM1: {base: PQHM, set: {}, note: "PQHM at 1 rayon thread (determinism)"}
   PQHMC: {scenario: scenarios/real-world/stress/pq-hybrid-mldsa44-certcycle.yaml, base: PQHM}
+  SMDL:
+    scenario: scenarios/phase2-manhattan.yaml
+    note: "SC-P6 baseline: the shipped file names detect/legacy-12 on the default US deployment (attackers as shipped)"
+  SMDU:
+    base: SMDL
+    set: {detection.local: []}
+    note: "SC-P6: the empty list runs detect/us-sm-mbr at its defaults under the US deployment (report.phase2.local_suite names it)"
 
 rows:
 # ---------------------------------------------------------------- (1) full-scale benchmark
@@ -344,3 +351,27 @@ rows:
   verdict: fixed
   closed: "R-CCSIG fixed in wave 3 (06 §3 item 13; ccsig-memory §1, faults F1 and F2 red): the Partially-Hybrid cycle signs a node's messages with ECDSA and checks the PQ signature once per certificate; test cert_cycle_signature::hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid. Re-measured in scms-final-run.yaml PQHFC.sizes (fixed): BSM PSDU mean 207 -> 380 B (the NDSS ~380 B prediction; was 1,045 B), 1.00 frame per BSM. SC-D7 closed 2026-10-30"
   note: "confirms R-CCSIG: the 1,045 B mean is the R-CCSIG prediction, not the NDSS ~380 B, and every message pays the hybrid verification. The relay-report refusals are the documented certificate-cycle behaviour (pq-profile.md §2)"
+# ------------------------------------------- (SC-P6) SM-MBR as the US default local detector
+- id: FS.honest-reports.smmbr-default
+  base: SMDL
+  variant: SMDU
+  area: architecture
+  measure: reports_about_honest; honest_reported; decisions_honest
+  expect: >-
+    at or below the legacy-12 baseline (after SC-D5 no GNSS-drift report is filed): the US
+    profile files only the PSID-0x20 subtypes, so honest reports do not rise
+  source: "[SM-MBR] §2.3 (US OBUs detect and file only these subtypes); 09 §3 SC-P6"
+  measured: pending
+  verdict: open
+- id: FS.attackers-revoked.smmbr-default
+  base: SMDL
+  variant: SMDU
+  area: architecture
+  measure: attackers revoked (decisions about attackers) per attack class
+  expect: >-
+    no fewer attackers revoked than the legacy-12 baseline, or a stated reason per attack
+    class (a lie no SM-MBR subtype describes, such as a heading or a DENM lie, is not
+    filed by a US device)
+  source: "[SM-MBR] §2.3; 10 §1 SC-P6 records"
+  measured: pending
+  verdict: open

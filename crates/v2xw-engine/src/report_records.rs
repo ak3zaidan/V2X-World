@@ -116,8 +116,9 @@ pub struct MaReceived {
     /// device.
     pub la_link: String,
     /// Where the MA's accused certificate came from (SC-P1): `suspect-certificate` (read
-    /// from the opened report), `shared-report (modelled)` or `engine-map (modelled
-    /// report)`.
+    /// from the opened report), `shared-report (re-verified)` (a report another
+    /// provider's MA shared, opened and verified by this MA, SC-P5) or `engine-map
+    /// (modelled report)`.
     #[serde(default)]
     pub subject_from: String,
     /// `None` when the MA accepted the report as evidence; else why it set it aside.

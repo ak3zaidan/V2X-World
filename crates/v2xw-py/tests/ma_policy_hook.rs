@@ -46,10 +46,14 @@ class PseudonymK:
         self.revoked = set()
         self.calls = 0
         self.rows = 0
+        self.mas = set()
+        self.ids = []
 
     def decide(self, ctx, batch):
         self.calls += 1
         self.rows += len(batch)
+        self.mas.add(ctx.ma)
+        self.ids.extend(batch.column("report_id"))
         subjects = batch.column("subject_cert")
         reporters = batch.column("reporter_cert")
         out = []
@@ -63,6 +67,18 @@ class PseudonymK:
                 self.revoked.add(key)
                 out.append((subjects[i], True, i))
         return out
+
+class PseudonymK2(PseudonymK):
+    def __init__(self):
+        super().__init__(k=2)
+
+MADE = []
+
+def fresh():
+    """A factory for `v2xw.run_twice`: a new rule per run."""
+    rule = PseudonymK()
+    MADE.append(rule)
+    return rule
 
 class Raises:
     card = CARD
@@ -420,5 +436,268 @@ fn the_batch_carries_every_row_and_a_raise_is_an_error() {
         let mut raises = _v2xw::ma_policy::PyMaPolicy::attach(object(py, "Raises")).unwrap();
         let e = raises.decide(&call).unwrap_err();
         assert!(e.contains("no rule here") && e.contains("decide"), "{e}");
+    });
+}
+
+/// `ma.received` rows the MA set aside, by report id (`security.scms.report_records`).
+#[derive(Default)]
+struct SetAside(Vec<String>);
+
+impl RunRecorder for SetAside {
+    fn write(&mut self, _at: SimTime, r: &OwnedRecord) {
+        if &*r.channel == "ma.received" {
+            let v: Value = serde_json::from_slice(&r.json).expect("ma.received parses");
+            if !v["set_aside"].is_null() {
+                self.0
+                    .push(v["report_id"].as_str().unwrap_or_default().to_string());
+            }
+        }
+    }
+}
+
+/// [`shipped`] with a liar share of 20 % (the shipped 5 % gives two liars, both under
+/// one provider, and two decisions): liars under both providers, so both MAs decide,
+/// and more decisions to compare.
+fn busier() -> Value {
+    let mut d = shipped();
+    d["threats"]["attackers"][0]["fraction"] = json!(0.2);
+    d
+}
+
+/// The provider index of `name` in the run's deployment.
+fn provider_index(engine: &Engine, name: &str) -> u32 {
+    engine
+        .phase2()
+        .expect("an SCMS run")
+        .scms_runs()
+        .first()
+        .expect("a run")
+        .state
+        .deployment
+        .providers
+        .iter()
+        .position(|p| p.name == name)
+        .map(|i| u32::try_from(i).expect("small"))
+        .expect("the provider runs")
+}
+
+/// SC-M1 gap (wave B note, 09 §7): a run with a Python rule is reproducible. Through
+/// `v2xw.run_twice(..., ma_policy_factory=f)`, which calls the factory once per run, two
+/// runs of a seed give the same record digest, and each run's rule decided something.
+/// Fault: `run_twice` calls the factory once and attaches that object to both runs -> the
+/// second run starts with the first run's revocations remembered and decides nothing
+/// again, its digest differs, and the test goes red.
+#[test]
+fn a_python_rule_reproduces_its_run_with_a_fresh_rule_per_run() {
+    pyo3::prepare_freethreaded_python();
+    Python::with_gil(|py| {
+        let ported = port(py);
+        let made = ported.getattr("MADE").unwrap();
+        made.call_method0("clear").unwrap();
+        let m = module(py);
+        let doc = py
+            .import("json")
+            .unwrap()
+            .call_method1("loads", (shipped().to_string(),))
+            .unwrap();
+        let sc = m
+            .getattr("Scenario")
+            .unwrap()
+            .call_method1("from_dict", (doc,))
+            .unwrap();
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("build_utc", BUILD_UTC).unwrap();
+        kwargs
+            .set_item("ma_policy_factory", ported.getattr("fresh").unwrap())
+            .unwrap();
+        let (a, b): (String, String) = m
+            .call_method("run_twice", (&sc,), Some(&kwargs))
+            .unwrap_or_else(|e| {
+                e.print(py);
+                panic!("v2xw.run_twice must complete");
+            })
+            .extract()
+            .unwrap();
+        let rules: Vec<Bound<'_, PyAny>> = made.try_iter().unwrap().map(|r| r.unwrap()).collect();
+        let revoked: Vec<usize> = rules
+            .iter()
+            .map(|r| r.getattr("revoked").unwrap().len().unwrap())
+            .collect();
+        println!(
+            "digests {a} {b}; {} rules, revoked {revoked:?}",
+            rules.len()
+        );
+        assert_eq!(rules.len(), 2, "one fresh rule per run");
+        assert!(
+            revoked.iter().all(|n| *n > 0),
+            "a run's rule decided nothing: {revoked:?}"
+        );
+        assert_eq!(a, b, "two runs of a seed with a fresh Python rule differ");
+    });
+}
+
+/// SC-M1 gap: test 7 with more decisions. On a busier fleet ([`busier`]) the port at
+/// k = 2 takes the decisions of the Rust `pseudonym-k` preset at
+/// `threshold.min_distinct_reporters: 2`, at the same instants: at least five, against
+/// test 7's two, and the rule is called for both providers' MAs (the default deployment
+/// runs two), with every report the MA took. Fault: the adapter drops the last row of
+/// each batch -> the rule sees fewer rows than the MA's evidence and the test goes red
+/// (on this busy fleet the decisions themselves survive the lost rows: each pseudonym
+/// has more than two reporters).
+#[test]
+fn a_python_pseudonym_k_at_two_decides_as_the_rust_preset() {
+    pyo3::prepare_freethreaded_python();
+    let mut d = busier();
+    d["security"]["scms"]["ma_policy"] =
+        json!({"preset": "pseudonym-k", "threshold": {"min_distinct_reporters": 2}});
+    let mut engine = Engine::build(scenario(d), "").expect("builds");
+    let mut out = Decisions::default();
+    let two_counters = counters(&engine.run(&mut out).expect("runs"));
+    let two = out.0;
+    Python::with_gil(|py| {
+        let obj = object(py, "PseudonymK2");
+        let hook = _v2xw::ma_policy::PyMaPolicy::attach(obj.clone()).expect("attaches");
+        let mut engine = Engine::build(scenario(busier()), "").expect("builds");
+        let status = engine.attach_ma_policy(Box::new(hook)).expect("hosts it");
+        let mut python = Decisions::default();
+        let report = engine.run(&mut python).expect("runs");
+        assert_eq!(status.error(), None, "the rule raised");
+        let mas: std::collections::BTreeSet<u32> = obj.getattr("mas").unwrap().extract().unwrap();
+        println!(
+            "k=2 rust {} decisions, python {}; MAs called {mas:?}; counters {two_counters:?}",
+            two.len(),
+            python.0.len()
+        );
+        assert!(
+            two.len() >= 5,
+            "too few decisions to compare: {}",
+            two.len()
+        );
+        assert_eq!(
+            mas.len(),
+            2,
+            "the rule decides for both providers' MAs: {mas:?}"
+        );
+        // Every report the MA took as evidence reached the rule, once.
+        let rows: u64 = obj.getattr("rows").unwrap().extract().unwrap();
+        let p = &report.phase2;
+        assert_eq!(
+            rows,
+            p.reports_at_ma - p.reports_evidence_unverifiable - p.reports_evidence_time_implausible,
+            "the rule did not see every report the MA took"
+        );
+        assert_eq!(two, python.0, "the decisions differ");
+        assert_eq!(two_counters, counters(&report));
+    });
+}
+
+/// SC-M1 gap: a hook beside a provider's own policy, on a fleet with liars under both
+/// providers ([`busier`]). provider-b runs its own policy (a `pseudonym-k` at two
+/// reporters) and the Python port (k = 3) decides for provider-a's MA only: it is called
+/// for that MA and no other, and the run's decisions are those of the same deployment
+/// with the Rust preset in the hook's place. Fault: `ma_hook::attach` hands the hook
+/// provider-b's MA as well -> the hook is called for provider-b, and the test goes red.
+#[test]
+fn a_hook_decides_only_for_the_mas_without_their_own_policy() {
+    pyo3::prepare_freethreaded_python();
+    let with = |hook_in_place: bool| {
+        let mut d = busier();
+        d["security"]["scms"] = json!({
+            "ma_policies": {"pair": {"preset": "pseudonym-k",
+                                     "threshold": {"min_distinct_reporters": 2}}},
+            "deployment": {"preset": "us-production-2025",
+                           "providers": [{"name": "provider-b", "ma_policy": "pair"}]}
+        });
+        if !hook_in_place {
+            d["security"]["scms"]["ma_policy"] = json!({"preset": "pseudonym-k"});
+        }
+        d
+    };
+    let mut engine = Engine::build(scenario(with(false)), "").expect("builds");
+    let mut rust = Decisions::default();
+    let rust_report = engine.run(&mut rust).expect("runs");
+    assert!(!rust.0.is_empty(), "the Rust run revoked nobody");
+    Python::with_gil(|py| {
+        let obj = object(py, "PseudonymK");
+        let hook = _v2xw::ma_policy::PyMaPolicy::attach(obj.clone()).expect("attaches");
+        let mut engine = Engine::build(scenario(with(true)), "").expect("builds");
+        let a = provider_index(&engine, "provider-a");
+        let status = engine.attach_ma_policy(Box::new(hook)).expect("hosts it");
+        let mut python = Decisions::default();
+        let report = engine.run(&mut python).expect("runs");
+        assert_eq!(status.error(), None, "the rule raised");
+        let mas: std::collections::BTreeSet<u32> = obj.getattr("mas").unwrap().extract().unwrap();
+        println!(
+            "rust {} decisions, python {}; MAs called {mas:?} (provider-a is {a})",
+            rust.0.len(),
+            python.0.len()
+        );
+        assert_eq!(
+            mas,
+            std::collections::BTreeSet::from([a]),
+            "the hook was called for an MA with its own policy"
+        );
+        assert_eq!(rust.0, python.0, "the decisions differ");
+        assert_eq!(counters(&rust_report), counters(&report));
+    });
+}
+
+/// SC-M1 gap: evidence the MA sets aside never reaches the hook. One forger
+/// (`InvalidSignature`) makes receivers file reports whose only reason is a bad
+/// signature, carried to the MA on the research path (`modelled_reports: 1`), which sets
+/// them aside (`reports_evidence_unverifiable`). The hook's rows are exactly the reports
+/// the MA took: their count is the MA's evidence and no set-aside report id is among
+/// them. Fault: drop the `ma_accepts` filter before the hook call in
+/// `Phase2::ingest_arrivals` -> the hook sees the set-aside reports and the test goes red.
+#[test]
+fn set_aside_reports_never_reach_the_hook() {
+    pyo3::prepare_freethreaded_python();
+    let mut d = shipped();
+    d["security"]["scms"]["report_records"] = json!(true);
+    d["security"]["protocol"]["params"]["modelled_reports"] = json!(1);
+    d["threats"]["attackers"]
+        .as_array_mut()
+        .expect("the shipped attackers")
+        .push(json!({"id": "threat/attacker/legacy/InvalidSignature", "count": 1}));
+    Python::with_gil(|py| {
+        let obj = object(py, "PseudonymK");
+        let hook = _v2xw::ma_policy::PyMaPolicy::attach(obj.clone()).expect("attaches");
+        let mut engine = Engine::build(scenario(d), "").expect("builds");
+        let status = engine.attach_ma_policy(Box::new(hook)).expect("hosts it");
+        let mut aside = SetAside::default();
+        let report = engine.run(&mut aside).expect("runs");
+        assert_eq!(status.error(), None, "the rule raised");
+        let p = &report.phase2;
+        let seen: std::collections::BTreeSet<String> = obj
+            .getattr("ids")
+            .unwrap()
+            .extract::<Vec<String>>()
+            .unwrap()
+            .into_iter()
+            .collect();
+        let rows: u64 = obj.getattr("rows").unwrap().extract().unwrap();
+        let leaked: Vec<&String> = aside.0.iter().filter(|id| seen.contains(*id)).collect();
+        println!(
+            "at the MA {}, set aside {} unverifiable + {} implausible ({} logged), hook rows {rows}, \
+             leaked {}",
+            p.reports_at_ma,
+            p.reports_evidence_unverifiable,
+            p.reports_evidence_time_implausible,
+            aside.0.len(),
+            leaked.len()
+        );
+        assert!(
+            p.reports_evidence_unverifiable > 0 && !aside.0.is_empty(),
+            "nothing was set aside: the check could not see a leak"
+        );
+        assert!(
+            leaked.is_empty(),
+            "set-aside reports reached the hook: {leaked:?}"
+        );
+        assert_eq!(
+            rows,
+            p.reports_at_ma - p.reports_evidence_unverifiable - p.reports_evidence_time_implausible,
+            "the hook's rows are not the MA's evidence"
+        );
     });
 }

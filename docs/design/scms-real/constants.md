@@ -223,6 +223,7 @@ The engine's earlier defaults were a 512 B ClientHello and a 4,000 B server flig
 | `appcert_retry_wait_s` | 3600 | s | CITED | `run/appcert.rs` | ra-minWait 1 h, [SMP] Table 3 |
 | `threshold_round_timeout_ms` | 500 | ms | ASSUMPTION | `params.rs` `ThresholdDeployment` | Research option (FROST). No deployment publishes a value |
 | `threshold_member_link_latency_ms` | 20 | ms | ASSUMPTION | `params.rs` `ThresholdDeployment` | WAN latency between member organisations. Not published |
+| `ma_share_envelope` | `1609.2 encryption to the peer MA` | - | ASSUMPTION | `mbr.rs` `reencrypt_for_ma` | SC-P5 (2026-10-31): no published specification defines the MA-to-MA sharing format (09 §6). The forwarding MA re-encrypts the reporter-signed inner SPDU it opened, byte for byte, to the receiving provider's MA certificate as a device encrypts its report ([SM-MBR] §3, without the signing step and with no `Download-Req` header), so the receiving MA verifies the reporter's signature and the evidence itself, and the link carries the real ciphertext length. Draws come from the run's own `ma-share` stream |
 
 ---
 
