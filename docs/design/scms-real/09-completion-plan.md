@@ -187,3 +187,112 @@ Dated notes go under each id as its wave lands.
   component message. New test `provider_runs.rs`
   `a_report_shared_with_a_down_ma_arrives_when_it_is_back`. It only changes a run with an
   MA outage under report sharing, and no shipped scenario has one, so no golden moves.
+
+### SC-D6
+
+- **2026-10-30 (wave A): closed, no engine change needed.** What the real system does: IEEE
+  1609.2 §5.2 lets the receiving SDS discard an SPDU whose `generationTime` is too far in
+  the past or the future before verifying it; the BSM profile sets the window (public
+  value: C2C-CC BSP RS_BSP_168, 40 ms ahead and 2 s old; J2945/1's own is paywalled, so
+  ASSUMPTION for the US). A discarded BSM is unverified, and SM-MBR judges only verified
+  BSMs of one certificate, so it is not evidence and its sender is not reported. No
+  published rule (SM-MBR §2.3, CAMP-EE, the MA policy) revokes a device for its clock, so
+  none was added. The window landed in `rxval::GenerationTimeWindow` (`8da5b7c1`,
+  2026-10-21), after E2's new3 run; the honest revocations of new3 were that missing check.
+  Re-run on 5c5dfc4e's engine: `edge/clock-skew-ahead` against `scms-conformance`, cases
+  5 / 5, attackers revoked 5 / 5, honest revoked 0 / 0, reports about honest devices
+  13 / 28; 186,368 BSMs discarded as in the future and 141,407 as too old. Fault (window
+  opened to a year): reports about honest devices 13 -> 11,401. Row E2 in
+  `scms/scms-edge-cases.yaml` updated.
+
+### SC-D7
+
+- **2026-10-30 (wave A): closed, already fixed (R-CCSIG, wave 3).** The certificate cycle
+  signs a node's messages with ECDSA and checks the PQ signature once per certificate it
+  learns, as the NDSS 2024 Partially-Hybrid design does (ccsig-memory §1, faults F1 and F2
+  red; test `cert_cycle_signature::hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid`).
+  The final-bench rows were never moved after the fix; they now point at the final-run
+  re-measurements: ML-DSA-44 cycle 0 -> 50,183 frames, MTU refusals 50,180 -> 2 (the
+  relayed reports), BSM PSDU 814 B; Falcon-512 cycle PSDU 1,045 -> 380 B (the NDSS
+  prediction); verify cost 0.630 ms against ECDSA's 0.628.
+
+### SC-D8
+
+- **2026-10-30 (wave A): fixed.** Cause: `HardwareProfile::priced_op`
+  (`crates/v2xw-node/src/profile.rs`) charged a P-384 operation that the profile does not
+  price as its P-256 sibling, at exactly P-256's cost, on every profile but
+  `obu/generic-automotive-soc-no-hsm` (live-scms LS.S384.verify 0.422132 -> 0.422136 ms).
+  The real system: US end entities sign BSMs with P-256; P-384 is the electors' curve
+  (Elector Technical Specification §2.3) and an option 1609.2 allows per certificate, so a
+  P-384 BSM run is a research variant, but it must not cost what P-256 costs. Fix: such an operation is now
+  the profile's own P-256 figure times the P-384 / P-256 cost ratio on the first catalogue
+  reference that publishes both (the profile's `crypto_anchors`, then the catalogue's
+  device anchors), the catalogue's own `CostRatio` rule (04-models.md §9.4):
+  `HardwareProfile::curve_ratio`, applied in `op_cost`, the HSM range draws
+  (`server.rs`) and the cost facts, flagged derived. CRATON2 (Pi 3B Cortex-A53 anchor):
+  verify x8.24, sign x4.55. Key generation has no P-384 reference row and stays at P-256
+  (flagged). Test `curve_pricing::a_profile_without_p384_scales_p256_by_the_reference_ratio_and_says_so`
+  replaces the test that pinned the P-256 cost; fault `curve_ratio` -> 1.0 turns it red.
+  No golden moves: no pinned run signs with P-384. Recorded, not modelled: an HSM's own
+  P-384 / P-256 ratio is unpublished for V2X parts (Thales T-2000 1.5, T-5000 1.0, OpenSSL
+  on Cortex-A 4.5-8.9), so the software ratio of the device's own anchor is an ASSUMPTION
+  and likely pessimistic for a hardware accelerator.
+
+### SC-D9
+
+- **2026-10-30 (wave A): closed, already fixed or not a defect.** The resume burst
+  (R-FFBURST) had two causes, both fixed in finalize 4 (testing/fast-forward.md §1): the
+  mobility clocks and the GNSS per-second hazards read the frozen window as elapsed time
+  (`Mobility::resume_after_pause`, `GnssModel::resume_after_pause`; tests
+  `calendar::the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed` and
+  `gauss_markov::a_receiver_resumed_after_a_pause_continues_its_error_as_if_no_time_had_passed`).
+  FB3 at full scale: 404 reports in the rollover window against FB2's 10,357, 0 cases.
+  The frequent stops are real wake sources (`stops_by_cause`): hourly conditional CRL
+  polls of each cellular device, the 60 s jump cap and kernel events; R-FFSLOW does not
+  reproduce after new3. FB2.honest-reports is `fixed` and FB2.ff-ticks a corrected
+  expectation. Left for the validation wave: FB4.ff-stops (cost per stop).
+
+### SC-D10
+
+- **2026-10-30 (wave A).** TM-1 (the repeated secMark): already fixed in `cca82fcd`, the v2
+  BSM timing model (a free OBU's own BSM clock; a slip k > 0 moves the position k fixes
+  later and keeps the timestamp). Its re-run rows pass (`P1.TM1.sm-repeat` 0 against v1's
+  17 %, `P1.TM1.gt-vs-sm.v2` 5,318 -> 5,935); the three v1-engine rows
+  `P1.RP.gt-vs-sm.v10.*` are marked fixed and point at them.
+- VR-2 (26 VeReMi truth rows at (0, 0)): cause, `v2xw-record` `dataset/veremi.rs`
+  joined a reception to its sender's latest `gt.kinematics` record *at or before* it,
+  and a vehicle's node is created when the mobility step that spawns it is dispatched
+  (`Engine::absorb` -> `create_node(.., now)`), so it can send its first BSM inside that
+  step, before the vehicle's first record. Fix (exporter, no engine record moves): with no
+  record at or before the reception, the first record within 0.2 s after it
+  (`FORWARD_JOIN_NS`, two mobility steps, ASSUMPTION) is carried back along its own
+  velocity by the engine's published extrapolation rule (03-interfaces §3, I-M4), which is
+  where the engine itself placed the node. Test
+  `veremi::tests::a_first_bsm_before_the_first_kinematics_record_gets_the_carried_back_truth`;
+  fault (no forward branch) red. Recorded, not changed: the node is live up to one step
+  before its vehicle's first record; moving node creation would re-time every spawn and
+  move every golden for an effect only this export sees.
+
+### SC-D5
+
+- **2026-10-30 (wave A): fixed (`146e87b1`).** The 88 full-scale cases were R-USFP (raw
+  GNSS white noise), fixed earlier by the smoothed receiver (testing/usfp.md). What was
+  left at full density: every honest `positionJump` compared two BSMs with lost ones
+  between them (memory-density.md §2.2: no pair as sent breaks the rule). That came from
+  `UsSmMbr::checks` (`crates/v2xw-threat/src/us_mbr.rs`), which paired a BSM with the
+  previous one *received* within `max_gap_s`. SM-MBR v1.0 judges "two consecutive BSMs"
+  and the ASN.1 v1.1 two BSMs "sent 0.1 seconds apart". Neither has a streak gate, so none
+  was added: one would leave the US rules. A receiver tells consecutive BSMs apart by J2735
+  `msgCnt`, so the sender now carries it (`BsmExtras::msg_cnt`) and the profile pairs only
+  `msgCnt` successors within `max_gap_s`. The new choice
+  `detection.local[].params.consecutive` takes `msg_count` (the default) or `received`
+  (the old reading). Every Paper 1 scenario sets `received`, so Paper 1 keeps the reading
+  it was measured on; its p1-attack recording is byte-identical to the release binary's.
+- Evidence: `stress/fs-40` (full fleet, 40 s live), same binary, received -> msg_count.
+  Verdicts went 8 -> 0 (positionJump 3, constantPositionFrozen 5) and reports about honest
+  devices 8 -> 0. Attackers are still caught: on p1-attack, reports about attackers went
+  126 -> 122, about the same attacker, with 2 cases in both. Fault: `in_sequence` always
+  true makes `us_mbr::tests::only_bsms_consecutive_on_the_air_are_a_pair` red. No golden
+  moved: the pinned runs use the research suite.
+- Left: the matrix, realism and live-atk US-profile rows were measured on the old reading,
+  so they are re-measured in the validation wave.

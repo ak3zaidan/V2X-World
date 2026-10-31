@@ -16,4 +16,8 @@ pub struct BsmExtras {
     pub speed_mps: Option<f64>,
     /// The `heading` the BSM carries when it differs from the belief, radians.
     pub heading_rad: Option<f64>,
+    /// `msgCnt` (J2735 `MsgCount`, 0..=127), the sender's per-identity BSM sequence
+    /// number: how a receiver tells two BSMs consecutive on the air from two with lost
+    /// BSMs between them.
+    pub msg_cnt: Option<u8>,
 }

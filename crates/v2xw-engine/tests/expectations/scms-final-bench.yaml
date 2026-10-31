@@ -291,7 +291,8 @@ rows:
     airtime x3-5 the classical base, far below PQHM; CBR 0.04-0.08
   source: NDSS 2024 (Twardokus et al.) §IV, §V-D; cert_cycle.rs alpha rule
   measured: "PQHMC: frames_transmitted 0, net_mtu_refusals 50,180 (every BSM and PSM SDU); reception attempts 0; 30 s wall"
-  verdict: open
+  verdict: fixed
+  closed: "R-CCSIG fixed in wave 3 (06 §3 item 13; ccsig-memory §1, faults F1 and F2 red): the Partially-Hybrid cycle signs a node's messages with ECDSA and checks the PQ signature once per certificate; test cert_cycle_signature::hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid. Re-measured in scms-final-run.yaml PQHMC.sizes (fixed): 50,183 frames (was 0), net_mtu_refusals 2 (the relayed reports; was 50,180), 1.00 frame per BSM, BSM PSDU mean 814 B. SC-D7 closed 2026-10-30"
   note: "ENGINE DEFECT R-CCSIG: under the certificate cycle the engine still adds the hybrid signature (ECDSA + ML-DSA-44, 2,484 B) to every SPDU (run.rs hand_down_app: signature::resize with the scenario's scheme; commit 45f0942f made the cycle's fragment fit beside it). The NDSS 2024 Partially-Hybrid design that cert_cycle.rs cites keeps ECDSA on every BSM (204 B frames, Fig. 4). With Falcon-512 the SPDU still fits under the 1,400 B WSMP MTU but is 666 B too large. With ML-DSA-44 every SPDU is refused, so the run is silent, and the validator accepts it with notes only"
 - id: PQHMC.verify-load
   base: PQHM
@@ -301,7 +302,8 @@ rows:
   expect: "ECDSA verification per BSM (~0.63 ms) plus one ML-DSA-44 verify per new certificate; verified BSMs near the classical base (within 10 %)"
   source: NDSS 2024 §III
   measured: "not measurable: nothing was transmitted (R-CCSIG)"
-  verdict: open
+  verdict: fixed
+  closed: "R-CCSIG fixed in wave 3 (06 §3 item 13; ccsig-memory §1, faults F1 and F2 red): the Partially-Hybrid cycle signs a node's messages with ECDSA and checks the PQ signature once per certificate; test cert_cycle_signature::hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid. Re-measured in scms-final-run.yaml PQHMC.verify (pass): verify cost mean 0.6297 ms against PQ0 0.6278, cert_pq_verifications 2,743 of 359,203 checks (0.76 %). SC-D7 closed 2026-10-30"
 - id: PQHMC.reports
   base: PQHM
   variant: PQHMC
@@ -314,7 +316,8 @@ rows:
     likewise refused (crl_broadcasts 0)
   source: testing/pq-profile.md §2 (pq_relay.rs certificate-cycle case); IEEE 1609.3 WSMP has no fragmentation
   measured: "0 reports (nothing was received, so nothing was detected); reports_refused_mtu 0"
-  verdict: open
+  verdict: fixed
+  closed: "R-CCSIG fixed in wave 3 (06 §3 item 13; ccsig-memory §1, faults F1 and F2 red): the Partially-Hybrid cycle signs a node's messages with ECDSA and checks the PQ signature once per certificate; test cert_cycle_signature::hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid. Re-measured in scms-final-run.yaml PQHMC.architecture: reports_uploaded_relay 0 and reports_refused_mtu 2 (the hybrid report SPDU is refused at the WSMP MTU, as this row expected), rsu_crls_installed 60. SC-D7 closed 2026-10-30"
   note: "vacuous under R-CCSIG"
 - id: PQ.topups
   base: PQ0
@@ -338,5 +341,6 @@ rows:
     1,000-1,100 B
   source: NDSS 2024 Fig. 4 (cert_cycle.rs anchors); run.rs hand_down_app
   measured: "PQ0 -> PQHFC: BSM frames 41,903 -> 41,900 (1.00 per BSM), PSDU mean 207 -> 1,045 B; BSM airtime 13.6 -> 60.4 s (x4.4); CBR 0.010 -> 0.044; verify cost 0.628 -> 0.751 ms (the hybrid sum, not ECDSA); relay reports 0 with reports_refused_mtu 5; 83 s wall, 104 CPU-s"
-  verdict: open
+  verdict: fixed
+  closed: "R-CCSIG fixed in wave 3 (06 §3 item 13; ccsig-memory §1, faults F1 and F2 red): the Partially-Hybrid cycle signs a node's messages with ECDSA and checks the PQ signature once per certificate; test cert_cycle_signature::hybrid_mldsa44_messages_are_ecdsa_and_only_the_certificate_is_hybrid. Re-measured in scms-final-run.yaml PQHFC.sizes (fixed): BSM PSDU mean 207 -> 380 B (the NDSS ~380 B prediction; was 1,045 B), 1.00 frame per BSM. SC-D7 closed 2026-10-30"
   note: "confirms R-CCSIG: the 1,045 B mean is the R-CCSIG prediction, not the NDSS ~380 B, and every message pays the hybrid verification. The relay-report refusals are the documented certificate-cycle behaviour (pq-profile.md §2)"

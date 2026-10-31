@@ -40,26 +40,41 @@ fn a_profile_that_publishes_p384_charges_it() {
     assert!(p.op_cost(verify).expect("priced").0 > p256 * 5);
 }
 
+/// SC-D8 (live-scms LS.S384.verify): a profile that publishes no P-384 figure no longer
+/// charges P-384 exactly as P-256. It scales its own P-256 figure by the P-384 / P-256
+/// cycle ratio on the catalogue reference that publishes both (the CRATON2's Pi 3B
+/// Cortex-A53 anchor: verify 775.3 / 94.1 per s = 8.24x, sign 1,631.1 / 358.4 = 4.55x),
+/// and its cost facts say so. Before, this test pinned the P-256 cost itself.
+///
+/// Fault injected (and reverted): `curve_ratio` returning 1.0 -> this test red.
 #[test]
-fn a_profile_without_p384_charges_p256_and_says_so() {
+fn a_profile_without_p384_scales_p256_by_the_reference_ratio_and_says_so() {
     let p = profiles::get(profiles::REFERENCE_OBU).expect("shipped");
     let (sign, verify) = signature_ops("ecdsa-p384");
-    for (op, p256) in [(sign, "ecdsa-p256-sign"), (verify, "ecdsa-p256-verify")] {
+    for (op, p256, want) in [
+        (sign, "ecdsa-p256-sign", 1_631.1 / 358.4),
+        (verify, "ecdsa-p256-verify", 775.3 / 94.1),
+    ] {
         assert_eq!(p.priced_op(op), p256);
         assert!(p.op_cost_is_curve_proxy(op));
-        assert_eq!(
-            p.op_cost(op).map(|c| c.0),
-            p.op_cost(p256).map(|c| c.0),
-            "{op}"
-        );
+        assert!(p.op_cost_is_derived(op), "{op}");
+        let k = p.curve_ratio(op);
+        assert!((k - want).abs() < 0.01, "{op}: ratio {k}, want {want}");
+        let t = p.op_cost(op).expect("priced").0.as_nanos() as f64;
+        let base = p.op_cost(p256).expect("priced").0.as_nanos() as f64;
+        assert!((t / base - k).abs() < 1e-6, "{op}: {t} ns against {base} ns");
         let facts = p.op_cost_facts(op).expect("priced");
         assert!(
             facts
                 .source
                 .as_deref()
-                .is_some_and(|s| s.contains("charged as P-256")),
+                .is_some_and(|s| s.contains("charged as P-256 x")),
             "{facts:?}"
         );
     }
+    // Every other operation, and P-384 on a profile that prices it, is unscaled.
+    assert_eq!(p.curve_ratio("ecdsa-p256-verify"), 1.0);
     assert!(!p.op_cost_is_curve_proxy("ecdsa-p256-verify"));
+    let g = profiles::get("obu/generic-automotive-soc-no-hsm").expect("shipped");
+    assert_eq!(g.curve_ratio(verify), 1.0);
 }

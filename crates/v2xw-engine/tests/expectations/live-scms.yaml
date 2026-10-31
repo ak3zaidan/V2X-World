@@ -1281,9 +1281,14 @@ rows:
   expect: up
   min_change: 0.3
   source: a P-384 verification costs more than a P-256 one on any accelerator
-  measured: 0.422132 -> 0.422136
-  verdict: open
-  note: 'engine modelling choice, not yet fixed: v2xw-node profile::signature_ops keeps the P-256 sign
+  measured: 0.419786 -> 3.33455
+  verdict: fixed
+  remeasured: 'SC-D8, 2026-10-30, opt-level-2 debug build of this branch (050eee80 + 146e87b1), runs
+    L and S384 at --record-level events, one thread each: 0.419786 -> 3.33455 ms (x7.94; P-384 verify
+    is P-256 x 8.24 on the CRATON2 by HardwareProfile::curve_ratio, the rest of the mean being other
+    operations). Before (486c8cba): 0.422132 -> 0.422136. BSM PSDU 213 -> 250 B as before. Test
+    curve_pricing::a_profile_without_p384_scales_p256_by_the_reference_ratio_and_says_so'
+  note: 'engine modelling choice, fixed by SC-D8 (the rest of this note is the original finding): v2xw-node profile::signature_ops keeps the P-256 sign
     and verify ops for every classical curve ("one P-384 figure is not a table"), so P-384 costs exactly
     P-256 (sign 9.012 ms, verify 0.422 ms, the rate still keyed ecdsa-p256-verify) although obu-generic-automotive-soc-no-hsm
     publishes P-384 (8,104 us sign, 5,721 us verify, R5 B.5). Sizes are right (+37 B). Proposed fix: use

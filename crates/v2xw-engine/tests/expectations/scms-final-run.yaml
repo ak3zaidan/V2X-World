@@ -321,7 +321,8 @@ rows:
     revoked over the two days; cases opened 0-4 (manual review, 8 h per case)
   source: "testing/measure.md (R-FS40, R-UNSEC); testing/usfp.md; D3 ASSUMPTION"
   measured: "first window (0-240 s): 1,935 reports filed (8.1/s; R-FS40 5.7/s), all about honest devices, and none delivered to an MA before the fast-forward (1,258 held in flight through 240-43,170 s). Rollover window: 10,357 more filed in 60 s, 4,876 of them in the first 10 s after the resume; the MAs received 15,062 at 43,200-43,220 s and opened 71 cases; false_accusations at vehicle level 69 -> 71 (det_fpr 3.3 % of 2,127 vehicles)"
-  verdict: open
+  verdict: fixed
+  closed: "SC-D9, 2026-10-30: R-FFBURST fixed at its two causes (testing/fast-forward.md §1): the mobility clocks (standstill, lane change, entry queue, stop end, next arrival) and the GNSS per-second hazards read the 42,930 s window as elapsed time, so gridlock teleports and a 12 m outlier on every vehicle were reported after the resume. Mobility::resume_after_pause and GnssModel::resume_after_pause move them on by the pause; tests calendar::the_traffic_resumes_after_a_fast_forward_as_if_no_time_had_passed and gauss_markov::a_receiver_resumed_after_a_pause_continues_its_error_as_if_no_time_had_passed. Re-measured at full scale as scms-full-bench.yaml FB3.honest-reports (pass): 404 reports in the 60 s rollover window (FB2 10,357, 4,876 in 10 s), fleet 1,830 -> 1,891 across the resume (FB2 1,833 -> 1,281), 0 cases, 0 revocations. R-FFHOLD is the report shuffle, not a fast-forward defect (fast-forward.md §4)"
   note: "the expectation (0-4 cases, no burst) failed. Two engine findings, both open (final-run.md §4): R-FFBURST, a report burst on resuming after a fast-forward, and R-FFHOLD, reports held in flight for the whole fast-forward and delivered only at the i-period boundary. The detector breakdown, decisions and honest revocations need the run report"
 - id: FB2.crl
   base: RFS
@@ -396,7 +397,8 @@ rows:
     54,511 for 33 days); skipped steps (42,930 + 129,570 s) / 0.1 s = 1,725,000
   source: "D2 design; testing/stress.md MW.cost"
   measured: "backend ticks are in the run report only; first fast-forward 42,930 s in 207 s wall; second 4,110 s in 617 s wall (6.7 simulated s per wall s); scms.kernel_steps +2,560 over the first 2,600 s of it"
-  verdict: open
+  verdict: wrong-expectation
+  closed: "SC-D9, 2026-10-30: the frequent stops are real wake sources, not a defect. FastForwardReport::stops_by_cause labels every stop: on the conformance run (scms-full-bench.yaml FF.conformance-stops) 2,415,612 -> 8,310 ticks, crl-poll 2,259, the 60 s jump cap 6,024, kernel 23, governance 1, crl-feed 1, window-end 2; R-FFSLOW (one stop per 0.1 s step) does not reproduce after new3. At full scale (FB3) the stops are each cellular device's hourly conditional CRL poll (69,076, a real request answered 412), the jump cap and kernel events. The expectation counted idle stops only. The cost per stop is FB4.ff-stops (open, validation wave)"
   note: "§9.2 is not fixed: the first fast-forward is cheap and the second, after the rollover, stops often"
 - id: FB2.backend-load
   base: QD

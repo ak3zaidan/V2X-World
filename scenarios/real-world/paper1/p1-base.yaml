@@ -36,4 +36,8 @@ detection:
   local:
     - id: detect/us-sm-mbr
       params:
+        # Paper 1 keeps the reading it was measured on: pairs consecutively received
+        # within max_gap_s, BSMs lost between or not (SC-D5 made msgCnt successors
+        # the default elsewhere).
+        consecutive: received
         time_base: secmark

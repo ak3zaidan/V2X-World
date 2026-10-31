@@ -118,7 +118,9 @@ rows:
   expect: under 1 % (reports go over Uu or to an RSU; the 29.3 % storm was fixed by VAL-VEH)
   source: validation/vehicle-and-roadside.md §4; realism.md MBR airtime 0.33 %
   measured: "quarter density (pq-base, us-sm-mbr): 5,710 MBR frames, 9.1 s of airtime against 13.6 s of BSMs (34 %); positionJump fired on 306,151 of 391,345 checked BSMs; 37,769 reports about 141 honest devices in 60 s. Full fleet: 2,223 reports in the first 5 s"
-  verdict: open
+  verdict: fixed
+  remeasured: "full fleet stress/fs-40 on 146e87b1 (msg_count): 0 MBR frames and 0 reports uploaded (received reading on the same binary: 1 MBR frame, 4 uploads); R-FS40 binary 0.21 % (FB.mbr-airtime)"
+  closed: "SC-D5, 2026-10-30: the 88 cases were R-USFP (raw 10 Hz GNSS white noise; fixed by the smoothed receiver, testing/usfp.md: realism base 26 honest revoked -> 0). What remained at full density: every honest positionJump compared two BSMs with lost ones between (memory-density.md §2.2). SM-MBR has no streak gate, so none is added; the US profile now pairs only BSMs consecutive on the air (msgCnt successors, consecutive: msg_count, 146e87b1). stress/fs-40 (full fleet, 40 s live), same opt-level-2 binary, received -> msg_count: verdicts 8 (positionJump 3, constantPositionFrozen 5) -> 0, reports about honest devices 8 (4 devices) -> 0, cases 0 -> 0. Attackers still caught: p1-attack 60 s, reports about attackers 126 -> 122, the same attacker, cases 2 -> 2. fault: in_sequence always true -> us_mbr::tests::only_bsms_consecutive_on_the_air_are_a_pair red"
   note: "R-USFP (07 §8.3): the 1 m RandomPosition gpsDrift with no streak gate on raw, uncorrelated GNSS fixes; needs a filtered-position model"
   note: "R-USFP (07 §8.3): the 1 m RandomPosition gpsDrift with no streak gate on raw, uncorrelated GNSS fixes; needs a filtered-position model"
 - id: FS.honest-revocations
@@ -129,7 +131,9 @@ rows:
   expect: "greater than 0 and growing with the fleet (open R-USFP: the strict US profile's 1 m RandomPosition threshold flags honest raw-GNSS drift); every case decided 8 h after the shuffle releases"
   source: 07-config-testing-report §8 (R-USFP, 26 honest in the realism base)
   measured: "quarter density: 88 cases in 60 s about honest devices (no attackers in the scenario)"
-  verdict: open
+  verdict: fixed
+  remeasured: "full fleet stress/fs-40 on 146e87b1 (msg_count): 0 verdicts, 0 reports about honest devices, 0 cases, 0 revoked; FB3 (2 days, before SC-D5): 0 cases, 0 revocations"
+  closed: "SC-D5, 2026-10-30: the 88 cases were R-USFP (raw 10 Hz GNSS white noise; fixed by the smoothed receiver, testing/usfp.md: realism base 26 honest revoked -> 0). What remained at full density: every honest positionJump compared two BSMs with lost ones between (memory-density.md §2.2). SM-MBR has no streak gate, so none is added; the US profile now pairs only BSMs consecutive on the air (msgCnt successors, consecutive: msg_count, 146e87b1). stress/fs-40 (full fleet, 40 s live), same opt-level-2 binary, received -> msg_count: verdicts 8 (positionJump 3, constantPositionFrozen 5) -> 0, reports about honest devices 8 (4 devices) -> 0, cases 0 -> 0. Attackers still caught: p1-attack 60 s, reports about attackers 126 -> 122, the same attacker, cases 2 -> 2. fault: in_sequence always true -> us_mbr::tests::only_bsms_consecutive_on_the_air_are_a_pair red"
   note: "R-USFP"
 - id: FS.crl-polls
   base: FS

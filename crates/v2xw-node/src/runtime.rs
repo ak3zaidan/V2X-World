@@ -2410,6 +2410,8 @@ impl ObuRuntime {
         crate::bsm_timing::BsmExtras {
             speed_mps: timing.and_then(|t| t.speed_mps),
             heading_rad: timing.and_then(|t| t.heading_rad),
+            // The count `encode_payload` just put in the BSM.
+            msg_cnt: Some(self.schedule.bsm_msg_count()),
             sec_mark_ms: Some(bsm::sec_mark(
                 self.config.wall,
                 timing.map_or(believed, |t| t.sec_mark_at),
