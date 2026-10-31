@@ -494,6 +494,14 @@ def m_store_order(D):
             e[2] = f['t']
             if f['fate'] == 'uploaded':
                 e[1] = min(sent_at.get(rid, f['t']), f['t'])
+    # A relayed report is sent when its first frame is on the air, whether or not a unit
+    # ever confirmed it: one sent and never confirmed (later evicted or expired) is not
+    # pending at the sends after its own (2026-10-30: the 22 left on AUD were all such,
+    # reporter 19 sending its newest report first at 196,208.912 s, unconfirmed).
+    for reps in life.values():
+        for rid, e in reps.items():
+            if rid in sent_at and (e[1] is None or sent_at[rid] < e[1]):
+                e[1] = sent_at[rid]
     bad = exercised = relayed = 0
     for reps in life.values():
         for rid, (st, s, _end) in reps.items():

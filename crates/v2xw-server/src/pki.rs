@@ -657,6 +657,12 @@ impl PkiStore {
         if let Some(e) = &c.enrolment {
             self.cert_owner.insert(e.clone(), c.device.clone());
         }
+        // A roadside unit's application certificates (`rsu/<node>`): their bytes and
+        // owner are kept for `inspect.cert`, but a unit is not a vehicle of the Vehicles
+        // table, and its certificates are not on a pseudonym CRL.
+        if c.device.starts_with("rsu/") {
+            return;
+        }
         // A certificate first seen now against every CRL already published.
         let crls: Vec<(String, String)> = self
             .crl_hex

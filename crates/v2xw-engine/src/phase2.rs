@@ -732,6 +732,10 @@ struct RsuCycle {
     starved: bool,
     starved_since: Option<SimTime>,
     starved_last: SimTime,
+    /// The digest of the unit's last `node.credentials` record (0: none yet).
+    cred_digest: u64,
+    /// The application certificates a `node.credentials` record already carried.
+    certs_carried: std::collections::BTreeSet<[u8; 8]>,
 }
 
 /// One roadside unit the scenario declared.
@@ -3441,6 +3445,104 @@ impl Phase2 {
             out.push((node, creds));
         }
         out
+    }
+
+    /// `node.credentials` for roadside unit `node` (audit-prov PV.rsu-cert, SC-D13): the
+    /// application certificates its provider issued it, one cell per i-period (`j` 0),
+    /// each certificate's bytes the first time a record carries it, written when the set
+    /// or a state changes. `device` is `rsu/<node>`, so a reader keeps units apart from
+    /// vehicles. `None` when the PKI view is off, under ETSI, or nothing changed. Before,
+    /// no record carried a unit's certificate: the response is sealed to the unit and
+    /// recorded without its plaintext, and `node.credentials` was vehicles only.
+    pub fn rsu_credentials(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+    ) -> Option<v2xw_proto::scms::pki_view::NodeCredentials> {
+        use v2xw_proto::scms::pki_view::{CredCell, NodeCredentials, PKI_VIEW_SCHEMA};
+        if self.etsi.is_some() || self.pki.is_none() || !self.rsu_cycle.contains_key(&node) {
+            return None;
+        }
+        let device = device_of(node);
+        let run = self.run_of(device);
+        let installed = run.app_installed(device);
+        if installed.is_empty() {
+            return None;
+        }
+        let current_i = run.state.params.period_at(now);
+        let provider = v2xw_proto::scms::pki_view::provider_label(run);
+        let cycle = self.rsu_cycle.get(&node)?;
+        let mut held = Vec::with_capacity(installed.len());
+        for c in installed {
+            let Ok(id8) = v2xw_sec::sig1609::cert_hashed_id8(&c.cred.cert) else {
+                continue;
+            };
+            let state = if now < c.from {
+                "downloaded"
+            } else if now >= c.until {
+                "expired"
+            } else {
+                "valid"
+            };
+            // The bytes only of a certificate no record has carried yet.
+            let coer = (!cycle.certs_carried.contains(&id8))
+                .then(|| v2xw_sec::cert::canonical_coer(&c.cred.cert).ok())
+                .flatten();
+            held.push((c.cred.period, id8, state, coer));
+        }
+        let mut b = Vec::with_capacity(32 + held.len() * 24);
+        b.extend_from_slice(b"v2xw/rsu.credentials/1");
+        b.extend_from_slice(&current_i.to_be_bytes());
+        for (i, id8, state, _) in &held {
+            b.extend_from_slice(&i.to_be_bytes());
+            b.extend_from_slice(id8);
+            b.extend_from_slice(state.as_bytes());
+        }
+        let d = v2xw_core::hash::sha256(&b);
+        let digest = u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]]).max(1);
+        if cycle.cred_digest == digest {
+            return None;
+        }
+        let hex = |b: &[u8]| v2xw_core::hash::hex_encode(b);
+        let mut certificates = BTreeMap::new();
+        let mut cells = Vec::with_capacity(held.len());
+        let mut active = None;
+        let c = self.rsu_cycle.get_mut(&node)?;
+        c.cred_digest = digest;
+        for (i, id8, state, coer) in held {
+            if let Some(coer) = coer {
+                c.certs_carried.insert(id8);
+                certificates.insert(hex(&id8), hex(&coer));
+            }
+            if state == "valid" && i == current_i {
+                active = Some(hex(&id8));
+            }
+            cells.push(CredCell {
+                i,
+                j: 0,
+                state: state.to_string(),
+                id8: Some(hex(&id8)),
+                used: false,
+            });
+        }
+        Some(NodeCredentials {
+            schema: PKI_VIEW_SCHEMA,
+            t: now,
+            node: node.index(),
+            device: format!("rsu/{}", node.index()),
+            provider,
+            enrolled: true,
+            enrolment: None,
+            current_i,
+            jmax: 1,
+            active,
+            cells,
+            history: Vec::new(),
+            ctl_sequence: None,
+            revoked: false,
+            certificates,
+            departed: false,
+        })
     }
 
     /// Counts certificates a roadside unit refused to install.

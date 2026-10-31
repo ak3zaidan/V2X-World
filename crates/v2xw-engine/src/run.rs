@@ -9410,6 +9410,11 @@ impl Engine {
                 let rec = crate::sec_records::SecCert::new(now, rsu, "rsu-app-cert", id8, None);
                 self.emit(recorder, &rec);
             }
+            // The unit's application certificates, with their bytes (PV.rsu-cert): the
+            // preloaded ones on the first tick, then each change.
+            if let Some(c) = self.phase2.as_mut().and_then(|p| p.rsu_credentials(rsu, now)) {
+                self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
+            }
         }
         // Refused top-ups and successor enrolments, as credential events.
         for (node, event) in &tick.events {
