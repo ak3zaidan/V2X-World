@@ -125,3 +125,16 @@ Dated notes go under each id as its wave lands.
   tell a frame's list: a unit keeps relaying the older list while its download is on the
   line, so LR.S.l240.bc4.fix.lag-max is a wrong expectation, not a defect. Rows:
   live-rsu LR.S.l240.bc4.fix.*, LR.S.dbl.unexplained, LR.S.lat2000bc3.crl-lag.
+
+### SC-D2
+
+- 2026-10-30 (wave A): fixed in code before this wave, by `2a14d6c4` (2026-10-24, R-JOINCRL):
+  `Phase2::prerun_crl` hands a joiner the composite its RA serves at its join once that is
+  newer than the `t0` snapshot, and marks its copy as of it. The 755 refusals were measured
+  on `77cffb5b`, before the fix. The MWC runs on `f4982788` (release) and `a925db58+` (debug)
+  refuse 0 messages of any kind, so W5 has 0 crl-overdue refusals; MW went 16,618 -> 0.
+  Test `join_crl_tests::a_device_joining_after_a_publication_holds_the_newest_list` passes
+  on `5c5dfc4e`. Fault: `newer = false` (every joiner gets the `t0` lists) -> red. Row
+  scms-stress MWC.recovery is now fixed. Kept as modelled and noted: the joiner holds its RA's
+  list from the instant it joins, not after its first connection's round trip. That is
+  seconds against a two-week tolerance, so negligible.
