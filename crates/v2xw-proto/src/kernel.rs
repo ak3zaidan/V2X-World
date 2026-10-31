@@ -435,6 +435,44 @@ impl<M> Kernel<M> {
         }
     }
 
+    /// The down intervals of every hosted entity with an availability model
+    /// ([`crate::service::AvailabilityModel`], SC-P12.1) that start before `horizon`,
+    /// drawn under `seed` and keyed by the entity's node index: each entity's windows are
+    /// its own, whatever else is hosted. Entities without a model, or with no outage
+    /// before `horizon`, are absent.
+    pub fn availability_windows(
+        &self,
+        seed: u64,
+        horizon: SimTime,
+    ) -> BTreeMap<NodeId, Vec<(SimTime, SimTime)>> {
+        self.queues
+            .iter()
+            .filter_map(|(node, q)| {
+                let w = q
+                    .availability()?
+                    .outages(seed, u64::from(node.index()), horizon);
+                (!w.is_empty()).then_some((*node, w))
+            })
+            .collect()
+    }
+
+    /// [`Kernel::availability_windows`] applied to `plan` as `offline` faults
+    /// ([`crate::fault::FaultPlan::add_outages`]): a drawn outage is handled exactly as a
+    /// scenario's `failures[]` window in mode `offline`, so the backend retry and the
+    /// device's timeout see it the same way. Returns how many outages were added.
+    pub fn apply_availability(
+        &self,
+        plan: &mut crate::fault::FaultPlan,
+        seed: u64,
+        horizon: SimTime,
+    ) -> usize {
+        let windows = self.availability_windows(seed, horizon);
+        windows
+            .iter()
+            .map(|(node, w)| plan.add_outages(*node, w))
+            .sum()
+    }
+
     /// Gives `node` a service model and a hardware profile.
     pub fn host(&mut self, node: NodeId, spec: &ServiceModelSpec, profile: &'static str) {
         self.queues.insert(node, ServiceQueue::new(spec));

@@ -21,7 +21,10 @@
 //!   (`crate::threshold::session`). Protocols that are not threshold ones ignore it.
 //!
 //! Faults are scenario data (`actors.backend.failures`), keyed by node, applied in id
-//! order; nothing here reads a clock or a random number.
+//! order; nothing here reads a clock or a random number. A random outage of an entity
+//! with an availability model (SC-P12.1) is drawn by the kernel from keyed hashes
+//! ([`crate::Kernel::availability_windows`]) and added here as an `offline` fault
+//! ([`FaultPlan::add_outages`]), so it behaves exactly as a scenario window.
 
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::{Duration, SimTime};
@@ -92,6 +95,9 @@ pub struct FaultPlan {
     pub held: u64,
     /// A down component's own timers, run when it restarted.
     pub deferred_timers: u64,
+    /// Per node, the random outages its availability model drew (SC-P12.1):
+    /// `(outages, downtime in ns)`.
+    pub random_outages: std::collections::BTreeMap<NodeId, (u64, u64)>,
 }
 
 impl FaultPlan {
@@ -160,6 +166,33 @@ impl FaultPlan {
         self.faults
             .iter()
             .any(|f| f.node == node && f.kind == FaultKind::Malicious && f.active(at))
+    }
+
+    /// Adds `node`'s random outages `[from, until)` as `offline` faults and counts them
+    /// (SC-P12.1). Returns how many were added.
+    pub fn add_outages(&mut self, node: NodeId, windows: &[(SimTime, SimTime)]) -> usize {
+        let e = self.random_outages.entry(node).or_insert((0, 0));
+        for &(from, until) in windows {
+            self.faults.push(Fault {
+                node,
+                kind: FaultKind::Offline,
+                from,
+                until,
+            });
+            e.0 += 1;
+            e.1 = e.1.saturating_add(until.saturating_sub(from));
+        }
+        windows.len()
+    }
+
+    /// `outages` of `node`: how many random outages it had (SC-P12.1).
+    pub fn outages(&self, node: NodeId) -> u64 {
+        self.random_outages.get(&node).map_or(0, |e| e.0)
+    }
+
+    /// `downtime_s` of `node`: the total length of its random outages (SC-P12.1).
+    pub fn downtime(&self, node: NodeId) -> Duration {
+        Duration::from_nanos(self.random_outages.get(&node).map_or(0, |e| e.1))
     }
 
     /// Whether any fault is declared at all.

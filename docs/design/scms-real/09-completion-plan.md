@@ -523,3 +523,27 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   issued certificates left off the list). Not called by the engine yet (P9.2 C2, P9.3 D1),
   so no golden moves. Not shown red: the enrolment-kept assert alone (the PSID fault fails
   the same test first).
+
+### SC-P12
+
+- 2026-10-31 (wave C R4, P12.1, agent C3): **two-state availability, off by default.**
+  `ServiceModelSpec::availability` was `Option<()>`, a hook nothing read
+  (`service.rs`, was `:56-59`). It is now `Option<AvailabilityModel { mtbf, mttr }>`, and
+  `ServiceQueue::spec` keeps it. `AvailabilityModel::outages` draws the k-th up time as
+  `-mtbf·ln(1 − keyed_uniform(seed, entity, k, up))` and the k-th down time the same with
+  `mttr` (a SplitMix64 keyed hash, no stream position). Every entity starts up at 0
+  (ASSUMPTION). `Kernel::availability_windows` gives each hosted entity with a model its
+  windows, keyed by its node index. `Kernel::apply_availability` adds them to the run's
+  `FaultPlan` as `offline` faults (`FaultPlan::add_outages`), so the backend retry and the
+  EE timeout treat them as a `failures[]` window. `FaultPlan::outages` and `downtime` are
+  the per-entity counters. Parameters are rows in `constants.md` §1.6 (ASSUMPTION). Tests
+  `availability::outages_follow_the_mtbf_and_mttr` (red with the down time drawn from the
+  MTBF: share 0.506 against 0.040), `availability::the_same_seed_gives_the_same_outages`
+  (red with the draws keyed by position among the modelled entities, a shared stream:
+  entity 5 moved when entity 2 was added), and
+  `availability::drawn_outages_are_offline_faults_and_counted` (red with the faults not
+  added). No golden moves: no entity has a model. Left to P12.3 (D1): the scenario keys,
+  the `crypto_config.rs` mapping, the call `run.kernel.apply_availability(&mut
+  run.state.faults, seed, horizon)` after hosting, the RunReport leaves, and the
+  `scms-knobs.yaml` rows. Note: the engine's `scms_topology.rs` `with_capacity` rebuilds
+  the spec with `ServiceModelSpec::new`, which drops a model, so P12.3 must keep it there.
