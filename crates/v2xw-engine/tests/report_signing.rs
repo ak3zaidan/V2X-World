@@ -320,7 +320,10 @@ fn a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation() {
         1 + p.decisions_linked + p.decisions_already_covered,
         "one revoking decision; the rest linked or covered"
     );
-    assert_eq!(p.cases_opened, 2, "the linked decision cost a case of its own");
+    assert_eq!(
+        p.cases_opened, 2,
+        "the linked decision cost a case of its own"
+    );
     assert_eq!(entries, 1, "one CRL entry for the device");
     assert_eq!(linked, 1, "one case ends `linked`");
     assert_eq!(p.revoked_attackers, 1);
