@@ -1907,6 +1907,9 @@ impl Governance {
                 )?);
             }
         }
+        // A level the loop above missed leaves the ACA's chain open: refuse the PKI rather
+        // than run a deployment no device can enrol in.
+        pki.check_issuers()?;
         Ok(pki)
     }
 

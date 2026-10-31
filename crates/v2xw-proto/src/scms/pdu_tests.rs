@@ -452,3 +452,21 @@ fn info_status_fetches_only_newer_lists() {
         "an older date is not newer"
     );
 }
+
+/// SC-M2 leftover (2026-10-31): a PKI in which a component's issuing CA is missing is
+/// refused by name. Under the `.min(1)` fault on `Governance::with_levels` a deeper
+/// hierarchy lost its ICA levels 2..n, provider-b's RSU never enrolled, and its
+/// application-certificate cycle retried on the pre-run scratch kernel without end (past
+/// 4.9 GB). Fault: `check_issuers` always `Ok`.
+#[test]
+fn a_pki_missing_a_components_issuer_is_refused() {
+    let mut p = pki();
+    assert!(p.check_issuers().is_ok(), "the whole PKI chains");
+    // The ICA dropped (its slot holds the root again): the ECA and every ICA-issued
+    // certificate now name a CA the PKI does not hold.
+    p.ica = p.root.clone();
+    match p.check_issuers() {
+        Err(PduError::MissingIssuer(name)) => assert_eq!(name, p.eca.name, "the first one"),
+        other => panic!("{other:?}"),
+    }
+}

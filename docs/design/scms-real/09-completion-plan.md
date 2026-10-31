@@ -426,7 +426,15 @@ Recorded deviation: 08 §8 read P2PCD as "one exchange per certificate". The sta
 response carries the chain, so the test asserts n + 1 certificates in one exchange.
 Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to price.
 - 2026-10-31 (wave B merge): merged to main (`922c44ac`). Conflicts: `publish.rs` `module_keys_publish_menus_ranges_and_status` (wave A had moved the status lookup to `module_keys::key_status()`, which chains the same two tables, so main's form was kept); the configuration-reference rows (the branch's built site, sites, capacity and `ica_levels` rows kept with main's built `ma_policy` and sweep rows); §7 appends. `scms_hierarchy` (7), `scms_sites` (5), `scms_capacity` (4), `p2pcd_air` (4), node `rx_validation` (32) and `p2pcd_exchange` (5) pass; no golden moved.
-
+- 2026-10-31 (wave C, C2, the wave B leftover): the `.min(1)` memory growth is traced and
+  refused. A sampled run put it in `ScmsRun::preload_app_cert` (`run/appcert.rs` ~494, a
+  scratch-kernel drain with no horizon) re-arming the `NotEnrolled` retry (~826-831) for
+  provider-b's RSU, which could not enrol because its PKI lacked ICA levels 2..3. New
+  `ScmsPki::check_issuers` (`pdu.rs`), called at the end of `Governance::with_levels`,
+  refuses a PKI whose component's issuer it does not hold (`PduError::MissingIssuer`), so
+  `Engine::build` fails with the component named. Test
+  `pdu::tests::a_pki_missing_a_components_issuer_is_refused`; the faulted hierarchy test
+  now fails in 0.06 s. The unbounded scratch drain itself is C3's file and stays as it is.
 ### SC-M3
 
 - 2026-10-30 (wave B): merged `worktree-wf_0343ab94-a4a-1` (13ae0463) and finished it.
