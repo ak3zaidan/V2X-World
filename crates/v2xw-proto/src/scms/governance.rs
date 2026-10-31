@@ -552,6 +552,13 @@ impl CertProfile {
     /// `role`'s profile.
     #[must_use]
     pub fn spec(self, role: &str) -> &'static RoleSpec {
+        // A deeper ICA level (`ica-2` ... `ica-5`, 08-settings-ux-and-gaps §8) takes the
+        // ICA's profile; its issuer is the level above ([`issuer_of`]).
+        let role = if ica_level(role).is_some() {
+            "ica"
+        } else {
+            role
+        };
         self.specs()
             .iter()
             .find(|s| s.role == role)
@@ -771,6 +778,63 @@ fn app_permissions(profile: CertProfile, role: &str) -> Vec<PsidSsp> {
         _ => {}
     }
     v
+}
+
+/// The intermediate CA level of `role`: 1 for `ica`, `k` for `ica-k` (`ica-2` ... `ica-5`,
+/// 08-settings-ux-and-gaps §8); `None` for any other role.
+#[must_use]
+pub fn ica_level(role: &str) -> Option<u32> {
+    if role == "ica" {
+        return Some(1);
+    }
+    let k: u32 = role.strip_prefix("ica-")?.parse().ok()?;
+    (2..=crate::scms::deployment::MAX_ICA_LEVELS)
+        .contains(&k)
+        .then_some(k)
+}
+
+/// The role name of intermediate CA level `k` of `n`: `ica` for the root-issued level 1,
+/// `ica-k` below it.
+#[must_use]
+pub fn ica_level_role(k: u32) -> &'static str {
+    match k {
+        2 => "ica-2",
+        3 => "ica-3",
+        4 => "ica-4",
+        5 => "ica-5",
+        _ => "ica",
+    }
+}
+
+/// Who issues `role` under `profile`: the level above for a deeper ICA level, else the
+/// profile's issuer.
+#[must_use]
+pub fn issuer_of(profile: CertProfile, role: &str) -> IssuedBy {
+    match ica_level(role) {
+        Some(k) if k > 1 => IssuedBy::Ica,
+        _ => profile.spec(role).issuer,
+    }
+}
+
+/// The `certIssuePermissions` of ICA level `k` of `n` (08 §8): the published ICA's
+/// groups, with the all-PSID group's `minChainLength` 2 + (n - k) and range 0, so every
+/// chain below it is exact and a certificate issued at the wrong level fails the chain
+/// check. Level 1 of 1 is the published ICA, `{2, 0}`.
+fn ica_issue_permissions(k: u32, n: u32) -> SequenceOfPsidGroupPermissions {
+    let min = 2 + i32::try_from(n.saturating_sub(k)).unwrap_or(0);
+    SequenceOfPsidGroupPermissions(vec![
+        group(SubjectPermissions::all(()), min, 0, true, true),
+        group(
+            explicit_psids(vec![
+                (SECURITY_MGMT_PSID, Some(SspRange::all(()))),
+                (v2xw_sec::crl::CRL_PSID, Some(SspRange::all(()))),
+            ]),
+            1,
+            -1,
+            true,
+            true,
+        ),
+    ])
 }
 
 /// A role's `certIssuePermissions`, as on the published certificates.
@@ -1242,6 +1306,9 @@ pub struct GovernanceConfig {
     pub peers: Vec<PeerProvider>,
     /// The home provider's certificate profile.
     pub profile: CertProfile,
+    /// The home provider's intermediate CA levels (08 §8): 1, the US hierarchy, or up to
+    /// [`crate::scms::deployment::MAX_ICA_LEVELS`].
+    pub ica_levels: u32,
 }
 
 impl Default for GovernanceConfig {
@@ -1251,6 +1318,7 @@ impl Default for GovernanceConfig {
             provider: "provider-a".into(),
             peers: Vec::new(),
             profile: CertProfile::default(),
+            ica_levels: 1,
         }
     }
 }
@@ -1273,6 +1341,8 @@ pub struct PeerProvider {
     pub on_ctl: bool,
     /// Its certificate profile.
     pub profile: CertProfile,
+    /// Its intermediate CA levels (08 §8).
+    pub ica_levels: u32,
 }
 
 impl PeerProvider {
@@ -1290,6 +1360,7 @@ impl PeerProvider {
                     pg: n.pg,
                     on_ctl: d.providers[k].on_ctl,
                     profile: d.providers[k].cert_profile,
+                    ica_levels: d.providers[k].ica_levels,
                 }
             })
             .collect()
@@ -1536,7 +1607,18 @@ impl Governance {
     ) -> Authority {
         let profile = self.profile_of(label);
         let spec = profile.spec(role);
-        let key = p256_key(rng, "protocol/scms/governance/keys", node, generation);
+        // A deeper ICA level is hosted on the ICA's node (all levels are offline) and
+        // keyed from its own stream, so level 1's key and bytes are today's.
+        let level = ica_level(role).filter(|k| *k > 1);
+        let key = match level {
+            None => p256_key(rng, "protocol/scms/governance/keys", node, generation),
+            Some(_) => p256_key(
+                rng,
+                &format!("protocol/scms/governance/keys/{role}"),
+                node,
+                generation,
+            ),
+        };
         let (enc_scalar, enc_field) = if spec.encryption {
             let s = p256_key(rng, "protocol/scms/governance/enc-keys", node, generation);
             let pubc = compressed_p256(&s);
@@ -1557,6 +1639,10 @@ impl Governance {
         // the issuer (an ICA-issued CRL signer, SAESOL production).
         let (craca, series) = match issuer {
             None => ([0u8; 3], 0u16),
+            // A deeper ICA level is revoked by its issuer, the level above (08 §8).
+            Some(i) if level.is_some() => {
+                (hashed_id3(&i.cert), v2xw_sec::crl::SERIES_SCMS_COMPONENTS)
+            }
             Some(i) => (
                 match self.root_above(&i.cert) {
                     Some(root) => profile.craca_for(&i.cert, &root),
@@ -1570,7 +1656,7 @@ impl Governance {
             ),
         };
         // ISS's ICA and every component it issues carry identifiedRegion {124, 484, 840}.
-        let region = (spec.issuer == IssuedBy::Ica || role == "ica")
+        let region = (spec.issuer == IssuedBy::Ica || ica_level(role).is_some())
             .then(|| profile.subca_region())
             .flatten()
             .map(crate::scms::enrolment::us_region);
@@ -1578,13 +1664,23 @@ impl Governance {
         // `certIssuePermissions` (SAESOL production).
         let (cip, crp) = if role == "ra" && profile.ra_request_form() {
             (None, cert_issue_permissions(role))
+        } else if let Some(k) = ica_level(role) {
+            let n = self.levels_of(label);
+            if k == 1 && n == 1 {
+                (cert_issue_permissions(role), None)
+            } else {
+                (Some(ica_issue_permissions(k, n)), None)
+            }
         } else {
             (cert_issue_permissions(role), None)
         };
         // The name the PDU layer always used (`eca.provider-a`): with one certificate per
         // component these are what the devices see, so the device-facing sizes stay those
         // reconciled with CAMP Table 3 (04 §3).
-        let name = format!("{}.{}", spec.host, label);
+        let name = match level {
+            None => format!("{}.{}", spec.host, label),
+            Some(_) => format!("{role}.{label}"),
+        };
         let tbs = ToBeSignedCertificate::new(
             CertificateId::name(Hostname(name)),
             HashedId3(FixedOctetString::from(craca)),
@@ -1609,7 +1705,7 @@ impl Governance {
         // They were counted here, so the home root showed every provider's work and a
         // peer's root none (audit-gov GOV.L.counters).
         if label == self.config.provider {
-            match spec.issuer {
+            match issuer_of(profile, role) {
                 IssuedBy::SelfSigned | IssuedBy::Root => self.counters.root_certs_issued += 1,
                 IssuedBy::Ica => self.counters.ica_certs_issued += 1,
             }
@@ -1646,6 +1742,7 @@ impl Governance {
         if let Some(old) = self.authorities.insert("ica", ica.clone()) {
             self.retired.push(old.cert);
         }
+        self.certify_levels(rng, generation, now32);
         for role in self.config.profile.root_issued() {
             let node = role_node(role, &self.nodes, online);
             let a = self.make_authority(role, rng, node, generation, Some(&root), &label, now32);
@@ -1664,7 +1761,7 @@ impl Governance {
         now32: u32,
     ) {
         let label = self.config.provider.clone();
-        let ica = self.authorities["ica"].clone();
+        let ica = self.authorities[ica_level_role(self.config.ica_levels)].clone();
         for role in self.config.profile.ica_issued() {
             let node = role_node(role, &self.nodes, online);
             let a = self.make_authority(role, rng, node, generation, Some(&ica), &label, now32);
@@ -1672,6 +1769,40 @@ impl Governance {
                 self.retired.push(old.cert);
             }
         }
+    }
+
+    /// The home provider's ICA levels 2 to n, each issued by the level above (08 §8).
+    /// Nothing for the US hierarchy's one level.
+    fn certify_levels(&mut self, rng: &RngRegistry, generation: u32, now32: u32) {
+        let label = self.config.provider.clone();
+        for k in 2..=self.config.ica_levels {
+            let above = self.authorities[ica_level_role(k - 1)].clone();
+            let role = ica_level_role(k);
+            let a = self.make_authority(
+                role,
+                rng,
+                self.nodes.ica,
+                generation,
+                Some(&above),
+                &label,
+                now32,
+            );
+            if let Some(old) = self.authorities.insert(role, a) {
+                self.retired.push(old.cert);
+            }
+        }
+    }
+
+    /// Provider `label`'s intermediate CA levels: the home one's or a peer's.
+    fn levels_of(&self, label: &str) -> u32 {
+        if label == self.config.provider {
+            return self.config.ica_levels;
+        }
+        self.config
+            .peers
+            .iter()
+            .find(|p| p.label == label)
+            .map_or(1, |p| p.ica_levels)
     }
 
     /// A peer provider's ceremony: its self-signed root (approved on the genesis CTL),
@@ -1688,6 +1819,14 @@ impl Governance {
         });
         let ica = self.make_authority("ica", rng, peer.ica, 0, Some(&root), label, now32);
         let mut set = BTreeMap::new();
+        // Its ICA levels 2 to n, each under the one above; the last issues (08 §8).
+        let mut issuing = ica.clone();
+        for k in 2..=peer.ica_levels {
+            let role = ica_level_role(k);
+            let a = self.make_authority(role, rng, peer.ica, 0, Some(&issuing), label, now32);
+            set.insert(role, a.clone());
+            issuing = a;
+        }
         let peer_role = |r: &&str| PEER_ROOT_ISSUED.contains(r) || PEER_ICA_ISSUED.contains(r);
         for role in peer.profile.root_issued().into_iter().filter(peer_role) {
             let node = match role {
@@ -1699,7 +1838,7 @@ impl Governance {
         }
         for role in peer.profile.ica_issued().into_iter().filter(peer_role) {
             let node = role_node(role, &self.nodes, &peer.online);
-            let a = self.make_authority(role, rng, node, 0, Some(&ica), label, now32);
+            let a = self.make_authority(role, rng, node, 0, Some(&issuing), label, now32);
             set.insert(role, a);
         }
         set.insert("ica", ica);
@@ -1723,24 +1862,52 @@ impl Governance {
         let parts = |a: &Authority| (a.cert.clone(), a.key.clone(), a.enc_scalar);
         if label == self.config.provider {
             let root = parts(&self.home_root().authority);
-            return Some(crate::scms::pdu::ScmsPki::of_governance(
-                label,
-                profile,
-                |r| {
+            return Some(
+                crate::scms::pdu::ScmsPki::of_governance(label, profile, |r| {
                     if r == "root" {
                         Some(root.clone())
                     } else {
                         self.authorities.get(r).map(parts)
                     }
-                },
-            ));
+                })
+                .and_then(|pki| self.with_levels(pki, label)),
+            );
         }
         let set = self.peer_authorities.get(label)?;
-        Some(crate::scms::pdu::ScmsPki::of_governance(
-            label,
-            profile,
-            |r| set.get(r).map(parts),
-        ))
+        Some(
+            crate::scms::pdu::ScmsPki::of_governance(label, profile, |r| set.get(r).map(parts))
+                .and_then(|pki| self.with_levels(pki, label)),
+        )
+    }
+
+    /// `pki` with provider `label`'s ICA levels 2 to n among its further components, so a
+    /// node resolves and validates every certificate of the deeper chain (08 §8).
+    /// Unchanged for the US hierarchy's one level.
+    fn with_levels(
+        &self,
+        mut pki: crate::scms::pdu::ScmsPki,
+        label: &str,
+    ) -> Result<crate::scms::pdu::ScmsPki, crate::scms::pdu::PduError> {
+        let set = if label == self.config.provider {
+            &self.authorities
+        } else {
+            match self.peer_authorities.get(label) {
+                Some(s) => s,
+                None => return Ok(pki),
+            }
+        };
+        for k in 2..=self.levels_of(label) {
+            let role = ica_level_role(k);
+            if let Some(a) = set.get(role) {
+                pki.extra.push(crate::scms::pdu::Authority::of_keys(
+                    &format!("{role}.{label}"),
+                    a.cert.clone(),
+                    a.key.clone(),
+                    a.enc_scalar,
+                )?);
+            }
+        }
+        Ok(pki)
     }
 
     /// The `HashedId32` of the newest approved root of provider `label` (home or peer).
@@ -1830,7 +1997,7 @@ impl Governance {
         let by = |pred: fn(IssuedBy) -> bool| {
             u32::try_from(
                 set.keys()
-                    .filter(|r| pred(peer.profile.spec(r).issuer))
+                    .filter(|r| pred(issuer_of(peer.profile, r)))
                     .count(),
             )
             .unwrap_or(u32::MAX)
@@ -1844,6 +2011,7 @@ impl Governance {
         let mut config = self.config.clone();
         config.provider = label.to_string();
         config.profile = peer.profile;
+        config.ica_levels = peer.ica_levels;
         config.peers[idx] = PeerProvider {
             label: old_label,
             online: ScmsNodes::default(),
@@ -1852,6 +2020,7 @@ impl Governance {
             pg: self.nodes.pg,
             on_ctl: true,
             profile: self.config.profile,
+            ica_levels: self.config.ica_levels,
         };
         let mut nodes = self.nodes.clone();
         nodes.root = peer.root;
@@ -2405,6 +2574,7 @@ impl Governance {
         if let Some(old) = self.authorities.insert("ica", ica) {
             self.retired.push(old.cert);
         }
+        self.certify_levels(rng, generation, now32);
         self.certify_ica_issued(rng, online, generation, now32);
         self.log.push(GovernanceEvent {
             decided_at,

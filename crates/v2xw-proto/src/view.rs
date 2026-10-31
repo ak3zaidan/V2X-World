@@ -36,6 +36,15 @@ pub struct QueueView {
     pub backlog_ns: u64,
     /// Deliveries on their way to it (messages on links, timers it set).
     pub inbound: u64,
+    /// Requests it turned away because its queue was at `queue_limit` (08 §6); left out
+    /// of the record while zero, so a run without a limit records what it always did.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub refused_busy: u64,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// One authority, or the pooled devices.
@@ -253,6 +262,7 @@ pub fn queue_of<M>(kernel: &Kernel<M>, node: NodeId, now: SimTime) -> Option<Que
         waited_ns: q.waiting().as_nanos(),
         backlog_ns: q.busy_until().saturating_sub(now),
         inbound: kernel.pending_to(node) as u64,
+        refused_busy: q.refused(),
     })
 }
 

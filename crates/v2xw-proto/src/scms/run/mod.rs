@@ -1230,7 +1230,7 @@ impl ScmsRun {
             transport: Transport::BackendNet,
         };
         for (a, b) in nodes.backend_links() {
-            net.connect(a, b, backend);
+            net.connect(a, b, role_link(&deployment, 0, a, b, backend));
         }
         let rng = RngRegistry::new(params.master_seed);
         // One clock for the whole deployment: the governance artefacts (CTL
@@ -1246,10 +1246,11 @@ impl ScmsRun {
                 provider: deployment.providers[0].name.clone(),
                 peers: crate::scms::governance::PeerProvider::of_deployment(&deployment),
                 profile: deployment.providers[0].cert_profile,
+                ica_levels: deployment.providers[0].ica_levels,
             },
         );
         for (a, b) in governance_links(&nodes, &gov) {
-            net.connect(a, b, backend);
+            net.connect(a, b, role_link(&deployment, 0, a, b, backend));
         }
         let transparent = Link {
             latency: Duration::ZERO,
@@ -1262,8 +1263,8 @@ impl ScmsRun {
         let peer_links = peer_topology(&deployment, &mut net, backend);
         let home_acas = extra_acas(&deployment, 0);
         for &a in &home_acas {
-            net.connect(nodes.ra, a, backend);
-            net.connect(nodes.ma, a, backend);
+            net.connect(nodes.ra, a, role_link(&deployment, 0, nodes.ra, a, backend));
+            net.connect(nodes.ma, a, role_link(&deployment, 0, nodes.ma, a, backend));
         }
         let mut kernel = Kernel::new_at(net, t0);
         for (node, spec) in nodes.backend_service_models(&params) {
@@ -1409,15 +1410,15 @@ impl ScmsRun {
         };
         let mut net = BackendNet::new();
         for (a, b) in nodes.backend_links() {
-            net.connect(a, b, backend);
+            net.connect(a, b, role_link(&deployment, k, a, b, backend));
         }
         for (a, b) in governance_links(&nodes, &gov) {
-            net.connect(a, b, backend);
+            net.connect(a, b, role_link(&deployment, k, a, b, backend));
         }
         let aca_extra = extra_acas(&deployment, k);
         for &a in &aca_extra {
-            net.connect(nodes.ra, a, backend);
-            net.connect(nodes.ma, a, backend);
+            net.connect(nodes.ra, a, role_link(&deployment, k, nodes.ra, a, backend));
+            net.connect(nodes.ma, a, role_link(&deployment, k, nodes.ma, a, backend));
         }
         let transparent = Link {
             latency: Duration::ZERO,
@@ -1914,6 +1915,19 @@ impl ScmsRun {
                 .and_then(|x| x.awaiting.as_ref())
                 .is_some_and(|a| a.0 == *seq)
         {
+            return Ok(());
+        }
+        // A server whose queue is at its limit (`capacity.<role>.queue_limit`, 08 §6)
+        // turns a device's request away, as an overloaded HTTP front end answers 503:
+        // the request is gone and the device finds out by timing out and retrying
+        // (SCMS-522/523, `EeRetryTimer`). Only a request from outside the provider is
+        // turned away (a device's, or one the proxy relays); one component's message to
+        // another waits in the queue as before.
+        if d.from != d.to
+            && (d.from == state.nodes.lop || state.devices.contains_key(&d.from))
+            && kernel.is_full_at(d.to, d.at)
+        {
+            kernel.refuse(d.to);
             return Ok(());
         }
         let profile = kernel.profile_of(d.to);
@@ -2446,6 +2460,31 @@ fn with_aca_instances(
     Ok(pki)
 }
 
+/// Provider `k`'s link between its nodes `a` and `b`: one hop between their roles'
+/// points (`providers[].sites`, 08 §5). A provider with no per-role site keeps `backend`
+/// itself, so the default topology is unchanged; a node that is no role of the provider
+/// (the DCM, the SCMS Manager) sits at the provider's own point.
+fn role_link(
+    d: &crate::scms::deployment::Deployment,
+    k: usize,
+    a: NodeId,
+    b: NodeId,
+    backend: Link,
+) -> Link {
+    if d.providers.get(k).is_none_or(|p| p.sites.is_empty()) {
+        return backend;
+    }
+    let pn = d.nodes(k);
+    let role = |n: NodeId| {
+        pn.instances
+            .iter()
+            .find(|(_, _, m)| *m == n)
+            .map_or("", |(r, _, _)| r.as_str())
+    };
+    d.between(k, role(a), k, role(b))
+        .map_or(backend, |latency| Link { latency, ..backend })
+}
+
 fn peer_topology(
     d: &crate::scms::deployment::Deployment,
     net: &mut BackendNet,
@@ -2468,7 +2507,7 @@ fn peer_topology(
         ] {
             for role in roles {
                 for n in of(role) {
-                    net.connect(hub, n, intra);
+                    net.connect(hub, n, role_link(d, k, hub, n, intra));
                 }
             }
         }

@@ -422,6 +422,19 @@ impl<M> Kernel<M> {
         self.queues.get(&node).map_or(0, |q| q.depth_at(t))
     }
 
+    /// Whether `node`'s queue is at its limit for a request arriving at `t`
+    /// (`ServiceModelSpec::queue_limit`); false for a node with no limit or no queue.
+    pub fn is_full_at(&self, node: NodeId, t: SimTime) -> bool {
+        self.queues.get(&node).is_some_and(|q| q.is_full_at(t))
+    }
+
+    /// Counts a request `node` turned away as busy.
+    pub fn refuse(&mut self, node: NodeId) {
+        if let Some(q) = self.queues.get_mut(&node) {
+            q.refuse();
+        }
+    }
+
     /// Gives `node` a service model and a hardware profile.
     pub fn host(&mut self, node: NodeId, spec: &ServiceModelSpec, profile: &'static str) {
         self.queues.insert(node, ServiceQueue::new(spec));

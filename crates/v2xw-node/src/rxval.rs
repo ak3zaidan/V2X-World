@@ -978,8 +978,23 @@ impl RxTrust {
         }
         self.stats.ca_validations += 1;
         // The cost a device pays for this path once: every explicit link (the root's
-        // self-signature included) and every implicit reconstruction.
-        for k in 0..certs.len() {
+        // self-signature included) and every implicit reconstruction, down from the
+        // first certificate already on a validated cached path. That certificate was
+        // verified then, and so was everything above it (its issuer chain is that path's
+        // suffix): a device verifies each CA certificate once (module documentation), so
+        // a chain one level deeper costs one more verification, not a whole path again
+        // (scms-real/08 §8).
+        let held: BTreeSet<[u8; 8]> = self
+            .paths
+            .values()
+            .filter_map(|p| p.as_ref().ok())
+            .flat_map(|p| p.certs.iter().filter_map(|c| id8(c)))
+            .collect();
+        let stop = certs
+            .iter()
+            .position(|c| id8(c).is_some_and(|id| held.contains(&id)))
+            .unwrap_or(certs.len());
+        for k in 0..stop {
             let sub = &certs[k];
             let iss = certs.get(k + 1).unwrap_or(sub);
             match sub.0.r_type {

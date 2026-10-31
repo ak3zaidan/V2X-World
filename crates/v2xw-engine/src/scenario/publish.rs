@@ -1755,15 +1755,16 @@ mod tests {
     /// step for a number; and the module's own status, refused until it is built.
     #[test]
     fn module_keys_publish_menus_ranges_and_status() {
+        let owned_by = |entry: &str, p: &str| {
+            p == entry
+                || p.strip_prefix(entry)
+                    .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+        };
         let owned = |p: &str| {
             crate::ma_policy::KEY_STATUS
                 .iter()
                 .chain(crate::scms_topology::KEY_STATUS)
-                .any(|k| {
-                    p == k.path
-                        || p.strip_prefix(k.path)
-                            .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
-                })
+                .any(|k| owned_by(k.path, p))
         };
         let mut seen = Vec::new();
         let mut bad = Vec::new();

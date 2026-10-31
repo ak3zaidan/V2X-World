@@ -405,3 +405,21 @@ Dated notes go under each id as its wave lands.
   rule because the loop takes it on the report it names; no `run_twice` determinism
   check for a Python policy (it would need a fresh policy object per run). No golden
   moved: `ma_policy` and the hook are absent by default.
+
+### SC-M2
+
+2026-10-30 (wave B): branch `worktree-wf_ab880052-ba6-5` (C1a-C3a, C3b snapshot
+`538a10fa`) merged onto `5c5dfc4e`. The one conflict was the configuration-reference rows;
+both sides were kept, with the built `ica_levels` row. C3b is finished as 08 §8 "Status,
+C3b (2026-10-30)" records:
+
+* the snapshot's `.min(1)` cap on `with_levels` is removed;
+* P2PCD learns a deeper foreign chain whole, in one `caCerts` exchange (IEEE 1609.2);
+* each level costs a foreign receiver one verification (an overcharge in
+  `RxTrust::build_path` is fixed);
+* failures naming an offline CA are refused by name;
+* `us_system` names the level count.
+
+Recorded deviation: 08 §8 read P2PCD as "one exchange per certificate". The standard's
+response carries the chain, so the test asserts n + 1 certificates in one exchange.
+Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to price.
