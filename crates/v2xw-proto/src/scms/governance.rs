@@ -130,6 +130,19 @@ pub const CTL_ADD_ROOT_BUSINESS_DAYS: u32 = 3;
 pub const CTL_ADD_ELECTOR_BUSINESS_DAYS: u32 = 5;
 /// See [`CTL_ADD_ROOT_BUSINESS_DAYS`].
 pub const CTL_REMOVAL_HOURS: u64 = 48;
+/// The Board of Directors reviews a requested addition (a root, a rollover's new root, an
+/// elector) within 10 business days before the EAC votes (Elector Policy v1.0 §2.4.2;
+/// gov G-2), counted as [`CTL_ADD_ROOT_BUSINESS_DAYS`] are.
+pub const REVIEW_ADD_BUSINESS_DAYS: u32 = 10;
+/// The Board investigates a requested removal within 24 h before the vote (Elector Policy
+/// v1.0 §2.4.4-2.4.5; gov G-2).
+pub const REVIEW_REMOVAL_HOURS: u64 = 24;
+/// A provider gives 365 days' notice before its Root CA is terminated ([SM-PROV] §3.5.6;
+/// gov L-8). The subscriber-majority transfer vote is not modelled (unpublished).
+pub const ROOT_TERMINATION_NOTICE_DAYS: u64 = 365;
+/// No elector may go more than a year without signing: the Board runs a Test Ballot at
+/// least yearly (Elector Policy v1.0 §1.1; gov G-10). 365 days, the menu's "yearly".
+pub const TEST_BALLOT_MAX_IDLE_DAYS: u64 = 365;
 /// The US i-period epoch, 2015-01-06 04:00 EST = 09:00 UTC (03 §1 fact 4).
 pub const US_IPERIOD_EPOCH_UNIX_S: i64 = 1_420_534_800;
 /// The default wall-clock instant of scenario `t0`: 2026-01-06 09:00 UTC, the start of US
@@ -1074,6 +1087,9 @@ struct ElectorSlot {
     node: NodeId,
     elector: Elector,
     approved: bool,
+    /// When it joined the trust list (the ceremony, or its replacement vote): the start of
+    /// its idle time until it first signs (gov G-10).
+    joined: SimTime,
 }
 
 /// One provider root (the home provider's current and past roots, and added roots).
@@ -1270,6 +1286,9 @@ pub struct GovernanceCounters {
     pub elector_changes: u32,
     /// Test ballots run.
     pub test_ballots: u32,
+    /// Root removals refused because the provider's 365-day termination notice had not
+    /// run out (gov L-8).
+    pub early_root_removal_refused: u32,
 }
 
 /// What an EAC decision changes in the CTL.
@@ -1315,25 +1334,47 @@ pub fn ctl_publication_deadline(
     decided_at: SimTime,
     clock: WallClock,
 ) -> SimTime {
-    use crate::scms::calendar::{days_from_civil, eastern_date, is_business_day};
-    const DAY: u64 = 86_400 * NS_PER_S;
-    let business_days = |n: u32| {
-        let mut t = decided_at;
-        let mut left = n;
-        while left > 0 {
-            t += DAY;
-            let (y, m, d) = eastern_date(clock.unix_seconds_at(t));
-            if is_business_day(days_from_civil(y, m, d)) {
-                left -= 1;
-            }
-        }
-        t
-    };
     match kind {
         CtlChangeKind::Genesis => decided_at,
         CtlChangeKind::RemoveRoot => decided_at + CTL_REMOVAL_HOURS * 3_600 * NS_PER_S,
-        CtlChangeKind::AddRoot => business_days(CTL_ADD_ROOT_BUSINESS_DAYS),
-        CtlChangeKind::ReplaceElector => business_days(CTL_ADD_ELECTOR_BUSINESS_DAYS),
+        CtlChangeKind::AddRoot => add_business_days(decided_at, CTL_ADD_ROOT_BUSINESS_DAYS, clock),
+        CtlChangeKind::ReplaceElector => {
+            add_business_days(decided_at, CTL_ADD_ELECTOR_BUSINESS_DAYS, clock)
+        }
+    }
+}
+
+/// `from` plus `n` business days: whole days at the same instant, each counted when its
+/// Eastern civil date is a business day (weekends and observed federal holidays skipped).
+fn add_business_days(from: SimTime, n: u32, clock: WallClock) -> SimTime {
+    use crate::scms::calendar::{days_from_civil, eastern_date, is_business_day};
+    const DAY: u64 = 86_400 * NS_PER_S;
+    let mut t = from;
+    let mut left = n;
+    while left > 0 {
+        t += DAY;
+        let (y, m, d) = eastern_date(clock.unix_seconds_at(t));
+        if is_business_day(days_from_civil(y, m, d)) {
+            left -= 1;
+        }
+    }
+    t
+}
+
+/// The EAC vote instant for a change requested at `requested_at` (gov G-2): the Board
+/// reviews an addition (a root, a rollover's new root, an elector replacement, which adds
+/// an elector) within 10 business days (Elector Policy v1.0 §2.4.2) and investigates a
+/// removal within 24 h (§2.4.4-2.4.5). The vote is taken at the end of the review, the
+/// latest the policy allows (when within the window the Board finishes is unpublished).
+/// The genesis CTL has no review.
+#[must_use]
+pub fn review_vote_at(kind: CtlChangeKind, requested_at: SimTime, clock: WallClock) -> SimTime {
+    match kind {
+        CtlChangeKind::Genesis => requested_at,
+        CtlChangeKind::RemoveRoot => requested_at + REVIEW_REMOVAL_HOURS * 3_600 * NS_PER_S,
+        CtlChangeKind::AddRoot | CtlChangeKind::ReplaceElector => {
+            add_business_days(requested_at, REVIEW_ADD_BUSINESS_DAYS, clock)
+        }
     }
 }
 
@@ -1481,6 +1522,8 @@ pub struct Governance {
     pub counters: GovernanceCounters,
     /// Every decision and publication.
     pub log: Vec<GovernanceEvent>,
+    /// Termination notices by root `HashedId32` (gov L-8): when the provider gave notice.
+    notices: BTreeMap<[u8; 32], SimTime>,
 }
 
 impl core::fmt::Debug for Governance {
@@ -1563,6 +1606,7 @@ impl Governance {
                     )
                     .expect("an elector certificate builds"),
                     approved: true,
+                    joined: t0,
                 }
             })
             .collect();
@@ -1608,6 +1652,7 @@ impl Governance {
             lccf: cf(Scope::Local),
             counters: GovernanceCounters::default(),
             log: Vec::new(),
+            notices: BTreeMap::new(),
         };
         let label = gov.config.provider.clone();
         let issued = now32.saturating_sub(GENESIS_BACKDATE_S);
@@ -2097,6 +2142,7 @@ impl Governance {
                 ..GovernanceCounters::default()
             },
             log: Vec::new(),
+            notices: self.notices.clone(),
         };
         gov.lpf.version = 0;
         gov.lccf.version = 0;
@@ -2480,6 +2526,7 @@ impl Governance {
             lccf: self.lccf.clone(),
             counters: self.counters,
             log: Vec::new(),
+            notices: self.notices.clone(),
         }
     }
 
@@ -2567,7 +2614,20 @@ impl Governance {
 
     /// EAC vote: remove the root with `HashedId32` `root`. It drops out of the next CTL
     /// (it is never put on a CRL, ISS CP §6.5.1), published within 48 h.
+    ///
+    /// A root whose provider gave a termination notice ([`Governance::termination_notice`])
+    /// cannot leave before the notice's 365 days have run ([SM-PROV] §3.5.6, gov L-8): the
+    /// vote is refused (`None`) and counted in `early_root_removal_refused`. A root without
+    /// a notice is removed at once, as before (a compromise removal; whether an emergency
+    /// removal overrides a running notice is unpublished, so a noticed root waits).
     pub fn remove_root(&mut self, root: [u8; 32], decided_at: SimTime) -> Option<SimTime> {
+        if let Some(&notice) = self.notices.get(&root) {
+            let earliest = notice + ROOT_TERMINATION_NOTICE_DAYS * 86_400 * NS_PER_S;
+            if decided_at < earliest {
+                self.counters.early_root_removal_refused += 1;
+                return None;
+            }
+        }
         let slot = self
             .roots
             .iter_mut()
@@ -2585,6 +2645,79 @@ impl Governance {
             Some(dropped),
             label,
         ))
+    }
+
+    /// The provider of root `root` gives notice of its termination at `at` ([SM-PROV]
+    /// §3.5.6, gov L-8): logged as `provider-termination-notice`, and
+    /// [`Governance::remove_root`] refuses that root until `at` + 365 days, which this
+    /// returns. `None` if no approved root has that `HashedId32`; a second notice for the
+    /// same root keeps the first.
+    pub fn termination_notice(&mut self, root: [u8; 32], at: SimTime) -> Option<SimTime> {
+        let label = self
+            .roots
+            .iter()
+            .find(|r| r.approved && cert_hashed_id32(&r.authority.cert).ok() == Some(root))?
+            .label
+            .clone();
+        let notice = *self.notices.entry(root).or_insert(at);
+        let earliest = notice + ROOT_TERMINATION_NOTICE_DAYS * 86_400 * NS_PER_S;
+        self.log.push(GovernanceEvent {
+            decided_at: at,
+            published_at: None,
+            kind: "provider-termination-notice",
+            ctl_sequence: None,
+            signers: Vec::new(),
+            detail: label,
+        });
+        Some(earliest)
+    }
+
+    /// The Board receives a request for a CTL change at `requested_at` (gov G-2): logged as
+    /// `eac-request` (the detail names the change), and the vote instant
+    /// [`review_vote_at`] returned, at which the caller takes the vote
+    /// ([`Governance::add_root`], [`Governance::remove_root`], ...).
+    pub fn request(
+        &mut self,
+        kind: CtlChangeKind,
+        requested_at: SimTime,
+        detail: String,
+    ) -> SimTime {
+        let vote = review_vote_at(kind, requested_at, self.config.clock);
+        self.log.push(GovernanceEvent {
+            decided_at: requested_at,
+            published_at: None,
+            kind: "eac-request",
+            ctl_sequence: None,
+            signers: Vec::new(),
+            detail,
+        });
+        vote
+    }
+
+    /// When elector slot `slot` last signed (gov G-10): the latest logged ballot (the
+    /// genesis CTL, an EAC vote, a test ballot) whose signers include it. `None` if it
+    /// has not signed in this log.
+    #[must_use]
+    pub fn last_signature_at(&self, slot: u32) -> Option<SimTime> {
+        self.log
+            .iter()
+            .filter(|e| e.signers.contains(&slot))
+            .map(|e| e.decided_at)
+            .max()
+    }
+
+    /// Whether a Test Ballot is due at `now` (Elector Policy v1.0 §1.1, gov G-10): some
+    /// approved elector has gone `max_idle` or longer without signing, counted from its
+    /// last signature, or from when it joined if it has not signed.
+    #[must_use]
+    pub fn test_ballot_due(&self, now: SimTime, max_idle: SimTime) -> bool {
+        self.electors.iter().enumerate().any(|(k, e)| {
+            let slot = u32::try_from(k).unwrap_or(u32::MAX);
+            let since = self
+                .last_signature_at(slot)
+                .map_or(e.joined, |t| t.max(e.joined));
+            e.approved && now.saturating_sub(since) >= max_idle
+        })
     }
 
     /// Home-provider root rollover (key changeover, Provider Req. §3.5.4): a new root key
@@ -2702,6 +2835,7 @@ impl Governance {
             node: elector_node(new_slot),
             elector: e,
             approved: true,
+            joined: decided_at,
         });
         self.nodes.electors = self
             .electors
@@ -2723,7 +2857,8 @@ impl Governance {
 
     /// The yearly test ballot (Elector Policy §1.1): every approved elector signs the
     /// current CTL's contents to prove its key and HSM still work. Returns the slots that
-    /// produced a valid signature.
+    /// produced a valid signature. Logged as `eac-test-ballot` (it was `test-ballot`; the
+    /// Board runs it, as the other `eac-*` votes), whose signers are those slots.
     pub fn test_ballot(&mut self, at: SimTime) -> Vec<u32> {
         let signers = self.approved_signers();
         let c = self.ctl_endorsed_by(&signers);
@@ -2747,7 +2882,7 @@ impl Governance {
         self.log.push(GovernanceEvent {
             decided_at: at,
             published_at: None,
-            kind: "test-ballot",
+            kind: "eac-test-ballot",
             ctl_sequence: Some(self.ctl.sequence),
             signers: ok.clone(),
             detail: format!("{} of {} responded", ok.len(), signers.len()),

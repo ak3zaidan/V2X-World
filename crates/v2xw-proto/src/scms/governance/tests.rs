@@ -584,7 +584,10 @@ fn adding_a_provider_root_and_a_test_ballot_are_recorded() {
     assert_eq!(g.counters.test_ballots, 1);
     assert!(t.install_ctl(&g.ctl).is_err(), "already installed");
     let kinds: Vec<&str> = g.log.iter().map(|e| e.kind).collect();
-    assert_eq!(kinds, vec!["ctl-genesis", "eac-add-root", "test-ballot"]);
+    assert_eq!(
+        kinds,
+        vec!["ctl-genesis", "eac-add-root", "eac-test-ballot"]
+    );
 }
 
 /// Writes every artefact for the independent oracle (`oracle.py real`) when
@@ -772,4 +775,135 @@ fn a_removal_ctl_carries_the_dropped_root_once() {
             .all(|c| cert_hashed_id32(c).expect("encodes") != peer),
         "the dropped root is carried once only"
     );
+}
+
+/// gov G-2: the Board reviews an addition within 10 business days before the vote
+/// (Elector Policy v1.0 §2.4.2) and investigates a removal within 24 h (§2.4.4-2.4.5).
+/// A request on Thursday 2026-07-02 skips Friday 2026-07-03 (Independence Day, observed,
+/// as 4 July is a Saturday) and two weekends: 6-10 and 13-17 July, a vote on Friday 17.
+#[test]
+fn a_request_before_a_holiday_votes_ten_business_days_later() {
+    let clock = GovernanceConfig::default().clock;
+    let thu = clock_at(clock, "2026-07-02T15:00:00Z");
+    for kind in [CtlChangeKind::AddRoot, CtlChangeKind::ReplaceElector] {
+        assert_eq!(
+            clock.to_rfc3339_at(review_vote_at(kind, thu, clock)),
+            "2026-07-17T15:00:00Z",
+            "{kind:?}: 10 business days, the observed holiday and weekends skipped"
+        );
+    }
+    assert_eq!(
+        clock.to_rfc3339_at(review_vote_at(CtlChangeKind::RemoveRoot, thu, clock)),
+        "2026-07-03T15:00:00Z",
+        "a removal is investigated within 24 h, holiday or not"
+    );
+    assert_eq!(review_vote_at(CtlChangeKind::Genesis, thu, clock), thu);
+    // The governance entry point logs the request and gives the same vote instant.
+    let mut g = gov();
+    let vote = g.request(CtlChangeKind::AddRoot, thu, "provider-b".into());
+    assert_eq!(vote, review_vote_at(CtlChangeKind::AddRoot, thu, clock));
+    let e = g.log.last().expect("logged");
+    assert_eq!((e.kind, e.decided_at), ("eac-request", thu));
+    assert!(e.signers.is_empty(), "a request is not a signature");
+    let (_, published) = g.add_root(&rng(), "provider-b", vote);
+    assert_eq!(
+        clock.to_rfc3339_at(published),
+        "2026-07-22T15:00:00Z",
+        "then the 3-business-day publication deadline runs from the vote"
+    );
+}
+
+/// gov L-8: a provider's root may leave the CTL only after its 365 days' notice
+/// ([SM-PROV] §3.5.6).
+#[test]
+fn a_root_removal_waits_for_its_notice() {
+    let mut g = gov();
+    let (peer, at) = g.add_root(&rng(), "provider-b", 0);
+    g.publish_due(at);
+    let notice = at + DAY;
+    assert_eq!(
+        g.termination_notice(peer, notice),
+        Some(notice + 365 * DAY),
+        "the earliest removal"
+    );
+    assert_eq!(
+        g.log.last().map(|e| (e.kind, e.detail.as_str())),
+        Some(("provider-termination-notice", "provider-b"))
+    );
+    assert_eq!(g.termination_notice([0; 32], notice), None, "no such root");
+    let ctls = g.counters.ctls_published;
+    assert_eq!(
+        g.remove_root(peer, notice + 200 * DAY),
+        None,
+        "refused early"
+    );
+    assert_eq!(g.counters.early_root_removal_refused, 1);
+    assert_eq!(g.counters.roots_removed, 0);
+    assert!(g.pending.is_empty(), "no CTL decided");
+    assert!(g.ctl.roots.contains(&peer), "still approved");
+    // A second notice does not restart the clock.
+    assert_eq!(
+        g.termination_notice(peer, notice + 300 * DAY),
+        Some(notice + 365 * DAY)
+    );
+    let at = g
+        .remove_root(peer, notice + 366 * DAY)
+        .expect("the notice has run out");
+    assert_eq!(g.publish_due(at), 1);
+    assert_eq!(g.counters.ctls_published, ctls + 1);
+    assert!(!g.ctl.roots.contains(&peer), "removed");
+    assert_eq!(g.counters.early_root_removal_refused, 1);
+    // A root without a notice is still removed at once (the home root after a rollover).
+    let (old, _, at) = g.rollover_root(&rng(), &ScmsNodes::default(), at + DAY);
+    g.publish_due(at);
+    assert!(g.remove_root(old, at + DAY).is_some(), "no notice, no wait");
+}
+
+/// gov G-10: the engine schedules a Test Ballot from each elector's last signature in
+/// the log (Elector Policy v1.0 §1.1, no elector idle for more than a year).
+#[test]
+fn an_electors_last_signature_is_its_latest_ballot() {
+    let year = TEST_BALLOT_MAX_IDLE_DAYS * DAY;
+    let mut g = gov();
+    for k in 0..5 {
+        assert_eq!(
+            g.last_signature_at(k),
+            Some(0),
+            "slot {k} signed the genesis CTL"
+        );
+    }
+    assert!(!g.test_ballot_due(year - S, year));
+    assert!(
+        g.test_ballot_due(year, year),
+        "a year since the genesis CTL"
+    );
+    // An EAC vote signed by every elector restarts every clock.
+    let (_, at) = g.add_root(&rng(), "provider-b", 100 * DAY);
+    g.publish_due(at);
+    assert_eq!(
+        g.last_signature_at(3),
+        Some(100 * DAY),
+        "the vote, not publication"
+    );
+    assert!(!g.test_ballot_due(year, year));
+    // A replacement: the removed elector is excluded from the vote, the new one has not
+    // signed and is idle from its joining.
+    let (new, at) = g.replace_elector(&rng(), 0, 200 * DAY).expect("approved");
+    g.publish_due(at);
+    assert_eq!(
+        g.last_signature_at(0),
+        Some(100 * DAY),
+        "excluded from the vote"
+    );
+    assert_eq!(g.last_signature_at(1), Some(200 * DAY));
+    assert_eq!(g.last_signature_at(new), None, "not signed yet");
+    assert!(
+        !g.test_ballot_due(100 * DAY + year, year),
+        "slot 0 is no longer approved, the new slot joined at day 200"
+    );
+    assert!(g.test_ballot_due(200 * DAY + year, year));
+    assert_eq!(g.test_ballot(250 * DAY).len(), 5);
+    assert_eq!(g.last_signature_at(new), Some(250 * DAY));
+    assert!(!g.test_ballot_due(250 * DAY + year - S, year));
+    assert!(g.test_ballot_due(250 * DAY + year, year));
 }

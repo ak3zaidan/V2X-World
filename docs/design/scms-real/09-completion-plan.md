@@ -866,3 +866,50 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   (the governance PKI's are version 1); not in L-11's scope, recorded for the wave E
   register. `phase2.rs` (D1) forges RSU false-CRL entries with `LaId(1)`, `LaId(2)`
   (`:3935`): an attacker's choice, no effect on matching.
+
+### gov G-2
+
+- 2026-10-31 (wave D R3, agent D2): **the API.** `governance_due` (`phase2.rs`, D1)
+  takes the `*_at_s` keys as votes; nothing gave the Board's review. New
+  `governance::review_vote_at(kind, requested_at, clock)`: request + 10 Eastern business
+  days for an addition (a root, a rollover's new root, an elector replacement, which adds
+  an elector; Elector Policy v1.0 §2.4.2), + 24 h for a removal (§2.4.4-2.4.5), the
+  vote at the end of the window. The business-day walk of `ctl_publication_deadline` is
+  now the shared `add_business_days`. `Governance::request(kind, at, detail)` logs
+  `eac-request` and returns the vote instant. Test
+  `governance::tests::a_request_before_a_holiday_votes_ten_business_days_later` (Thursday
+  2026-07-02 votes Friday 17 July, skipping the observed Independence Day and two
+  weekends), red with a delay of 0. Constants `review_add_business_days`,
+  `review_removal_hours`. Left for D1 R5: the `eac_review` key and reading the `*_at_s`
+  keys as requests. No golden moves (off by default; nothing calls it yet).
+
+### gov L-8
+
+- 2026-10-31 (wave D R3, agent D2): **the API.** `remove_root` (`governance.rs`) removed
+  any approved root at once. New `Governance::termination_notice(root, at)` logs
+  `provider-termination-notice` and returns notice + 365 d; `remove_root` for that root
+  before then returns `None` and counts the new `GovernanceCounters::early_root_removal_refused`
+  (a second notice keeps the first; a root without a notice is removed at once, as
+  before). Test `governance::tests::a_root_removal_waits_for_its_notice` (refused at
+  notice + 200 d, published at + 366 d), red with the check skipped. The transfer vote is
+  not modelled (unpublished, as G-1); whether an emergency removal overrides a running
+  notice is unpublished, so a noticed root waits (constants.md
+  `root_termination_notice_days`). Left for D1 R5: the
+  `root_termination_notice_at_s` key. No golden moves.
+
+### gov G-10
+
+- 2026-10-31 (wave D R3, agent D2): **the API.** `Governance::test_ballot` existed, but
+  nothing could tell when one was due. New `Governance::last_signature_at(slot)` (the
+  latest logged ballot, genesis, EAC vote or test ballot, whose signers include the slot)
+  and `test_ballot_due(now, max_idle)` (an approved elector idle that long since its last
+  signature, or since it joined: `ElectorSlot` now records its joining instant). The
+  ballot's log kind is now `eac-test-ballot` (was `test-ballot`; nothing outside the unit
+  test read it). Test `governance::tests::an_electors_last_signature_is_its_latest_ballot`,
+  red with the first signature taken for the last. Found on the way: a test ballot held
+  before an elector replacement's CTL is published fails the new elector's signature
+  (the endorsed CTL keeps the published `effectiveDate`, before the new certificate's
+  start); a scheduler should ballot on the published list. Left for D1 R5: the scheduler
+  in `governance_due`, the key `test_ballot_interval_days` and the engine accept test
+  `security_lifecycle::a_long_run_holds_a_test_ballot_each_year` (D1's file). No golden
+  moves.
