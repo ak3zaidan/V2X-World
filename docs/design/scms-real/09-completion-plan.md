@@ -904,3 +904,36 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   an idle RA misses none. Red with the delay taken from admission (count 0, p99 2 ms). No
   golden moves (a counter only; no record carries it). Left to D1: the RunReport leaves
   `ra_ack_over_1s` and `ra_ack_p99_ms`, read from `kernel.acks(nodes.ra)`.
+
+### UI U1, U4, U6, U9
+
+- 2026-10-31 (wave D R4, agent D3): **answered by the server's PKI store, with no record
+  change.** Cause: every PKI record (`pki.state`, `pki.flow`, `node.credentials`,
+  `node.security`) is in the G-SCMS record digest (`DigestRecorder` excludes nothing, and
+  `pki_view` is on by default), so a new record field would move G-SCMS, which §3 forbids.
+  The facts were already in the records; `v2xw-server/src/pki.rs` now joins them:
+  - **U1:** `node.security` `crls[]` is kept, and each held list gains `crl_id8` (the
+    published version with the same `(crlCraca, crlSeries, counter, issueDate)`, decoded
+    from its bytes by `pki_view::crl_key`) and `provider` (the component holding the
+    CRACA's certificate, else the version's CRL Generator). Both are null for a list
+    never published.
+  - **U4:** vehicle rows gain `in_run` and `left_at_ns` from the last `node.credentials`'
+    `departed` flag (the removal record that already exists), and
+    `enrolment_valid_until` (Time32) and `enrolment_valid_until_ns` from the enrolment
+    certificate's own `validityPeriod`.
+  - **U6:** `inspect.flows` rows and `inspect.flow` gain `device_kinds`: `ee/<n>` is
+    `{kind: rsu, node, rsu}` when `n - SCMS_DEVICE_BASE` is in the roadside range
+    (`ROADSIDE_ID_BASE + i`), else `{kind: vehicle, node}`. Vehicle rows and `owner_of`
+    gain `kind`.
+  - **U9:** `pki.state`'s authority certificates go in an unbounded `authority` map,
+    apart from the `CERT_CAP` device ring. `inspect.cert` searches both
+    (`pki_view::inspect_cert_in`).
+- **Not done (open):** electors stay unopenable. Their certificates are in no record
+  (`pki.state` gives an elector's `cert` as the first 8 bytes of its HashedId48), so
+  opening them needs `pki_state` to carry them, which moves G-SCMS. That needs a spec
+  decision and its own golden commit.
+- Tests: `v2xw-server/tests/pki_requests.rs`, five tests on the committed two-provider
+  fixture, each checked against the records' own bytes (CRLs decoded in the test, the
+  enrolment certificate's JER validity, `node.credentials.node`). Each went red under its
+  fault. The Studio fixtures `pki-tabs.json` and `pki-studio.json` were regenerated
+  (fields added only), and `tests/pki.rs` passes 13/13. No golden moves.

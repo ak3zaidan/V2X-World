@@ -105,8 +105,20 @@ pub struct PkiStore {
     pdu_order: VecDeque<(String, usize)>,
     /// What the kept SPDUs cost, bytes.
     pdu_bytes: usize,
+    /// Device certificates (pseudonym, enrolment, a roadside unit's) from
+    /// `node.credentials`: bounded by [`CERT_CAP`], oldest first.
     certs: BTreeMap<String, String>,
     cert_order: VecDeque<String>,
+    /// Every authority certificate and CTL root `pki.state` carried, by HashedId8: a few
+    /// dozen per provider, so never evicted, and a long run's pseudonyms cannot push a
+    /// chain's root out of [`PkiStore::certs`] (U9).
+    authority: BTreeMap<String, String>,
+    /// Which provider holds each authority certificate (its component's `provider`).
+    cert_provider: BTreeMap<String, String>,
+    /// Each CRL version's id8 by what a receiver files an installed CRL under
+    /// (`(crlCraca hex, crlSeries, counter, issueDate)`, [`pki_view::crl_key`]), so a
+    /// `node.security` held CRL is named by its provider and id8 (U1).
+    crl_keys: BTreeMap<(String, u16, u32, u32), String>,
     crl_hex: BTreeMap<String, String>,
     /// CRL heads, newest last, as `pki.state` listed them.
     crls: Vec<CrlHead>,
@@ -302,6 +314,31 @@ fn device_id(d: &str) -> String {
     }
 }
 
+/// What a device id (`ee/<n>`) stands for (U6): `{kind, node}` with `kind` `vehicle` (a
+/// vehicle or a road user's device, node `n - SCMS_DEVICE_BASE`) or `rsu` (a roadside
+/// unit, whose node is in the roadside range, with its `rsu` index). `None` for an id that
+/// is not a device, or a bare backend test device below the engine's device numbering.
+fn device_ref(device: &str) -> Option<Value> {
+    use v2xw_engine::phase2::SCMS_DEVICE_BASE;
+    use v2xw_engine::run::ROADSIDE_ID_BASE;
+    let n: u32 = device.strip_prefix("ee/")?.parse().ok()?;
+    let node = n.checked_sub(SCMS_DEVICE_BASE)?;
+    // Roadside unit `i` is node `ROADSIDE_ID_BASE + i`, with fewer than 2^30 units
+    // (`v2xw_engine::run::roadside_node`).
+    Some(match node.checked_sub(ROADSIDE_ID_BASE) {
+        Some(i) if i < 1 << 30 => json!({"kind": "rsu", "node": node, "rsu": i}),
+        _ => json!({"kind": "vehicle", "node": node}),
+    })
+}
+
+/// [`device_ref`] of each device id, by id; ids that are not devices are left out.
+fn device_kinds<'a>(ids: impl Iterator<Item = &'a String>) -> Value {
+    let m: serde_json::Map<String, Value> = ids
+        .filter_map(|d| device_ref(d).map(|r| (d.clone(), r)))
+        .collect();
+    Value::Object(m)
+}
+
 /// One component's message and byte counts in a `pki.state` value.
 fn traffic_of(c: &Value) -> (u64, u64) {
     let t = &c["traffic"];
@@ -491,8 +528,13 @@ impl PkiStore {
         if let Some(certs) = v.get("certificates").and_then(Value::as_object) {
             for (id, hex) in certs {
                 if let Some(h) = hex.as_str() {
-                    self.put_cert(id.clone(), h.to_string());
+                    self.authority.insert(id.clone(), h.to_string());
                 }
+            }
+        }
+        for (_, c) in components_of(v) {
+            if let (Some(cert), Some(p)) = (c["cert"].as_str(), c["provider"].as_str()) {
+                self.cert_provider.insert(cert.to_string(), p.to_string());
             }
         }
         if let Some(crls) = v.get("crls").and_then(Value::as_array) {
@@ -501,6 +543,10 @@ impl PkiStore {
                     if let Some(h) = head.hex.clone() {
                         if !self.crl_hex.contains_key(&head.id8) {
                             self.match_crl(&head.id8, &h);
+                            if let Some((craca, series, counter, issue)) = pki_view::crl_key(&h) {
+                                self.crl_keys
+                                    .insert((craca, series, counter, issue), head.id8.clone());
+                            }
                         }
                         self.crl_hex.insert(head.id8.clone(), h);
                     }
@@ -608,7 +654,7 @@ impl PkiStore {
             "messages": messages,
             "messages_omitted": omitted,
             "messages_complete": complete,
-            "certificates_known": self.certs.len(),
+            "certificates_known": self.certs.len() + self.authority.len(),
             "history": self.states.len(),
         }))
     }
@@ -626,6 +672,7 @@ impl PkiStore {
             "bytes": log.bytes,
             "pdus": log.pdus,
             "devices": log.devices.iter().take(8).collect::<Vec<_>>(),
+            "device_kinds": device_kinds(log.devices.iter().take(8)),
             "device_count": log.devices.len(),
             "last_stage": log.last_stage,
         })
@@ -678,6 +725,7 @@ impl PkiStore {
             .collect();
         records.sort_by_key(|r| r["t"].as_u64().unwrap_or(0));
         let mut row = Self::flow_row(instance, log);
+        row["device_kinds"] = device_kinds(log.devices.iter());
         row["records"] = json!(records);
         row["dropped"] = json!(log.dropped);
         Some(row)
@@ -776,6 +824,7 @@ impl PkiStore {
             "pool_valid",
             "changes",
             "pseudonym",
+            "crls",
         ] {
             if let Some(x) = row.get(k) {
                 keep.insert(k.to_string(), x.clone());
@@ -843,8 +892,14 @@ impl PkiStore {
                     .filter(|c| t_ns.is_none_or(|at| c.issued_at <= at))
                     .cloned()
                     .collect();
-                let mut v =
-                    pki_view::inspect_cert(id8, &self.certs, roots, &crls, &self.crl_hex, time32)?;
+                let mut v = pki_view::inspect_cert_in(
+                    id8,
+                    &[&self.authority, &self.certs],
+                    roots,
+                    &crls,
+                    &self.crl_hex,
+                    time32,
+                )?;
                 v["t_ns"] = json!(t_ns.unwrap_or(*t));
                 Some(v)
             }
@@ -928,7 +983,7 @@ impl PkiStore {
                     self.revoked_by
                         .iter()
                         .filter(|(_, crls)| crls.contains(id8))
-                        .filter_map(|(c, _)| self.certs.get(c).map(|h| (c.as_str(), h.as_str())))
+                        .filter_map(|(c, _)| self.cert_hex(c).map(|h| (c.as_str(), h.as_str())))
                         .collect()
                 } else {
                     Vec::new()
@@ -957,9 +1012,60 @@ impl PkiStore {
         }
     }
 
+    /// The run instant of a `Time32`, on the newest `pki.state`'s clock (`t` at `time32`);
+    /// `None` before the first state or for an instant before the run began.
+    fn time32_to_ns(&self, time32: u64) -> Option<u64> {
+        let (t, now32, _) = self.ctl.back()?;
+        let dt = i128::from(time32) - i128::from(*now32);
+        u64::try_from(i128::from(*t) + dt * 1_000_000_000).ok()
+    }
+
     /// The newest `pki.state`'s `(t, time32)`.
     fn now(&self) -> (u64, u32) {
         self.ctl.back().map_or((0, 0), |(t, s, _)| (*t, *s))
+    }
+
+    /// A certificate's COER hex: an authority's, else a device's.
+    fn cert_hex(&self, id8: &str) -> Option<&String> {
+        self.authority.get(id8).or_else(|| self.certs.get(id8))
+    }
+
+    /// The held CRLs of a `node.security` row, each named by its provider and its id8
+    /// (U1): `crl_id8` is the version whose `(crlCraca, crlSeries, counter, issueDate)`
+    /// it is, and `provider` the provider of the CRACA's certificate (the component that
+    /// holds it, under its root on the CTL), else of the version's CRL Generator. Both are
+    /// null for a list the store never saw published.
+    fn named_crls(&self, security: &Value) -> Value {
+        let mut out = security.clone();
+        for c in out["crls"].as_array_mut().into_iter().flatten() {
+            let craca = c["craca"].as_str().unwrap_or("").to_ascii_lowercase();
+            let key = (
+                craca.clone(),
+                c["series"]
+                    .as_u64()
+                    .and_then(|x| u16::try_from(x).ok())
+                    .unwrap_or(0),
+                c["counter"]
+                    .as_u64()
+                    .and_then(|x| u32::try_from(x).ok())
+                    .unwrap_or(0),
+                c["issue_date"]
+                    .as_u64()
+                    .and_then(|x| u32::try_from(x).ok())
+                    .unwrap_or(0),
+            );
+            let id8 = self.crl_keys.get(&key);
+            let provider = self.cert_provider.get(&craca).or_else(|| {
+                let id8 = id8?;
+                self.crls
+                    .iter()
+                    .find(|h| h.id8 == *id8)
+                    .map(|h| &h.provider)
+            });
+            c["crl_id8"] = json!(id8);
+            c["provider"] = json!(provider);
+        }
+        out
     }
 
     /// Who holds certificate `id8` and where in its grid (ground truth).
@@ -971,6 +1077,7 @@ impl PkiStore {
         let cell = v.and_then(|v| v.last.cells.iter().find(|c| c.id8.as_deref() == Some(id8)));
         json!({
             "device": dev,
+            "kind": device_ref(dev).map(|d| d["kind"].clone()),
             "node": v.map(|v| v.last.node),
             "provider": v.map(|v| v.last.provider.clone()),
             "i": cell.map(|c| c.i),
@@ -1006,8 +1113,21 @@ impl PkiStore {
             "pseudonym_changes": v.pseudonyms.len().saturating_sub(1),
             "used": c.history.len(),
             "ctl_sequence": c.ctl_sequence, "revoked": c.revoked,
-            "security": self.security.get(&u64::from(c.node)),
+            "security": self.security.get(&u64::from(c.node)).map(|s| self.named_crls(s)),
         });
+        // U4: whether it is still in the run (its last `node.credentials` says `departed`
+        // when it left), and when its enrolment certificate stops being valid.
+        row["kind"] = device_ref(&c.device).map_or(Value::Null, |d| d["kind"].clone());
+        row["in_run"] = json!(!c.departed);
+        row["left_at_ns"] = json!(c.departed.then_some(c.t));
+        let ec_end = c
+            .enrolment
+            .as_ref()
+            .and_then(|e| self.cert_hex(e))
+            .and_then(|h| pki_view::cert_validity(h))
+            .map(|(_, end)| end);
+        row["enrolment_valid_until"] = json!(ec_end);
+        row["enrolment_valid_until_ns"] = json!(ec_end.and_then(|end| self.time32_to_ns(end)));
         if gt {
             let mut crls: BTreeSet<&String> = BTreeSet::new();
             let mut n = 0;
@@ -1146,7 +1266,10 @@ impl PkiStore {
     pub fn known(&self, q: &PkiQuery) -> String {
         match q {
             PkiQuery::Pdu { .. } => format!("{} PDUs recorded", self.pdus.len()),
-            PkiQuery::Cert { .. } => format!("{} certificates recorded", self.certs.len()),
+            PkiQuery::Cert { .. } => format!(
+                "{} certificates recorded",
+                self.certs.len() + self.authority.len()
+            ),
             PkiQuery::Knowledge { .. } => {
                 let ids: Vec<&str> = self.knowledge.keys().map(String::as_str).collect();
                 format!("entities: {}", ids.join(", "))
