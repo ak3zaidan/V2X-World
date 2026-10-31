@@ -1307,3 +1307,54 @@ fn the_cpm_rate_follows_a_300_ms_dcc_interval() {
         "the knob off: the DCC does not reach the CP service"
     );
 }
+
+/// SC-P7: the BSM's brake status reaches the receiver's observation as the frame carried
+/// it ([SM-MBR] §2.3.1.3.4 reads it): a vehicle braking at 3 m/s² (past the 0.7 m/s²
+/// brake-switch deceleration) sends `brakes_applied = Some(true)`, the same vehicle
+/// cruising sends `Some(false)`, and one with no bus reading sends `None` (the status is
+/// not available). Fault: leave the field at `None` and the braking BSM goes red.
+#[test]
+fn a_braking_vehicles_bsm_carries_its_brake_status() {
+    let services = ServiceSet {
+        bsm: true,
+        ..ServiceSet::NONE
+    };
+    let bus = |a: f64| v2xw_node::vehicle::VehicleBus {
+        t: 0,
+        speed_mps: 10.0,
+        a_long_mps2: a,
+        a_lat_mps2: 0.0,
+        yaw_rate_rad_s: 0.0,
+        hazard_lights: false,
+        low_beam: false,
+        intent: None,
+        heavy: false,
+        speed_limit_mps: 13.4,
+        non_urban: None,
+        abs_active: false,
+    };
+    let sent = |a: Option<f64>| {
+        let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+        if let Some(a) = a {
+            rt.set_vehicle_bus(bus(a));
+        }
+        let outs = run(&mut rt, 10, 100 * NS_PER_MS, |_| Vec::new());
+        let bsms: Vec<_> = outs
+            .iter()
+            .flat_map(|o| o.transmissions.iter())
+            .filter(|t| t.msg_type == MsgType::Bsm)
+            .map(|t| (t.bsm.brakes_applied, t.bsm.accel_long_mps2))
+            .collect();
+        assert!(!bsms.is_empty(), "no BSM in a second");
+        bsms
+    };
+    assert!(
+        sent(Some(-3.0))
+            .iter()
+            .all(|&(b, a)| b == Some(true) && a == Some(-3.0)),
+        "{:?}",
+        sent(Some(-3.0))
+    );
+    assert!(sent(Some(0.0)).iter().all(|&(b, _)| b == Some(false)));
+    assert!(sent(None).iter().all(|&(b, a)| b.is_none() && a.is_none()));
+}

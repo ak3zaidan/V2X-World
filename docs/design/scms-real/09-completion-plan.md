@@ -426,7 +426,15 @@ Recorded deviation: 08 §8 read P2PCD as "one exchange per certificate". The sta
 response carries the chain, so the test asserts n + 1 certificates in one exchange.
 Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to price.
 - 2026-10-31 (wave B merge): merged to main (`922c44ac`). Conflicts: `publish.rs` `module_keys_publish_menus_ranges_and_status` (wave A had moved the status lookup to `module_keys::key_status()`, which chains the same two tables, so main's form was kept); the configuration-reference rows (the branch's built site, sites, capacity and `ica_levels` rows kept with main's built `ma_policy` and sweep rows); §7 appends. `scms_hierarchy` (7), `scms_sites` (5), `scms_capacity` (4), `p2pcd_air` (4), node `rx_validation` (32) and `p2pcd_exchange` (5) pass; no golden moved.
-
+- 2026-10-31 (wave C, C2, the wave B leftover): the `.min(1)` memory growth is traced and
+  refused. A sampled run put it in `ScmsRun::preload_app_cert` (`run/appcert.rs` ~494, a
+  scratch-kernel drain with no horizon) re-arming the `NotEnrolled` retry (~826-831) for
+  provider-b's RSU, which could not enrol because its PKI lacked ICA levels 2..3. New
+  `ScmsPki::check_issuers` (`pdu.rs`), called at the end of `Governance::with_levels`,
+  refuses a PKI whose component's issuer it does not hold (`PduError::MissingIssuer`), so
+  `Engine::build` fails with the component named. Test
+  `pdu::tests::a_pki_missing_a_components_issuer_is_refused`; the faulted hierarchy test
+  now fails in 0.06 s. The unbounded scratch drain itself is C3's file and stays as it is.
 ### SC-M3
 
 - 2026-10-30 (wave B): merged `worktree-wf_0343ab94-a4a-1` (13ae0463) and finished it.
@@ -463,3 +471,106 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   interval (Req_588, time slot 0): 199 WSAs, 0 outside it. The separate 178 channel is kept as modelled (§6). Left to wave E:
   the P19.5 `live-rsu.yaml` rows and the `sch` default (release city runs).
 - 2026-10-31 (wave B merge): merged to main (`d22ed5ac`). msg lib (209), `wsa_oracle` (2), node `rsu_runtime` (12) and engine `foundations` (15) pass; no golden moved. Still open: the P19.5 `live-rsu.yaml` rows and the `sch` default (wave E).
+
+### SC-P10
+
+- 2026-10-31 (wave C, C2, P10.1): the joiner-at-boundary cause, found to file:line. The
+  2026-09-30 note in `Phase2::provision` (`phase2.rs` ~4211-4216: "vehicles joining a few
+  seconds after a period boundary get no certificate", 4 of 55 at 1,500 veh/h) was the RA's
+  request shuffle: in-run top-ups, then full requests, sat in the run's shuffle right after
+  each boundary, and a joiner's pre-run job joined that queue, whose timer was armed on the
+  run's kernel. Fixed on 2026-09-30 by `750e7956` (`ScmsRun::preload_at`,
+  `v2xw-proto/src/scms/run/provision.rs:385-420`: the scratch run gets an empty shuffle and
+  the run's queue and timer are put back). Since `ra-maxReqs` = 1 a top-up is `.info` plus a
+  download (`provision.rs:1281-1290`) and never enters the shuffle, so no default run reaches
+  it: `credential-lifecycle` without attackers left 0 vehicles unprovisioned at 1,500 veh/h
+  (190 s, 77 nodes), 3,000 (130 s, 108) and 6,000 (130 s, 211). The window the spec
+  suspected is right: `start = period_at(now)` gives the joiner its current period, and
+  `aged.valid_from.min(now)` (`3471f2fc`) runs the exchange when its enrolment began. No
+  code change; no golden moves. New test `credential_handoff::a_vehicle_joining_after_a_period_boundary_holds_that_periods_pseudonyms`
+  (60 s i-periods, six vehicles from 0 and one joining at 62 s with a 60 s enrolment
+  lifetime, so its enrolment began inside the run): 0 unprovisioned, every frame of the
+  joiner under an SCMS batch certificate (linkageData, cracaId not the ACA's own) whose
+  validity starts in period 1. Fault: the exchange at 0 instead of
+  `aged.valid_from.min(now)` -> the RA refuses it `EnrolmentExpired`, 1 unprovisioned, red.
+- 2026-10-31 (wave C, C2, P10.2): no bootstrap stand-in under an SCMS. `run.rs` installed
+  what `Phase2::provision` returned only `if !creds.is_empty()`, so a vehicle left with no
+  certificate kept the factory pool (`wiring::bootstrap_credentials`, no linkage value) and
+  signed with it. Under a credential system it now always installs: an empty batch gives an
+  empty store (`install_provisioned` / `hosted::install_credentials`), the vehicle sends
+  nothing signed and its due messages count in `tx_uncredentialed`. A run without an SCMS
+  (no `Phase2`) keeps the bootstrap pool. `vehicles_unprovisioned` keeps its name and is
+  documented as "vehicles unable to sign". The spec's forcing (`pca` offline from 0) did not
+  reach a pre-run pool: `ScmsRun::preload_at` takes the run's faults off it ("issued long
+  before the run"). Since `3471f2fc` a joiner whose enrolment began inside the run asks for
+  its pool at that instant (`at` > 0), so `preload_at` now checks the pool's path there
+  (`pool_path_down`, `provision.rs`): when the LOP, RA, either LA or the ACA is offline at
+  `at` and not back by the run's clock, no pool is issued. A pool at 0 (the pre-run fleet)
+  and an outage that ended before the join are unchanged. ASSUMPTION: such a device does
+  not retry its first request in the run (left open). New test
+  `credential_handoff::a_vehicle_whose_provisioning_fails_cannot_sign` (the P10.1 fleet,
+  both providers' ACA offline from 0): 1 unprovisioned, no linkageData frame under a
+  factory certificate, no node first transmitting after the join, exactly one node with
+  `tx_uncredentialed` > 0 and it never transmitted. Faults: `if !creds.is_empty()`
+  restored -> node 6 signs under a factory certificate, red; `pool_path_down` forced false
+  -> 0 unprovisioned, red. No golden moves: `phase2-path` (ae92e07b698d, 736a1216d48e),
+  `i-s1-phase2-60s` (d590fd1b6f58, 648b5200541c) and `ttc-triggered-brake` (5047d6fccac9,
+  ba01d4823379) reproduce; no G-SCMS case has a backend failure, and an unchanged digest
+  means none of their vehicles was unprovisioned before or after (one would have signed
+  with the stand-in before and stayed silent after).
+
+### SC-P7
+
+- 2026-10-31 (wave C, C2): BrakeAcceleration and MaxAcceleration read the BSM's own fields.
+  `BsmExtras` (`v2xw-core/src/bsm_fields.rs`) gains `brakes_applied`, filled by the sender
+  from the `brakes.wheelBrakes` it encodes (`runtime.rs` `bsm_extras`: a wheel bit ->
+  `Some(true)`, none -> `Some(false)`, `unavailable` or no bus -> `None`); the receiver's
+  copy is what the frame carried. [SM-MBR] v1.0 was read for the speed condition (the PDF,
+  extracted by hand): §2.3.1.3.1 "the evidence for this type is a single BSM"; §2.3.1.3.3
+  "the acceleration in a single BSM"; §2.3.1.3.4 "the vehicle is braking but … the
+  acceleration is not negative, i.e. that the acceleration vector makes an acute angle with
+  the velocity vector". The acute angle needs a velocity, so the speed gate
+  (`speed ≥ speed_resolution_mps`) is the text, not an ASSUMPTION, and an acute angle is a
+  strictly positive component, so `brake_accel_tolerance_mps2` defaults to 0 (the spec's
+  0.01, one LSB, is a menu value). New `DetectorId::BrakeAcceleration`
+  (`brakeAcceleration`), US-only, outside `DetectorId::ALL`: no `detnorm_*` column, G-ML
+  cannot move. MaxAcceleration under `max_accel_reading: accel-set` (default) fires on
+  `|accelSet.long| > max_accel_mps2` from one BSM; a BSM without `accelSet` falls back to
+  `|v₂ − v₁| / Δt` (`UsSmMbr::accel_unavailable_fallbacks`). Settings (model card,
+  `PARAM_KEYS` 17 -> 20, reference rows): `max_accel_reading` (`accel-set` "Reported
+  acceleration (SM-MBR)", `speed-difference` "From consecutive speeds"),
+  `brake_acceleration` (on/off), `brake_accel_tolerance_mps2` (0, 0.01, 0.1, 0.5 m/s²,
+  range 0-2 enforced by the loader, step 0.01). The stale deviation bullets are gone. No
+  golden moves: no G-SCMS scenario names `detect/us-sm-mbr` (phase2-manhattan, the
+  two-provider I-S1 case and ttc-triggered-brake use legacy-12). Left: the PSID-0x20
+  report subtype for `brakeAcceleration` (`phase2.rs` `us_subtype`) is SC-P6's (C1);
+  `ma_policy::RULE_KEYS` has no `detect/brakeAcceleration` yet. Wave E rows (verdict open)
+  in `live-atk.yaml`: `P7.TSU.maxaccel-reads-accel-set` (RandomSpeed lies only in the speed
+  field: predicted down from 14262 to under 1 %; supersedes `TSU.maxaccel`) and
+  `P7.B0U.no-honest-brake-acceleration` (eq 0).
+
+### SC-P11
+
+- 2026-10-31 (wave C, C2, P11.1): `tools/regions/build.py` (stdlib, `python3 -I`) writes
+  `v2xw-node/data/regions.bin` from Natural Earth admin-0 1:50m v5.1.1 (124, 484) and the
+  Census `cb_2020_us_state_20m` states (2010 FIPS `STATEFP`), integer microdegree rings
+  plus a 0.25° inside/outside/border grid; sha256 and URLs in `vectors-provenance.md`
+  ("SC-P11"). `regions.rs` runs the integer crossing test in border cells over only the
+  edges of the point's 0.25° band. Two measured deviations from the spec: no
+  simplification (the 2,000-vertex budget needs a 0.107° Douglas-Peucker tolerance for
+  Canada, about 12 km; the band index bounds the cost instead), and 840 is the union of
+  the Census states and DC, because Natural Earth 1:50m puts corners of Manhattan, Miami,
+  San Francisco, Honolulu, Bridgeport and Portland ME in the sea (16 of 315 city-box
+  points; `--check worlds/cities.yaml` now passes all 315). Accept 4
+  `the_grid_equals_brute_force_point_in_polygon`.
+- 2026-10-31 (P11.2): `rxval::location_in` places `identifiedRegion` (a SEQUENCE is the
+  union; `countryAndSubregions` refuses outside the state and is otherwise unchecked;
+  unknown countries and unavailable coordinates are unchecked). A region-less end-entity
+  certificate inherits the first region up its validated path, held on `CaPath` (one per
+  path, so per end-entity in effect) rather than in `EeCache`; its own region is still
+  checked before the chain. Chain consistency (EE region inside the issuer's) was already
+  checked once per path by `v2xw_sec::chain` and keeps its `chain-region-not-contained`
+  reason rather than `outside-region`. Accept 1-3 in `rx_validation.rs`, each red under
+  its fault. G-SCMS does not move: phase2-path, i-s1-phase2-60s and ttc-triggered-brake
+  reproduce, since US BSMs carry no `generationLocation`. Records: veh R10 marked fixed in
+  06; `LS.region-unchecked` (eq 0, verdict open) in `live-scms.yaml`.

@@ -1997,7 +1997,9 @@ pub struct Phase2Report {
     /// The most corroborated events any pseudonym the authority did not revoke reached
     /// (`threat/ma/corroborated` only): the margin an honest fleet leaves to the threshold.
     pub ma_peak_unrevoked_events: u64,
-    /// Vehicles the pre-run provisioning left with no pseudonym certificate at all.
+    /// Vehicles unable to sign: the pre-run provisioning left them with no pseudonym
+    /// certificate at all, so they join with an empty store and send nothing signed
+    /// (their due messages are each node's `tx_uncredentialed`; SC-P10.2).
     pub vehicles_unprovisioned: u64,
     /// Receptions the live nodes' revocation gates refused for a certificate period
     /// outside their plausibility window, at the end of the run (classified `Invalid`).
@@ -2588,8 +2590,9 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
                                 format!(
                                     "is {value}; reading takes v1_0 or asn1_v1_1, time_base \
                                      takes generation_time or secmark, consecutive takes \
-                                     msg_count or received, and every other parameter a \
-                                     number"
+                                     msg_count or received, max_accel_reading takes \
+                                     accel-set or speed-difference, and every other \
+                                     parameter a number"
                                 ),
                             ));
                         }
@@ -2615,6 +2618,13 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
                                  report_interval_s, {}",
                                 v2xw_threat::us_mbr::PARAM_KEYS.join(", ")
                             ),
+                        ));
+                    } else if let Some((lo, hi)) = v2xw_threat::us_mbr::range(key)
+                        && !(lo..=hi).contains(&v)
+                    {
+                        return Err(conflict(
+                            &field,
+                            format!("is {value}; it takes {lo} to {hi}"),
                         ));
                     }
                 }
@@ -4192,7 +4202,7 @@ impl Phase2 {
         );
         if let Err(e) = &preloaded {
             // A refused pre-run pool is a backend failure, not a quiet empty pool: the
-            // device joins on the bootstrap stand-in. Every provider-b pool failed this
+            // device joins unable to sign (SC-P10.2). Every provider-b pool failed this
             // way with `aca/1` and nothing in the report said so (F4A.PQCC.*).
             self.report.vehicles_unprovisioned += 1;
             self.note_backend_error(e);
@@ -4210,10 +4220,11 @@ impl Phase2 {
         let out = self.creds_of_device(device, 0);
         if out.is_empty() {
             // The pre-run provisioning flows finished without an error and without a
-            // single certificate for this device. It then signs with the bootstrap
-            // stand-in (`wiring::bootstrap_credentials`), which carries no linkage value;
-            // counted so the gap is visible. Seen on `credential-lifecycle` (60 s
-            // i-periods) for vehicles joining a few seconds after a period boundary.
+            // single certificate for this device (a refusal, or an outage on the pool's
+            // path, `ScmsRun::preload_at`). It joins with an empty store and cannot sign
+            // (SC-P10.2); counted so the gap is visible. The 2026-09-30 cause on
+            // `credential-lifecycle` (joiners just past a period boundary, the RA's
+            // request shuffle) was fixed by `750e7956` (SC-P10.1).
             self.report.vehicles_unprovisioned += 1;
         }
         let last = start + self.params.pool_periods.saturating_sub(1);

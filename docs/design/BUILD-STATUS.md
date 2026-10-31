@@ -68,7 +68,14 @@ changed six files (own commit `de330ca6`).
   - SC-M1: no `run_twice` check for a Python policy; test 7 sees only 2 decisions; no
     multi-provider hook test.
   - SC-M2: under the `.min(1)` fault, `a_deeper_hierarchy_runs_and_is_flagged_not_us` grew
-    past 4.9 GB. The cause is not traced; it is worth a sampled run.
+    past 4.9 GB. **Traced 2026-10-31 (wave C, C2)** by a sampled run: `Engine::build` ->
+    `create_rsus` -> `Phase2::join_rsu_cycle` -> `ScmsRun::preload_app_cert`. Provider-b's
+    PKI lacked ICA levels 2..3, so its RSU never enrolled; the cycle's `NotEnrolled` branch
+    re-arms its timer (`run/appcert.rs` ~826-831) and the scratch drain has no horizon
+    (`appcert.rs` ~494), so timers and `AppEvent`s grew without end. Now a refusal:
+    `ScmsPki::check_issuers`, called at the end of `Governance::with_levels`, refuses a PKI
+    whose component names an issuer it does not hold ("eca.provider-b: its issuing CA is
+    not in the provider's PKI"); the faulted test fails in 0.06 s.
   - SC-M3/M4: the oracle INFO-STAT rule and the info-no-ra mutation on a recording; the
     P19.5 `live-rsu.yaml` rows and the `sch` default (wave E).
   - The 4 failures above.

@@ -3,8 +3,8 @@
 //! Shared by the sender (`v2xw-node`, which fills them from what it encodes) and the
 //! receiver's detectors (`v2xw-threat`), which do not depend on each other.
 
-/// A BSM's `secMark` and `accelSet.long`, carried from the sender's encoder to the
-/// receiver's observation; both `None` for anything that is not a BSM.
+/// A BSM's `secMark`, `accelSet.long` and brake status, carried from the sender's encoder
+/// to the receiver's observation; all `None` for anything that is not a BSM.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct BsmExtras {
     /// `secMark`, ms within the UTC minute (0..=59,999).
@@ -20,4 +20,8 @@ pub struct BsmExtras {
     /// number: how a receiver tells two BSMs consecutive on the air from two with lost
     /// BSMs between them.
     pub msg_cnt: Option<u8>,
+    /// `brakes.wheelBrakes` (J2735 `BrakeAppliedStatus`): `Some(true)` when a wheel bit is
+    /// set, `Some(false)` when none is, `None` when the `unavailable` bit is set or the BSM
+    /// carries no brake status. SM-MBR's BrakeAcceleration check reads it.
+    pub brakes_applied: Option<bool>,
 }

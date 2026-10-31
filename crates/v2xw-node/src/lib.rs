@@ -100,6 +100,7 @@ pub mod policy;
 pub mod profile;
 pub mod profiles;
 pub mod queue;
+pub mod regions;
 pub mod rsu;
 pub mod runtime;
 pub mod rxval;

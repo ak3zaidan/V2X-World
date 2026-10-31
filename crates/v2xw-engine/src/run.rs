@@ -4274,26 +4274,26 @@ impl Engine {
                 let offset = obu.clock().offset_ns();
                 obu.security_mut().set_clock_offset(offset);
             }
-            if !creds.is_empty() {
-                let factory = std::sync::Arc::clone(&self.credential_factory);
-                let installed = match runtime.as_obu_mut() {
-                    Some(obu) => crate::wiring::install_provisioned(
-                        obu,
-                        &self.scenario,
-                        &factory,
-                        id,
-                        &creds,
-                    ),
-                    None => crate::hosted::install_credentials(
-                        &mut runtime,
-                        &self.scenario,
-                        &factory,
-                        id,
-                        &creds,
-                    ),
-                };
-                self.report.credentials_refused += (creds.len() - installed) as u64;
-            }
+            // Under a credential system what it issued is all the device holds: a vehicle
+            // whose provisioning failed or returned nothing (`vehicles_unprovisioned`)
+            // gets an empty store and cannot sign (1609.2: an unprovisioned device has no
+            // signing credential), its due messages counted in `tx_uncredentialed`
+            // (SC-P10.2). It kept the bootstrap stand-in before, which carries no linkage
+            // value. Only a run without an SCMS keeps that pool, its only source.
+            let factory = std::sync::Arc::clone(&self.credential_factory);
+            let installed = match runtime.as_obu_mut() {
+                Some(obu) => {
+                    crate::wiring::install_provisioned(obu, &self.scenario, &factory, id, &creds)
+                }
+                None => crate::hosted::install_credentials(
+                    &mut runtime,
+                    &self.scenario,
+                    &factory,
+                    id,
+                    &creds,
+                ),
+            };
+            self.report.credentials_refused += (creds.len() - installed) as u64;
         }
         self.nodes.insert(id, runtime);
         self.inboxes.insert(id, Vec::new());

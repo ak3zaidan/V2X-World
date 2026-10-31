@@ -144,6 +144,10 @@ pub enum DetectorId {
     /// Raised only by the strict US profile ([`crate::us_mbr`]); not in [`Self::ALL`], so
     /// it has no fingerprint column and the `detnorm_*` contract is unchanged.
     ImplausibleSpeed,
+    /// The BSM says its brakes are on and its `accelSet.long` is not negative: the US
+    /// Implausible/BrakeAcceleration subtype ([SM-MBR] §2.3). US-only like
+    /// [`Self::ImplausibleSpeed`]: not in [`Self::ALL`], no fingerprint column.
+    BrakeAcceleration,
 }
 
 impl DetectorId {
@@ -212,6 +216,7 @@ impl DetectorId {
             DetectorId::DenmPlausibility => "denmPlausibility",
             DetectorId::KalmanConsistency => "kalmanConsistency",
             DetectorId::ImplausibleSpeed => "implausibleSpeed",
+            DetectorId::BrakeAcceleration => "brakeAcceleration",
         }
     }
 
@@ -245,7 +250,8 @@ impl DetectorId {
             | DetectorId::BeaconFrequency
             | DetectorId::DenmPlausibility
             | DetectorId::VruImpersonation
-            | DetectorId::ImplausibleSpeed => 1,
+            | DetectorId::ImplausibleSpeed
+            | DetectorId::BrakeAcceleration => 1,
             DetectorId::PositionSpeedInconsistency
             | DetectorId::PositionJump
             | DetectorId::HeadingInconsistency

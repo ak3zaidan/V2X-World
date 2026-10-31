@@ -133,6 +133,10 @@ pub enum PduError {
     /// US profile's request-validity rules, [SMP] §6.3.1; WP-B2).
     #[error("refused by policy: {0}")]
     Policy(&'static str),
+    /// A component's issuing CA is not in its provider's PKI, so nothing it certifies
+    /// chains to the root (an ICA level missing from a deeper hierarchy).
+    #[error("{0}: its issuing CA is not in the provider's PKI")]
+    MissingIssuer(String),
 }
 
 /// Result of this module.
@@ -1091,6 +1095,39 @@ impl ScmsPki {
             &self.root, &self.ica, &self.eca, &self.ra, &self.aca, &self.ma, &self.la1, &self.la2,
             &self.dcm, &self.crlg,
         ]
+    }
+
+    /// Refuses a PKI in which a component's issuer is missing: every certificate other
+    /// than a self-signed root must name (by HashedId8) a CA of this PKI. Without that a
+    /// device enrolled under it holds a certificate no one can chain, and a unit whose
+    /// enrolment therefore never completes retried on the pre-run scratch kernel without
+    /// end (`ScmsRun::preload_app_cert`).
+    ///
+    /// # Errors
+    /// [`PduError::MissingIssuer`] naming the first such component.
+    pub fn check_issuers(&self) -> Result<()> {
+        use v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier as I;
+        let all = || {
+            self.all()
+                .into_iter()
+                .chain(self.extra.iter())
+                .chain(self.retired.iter())
+        };
+        let held: std::collections::BTreeSet<[u8; 8]> = all().map(Authority::id8).collect();
+        for a in all() {
+            let named = match &a.cert.0.issuer {
+                I::sha256AndDigest(d) | I::sha384AndDigest(d) => {
+                    let mut id = [0u8; 8];
+                    id.copy_from_slice(&d.0[..]);
+                    id
+                }
+                _ => continue,
+            };
+            if !held.contains(&named) {
+                return Err(PduError::MissingIssuer(a.name.clone()));
+            }
+        }
+        Ok(())
     }
 
     /// The component whose whole-certificate HashedId8 is `id8`.
