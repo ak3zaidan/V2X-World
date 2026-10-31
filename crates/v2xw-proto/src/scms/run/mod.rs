@@ -45,7 +45,10 @@ mod report;
 mod revoke;
 
 use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
-pub use crl::{CrlOrder, IssuedCrl, crl_bytes, crl_digest, linkage_revocations};
+pub use crl::{
+    ComponentRevocation, CrlOrder, IssuedCrl, component_authority, crl_bytes, crl_digest,
+    hash_crl_signer, linkage_revocations,
+};
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 const ECQV: PrimitiveId = PrimitiveId::ECQV_P256;
@@ -897,13 +900,18 @@ pub struct CrlState {
     pub crls_at_i: BTreeMap<u16, u8>,
     /// Entries already covered by the previous publication (the delta's base).
     pub published_entries: usize,
-    /// Certificates revoked by hash, by series (3: RSU application and OBU
-    /// identification; 4: enrolment).
+    /// Certificates revoked by hash, by series (2: SCMS components; 3: RSU application
+    /// and OBU identification; 4: enrolment; 256: root-signed components).
     pub hash_entries: BTreeMap<u16, Vec<v2xw_sec::crl::HashRevocation>>,
     /// `crlSerial` per hash series.
     pub hash_serial: BTreeMap<u16, u32>,
     /// The latest full hash CRL per series.
     pub hash_crls: BTreeMap<u16, crate::scms::pdu::Pdu>,
+    /// Component revocations decided ([`ScmsRun::revoke_component`]) and not yet on a
+    /// signed list: each goes on the first publication at or after its decision (SC-P8.1).
+    pub component_pending: Vec<crl::ComponentRevocation>,
+    /// Every component revocation that reached a signed list, in order (SC-P8.1).
+    pub component_revoked: Vec<crl::ComponentRevocation>,
     /// The run of each CRL version that reached this entity, in order (CRL Store only):
     /// the instant a case's entry became public is the first of their `published` stamps
     /// at or after its issue, since entries appended while a business-day or cadence

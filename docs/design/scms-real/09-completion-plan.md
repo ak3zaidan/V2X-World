@@ -463,3 +463,22 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   interval (Req_588, time slot 0): 199 WSAs, 0 outside it. The separate 178 channel is kept as modelled (§6). Left to wave E:
   the P19.5 `live-rsu.yaml` rows and the `sch` default (release city runs).
 - 2026-10-31 (wave B merge): merged to main (`d22ed5ac`). msg lib (209), `wsa_oracle` (2), node `rsu_runtime` (12) and engine `foundations` (15) pass; no golden moved. Still open: the P19.5 `live-rsu.yaml` rows and the `sch` default (wave E).
+
+### SC-P8
+
+- 2026-10-31 (wave C R1, P8.1, agent C3): **component hash CRLs are issued.** Cause: the
+  Generator's hash-list loop named series 3 and 4 only (`run/crl.rs`, was `:450-452`) and
+  nothing put a component on a list. `ScmsRun::revoke_component(role, at)` puts the
+  component certificate's HashedId10 on the list of the `(cracaId, crlSeries)` it names,
+  and the loop now issues a full hash CRL for every series with entries. The signer is
+  the certificate whose `CrlSsp` lists the series (`hash_crl_signer`): the CRL signer
+  (`issuerIsCraca`, [4, 3, 1, 2]) for series 2 under its issuer, the root itself
+  (`isCraca`, [256], every published US root) for series 256. Results: S2X PCA series 2
+  under the ICA; ISS PCA series 2 under the root (the spec's "ISS gives 256" is the series of
+  root-issued components; the certificate decides); MA and the ISS CRL signer series 256 under
+  the root. Labelled choices: the S2X ICA (series 2 under the root) has no signer and is
+  refused (CF-CRACA, recorded in `pki_profile.rs`); the root-signed list rides the
+  provider's publication rule (ASSUMPTION: a real root is offline, ceremony delay
+  unpublished); the decision reaches the Generator as an empty `crl-append`, so the
+  business-day SLA applies. Test `crl_issuance::a_revoked_pca_appears_on_its_component_crl`
+  (red with the loop left at {3, 4}). Off unless a component is revoked; no golden moves.

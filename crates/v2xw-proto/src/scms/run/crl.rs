@@ -71,6 +71,90 @@ pub struct IssuedCrl {
     pub pdu: crate::scms::pdu::Pdu,
 }
 
+/// One SCMS component's certificate put on its provider's component CRL (SC-P8.1).
+///
+/// [SMP] Table 1 and IEEE 1609.2 §5.1.3: a hash CRL revokes the certificates that name
+/// its `crlCraca` (by the low 3 bytes, `cracaId`) and its `crlSeries`. Each component
+/// certificate names its own: an ICA-issued component series 2 under the ICA (S2X) or
+/// the root (ISS); a root-issued one (MA, PG, the ISS CRL signer) series 256 under the
+/// root; the ICA itself series 2 under the root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComponentRevocation {
+    /// The component's role (`ica`, `pca`, `ra`, `eca`, `la1`, `la2`, `ma`, `crlg`,
+    /// `dcm`).
+    pub role: &'static str,
+    /// When the revocation was decided.
+    pub at: SimTime,
+    /// The `crlSeries` its certificate names.
+    pub series: u16,
+    /// The `crlCraca` of the list it goes on: the HashedId8 of its CRACA.
+    pub craca: [u8; 8],
+    /// Its `HashedId10` and expiry.
+    pub entry: v2xw_sec::crl::HashRevocation,
+}
+
+/// The component of `pki` that `role` names, by its canonical role name (`pca` and the
+/// engine's host label `aca` are the same component).
+#[must_use]
+pub fn component_authority<'a>(
+    pki: &'a crate::scms::pdu::ScmsPki,
+    role: &str,
+) -> Option<(&'static str, &'a crate::scms::pdu::Authority)> {
+    Some(match role {
+        "ica" => ("ica", &pki.ica),
+        "pca" | "aca" => ("pca", &pki.aca),
+        "ra" => ("ra", &pki.ra),
+        "eca" => ("eca", &pki.eca),
+        "la1" => ("la1", &pki.la1),
+        "la2" => ("la2", &pki.la2),
+        "ma" => ("ma", &pki.ma),
+        "crlg" => ("crlg", &pki.crlg),
+        "dcm" => ("dcm", &pki.dcm),
+        _ => return None,
+    })
+}
+
+/// The certificate that signs `pki`'s hash CRLs of `series`, and the `crlCraca` such a
+/// list carries: the first of the CRL signer and the root whose `CrlSsp` (version 1)
+/// lists the series, with the CRACA its `associatedCraca` names (itself for `isCraca`,
+/// its issuer for `issuerIsCraca`).
+///
+/// The published certificates decide it ([SMP] Table 1 rows 2 and 256 name no signer):
+/// the CRL signer holds `{issuerIsCraca, [4, 3, 1, 2]}` (ISS `crlg.preprod`), so it signs
+/// series 2, 3 and 4 under its issuer; every published US root holds
+/// `{isCraca, [256]}`, so the root signs series 256 itself ("root-signed", Table 1). No
+/// published certificate signs series 2 under the root when the CRL signer is
+/// ICA-issued (S2X), so the S2X ICA has no component CRL (`None` for that pairing,
+/// [`ScmsRun::revoke_component`]).
+#[must_use]
+pub fn hash_crl_signer(
+    pki: &crate::scms::pdu::ScmsPki,
+    series: u16,
+) -> Option<(&crate::scms::pdu::Authority, [u8; 8])> {
+    use v2xw_sec::crl::CracaType;
+    [&pki.crlg, &pki.root].into_iter().find_map(|a| {
+        let ssp = v2xw_sec::crl::crl_ssp(&a.cert).filter(|s| s.version.0 == 1)?;
+        if !ssp.crls.iter().any(|c| c.0.0 == series) {
+            return None;
+        }
+        let craca = match ssp.associated_craca {
+            CracaType::isCraca => a.id8(),
+            CracaType::issuerIsCraca => match &a.cert.0.issuer {
+                v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h)
+                | v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha384AndDigest(h) => {
+                    let id = v2xw_sec::hashedid::id8_bytes(h);
+                    [&pki.root, &pki.ica]
+                        .into_iter()
+                        .find(|i| i.id8() == id)?
+                        .id8()
+                }
+                _ => return None,
+            },
+        };
+        Some((a, craca))
+    })
+}
+
 /// Where a CRL stands in the sequence its CRL Generator issues for one
 /// `(crlCraca, crlSeries)` (R2).
 ///
@@ -275,6 +359,73 @@ impl ScmsRun {
             run,
         );
     }
+
+    /// The provider revokes one of its own SCMS components at `at` (SC-P8.1): the
+    /// component's certificate goes on the hash CRL of the series and CRACA it names
+    /// ([`ComponentRevocation`]), signed by the certificate whose `CrlSsp` lists that
+    /// series ([`hash_crl_signer`]), at the first publication at or after `at`.
+    ///
+    /// The decision reaches the CRL Generator as a change to the list, so it is
+    /// published by the provider's publication rule as a linkage revocation is: the next
+    /// business-day slot ([SM-PROV] §3.4.9, "within 1 business day of any change"), the
+    /// cadence boundary, or at once. ASSUMPTION (labelled): the root-signed series-256
+    /// list rides the provider's publication; a real root is offline and signs it at a
+    /// ceremony whose delay is not published.
+    ///
+    /// # Errors
+    /// The PDU layer is off, `role` names no component, or no certificate of the PKI
+    /// can sign a CRL that matches the component's `(cracaId, crlSeries)`: the S2X ICA
+    /// names the root on series 2, and its CRL signer's CRACA is the ICA (recorded in
+    /// `pki_profile.rs`, CF-CRACA).
+    pub fn revoke_component(
+        &mut self,
+        role: &str,
+        at: SimTime,
+    ) -> crate::scms::pdu::Result<ComponentRevocation> {
+        use crate::scms::pdu::PduError;
+        let pki = self
+            .state
+            .pki
+            .clone()
+            .ok_or(PduError::Policy("component CRLs need the PDU layer"))?;
+        let (role, a) =
+            component_authority(&pki, role).ok_or(PduError::Policy("no such SCMS component"))?;
+        let tbs = &a.cert.0.to_be_signed;
+        let series = tbs.crl_series.0.0;
+        let craca3 = &tbs.craca_id.0[..];
+        let (_, craca) = hash_crl_signer(&pki, series)
+            .filter(|(_, c)| c[5..] == *craca3)
+            .ok_or(PduError::Policy(
+                "no CRL signer holds the component's cracaId and crlSeries",
+            ))?;
+        let entry =
+            v2xw_sec::crl::hash_entry(&a.cert).map_err(|e| PduError::Coer(e.to_string()))?;
+        let rev = ComponentRevocation {
+            role,
+            at,
+            series,
+            craca,
+            entry,
+        };
+        self.state.crlg.component_pending.push(rev);
+        let at = at.max(self.kernel.now());
+        let crlg = self.state.nodes.crlg;
+        let run = self.new_run();
+        // A change to the list with no linkage entry: the Generator arms its publication
+        // exactly as for a revocation's `crl-append`.
+        self.inject_at(
+            at,
+            crlg,
+            ScmsMsg::CrlAppend {
+                i: 0,
+                pairs: Vec::new(),
+                jmax: 0,
+            },
+            FlowId::CrlIssuance,
+            run,
+        );
+        Ok(rev)
+    }
 }
 
 impl ScmsState {
@@ -447,11 +598,27 @@ impl ScmsState {
                 self.crlg.delta = Some(d);
             }
         }
-        for series in [
-            v2xw_sec::crl::SERIES_APPLICATION_IDENTIFICATION,
-            v2xw_sec::crl::SERIES_ENROLMENT,
-        ] {
+        // Component revocations decided by now join their series' list (SC-P8.1).
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.crlg.component_pending)
+            .into_iter()
+            .partition(|r| r.at <= at);
+        self.crlg.component_pending = later;
+        for r in due {
+            let list = self.crlg.hash_entries.entry(r.series).or_default();
+            if !list.iter().any(|e| e.id == r.entry.id) {
+                list.push(r.entry);
+                self.crlg.component_revoked.push(r);
+            }
+        }
+        // A full hash CRL for every series with entries (2, 3, 4, 256; [SMP] Table 1),
+        // each signed by the certificate whose `CrlSsp` lists it, under the CRACA that
+        // `CrlSsp` names ([`hash_crl_signer`]). No entries, no list.
+        let hash_series: Vec<u16> = self.crlg.hash_entries.keys().copied().collect();
+        for series in hash_series {
             let Some(entries) = self.crlg.hash_entries.get(&series).cloned() else {
+                continue;
+            };
+            let Some((signer, craca)) = hash_crl_signer(&pki, series) else {
                 continue;
             };
             let serial = {
@@ -471,7 +638,16 @@ impl ScmsState {
                     entries: entries.clone(),
                 },
             };
-            if let Some(p) = sign(&spec) {
+            let signed = (|| {
+                let contents = v2xw_sec::crl::crl_contents(&spec);
+                v2xw_sec::crl::check_crl(&contents, v2xw_msg::scms_types::WireEdition::default())
+                    .ok()?;
+                let crl = v2xw_sec::crl::sign_crl(&contents, &signer.cert, &signer.key).ok()?;
+                Some(crate::scms::pdu::Pdu::new(
+                    v2xw_sec::crl::encode_crl(&crl).ok()?,
+                ))
+            })();
+            if let Some(p) = signed {
                 log.push((series, false, entries.len(), p.clone()));
                 self.crlg.hash_crls.insert(series, p);
             }

@@ -382,3 +382,143 @@ fn a_later_crl_walks_earlier_seeds_forward_to_its_i_rev() {
         assert!(crl::revokes(&c, &cert(DEVICE_B, 1, j)), "B (1,{j})");
     }
 }
+
+/// The newest list of `series` the Generator signed, opened, with whether it verifies
+/// under `signer` (issued by `issuer`).
+fn component_list(
+    run: &ScmsRun,
+    series: u16,
+    signer: &v2xw_proto::scms::pdu::Authority,
+    issuer: Option<&v2xw_proto::scms::pdu::Authority>,
+) -> (crl::OpenedCrl, bool) {
+    let c = run
+        .state
+        .crlg
+        .issued
+        .iter()
+        .rev()
+        .find(|c| c.series == series)
+        .unwrap_or_else(|| panic!("a series-{series} list was issued"));
+    let opened = crl::decode_crl(c.pdu.bytes()).expect("decodes");
+    let v2xw_sec::sig1609::SpduSigner::Certificate(cert) = opened.signed.signer.clone() else {
+        panic!("the CRL carries its signer's certificate");
+    };
+    assert_eq!(
+        cert, signer.cert,
+        "series {series}: signed by {}",
+        signer.name
+    );
+    let ok = crl::verify_crl(
+        &opened,
+        &cert,
+        issuer.map(|i| &i.cert),
+        WireEdition::Ieee2022,
+    )
+    .accepted();
+    (opened, ok)
+}
+
+/// SC-P8.1 ([SMP] Table 1; IEEE 1609.2 §5.1.3): revoking a component puts its
+/// certificate's HashedId10 on the hash CRL of the series and CRACA the certificate
+/// names, signed by the certificate whose `CrlSsp` lists that series.
+/// - S2X (the default profile): the PCA is ICA-issued, so series 2 under the ICA, signed
+///   by the ICA-issued CRL signer (`issuerIsCraca`, [4, 3, 1, 2]).
+/// - ISS (provider-a of the 2025 production preset): the PCA is ICA-issued on series 2
+///   and names the root (CF-CRACA), so series 2 under the root, signed by the
+///   root-issued CRL signer. (The spec's "ISS gives series 256" is the root-issued
+///   components' series; the certificate decides, the `governance.rs` series rule.)
+/// - Root-issued components (the MA in both, the ISS CRL signer) go on series 256 under
+///   the root, signed by the root itself (`isCraca`, [256], every published US root).
+/// - The S2X ICA names the root on series 2, which no S2X certificate can sign: refused.
+///
+/// Fault: the series loop left at {3, 4}. No series-2 or 256 list is issued, red.
+#[test]
+fn a_revoked_pca_appears_on_its_component_crl() {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    use v2xw_proto::scms::governance::CertProfile;
+    // S2X.
+    let mut run = deployment(1);
+    let pki = run.state.pki.clone().expect("layer on");
+    assert_eq!(pki.profile, CertProfile::S2xProduction);
+    assert!(
+        run.state.crlg.issued.iter().all(|c| c.series == 1),
+        "no component revoked, no component list"
+    );
+    let rev = run
+        .revoke_component("pca", 0)
+        .expect("the S2X PCA is revocable");
+    assert_eq!(
+        (rev.series, rev.craca),
+        (crl::SERIES_SCMS_COMPONENTS, pki.ica.id8())
+    );
+    let ma = run.revoke_component("ma", 0).expect("the MA is revocable");
+    assert_eq!(
+        (ma.series, ma.craca),
+        (crl::SERIES_ROOT_SIGNED, pki.root.id8())
+    );
+    assert!(
+        run.revoke_component("ica", 0).is_err(),
+        "S2X: no certificate signs series 2 under the root"
+    );
+    assert!(run.revoke_component("nobody", 0).is_err());
+    run.run().expect("runs");
+    let (opened, ok) = component_list(&run, 2, &pki.crlg, Some(&pki.ica));
+    assert!(ok, "the S2X series-2 list verifies");
+    assert_eq!(
+        opened.contents.crl_craca.0[..],
+        pki.ica.id8()[..],
+        "crlCraca = ICA"
+    );
+    let ids: Vec<[u8; 10]> = crl::hash_entries(&opened.contents)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(
+        ids,
+        vec![crl::hash_entry(&pki.aca.cert).unwrap().id],
+        "the PCA only"
+    );
+    assert!(crl::revokes(&opened.contents, &pki.aca.cert));
+    assert!(!crl::revokes(&opened.contents, &pki.ra.cert));
+    let (opened, ok) = component_list(&run, 256, &pki.root, None);
+    assert!(ok, "the root-signed series-256 list verifies");
+    assert_eq!(opened.contents.crl_craca.0[..], pki.root.id8()[..]);
+    assert!(crl::revokes(&opened.contents, &pki.ma.cert));
+    assert!(!crl::revokes(&opened.contents, &pki.aca.cert));
+    assert_eq!(run.state.crlg.component_revoked.len(), 2);
+    assert!(run.state.crlg.component_pending.is_empty());
+
+    // ISS.
+    let mut iss = ScmsRun::new_deployed(
+        ScmsParams::default().quick(),
+        0,
+        Deployment::preset(Preset::UsProduction2025),
+    )
+    .expect("the production deployment builds");
+    let pki = iss.state.pki.clone().expect("layer on");
+    assert_eq!(pki.profile, CertProfile::Iss);
+    let rev = iss
+        .revoke_component("pca", 0)
+        .expect("the ISS PCA is revocable");
+    assert_eq!(
+        (rev.series, rev.craca),
+        (crl::SERIES_SCMS_COMPONENTS, pki.root.id8())
+    );
+    iss.revoke_component("crlg", 0)
+        .expect("the ISS CRL signer is revocable");
+    iss.revoke_component("ica", 0)
+        .expect("the ISS ICA is revocable");
+    iss.run().expect("runs");
+    let (opened, ok) = component_list(&iss, 2, &pki.crlg, Some(&pki.root));
+    assert!(ok, "the ISS series-2 list verifies");
+    assert_eq!(
+        opened.contents.crl_craca.0[..],
+        pki.root.id8()[..],
+        "crlCraca = root"
+    );
+    assert!(crl::revokes(&opened.contents, &pki.aca.cert));
+    assert!(crl::revokes(&opened.contents, &pki.ica.cert));
+    let (opened, ok) = component_list(&iss, 256, &pki.root, None);
+    assert!(ok, "the root-signed series-256 list verifies");
+    assert!(crl::revokes(&opened.contents, &pki.crlg.cert));
+}
