@@ -1220,6 +1220,13 @@ impl ObuRuntime {
         self.stores.neighbors.age(believed);
         self.stores.heard.age(believed);
         self.stores.certs.travelled(distance_travelled_m);
+        // The change rule reads displacement from the last change point (veh C6), on the
+        // device's own fix: without one it knows no position.
+        if self.belief.fix.has_position() {
+            self.stores
+                .certs
+                .position(self.belief.pos.x, self.belief.pos.y);
+        }
         self.stores.certs.sweep(believed, &self.stores.crl);
         let changes_before = self.stores.certs.changes();
         let _ = self

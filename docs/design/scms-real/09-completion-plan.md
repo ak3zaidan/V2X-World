@@ -840,3 +840,26 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   `scms_topology.rs` `with_capacity` (it rebuilds the spec with `ServiceModelSpec::new`,
   which drops both models), and the `scms-knobs.yaml` rows (`{service_time.cv, 0 -> 1,
   report.topup_latency_p99_s, up}`, verdict: open).
+
+### veh C6
+
+- 2026-10-31 (wave D R1, agent D3): **the 2 km condition is the straight-line distance
+  from the last change point.** Cause: `CertStore::change_due` (`v2xw-node/src/stores.rs`,
+  was `:369`) passed `distance_since_change_m`, the distance driven that `travelled` adds
+  up, to `RotationPolicy::is_due`. [CVP-P2] item 25 and [PRIMER] pp.8-9 say "2 km from the
+  last change point". Now `CertStore::position(x, y)` records the device's own believed fix.
+  Both callers (`ObuRuntime::step_timed`, `VruRuntime::step_timed`) call it beside
+  `travelled` when the fix has a position. `change_point` is set at the two resets
+  (the first fix, a change) to the position last reported, or to the first one after a
+  change made without a fix. `is_due` reads `displacement_since_change_m`, and the driven
+  distance stays as a figure (`distance_since_change_m()`). Strategies `j2945-1`,
+  `nyc-pilot` and `distance` change; `time`, `c2c-cc` (the engine's own odometer),
+  `mix-zone` and `silent` do not. The three option descriptions in `scenario/options.rs`
+  now say "in a straight line from the last change point" (D1's file, text only). Test
+  `stores::tests::a_loop_back_to_the_change_point_is_not_far_enough` (2.5 km driven, 0.3 km
+  away: no change under `J2945_1`; 2.5 km straight: an age change). Red with the travelled
+  distance passed to `is_due`. `rotation_drains_the_pool_in_issue_order` now also reports
+  positions, since a store told only the distance driven knows no displacement. No golden
+  moves: all three G-SCMS scenarios use the `time` strategy (no distance condition), so
+  the check was not re-run. Row `LS.PT30.changes-c6` (`live-scms.yaml`, `le 150`, verdict:
+  open) is for wave E.

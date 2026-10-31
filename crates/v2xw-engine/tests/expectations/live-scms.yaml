@@ -947,6 +947,20 @@ rows:
     included changes before a vehicle''s first frame (O-4, fixed in the records merge 9003768e). The predicted
     band assumed L devices cross a boundary as often as PT30 ones; L''s 64 s average dwell makes its base
     small (0.82 changes per device)'
+- id: LS.PT30.changes-c6
+  base: L
+  variant: PT30
+  area: privacy
+  measure: p2.pseudonym_changes
+  expect: le
+  value: 150
+  source: 'veh C6 (10-completion-specs.md §2.14): the distance condition reads the straight-line distance
+    from the last change point ([CVP-P2] item 25; [PRIMER] pp.8-9), not the distance driven, so no change
+    can come sooner than before; PT30 is the time rule alone, so equal is predicted'
+  measured: pending
+  verdict: open
+  note: '2026-10-31 (wave D R1, D3): written before the run; the 150 is PT30 on 938fb16a (LS.PT30.changes).
+    Wave E runs it'
 - id: LS.PT10.changes
   base: L
   variant: PT10
