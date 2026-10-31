@@ -6035,6 +6035,21 @@ impl Engine {
             let at = jitter.after(tx.ready_at);
             jitter = Duration::from_nanos(jitter.as_nanos() + sched.access_delay_ns(at, true));
         }
+        // SC-M4 (USDOT RSU Spec v4.1 Req_587-588): a WSA goes out on the control channel in
+        // the CCH interval (time slot 0), where every unit that alternates listens. The
+        // MAC's 1609.4 gate holds only a one-radio unit's frames, so a two-radio provider's
+        // WSA waits for the CCH interval here.
+        if tx.msg_type == v2xw_msg::MsgType::Wsa
+            && let Some(w) = self.wave
+            && !self.alternates(node)
+            && self
+                .channel_plan
+                .as_ref()
+                .is_none_or(|p| p.channel_for(tx.msg_type) == p.primary)
+        {
+            let at = jitter.after(tx.ready_at);
+            jitter = Duration::from_nanos(jitter.as_nanos() + w.access_delay_ns(at, true));
+        }
         if jitter.as_nanos() == 0 {
             self.hand_down_app(node, tx, now, horizon, None);
             return;

@@ -197,7 +197,9 @@ fn a_unit_with_no_roles_broadcasts_nothing() {
 fn a_wsa_is_encoded_and_decodes_per_the_1609_3_module() {
     let mut u = unit(RsuRoles::NONE.with(RsuRole::WsaBroadcast));
     let outcomes = run(&mut u, 60);
-    assert!(count(&outcomes, MsgType::Wsa) >= 2, "one per 5 s over 6 s");
+    // fault: wsa_period left at 5 s -> red (2 WSAs, RepeatRate 1).
+    let n = count(&outcomes, MsgType::Wsa);
+    assert!((55..=61).contains(&n), "{n}: 10 Hz over 6 s (RSU Spec v4.1 App. D)");
     assert_eq!(u.unsized_broadcasts(), 0);
     assert_eq!(
         u.modelled_broadcasts(),
@@ -225,8 +227,8 @@ fn a_wsa_is_encoded_and_decodes_per_the_1609_3_module() {
     assert!(wsa.routing.is_some(), "the WAVE Routing Advertisement");
     assert_eq!(
         wsa.header.expect("header")[0],
-        v2xw_msg::wsa::HeaderExt::RepeatRate(1),
-        "RepeatRate is WSAs per 5 s: one per 5 s"
+        v2xw_msg::wsa::HeaderExt::RepeatRate(50),
+        "RepeatRate is WSAs per 5 s: 50, as App. D"
     );
 
     // Octets a scenario supplies still win.

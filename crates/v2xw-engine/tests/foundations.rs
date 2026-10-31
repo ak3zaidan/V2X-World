@@ -931,6 +931,40 @@ fn the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
 /// `muted` puts the unit's radio at the validator's floor (-20 dBm, -10 dBi, 20 dB cable
 /// loss), so nothing it sends is heard, while it stays within the 300 m relay radius.
 fn relay_run(air: Option<&str>, muted: bool) -> (RunReport, MemoryRecorder) {
+    run(relay_scenario(air, muted))
+}
+
+/// SC-M4 (USDOT RSU Specification v4.1 Req_587-588): under IEEE 1609.4 alternating access
+/// a roadside unit's WSA goes out on the control channel in the CCH interval (time slot
+/// 0), where every one-radio unit that alternates is listening. The relaying unit has two
+/// radios (the RSU default), so the MAC's alternating gate does not hold its frames.
+/// fault: the hand-off wait for the CCH interval removed (run.rs `hand_down`) -> red.
+#[test]
+fn a_wsa_goes_out_in_the_control_channel_interval() {
+    use v2xw_radio::wave_schedule::{ChannelAccess, ChannelSchedule, Interval};
+    let mut s = relay_scenario(Some("sch"), false);
+    s.net.channel_access = Some("alternating".to_string());
+    let errors = v2xw_engine::scenario::validate(&s);
+    assert!(errors.is_empty(), "{errors:?}");
+    let (_, rec) = run(s);
+    let sched = ChannelSchedule {
+        access: ChannelAccess::Alternating,
+    };
+    let starts: Vec<u64> = on::<NodeTxView>(&rec)
+        .iter()
+        .filter(|t| t.msg_type.as_deref() == Some("wsa"))
+        .map(|t| t.t)
+        .collect();
+    let outside = starts
+        .iter()
+        .filter(|&&t| sched.interval(t) != Interval::Cch)
+        .count();
+    println!("WSA CCH: {} WSAs, {outside} outside the CCH interval", starts.len());
+    assert!((150..=210).contains(&starts.len()), "{} WSAs in 20 s", starts.len());
+    assert_eq!(outside, 0, "every WSA starts in the CCH interval");
+}
+
+fn relay_scenario(air: Option<&str>, muted: bool) -> Scenario {
     let mut s = with_backend(deterministic_radio(fleet(2, 20.0)));
     if let Some(uu) = s.net.uu.as_mut() {
         uu.params["penetration"] = 0.0.into();
@@ -958,7 +992,7 @@ fn relay_run(air: Option<&str>, muted: bool) -> (RunReport, MemoryRecorder) {
     }
     let errors = v2xw_engine::scenario::validate(&s);
     assert!(errors.is_empty(), "{errors:?}");
-    run(s)
+    s
 }
 
 /// WP-19 P19.4: a download the service channel cannot finish is cut off and tried again.

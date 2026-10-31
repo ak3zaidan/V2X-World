@@ -105,6 +105,7 @@ relabels of rule-gap-specs §3).
 | Unified and compact butterfly | Refused | Not deployed in the US |
 | Unpublished numbers (data-centre sites, fleet shares, MA thresholds and review time, store quota, report rate, backend capacity) | Labelled ASSUMPTION | Covered by the sensitivity sweeps of wave E |
 | Couriered key ceremony steps (gov C-14) | Not modelled | Off-network, no effect on a run |
+| WSAs on a separate 1609.4 control channel (US 178; RSU Spec v4.1 Req_587) | WSAs on the safety channel 172; under `net.channel_access: alternating` in its CCH interval (Req_588, SC-M4) | The channel plan has one safety and one service channel; a third channel needs the second radio to switch between CCH and SCH in the MAC. Only under the non-default `net.rsu_ip.air: sch`: a signed WSA (about 250 B, 0.4 ms at 6 Mb/s) at 10 Hz is about 0.4 % busy time on 172 per relaying unit in range, and a one-radio J2945/1 unit hears it on 172 where it could not hear 178 |
 
 ## 7. Status
 
@@ -127,3 +128,20 @@ Dated notes go under each id as its wave lands.
   bytes +72 kB. Off by default (`conditional`). Kept as modelled: a CTL-only change fetches
   the composite (it carries the CTL), not the chain file (6.3.5.7); no source says
   deployed devices poll infoStatus first, so the default stays.
+
+### SC-M4
+
+- 2026-10-30 (wave B): the WSA `MessageCodec` arm, `codec/uper/ieee1609-3-wsa`
+  (`v2xw_msg::wsa_codec::Ieee1609WsaCodec`): claims `MsgType::Wsa`, validates a payload by
+  decode and canonical re-encode as the J2735 codecs do; registered in `size_model::codecs()`;
+  the evidence row moves from "not encoded" to "byte-exact (oracle-validated)" (asn1tools,
+  `tests/wsa_oracle.rs`). The 10 Hz rate: the engine's `net.rsu_ip.wsa_interval_ms`
+  already defaulted to 100 ms under `sch` (`foundations::a_vehicle_uses_a_roadside_unit_only_after_verifying_its_wsa`:
+  150-210 WSAs in 20 s); `v2xw-node` `RsuConfig::wsa_period` was still 5 s (`RepeatRate` 1)
+  and is now 100 ms (`RepeatRate` 50, RSU Spec v4.1 App. D). The engine builds no
+  `RsuRuntime`, so no golden moves. WSAs on the control channel: under IEEE 1609.4
+  alternating access a two-radio provider's WSA (the RSU default) was not held by the MAC's
+  gate, so 52 of 199 in 20 s went out outside the CCH interval (in the SCH interval or a
+  guard) while one-radio users listened elsewhere; it now waits at the hand-off for the CCH
+  interval (Req_588, time slot 0): 199 WSAs, 0 outside it. The separate 178 channel is kept as modelled (§6). Left to wave E:
+  the P19.5 `live-rsu.yaml` rows and the `sch` default (release city runs).

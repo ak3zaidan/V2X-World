@@ -692,6 +692,7 @@ pub fn codecs() -> Vec<Box<dyn MessageCodec>> {
         Box::new(crate::j2735::infra::J2735InfraCodec::new()),
         Box::new(J2735SizeCodec::new()),
         Box::new(crate::etsi_size::EtsiSizeCodec::new()),
+        Box::new(crate::wsa_codec::Ieee1609WsaCodec::new()),
     ]
 }
 
