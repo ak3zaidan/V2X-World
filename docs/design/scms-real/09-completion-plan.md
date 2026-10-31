@@ -597,6 +597,31 @@ Dated notes go under each id as its wave lands.
   moved: `ma_policy` and the hook are absent by default.
 - 2026-10-31 (wave B merge): merged to main after wave A (`ebe829f9`); the only conflict was this file's §7 appends, both sides kept. On the merged tree engine `tests/ma_policy` (4), cli `ma_policy_family` (3) and py `ma_policy_hook` (3) pass; no golden moved.
 
+- 2026-10-31 (wave C R7, C1): **the wave B test gaps are closed** (`crates/v2xw-py/tests/ma_policy_hook.rs`).
+  New `v2xw.run_twice(..., ma_policy_factory=f)` (`v2xw-py/src/run.rs`, stub in
+  `_v2xw.pyi`): the factory is called once per run, so each run gets a fresh rule (a rule
+  object keeps state). Four tests, each red under its fault:
+  * `a_python_rule_reproduces_its_run_with_a_fresh_rule_per_run`: the same digest twice
+    (`442934d4...`), two rules, 2 revocations each. Fault: one factory call reused for both
+    runs -> the digests differ (`2c0bc39d...`).
+  * `a_python_pseudonym_k_at_two_decides_as_the_rust_preset`: on a 20 % liar fleet the
+    port at k = 2 matches `pseudonym-k` with `min_distinct_reporters: 2`, with 12 decisions
+    (test 7 has 2), both MAs called, and 1,843 rows = the MA's evidence. Fault: drop each
+    batch's last row -> 1,827 rows, red. On this fleet the decisions survive the lost
+    rows, so the row count is the check that fails.
+  * `a_hook_decides_only_for_the_mas_without_their_own_policy`: provider-b keeps its own
+    `pseudonym-k` at 2; the hook is called for MA {0} only, and the decisions match the
+    Rust run (12). Fault: `ma_hook::attach` also hands over provider-b -> MAs {0, 1}, red.
+  * `set_aside_reports_never_reach_the_hook`: an `InvalidSignature` forger with
+    `modelled_reports: 1`. 802 at the MA, 510 set aside (all logged in `ma.received`), 292
+    hook rows, 0 leaked. Fault: drop the `ma_accepts` filter in `ingest_arrivals` -> 499
+    set-aside ids reach the hook, red.
+
+  Before this, the shipped 5 % fleet had only 2 liars, both under one provider. So k = 2
+  gave no more decisions than k = 3 (2 against 2), and provider-a's MA got no evidence.
+  The `busier` helper exists for that reason. No golden moved: the hook is absent by
+  default.
+
 ### SC-M2
 
 2026-10-30 (wave B): branch `worktree-wf_ab880052-ba6-5` (C1a-C3a, C3b snapshot

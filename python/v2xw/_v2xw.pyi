@@ -7,7 +7,7 @@ every name here exists on the module and that no public name on the module is mi
 which catches the drift that matters.
 """
 
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 __version__: str
 
@@ -112,7 +112,9 @@ def run(
     metric_window_s: float = ...,
     ma_policy: Any = ...,
 ) -> Run: ...
-def run_twice(scenario: Scenario, *, build_utc: str) -> Tuple[str, str]: ...
+def run_twice(
+    scenario: Scenario, *, build_utc: str, ma_policy_factory: Optional[Callable[[], Any]] = None
+) -> Tuple[str, str]: ...
 
 class math:
     """The engine's transcendentals. A plug-in uses these instead of Python's ``math``."""
