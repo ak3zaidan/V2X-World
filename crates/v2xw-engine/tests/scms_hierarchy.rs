@@ -232,6 +232,14 @@ fn a_deeper_hierarchy_runs_and_is_flagged_not_us() {
     let base =
         v2xw_engine::phase2::deployment_of(&scenario(serde_json::json!({})), true).expect("builds");
     assert!(base.is_us());
+    // The settings window's banner (`scenario.validate`'s `us_system`) names it too.
+    let us = v2xw_engine::phase2::us_system(&s).expect("an SCMS run has a verdict");
+    assert!(!us.is_us);
+    assert!(
+        us.reasons.iter().any(|r| r == "provider-b has 3 ICA levels"),
+        "{:?}",
+        us.reasons
+    );
 
     let engine = v2xw_engine::Engine::build(s, "").expect("builds");
     let w = &engine.manifest().warnings;
@@ -267,5 +275,235 @@ fn a_deeper_hierarchy_runs_and_is_flagged_not_us() {
         lens,
         vec![3, 5],
         "provider-a: root, ICA, ACA; provider-b: two more levels"
+    );
+}
+
+/// 08 §8, piece C3b, failure-node names: `actors.backend.failures[].node` naming an ICA
+/// level (`ica-2`, `provider-b/ica-3`), the ICA or the root is refused as an offline CA,
+/// naming why (it takes no request during a run, so its failure would change nothing)
+/// and the online roles a failure can name. 08 §8 first proposed accepting `ica-2` … with
+/// no effect; a setting that silently does nothing is refused instead. Fault: the
+/// offline-CA check removed (the name then falls to the generic unknown-role message).
+#[test]
+fn a_failure_of_an_offline_ca_is_refused_by_name() {
+    for name in ["ica-2", "provider-b/ica-3", "ica", "root"] {
+        let mut s = scenario(serde_json::json!({"providers": [
+            {"name": "provider-b", "ica_levels": 3}
+        ]}));
+        s.actors.backend.failures = vec![
+            serde_json::from_value(serde_json::json!({"node": name, "mode": "offline"}))
+                .expect("a failure"),
+        ];
+        let e = s.validate().expect_err("an offline CA cannot fail").to_string();
+        assert!(
+            e.contains("is an offline CA") && e.contains("crlg"),
+            "{name}: {e}"
+        );
+    }
+}
+
+/// The signature verifications a provider-a device pays to learn provider-b's chain by
+/// P2PCD when provider-b runs `levels` ICA levels, and how many certificates it learned.
+/// The device holds the home provider's chain file and both CTL roots (the
+/// `chain_file: home-provider` case); the response is IEEE 1609.2's `caCerts`, the
+/// requested ACA first and each certificate issued by the next, up to the root's child.
+fn cost_to_learn_peer_chain(levels: u32) -> (usize, usize) {
+    use std::sync::Arc;
+    use v2xw_node::secure::{CryptoMode, NodeSecurity, PSID_SAFETY};
+    use v2xw_sec::primitive::PrimitiveId;
+    let run = run_with(1, levels);
+    let st = &run.state;
+    let home = st.pki.as_ref().expect("the PDU layer is on");
+    let (_, peer) = st
+        .peer_pki
+        .iter()
+        .find(|(l, _)| l == "provider-b")
+        .expect("provider-b");
+    let mut sec = NodeSecurity::new(
+        v2xw_core::time::WallClock::new(1_767_225_600),
+        CryptoMode::Real,
+        PSID_SAFETY,
+    );
+    let roots = [
+        Arc::new(home.root.cert.clone()),
+        Arc::new(peer.root.cert.clone()),
+    ];
+    let cas: Vec<Arc<Certificate>> = home
+        .all()
+        .into_iter()
+        .chain(home.extra.iter())
+        .map(|a| Arc::new(a.cert.clone()))
+        .collect();
+    sec.install_trust(&roots, &cas);
+    let _ = sec.take_validation_ops();
+    // caCerts: the ACA, ica-n … ica-2, the ICA.
+    let mut response = vec![peer.aca.cert.clone()];
+    for k in (2..=levels).rev() {
+        let want = format!(
+            "{}.provider-b",
+            v2xw_proto::scms::governance::ica_level_role(k)
+        );
+        let c = peer
+            .extra
+            .iter()
+            .find(|a| name_of(&a.cert).as_deref() == Some(want.as_str()))
+            .unwrap_or_else(|| panic!("{want} is not in provider-b's PKI"));
+        response.push(c.cert.clone());
+    }
+    response.push(peer.ica.cert.clone());
+    let learned = sec.p2pcd_learn(&response);
+    let verifies = sec
+        .take_validation_ops()
+        .iter()
+        .filter(|(p, _, _)| *p == PrimitiveId::ECDSA_P256_SHA256 || *p == PrimitiveId::ECDSA_P384)
+        .count();
+    (learned, verifies)
+}
+
+/// 08 §8, piece C3b: a receiver's first verification of a foreign chain pays one
+/// signature verification per certificate it did not hold, so each ICA level adds
+/// exactly one. Learning provider-b's chain costs the ACA and the ICA at one level (2)
+/// and n + 1 at n levels; the root it chains to was verified when the CTL installed it,
+/// and nothing already verified is verified again. Fault: `RxTrust::build_path` charges
+/// every link of every path (each learned certificate re-verifying everything above it,
+/// root included, gives 2 + 3 + … + (n + 2)).
+#[test]
+fn each_ica_level_costs_a_foreign_receiver_one_verification() {
+    for levels in [1u32, 3, 5] {
+        let (learned, verifies) = cost_to_learn_peer_chain(levels);
+        let want = levels as usize + 1;
+        assert_eq!(
+            learned, want,
+            "{levels} levels: the ACA and every level learned"
+        );
+        assert_eq!(
+            verifies, want,
+            "{levels} levels: one verification per certificate learned"
+        );
+    }
+}
+
+/// What the P2PCD run of accept test 4 did, per provider (deployment order).
+#[derive(Debug, Default)]
+struct LearnRun {
+    /// Per provider: Σ `learned` of each node of that provider that learned anything.
+    learned_by_node: [Vec<u64>; 2],
+    /// Per provider: Σ `requests_sent`, Σ `learn_unanchored`.
+    requests: [u64; 2],
+    unanchored: [u64; 2],
+    /// Learning responses put on the air.
+    on_air: u64,
+    /// SPaT, MAP and BSM receptions a provider-a vehicle verified from a provider-b
+    /// sender.
+    a_verified_b: u64,
+}
+
+/// `connected-intersections` for 12 s with two providers half and half (the setup of
+/// `tests/p2pcd_air.rs`), provider-b at `levels` ICA levels, under
+/// `chain_file: home-provider`: a device holds only its own provider's CA certificates
+/// and learns the other's by P2PCD.
+fn learn_run(levels: u32) -> LearnRun {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut s = v2xw_engine::Scenario::load(root.join("scenarios/connected-intersections.yaml"))
+        .expect("loads");
+    s.time.duration_s = 12.0;
+    s.threats.attackers.clear();
+    s.messages.sets = vec!["bsm".into(), "spat".into(), "map".into()];
+    s.security.protocol = Some(
+        serde_json::from_value(serde_json::json!({"id": "protocol/scms/camp"})).expect("choice"),
+    );
+    s.security.scms = Some(
+        serde_json::from_value(serde_json::json!({
+            "deployment": {
+                "preset": "us-production-2025",
+                "providers": [
+                    {"name": "provider-a", "fleet_share": 0.5},
+                    {"name": "provider-b", "fleet_share": 0.5, "ica_levels": levels}
+                ]
+            },
+            "chain_file": "home-provider",
+        }))
+        .expect("an scms section"),
+    );
+    let mut engine = v2xw_engine::Engine::build(s, "").expect("builds");
+    let mut rec = v2xw_engine::MemoryRecorder::new();
+    let report = engine.run(&mut rec).expect("runs");
+    let seed = engine.scenario().seed;
+    let p2 = engine.phase2().expect("an SCMS run");
+    let provider_of = |node: u64| p2.deployment().provider_of(seed, node).min(1);
+    let mut learned: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+    let mut out = LearnRun {
+        on_air: report.p2pcd_responses_on_air,
+        ..LearnRun::default()
+    };
+    for (_, r) in rec.records() {
+        if !matches!(r.channel, "node.p2pcd" | "node.rx") {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_slice(&r.json).expect("json");
+        // `node.p2pcd` names its node; `node.rx` its receiver `rx` and sender `tx`.
+        let Some(node) = v["node"].as_u64().or(v["rx"].as_u64()) else {
+            continue;
+        };
+        let k = provider_of(node);
+        match r.channel {
+            "node.p2pcd" => {
+                *learned.entry(node).or_insert(0) += v["learned"].as_u64().unwrap_or(0);
+                out.requests[k] += v["requests_sent"].as_u64().unwrap_or(0);
+                out.unanchored[k] += v["learn_unanchored"].as_u64().unwrap_or(0);
+            }
+            _ => {
+                if k == 0
+                    && v["tx"].as_u64().is_some_and(|f| provider_of(f) == 1)
+                    && matches!(v["msg_type"].as_str(), Some("spat" | "map" | "bsm"))
+                    && v["outcome"] == "delivered"
+                    && v["verification"] == "verified"
+                {
+                    out.a_verified_b += 1;
+                }
+            }
+        }
+    }
+    for (node, n) in learned {
+        if n > 0 {
+            out.learned_by_node[provider_of(node)].push(n);
+        }
+    }
+    eprintln!("ica_levels {levels}: {out:?}");
+    out
+}
+
+/// Accept test 4 (08 §8, piece C3b): under `chain_file: home-provider`, a provider-a
+/// device's first verification of provider-b's certificates, with provider-b at 3 ICA
+/// levels, learns n + 1 = 4 CA certificates (the ACA and every level) and then verifies
+/// provider-b's traffic; provider-b's devices learn provider-a's one-level chain (2).
+///
+/// How the four arrive: IEEE 1609.2 out-of-band P2PCD (the US flavour) answers one
+/// `p2pcdLearningRequest` with one `Ieee1609dot2Peer2PeerPDU` whose `caCerts` holds the
+/// requested certificate and each issuer up to the root's child (`v2xw_sec::p2pcd`), so
+/// the n + 1 certificates come in one exchange, not one exchange each as 08 §8 first
+/// read it. Fault: the chain file omits the middle level (`Governance::with_levels`
+/// skips ica-2): provider-b's devices then cannot serve a chain that reaches the root,
+/// provider-a's devices learn nothing anchored and verify none of provider-b's traffic.
+#[test]
+fn a_foreign_deeper_chain_is_learned_whole_by_p2pcd() {
+    let r = learn_run(3);
+    assert!(r.on_air > 0, "no learning response was put on the air");
+    assert!(
+        !r.learned_by_node[0].is_empty(),
+        "no provider-a device learned provider-b's chain: {r:?}"
+    );
+    assert!(
+        r.learned_by_node[0].iter().all(|n| *n == 4),
+        "a provider-a device learns the ACA and the 3 levels, once: {r:?}"
+    );
+    assert!(
+        r.learned_by_node[1].iter().all(|n| *n == 2),
+        "a provider-b device learns provider-a's ACA and ICA, once: {r:?}"
+    );
+    assert_eq!(r.unanchored, [0, 0], "every learned certificate reached a root");
+    assert!(
+        r.a_verified_b > 0,
+        "after learning, no provider-a device verified provider-b's traffic: {r:?}"
     );
 }

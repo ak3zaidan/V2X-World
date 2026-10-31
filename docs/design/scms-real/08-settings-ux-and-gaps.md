@@ -894,15 +894,35 @@ The scms_topology unit test `every_non_default_value_is_refused` became
 `every_well_formed_value_loads`, because no topology value is refused as unbuilt any more.
 It also checks that no `KEY_STATUS` row says `refused`.
 
-Not built:
+**Status, C3b (2026-10-30): built** (wave B, SC-M2, merged onto `5c5dfc4e`).
 
-* Test 4: a device under `chain_file: home-provider` making n + 1 P2PCD exchanges for a
-  peer's levels. It needs a city run with P2PCD counting (`run.rs`, `hosted.rs`), which
-  this piece's budget did not cover.
-* The extra verification per level on a foreign chain's first sight.
-* `failures[].node` accepting `ica-2` … `ica-n`. The role list lives in
-  `crypto_config.rs`, which belongs to A.
-* The default phase-2 digest is unchanged.
+* The wip snapshot `538a10fa` capped `Governance::with_levels` at `.min(1)`, so levels 2 to
+  n never reached `ScmsPki::extra`, the nodes' pools or the chain files the devices hold.
+  The cap is gone.
+* **Test 4** (`a_foreign_deeper_chain_is_learned_whole_by_p2pcd`). IEEE 1609.2
+  out-of-band P2PCD answers one request with one `caCerts` PDU. That PDU holds the
+  requested ACA and each issuer up to the root's child (`v2xw_sec::p2pcd`). So a
+  provider-a device learns provider-b's n + 1 certificates (ACA, `ica-n` … `ica`) in
+  **one exchange**, not one exchange per certificate as written above. The standard wins.
+  The test asserts that every provider-a learner learns exactly 4 certificates at 3
+  levels, that every provider-b learner learns 2, that nothing is left unanchored, and
+  that provider-a devices then verify provider-b's traffic.
+* **Per-level cost** (`each_ica_level_costs_a_foreign_receiver_one_verification`).
+  `RxTrust::build_path` charged every link of every CA path. Each learned certificate
+  therefore paid again for everything above it, root included: 2 + 3 + … + (n + 2)
+  verifications. It now charges only the links below the first certificate already on a
+  validated cached path. A foreign chain costs one verification per certificate the
+  device did not hold (n + 1), so each level adds one. The module's own rule, "a device
+  validates a CA certificate once", now holds. Install-time chain-file validation is
+  discarded unpriced (`credentials.rs`), so default runs pay the same as before.
+* **Failure-node names** (`a_failure_of_an_offline_ca_is_refused_by_name`).
+  `actors.backend.failures[].node` naming `root`, `ica` or `ica-2` … `ica-5` (bare or
+  `<provider>/`) is refused as an offline CA, with the reason and the online roles. An
+  offline CA takes no request during a run, so accepting the name would give a setting
+  with no effect. `prov[].sites.ica-k` stays refused ("runs no ica-k") for the same
+  reason.
+* **Not US.** `phase2::us_system` (the settings banner) adds "provider-b has 3 ICA levels"
+  to its reasons, beside the manifest's line.
 
 ---
 

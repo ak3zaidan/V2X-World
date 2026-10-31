@@ -8813,6 +8813,9 @@ pub fn us_system(scenario: &Scenario) -> Option<UsSystem> {
                 reasons.push(format!("{} runs no {role}", p.name));
             }
         }
+        if p.ica_levels > 1 {
+            reasons.push(format!("{} has {} ICA levels", p.name, p.ica_levels));
+        }
     }
     if !d.is_us() && reasons.is_empty() {
         reasons.push("the deployment is not the US one".to_string());

@@ -214,6 +214,16 @@ fn role_node(name: &str, n: &v2xw_proto::scms::params::ScmsNodes, run: &ScmsRun)
     })
 }
 
+/// The offline CA a failure's node names (`root`, `ica`, `ica-2` … `ica-5`, bare or
+/// `<provider>/`-qualified), described; `None` for any other name.
+fn offline_ca(name: &str) -> Option<String> {
+    let role = name.split_once('/').map_or(name, |(_, r)| r);
+    if role == "root" {
+        return Some("the root CA".into());
+    }
+    v2xw_proto::scms::governance::ica_level(role).map(|k| format!("intermediate CA level {k}"))
+}
+
 /// Why a failure's node does not resolve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FailureNodeError {
@@ -275,6 +285,20 @@ pub fn backend_faults(s: &Scenario, home: &ScmsRun) -> Result<Vec<(usize, Fault)
     let mut out = Vec::new();
     for (i, f) in s.actors.backend.failures.iter().enumerate() {
         let field = format!("actors.backend.failures[{i}]");
+        if let Some(ca) = offline_ca(&f.node) {
+            return Err(conflict(
+                &format!("{field}.node"),
+                format!(
+                    "'{}' is an offline CA ({ca}): the root and every intermediate CA \
+                     level (ica, ica-2 … ica-5) are kept off the network between \
+                     certification ceremonies and take no request during a run, so a \
+                     failure of it would change nothing (scms-real/08 §8). Name an \
+                     online role: {}",
+                    f.node,
+                    FAILURE_ROLES.join(", ")
+                ),
+            ));
+        }
         let (provider, node) = failure_target(&f.node, home).map_err(|e| {
             conflict(
                 &format!("{field}.node"),
