@@ -281,22 +281,21 @@ impl LegacyWindow {
     /// Evidence is kept in time order whatever order it arrives in, so the span is the
     /// span of the observations.
     pub fn ingest_evidence(&mut self, r: &MisbehaviourReport, at: SimTime) -> Option<MaAction> {
-        *self
-            .filed_by
-            .entry(r.reporter_cert_digest.clone())
-            .or_insert(0) += 1;
-        *self
-            .reported
-            .entry(r.subject_cert_digest.clone())
-            .or_insert(0) += 1;
-        let ev = self
-            .evidence
-            .entry(r.subject_cert_digest.clone())
-            .or_default();
+        self.ingest_pair(&r.reporter_cert_digest, &r.subject_cert_digest, at)
+    }
+
+    /// [`LegacyWindow::ingest_evidence`] on the two digests it reads: the reporter's and
+    /// the subject's certificates. A host that holds the report in another form (the MA
+    /// policy's [`crate::ma_policy::PolicyEvidence`], a replayed `ma.received` row) calls
+    /// this, so every form takes the same arithmetic.
+    pub fn ingest_pair(&mut self, reporter: &str, subject: &str, at: SimTime) -> Option<MaAction> {
+        *self.filed_by.entry(reporter.to_string()).or_insert(0) += 1;
+        *self.reported.entry(subject.to_string()).or_insert(0) += 1;
+        let ev = self.evidence.entry(subject.to_string()).or_default();
         let pos = ev.partition_point(|(t, _)| *t <= at);
-        ev.insert(pos, (at, r.reporter_cert_digest.clone()));
+        ev.insert(pos, (at, reporter.to_string()));
         let latest = ev.last().map_or(at, |e| e.0);
-        self.correlate(&r.subject_cert_digest, latest)
+        self.correlate(subject, latest)
     }
 
     /// How many distinct reporter certificates the evidence about `subject` holds, and how

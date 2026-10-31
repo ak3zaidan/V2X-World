@@ -1774,8 +1774,22 @@ mod tests {
             }
             seen.push(path.to_string());
             let s = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-            if s("x-status") != "refused" {
-                bad.push(format!("{path}: status {}, not refused", s("x-status")));
+            // The module's own row (longest match): `refused` until its piece builds the
+            // key and flips the row (08 §11), never a status from another table.
+            let module = crate::scenario::module_keys::key_status()
+                .filter(|k| {
+                    path == k.path
+                        || path
+                            .strip_prefix(k.path)
+                            .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+                })
+                .max_by_key(|k| k.path.len())
+                .map(|k| json!(k.status));
+            if module.as_ref().and_then(Value::as_str) != Some(s("x-status").as_str()) {
+                bad.push(format!(
+                    "{path}: status {}, not its module's {module:?}",
+                    s("x-status")
+                ));
             }
             if options::title(path).is_none() {
                 bad.push(format!("{path}: no title"));
