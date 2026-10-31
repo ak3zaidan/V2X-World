@@ -365,8 +365,10 @@ Dated notes go under each id as its wave lands.
   certificate retired (what it issued still verifies), and `ScmsState::follow_pki` counts
   it on the home ICA. Test `aca_instances::a_root_rollover_recertifies_the_second_aca`
   (red with the instance carried over). The shipped home provider runs one ACA, so no
-  shipped run changes from the rollover part. The counter fix moves G-SCMS (pki.state
-  values, own commit).
+  shipped run changes from the rollover part. The counter fix moves G-SCMS record digests
+  only (pki.state counter values; frames and record counts unchanged; checked on the parent
+  `ed49ff75`, where phase2-path still reproduced `ae92e07b`): phase2-path `ae92e07b ->
+  3746e52f`, i-s1-phase2-60s `d590fd1b -> a6864706`; ttc-triggered-brake unchanged.
 
 ### SC-D13
 
