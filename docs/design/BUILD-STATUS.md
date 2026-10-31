@@ -17,6 +17,62 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-31 — SCMS completion wave B merge (mapolicy, topology, relay)
+
+Three tracks from `5c5dfc4e`, merged `--no-ff` onto wave A's `24cd9c68` in the order
+mapolicy (`ebe829f9`), topology (`922c44ac`), relay (`d22ed5ac`). `cargo fmt --all` then
+changed six files (own commit `de330ca6`).
+
+- **Merged items.**
+  - Mapolicy (`e2246db0`, with `worktree-wf_ab880052-ba6-4`): SC-M1, the declarative MA
+    policy (B1-B3) and the Python MA policy hook (B4: `Engine::attach_ma_policy`,
+    `v2xw.run(..., ma_policy=obj)`).
+  - Topology (`50f7340e`, with `worktree-wf_ab880052-ba6-5`): SC-M2, provider sites, per-role
+    capacity and ICA levels 1..5. Includes the `with_levels` `.min(1)` fix and the
+    `RxTrust::build_path` per-level charge fix.
+  - Relay (`f8b46cc7`, with `worktree-wf_0343ab94-a4a-1`): SC-M3, infoStatus answered only on
+    arrival (off by default). SC-M4, the WSA codec arm, a 100 ms `RsuConfig::wsa_period` and
+    two-radio WSAs held to the CCH interval.
+- **Conflicts.** `09-completion-plan.md` §7 appends in all three merges; both sides were kept.
+  In topology there were two more:
+  - `publish.rs` `module_keys_publish_menus_ranges_and_status`: main's
+    `module_keys::key_status()` was kept, since it chains the same two tables.
+  - The configuration-reference rows: the branch's built site, sites, capacity and
+    `ica_levels` rows were kept, together with main's built `ma_policy` and sweep rows.
+
+  All three merges compiled as they stood (`cargo check --workspace --tests` clean after
+  each).
+- **Checks.** I ran 190 test binaries: the lib and every test binary of engine, proto, msg,
+  node, threat, experiment, cli and py. That includes the engine's publish (lib), scenario,
+  sensitivity and regression tests. Each binary ran in its own heavy.sh call with a
+  30-minute cap. `build.rs` and `schema.rs` were touched first.
+
+  **Result: 1,996 pass, 4 fail, 16 ignored.** Per crate (pass/fail/ignored): engine
+  682/4/16, proto 348/0/0, threat 271/0/0, node 313/0/0, msg 243/0/0, experiment 80/0/0,
+  cli 40/0/0, py 19/0/0. `scms_knobs_runs` hit the cap after 12 of 20 tests, as it did in
+  wave A; the other 8 passed in one more call (1,076 s).
+- **The 4 failures are the same 4 that wave A recorded before its merge.** The messages
+  are identical, and no wave B commit touches those fields or rows:
+  - `scms_knobs` x2: 39 lifecycle fields against 30 moves, and `root_rollover_at_s` has no
+    default.
+  - `sensitivity_catalogue` and `sensitivity_expectations`:
+    `full_cert_every_ms "high"` is not a planned end.
+- **Goldens.** None moved, and none was declared. The regression binaries (`phase2` with the
+  phase2-path digest, `bsm_timing`, `trigger_ttc`, `scms_scale`) pass on the merged tree.
+  `ma_policy`, the Python hook, `ica_levels` > 1, `crl_poll: info-status` and the CCH wait
+  are all off by default.
+- **Release and boot.** `cargo build --release -j 2 -p v2xw-cli --bins` succeeded in
+  9 min 9 s. `v2xw-server --scenario scenarios/manhattan-5min.yaml --port 8758 --paused
+  --speed 0` listened after 4 s and was stopped by PID.
+- **Still open.**
+  - SC-M1: no `run_twice` check for a Python policy; test 7 sees only 2 decisions; no
+    multi-provider hook test.
+  - SC-M2: under the `.min(1)` fault, `a_deeper_hierarchy_runs_and_is_flagged_not_us` grew
+    past 4.9 GB. The cause is not traced; it is worth a sampled run.
+  - SC-M3/M4: the oracle INFO-STAT rule and the info-no-ra mutation on a recording; the
+    P19.5 `live-rsu.yaml` rows and the `sch` default (wave E).
+  - The 4 failures above.
+
 ## 2026-10-31 — SCMS completion wave A merge (side, crl, honest, records)
 
 Four tracks from `5c5dfc4e`, merged `--no-ff` in the order side, crl, honest, records.

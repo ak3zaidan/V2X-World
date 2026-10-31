@@ -406,6 +406,7 @@ Dated notes go under each id as its wave lands.
   rule because the loop takes it on the report it names; no `run_twice` determinism
   check for a Python policy (it would need a fresh policy object per run). No golden
   moved: `ma_policy` and the hook are absent by default.
+- 2026-10-31 (wave B merge): merged to main after wave A (`ebe829f9`); the only conflict was this file's §7 appends, both sides kept. On the merged tree engine `tests/ma_policy` (4), cli `ma_policy_family` (3) and py `ma_policy_hook` (3) pass; no golden moved.
 
 ### SC-M2
 
@@ -424,6 +425,7 @@ C3b (2026-10-30)" records:
 Recorded deviation: 08 §8 read P2PCD as "one exchange per certificate". The standard's
 response carries the chain, so the test asserts n + 1 certificates in one exchange.
 Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to price.
+- 2026-10-31 (wave B merge): merged to main (`922c44ac`). Conflicts: `publish.rs` `module_keys_publish_menus_ranges_and_status` (wave A had moved the status lookup to `module_keys::key_status()`, which chains the same two tables, so main's form was kept); the configuration-reference rows (the branch's built site, sites, capacity and `ica_levels` rows kept with main's built `ma_policy` and sweep rows); §7 appends. `scms_hierarchy` (7), `scms_sites` (5), `scms_capacity` (4), `p2pcd_air` (4), node `rx_validation` (32) and `p2pcd_exchange` (5) pass; no golden moved.
 
 ### SC-M3
 
@@ -442,6 +444,7 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   bytes +72 kB. Off by default (`conditional`). Kept as modelled: a CTL-only change fetches
   the composite (it carries the CTL), not the chain file (6.3.5.7); no source says
   deployed devices poll infoStatus first, so the default stays.
+- 2026-10-31 (wave B merge): merged to main with SC-M4 (`d22ed5ac`); only §7 conflicted. `tests/info_status` (1) and `phase2` (16, regression digest included) pass; off by default, no golden moved.
 
 ### SC-M4
 
@@ -459,3 +462,4 @@ Skipped: `prov[].sites.ica-k`, because an offline CA has no run-time links to pr
   guard) while one-radio users listened elsewhere; it now waits at the hand-off for the CCH
   interval (Req_588, time slot 0): 199 WSAs, 0 outside it. The separate 178 channel is kept as modelled (§6). Left to wave E:
   the P19.5 `live-rsu.yaml` rows and the `sch` default (release city runs).
+- 2026-10-31 (wave B merge): merged to main (`d22ed5ac`). msg lib (209), `wsa_oracle` (2), node `rsu_runtime` (12) and engine `foundations` (15) pass; no golden moved. Still open: the P19.5 `live-rsu.yaml` rows and the `sch` default (wave E).
