@@ -138,3 +138,16 @@ Dated notes go under each id as its wave lands.
   scms-stress MWC.recovery is now fixed. Kept as modelled and noted: the joiner holds its RA's
   list from the instant it joins, not after its first connection's round trip. That is
   seconds against a two-week tolerance, so negligible.
+
+### SC-D3
+
+- 2026-10-30 (wave A): not an engine defect. The benchmark is honest traffic only, so it
+  should have 0 entries. FB3 ran the same file to 172,800 s: 2 CRL versions (the `t0` lists),
+  0 issued, 0 cases and 0 revocations, with 1,447 honest reports at the MAs (FB3.pki,
+  FB3.honest-reports). No reissue is due within 2 days (nextCrl = issue + 7 d). FB2.crl now
+  passes, judged on FB3. One thing found: the census keys `scms.crlg_entries` and
+  `scms.crl_store_entries` count the home provider only. New diagnostic keys
+  `scms.crlg_entries_all` and `scms.crl_store_entries_all` sum every provider (they reach
+  no record or digest). Tests: `phase2.rs`
+  `the_census_counts_the_entries_the_crl_generators_and_stores_hold` (path run, attacker
+  revoked) and `with_no_attacker_nothing_is_revoked` (census 0).

@@ -158,10 +158,7 @@ impl v2xw_engine::RunRecorder for CrlRecords {
         self.seen += 1;
         let keep = record.channel == "proto.revocation"
             || (record.channel == "node.tx"
-                && record
-                    .json
-                    .windows(16)
-                    .any(|w| w == br#""msg_type":"crl""#));
+                && record.json.windows(16).any(|w| w == br#""msg_type":"crl""#));
         if keep {
             let mut v: serde_json::Value = serde_json::from_slice(&record.json).expect("json");
             v["channel"] = serde_json::json!(record.channel);

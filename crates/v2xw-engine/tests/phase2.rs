@@ -82,6 +82,15 @@ fn rooted(mut scenario: Scenario) -> Scenario {
 }
 
 fn run(scenario: Scenario) -> (RunReport, regression::Pinned) {
+    let (report, pinned, _) = run_census(scenario);
+    (report, pinned)
+}
+
+/// The engine's collection census after a run ([`Engine::census`]).
+type Census = Vec<(&'static str, u64)>;
+
+/// [`run`], with the engine's census at the end of the run.
+fn run_census(scenario: Scenario) -> (RunReport, regression::Pinned, Census) {
     let mut engine = Engine::build(scenario, "").expect("builds");
     let mut recorder = DigestRecorder::new();
     let report = engine.run(&mut recorder).expect("runs");
@@ -90,7 +99,16 @@ fn run(scenario: Scenario) -> (RunReport, regression::Pinned) {
         frame_digest: recorder.frame_digest_hex(),
         records: recorder.written(),
     };
-    (report, pinned)
+    (report, pinned, engine.census())
+}
+
+/// One census entry by name.
+fn census_of(census: &Census, key: &str) -> u64 {
+    census
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| *v)
+        .unwrap_or_else(|| panic!("the census has no {key}"))
 }
 
 /// A recorder that keeps one channel's records and drops the rest as they come.
@@ -131,7 +149,20 @@ fn run_channel(scenario: Scenario, channel: &'static str) -> (RunReport, Channel
 /// The path run, once for every test in this binary that reads it.
 fn path_run() -> &'static (RunReport, regression::Pinned) {
     static RUN: OnceLock<(RunReport, regression::Pinned)> = OnceLock::new();
-    RUN.get_or_init(|| run(phase2()))
+    RUN.get_or_init(|| {
+        let (report, pinned, census) = run_census(phase2());
+        let _ = PATH_CENSUS.set(census);
+        (report, pinned)
+    })
+}
+
+/// The path run's census, taken when [`path_run`] ran.
+static PATH_CENSUS: OnceLock<Census> = OnceLock::new();
+
+/// The census at the end of the path run.
+fn path_census() -> &'static Census {
+    path_run();
+    PATH_CENSUS.get().expect("the path run took its census")
 }
 
 /// Sets one lifecycle parameter over the shipped ones.
@@ -219,6 +250,44 @@ fn a_report_becomes_a_vehicle_that_cannot_sign() {
         "the entry was installed and no reception was ever refused by it"
     );
     assert!(p.revocation_latency_ns > 0);
+}
+
+/// SC-D3 (09-completion-plan.md §1; scms-final-run FB2.crl): the engine census counts what
+/// the CRL Generators and CRL Stores hold, so a census that reads 0 entries, as the
+/// full-fleet benchmark's did through 46,470 s of honest traffic, means nothing was
+/// revoked rather than a counter that never moves. In the path run the attacker is
+/// decided and published: every provider's Generator then holds at least one entry per
+/// revoked device, and the Stores what was published. The no-attacker run reads 0
+/// (`with_no_attacker_nothing_is_revoked`).
+#[test]
+fn the_census_counts_the_entries_the_crl_generators_and_stores_hold() {
+    let (report, _) = path_run();
+    let census = path_census();
+    let p = &report.phase2;
+    let revoked = p.revoked_attackers + p.revoked_honest;
+    assert!(
+        revoked >= 1,
+        "the path run revoked nobody: the check cannot fail"
+    );
+    assert!(
+        p.crl_versions_published >= 1,
+        "the CRL Store never published"
+    );
+    let crlg = census_of(census, "scms.crlg_entries_all");
+    let store = census_of(census, "scms.crl_store_entries_all");
+    println!("revoked {revoked}; census crlg {crlg}, store {store}");
+    assert!(
+        crlg >= revoked,
+        "{revoked} devices revoked, {crlg} entries in the CRL Generators"
+    );
+    assert!(
+        (1..=crlg).contains(&store),
+        "{store} entries in the CRL Stores against {crlg} in the Generators"
+    );
+    assert!(
+        census_of(census, "scms.crlg_entries") <= crlg,
+        "the home provider's count is part of every provider's"
+    );
 }
 
 /// CV.attack-onset (audit-sim-metrics §3 item 5): the run report's onset is the first
@@ -416,8 +485,17 @@ fn the_revocation_latency_is_decomposed_by_stage() {
 fn with_no_attacker_nothing_is_revoked() {
     let mut scenario = phase2();
     scenario.threats.attackers.clear();
-    let (report, _) = run(scenario);
+    let (report, _, census) = run_census(scenario);
     let p = &report.phase2;
+    // SC-D3: with nothing decided, no provider's CRL Generator or CRL Store holds an entry
+    // (the t0 lists are empty), as the full-fleet benchmark's census read through 46 ks.
+    for key in ["scms.crlg_entries_all", "scms.crl_store_entries_all"] {
+        assert_eq!(
+            census_of(&census, key),
+            0,
+            "{key} in a run with no attacker"
+        );
+    }
     let rate = p.verdicts_fired as f64 / p.messages_checked.max(1) as f64;
     println!(
         "legacy-12 on honest traffic: {} verdicts over {} messages ({:.2} %), {} reports, \
