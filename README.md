@@ -7,7 +7,9 @@ It is built as a research instrument:
 - every metric says how it is computed;
 - every run is byte-identical for the same scenario and seed, on any machine and any number of threads.
 
-https://github.com/user-attachments/assets/5bd97631-f240-4698-ae43-bce1383829e7
+
+https://github.com/user-attachments/assets/527e9bd5-5d25-4480-9bf7-0818f529f154
+
 
 ## What it simulates
 
