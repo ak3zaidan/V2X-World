@@ -1,309 +1,271 @@
-# V2X World Simulator
+<p align="center">
+  <img alt="V2X World logo" src=".github/assets/logo/v2x-world.svg" width="112">
+</p>
 
-A simulator for connected-vehicle (V2X) networks. It combines realistic traffic on real city maps, a frame-level radio and network stack on top of that traffic, and the full security system that protects it: IEEE 1609.2 and the US Security Credential Management System (SCMS) as deployed. Everything runs in one deterministic engine. A 3D Studio sits on top, with a built-in agent that can set up, run and analyse simulations from plain language.
+<h1 align="center">V2X World</h1>
 
-It is built as a research instrument:
-- every model states its equations, its defaults and the citation behind each default;
-- every metric says how it is computed;
-- every run is byte-identical for the same scenario and seed, on any machine and any number of threads.
+<p align="center">
+  <b>A connected-vehicle simulator with a real US SCMS.</b> Road traffic, the radio channel, the network,
+  IEEE 1609.2 security and the US Security Credential Management System, in one deterministic engine.
+</p>
 
+<p align="center">
+  <a href="https://github.com/ak3zaidan/SCMS-Simulator/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ak3zaidan/SCMS-Simulator/ci.yml?branch=main&label=CI&logo=github"></a>
+  <a href="https://github.com/ak3zaidan/SCMS-Simulator/actions/workflows/docs.yml"><img alt="Docs" src="https://img.shields.io/github/actions/workflow/status/ak3zaidan/SCMS-Simulator/docs.yml?branch=main&label=docs&logo=materialformkdocs"></a>
+  <a href="LICENSE"><img alt="Code licence: Apache-2.0" src="https://img.shields.io/badge/code-Apache--2.0-blue"></a>
+  <a href="https://creativecommons.org/licenses/by/4.0/"><img alt="Data licence: CC BY 4.0" src="https://img.shields.io/badge/data-CC%20BY%204.0-lightgrey"></a>
+  <a href="rust-toolchain.toml"><img alt="Rust 1.98.1" src="https://img.shields.io/badge/rust-1.98.1-orange?logo=rust"></a>
+  <a href="https://arxiv.org/abs/XXXX.XXXXX"><img alt="Paper (coming soon)" src="https://img.shields.io/badge/paper-coming%20soon-b31b1b?logo=arxiv"></a>
+  <a href="https://huggingface.co/datasets/akzaidan/V2X-World"><picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/datasets/huggingface/badges/resolve/main/dataset-on-hf-sm-dark.svg"><img alt="Dataset on Hugging Face" src="https://huggingface.co/datasets/huggingface/badges/resolve/main/dataset-on-hf-sm.svg"></picture></a>
+</p>
+
+<p align="center">
+  <a href="https://ak3zaidan.github.io/SCMS-Simulator/"><img alt="Website" src=".github/assets/readme/btn-website.svg" width="128"></a>
+  <a href="https://github.com/ak3zaidan/SCMS-Simulator/releases"><img alt="Download" src=".github/assets/readme/btn-download.svg" width="128"></a>
+  <a href="https://ak3zaidan.github.io/SCMS-Simulator/getting-started/introduction/"><img alt="Docs" src=".github/assets/readme/btn-docs.svg" width="128"></a>
+  <a href="https://arxiv.org/abs/XXXX.XXXXX"><img alt="Paper" src=".github/assets/readme/btn-paper.svg" width="128"></a>
+  <a href="https://huggingface.co/datasets/akzaidan/V2X-World"><img alt="Dataset" src=".github/assets/readme/btn-dataset.svg" width="128"></a>
+  <a href="https://ak3zaidan.github.io/SCMS-Simulator/try/"><img alt="Try online" src=".github/assets/readme/btn-try.svg" width="128"></a>
+</p>
 
 https://github.com/user-attachments/assets/527e9bd5-5d25-4480-9bf7-0818f529f154
 
+## Overview
 
-## What it simulates
+V2X World is a deterministic, discrete-event simulator of connected-vehicle (V2X)
+systems, written in Rust. One run models the road traffic on a real city map, the radio
+channel and the network on top of it, the messages and safety applications, the IEEE 1609.2
+security envelope, and the credential system that issues and revokes certificates: the US
+SCMS as deployed, or the European ETSI ITS PKI. Attackers, on-vehicle misbehaviour detection
+and the misbehaviour authority run in the same loop. A browser Studio shows the run in 2D and
+3D, and a Python package drives the engine from scripts and notebooks.
 
-**Traffic**
-- Cars, trucks, buses, motorcycles, cyclists and pedestrians on 64 city maps (mostly US, listed in [`worlds/cities.yaml`](worlds/cities.yaml)) from OpenStreetMap, or on generated grids.
-- Car-following (IDM by default; Krauss, EIDM, W99 and Gipps available) and lane changing (MOBIL by default; SUMO's LC2013 available). Each driver has their own parameters, reaction times and style.
-- Lane-level routing with strategic lane choice, junction yielding and gap acceptance, fixed-time and actuated signals, gridlock handling and rerouting, kerbside stops, pedestrian crossings and refuge islands.
-- A city-scale mesoscopic tier for very large fleets, and an optional co-simulation mode in which SUMO drives the traffic over TraCI.
+It is built for research on V2X security and privacy: what credential management costs in
+bytes, queueing and latency; how long a misbehaving vehicle stays believed; what a roadside
+eavesdropper learns across pseudonym changes; what post-quantum signatures cost on the air.
+Every model states its equations, its defaults and the source of each default, and every
+run is byte-identical for the same scenario, seed and build, on any supported platform and
+any number of threads.
 
-**Radio and network**
-- DSRC (IEEE 802.11p), LTE-V2X and NR-V2X sidelink.
-- A per-link channel from real building geometry:
-  - 3GPP TR 37.885 line-of-sight and NLOS laws, plus a street-corner model;
-  - through-building loss and correlated shadowing;
-  - Nakagami fading, with optional Doppler coherence.
-- Cumulative interference and a windowed-SINR NIST error model.
-- EDCA channel access with carrier sense and back-off, half-duplex and hidden terminals, and C-V2X semi-persistent scheduling.
-- Congestion control: SAE J2945/1 rate and power control, and ETSI reactive and adaptive DCC.
-- WSMP and ETSI GeoNetworking with multi-hop forwarding.
-- Generation of BSM, CAM, DENM, CPM, VAM, SPaT, MAP, SRM, SSM and WSA messages.
-- Roadside units with SPaT/MAP, relay and CRL roles, WSA service announcements and a choice of backhaul.
-- A packet-level cellular model with TCP and TLS for backend traffic.
+## Key features
 
-**Intersections and safety applications**
-- **SPaT and MAP** (SAE J2735, UPER) come from the real signal controller of each equipped intersection. They are signed and broadcast at the CTI 4501 rates: SPaT at 10 Hz and MAP at 1 Hz.
-- **On-vehicle applications:**
-  - forward collision warning (FCW), emergency electronic brake light (EEBL), intersection movement assist (IMA), left-turn assist (LTA), blind-spot and lane-change warning (BSW) and pedestrian collision warning (PCW);
-  - red-light violation warning (RLVW);
-  - green-light optimal speed advisory (GLOSA), with a setting for how many drivers follow it.
-- **Signal priority:** vehicles request it with SRM and get NTCIP 1211 green extension or early green; SSM reports the state of each request.
+| Area | What is modelled |
+|---|---|
+| **Traffic** | Cars, trucks, buses, motorcycles, cyclists and pedestrians on 64 OpenStreetMap city maps ([`worlds/cities.yaml`](worlds/cities.yaml)), SUMO `net.xml` networks or procedural grids. IDM, EIDM, Krauss, Gipps, Wiedemann 99, ACC and CACC; MOBIL and LC2013 lane changes; fixed-time and actuated signals; a mesoscopic tier for city scale; optional SUMO co-simulation over TraCI. |
+| **Radio and network** | IEEE 802.11p (DSRC), LTE-V2X and NR-V2X sidelink, and the cellular link. 3GPP TR 37.885 path loss, building obstruction, shadowing and Nakagami fading; cumulative interference; SAE J2945/1 and ETSI DCC congestion control; IEEE 1609.3 WSMP and ETSI GeoNetworking/BTP. |
+| **Messages and applications** | SAE J2735 BSM, SPaT, MAP and PSM (UPER); ETSI CAM, DENM, VAM and CPM; SRM, SSM and WSA. FCW, EEBL, IMA, LTA, BSW, PCW, RLVW and GLOSA on the vehicle; signal priority at equipped intersections. |
+| **Security (IEEE 1609.2)** | Real signed and verified messages: COER encoding, ECDSA P-256, implicit (ECQV) and explicit certificates, chain, validity, region, permission and revocation checks, with per-device processing times. |
+| **US SCMS** | Governance with electors and certificate trust lists, several providers with their own root, ICA, ECA, RA, ACA, linkage authorities and misbehaviour authority, IEEE 1609.2.1 flows, butterfly keys, the weekly pseudonym calendar, linkage-based revocation and CRLs. What-if options, marked as such: the ETSI TS 102 941 PKI, deeper CA hierarchies, threshold authorities, hybrid and post-quantum signatures. |
+| **Threats and misbehaviour detection** | Fake positions, replay, Sybil identities, jamming, compromised roadside units and a passive privacy observer. On-vehicle detectors (VeReMi/F2MD style, the SCMS Manager report profile, ETSI TS 103 759), misbehaviour reports, and configurable misbehaviour-authority policies with offline replay. |
+| **Studio (2D and 3D)** | A browser interface on one Three.js scene: run controls, cameras, overlays for radio links, messages, signals and certificate states, click-to-inspect, searchable settings with plain explanations, cited defaults and units, live metrics, run comparison, certificate-system views and an optional built-in assistant. |
+| **Recording and measurement** | MCAP recordings that replay byte for byte; metrics with plain definitions, sample counts and confidence intervals; Parquet, Arrow, JSONL, VeReMi and SUMO exports; parameter sweeps, same-seed comparison and sensitivity analysis. |
+| **Determinism** | One event queue in integer nanoseconds, random streams keyed by (seed, purpose, entity), no wall clock. Results do not depend on thread count, and CI fails unless Linux, macOS and Windows produce the same digests. |
+| **Python** | The `v2xw` package: load and run scenarios, read metrics as Arrow tables, open recordings, and write car-following models, detectors or misbehaviour-authority policies in Python. |
 
-**Security and the SCMS**
-- **Signed messages:** real IEEE 1609.2 messages (COER encoding, ECDSA P-256) with implicit (ECQV) and explicit certificates.
-- **Receiver validation:** the chain to an approved root, validity, region, permissions and revocation.
-- **The US SCMS as deployed:**
-  - **Governance and providers:** governance with 5 electors and 3-of-5 trust lists on P-384. Several providers each have their own root, ICA, ECA, RA, ACA, linkage authorities, misbehaviour authority and CRL generator. Each provider can be placed at a named site and given a capacity per role.
-  - **Certificate supply:** the real IEEE 1609.2.1 messages over their HTTP framing, butterfly key provisioning and the real one-week certificate calendar. Enrolment, pseudonym, identification and RSU application certificates are all modelled, as are identified regions and peer-to-peer certificate distribution.
-  - **Revocation:** linkage-based revocation, with the misbehaviour authority (MA) exchanging chain identifiers with both linkage authorities. Linkage and hash-based CRLs are issued and installed.
-- **Misbehaviour:**
-  - on-vehicle detection, with the SCMS Manager's US BSM checks as the default detector under a US deployment;
-  - US misbehaviour reports (SM-MBR);
-  - a declarative MA policy with eight presets, the CV-pilot manual review being the default;
-  - an optional Python policy hook, and offline replay of a run's reports through a whole family of policies.
-- **What-if options**, marked as not the US system:
-  - the European CCMS;
-  - CA hierarchies up to five ICA levels deep;
-  - threshold authorities (FROST, CGGMP21, Umbrella);
-  - hybrid and post-quantum signatures (ML-DSA, Falcon, SLH-DSA).
-- **Attackers:** fake positions, replay, jamming, Sybil and compromised RSUs.
+Each model has a model card with its equations, parameters, assumptions and validation:
+see [Models](https://ak3zaidan.github.io/SCMS-Simulator/models/) in the documentation.
 
-**Measurement**
-- Metrics with plain definitions and health bands:
-  - delivery ratio, latency broken into 11 stages, channel busy ratio, age of information and overhead by layer;
-  - security processing, certificate supply and revocation latency;
-  - detection quality and linkability;
-  - traffic flow and safety indicators.
-- Runs can be compared with a noise test, swept one setting at a time, and checked against an expectation table of how each setting should move the metrics.
+## Recommended system
 
-## Status
-
-The engine runs end to end: traffic, radio, network, security and the SCMS backend in one process, with the Studio and the agent on top. Its own suites validate it (see [Validation](#validation)), and it is cross-checked against SUMO, Veins, Artery, OpenCV2X and published results.
-
-The SCMS is being rebuilt to match the real US deployment wherever the deployment can be observed:
-- **Done:** the cryptography, formats, protocols, receiver validation, multi-provider deployment, real calendar, menus for every SCMS setting, and the redesigned certificate and metrics views in the Studio.
-- **In progress:** the completion rounds, which close the remaining rule gaps. The plan and its status are in [`09-completion-plan.md`](docs/design/scms-real/09-completion-plan.md); the specs are in [`10-completion-specs.md`](docs/design/scms-real/10-completion-specs.md).
-- **SAE J2945/1:** the vehicle side has been checked requirement by requirement against SAE J2945/1 (2020). The deviations found and their fixes are in [`11-j2945-1-conformance.md`](docs/design/scms-real/11-j2945-1-conformance.md).
-
-Known limits are recorded rather than hidden:
-- [`BUILD-STATUS.md`](docs/design/BUILD-STATUS.md) lists what each round left open.
-- [`06-validation-summary.md`](docs/design/scms-real/06-validation-summary.md) states how close the SCMS is to the deployment, rule by rule.
-- Each validation report lists its failing rows.
+| Component | Requirement |
+|---|---|
+| **Operating system** | Linux, macOS and Windows: CI builds and tests on `ubuntu-latest`, `macos-latest` and `windows-latest` ([`ci.yml`](.github/workflows/ci.yml)). The helper scripts ([`run-sim.sh`](run-sim.sh), [`worlds/fetch.sh`](worlds/fetch.sh)) are Bash; on Windows, run the cargo commands they wrap. |
+| **Rust** | 1.98.1, pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Install [rustup](https://rustup.rs); it installs the pinned compiler, `rustfmt`, `clippy` and the `wasm32-unknown-unknown` target on first use. A C compiler is also needed (the recording's zstd codec is C). |
+| **Studio** | Node 22 or newer and pnpm 10 ([`ui/package.json`](ui/package.json) pins `pnpm@10.15.0`; `corepack` can provide it). |
+| **Python bindings** | Python 3.9 or newer and [maturin](https://www.maturin.rs). |
+| **Optional** | [`just`](https://just.systems) for the task recipes; [Eclipse SUMO](https://eclipse.dev/sumo/) for co-simulation and cross-validation. |
+| **Memory** | 16 GB or more is recommended for building. A parallel release build of the whole workspace can exhaust 8 GB; on an 8 GB machine build one job at a time (`-j 1`, as `just build-cli` and `run-sim.sh` do). At run time a full-scale Manhattan run peaked at about 1.9 GB of engine memory, roughly 1.35 MB per simulated node, so memory grows with the fleet. |
+| **Disk** | A release build takes a few GB under `target/`, and debug and test builds of the workspace take several GB more; keep 10 GB or more free. City extracts are a few MB to tens of MB each, and recordings grow with run length and record level. |
 
 ## Quick start
 
-**Requirements:**
-- Rust 1.98.1 (pinned in [`rust-toolchain.toml`](rust-toolchain.toml));
-- Node 22 or newer, with pnpm 10;
-- optionally [`just`](https://just.systems);
-- Python 3.12, only for the validation oracle, the Python package and the SUMO tools.
+Build the command-line tool and run a scenario on a procedural road network, with no
+download:
 
-**1. Optional: add model keys for the built-in agent.** Create `.env` in the repository root (it is git-ignored):
+```sh
+git clone https://github.com/ak3zaidan/SCMS-Simulator.git
+cd SCMS-Simulator
 
-```bash
-OPENAI_API_KEY=...          # or ANTHROPIC_API_KEY=...
-V2XW_AGENT_PROVIDER=openai  # openai or anthropic
-OPENAI_MODEL=...            # optional model override
+cargo build --release -p v2xw-cli          # rustup installs the pinned toolchain first
+./target/release/v2xw validate scenarios/highway-congestion.yaml
+./target/release/v2xw run scenarios/highway-congestion.yaml --out runs/highway
+./target/release/v2xw info runs/highway/recording.mcap
 ```
 
-The engine reads these at start-up and never prints them. Without keys, everything works except the agent.
+Run on a real city. Each city's OpenStreetMap extract is downloaded once into
+`worlds/cache/` (git-ignored):
 
-**2. Start the engine** with [`run-sim.sh`](run-sim.sh). It builds the release binary the first time and listens on port 8787:
+```sh
+./target/release/v2xw cities               # the city library
+worlds/fetch.sh manhattan                  # writes worlds/cache/manhattan.osm.xml
+./target/release/v2xw run scenarios/midtown-normal.yaml --out runs/midtown
 
-```bash
-./run-sim.sh                                   # default scenario (Manhattan)
-./run-sim.sh scenarios/portland-downtown.yaml  # any scenario
-V2XW_PORT=8788 ./run-sim.sh                    # a second engine on another port
+worlds/fetch.sh boston                     # the same scenario on another city
+./target/release/v2xw run scenarios/midtown-normal.yaml --city boston --out runs/boston
+./target/release/v2xw compare runs/midtown runs/boston
 ```
 
-**3. Start the Studio** in a second terminal, then open http://127.0.0.1:5173:
+Open the Studio: the engine in one terminal, the page in another.
 
-```bash
+```sh
+./run-sim.sh                               # the engine on :8787 (built on first use)
 pnpm --dir ui install
-pnpm --dir ui --filter @vwp/studio dev
+pnpm --dir ui --filter @vwp/studio dev     # then open http://127.0.0.1:5173
 ```
 
-The Studio connects to `http://127.0.0.1:8787` unless `VWP_ENGINE` says otherwise, and `VWP_STUDIO_PORT` moves the Studio itself ([`vite.config.ts`](ui/apps/studio/vite.config.ts)).
+> [!NOTE]
+> `run-sim.sh` serves `scenarios/manhattan-5min.yaml` unless you name another scenario, so
+> fetch the Manhattan extract first (`worlds/fetch.sh manhattan`). For browser work without a map, serve a synthetic stream
+> with `./target/release/v2xw-server --actors 200 --port 8787`.
 
-To restart cleanly: `pkill -f v2xw-server; ./run-sim.sh`.
+> [!TIP]
+> The built-in assistant is optional. To use it, put `V2XW_AGENT_PROVIDER` (`openai` or
+> `anthropic`) and `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in a `.env` file in the
+> repository root; it is git-ignored, and the engine never prints the keys. Everything else
+> works without them.
 
-## Using the Studio
+With [`just`](justfile): `just run <scenario>`, `just validate <scenario>`,
+`just serve <scenario>`, `just studio`, and `just ci` for the checks CI runs. Build the
+Python package with `cd python && maturin develop` inside a virtual environment
+([`python/README.md`](python/README.md)).
 
-- **Header:** run, pause, restart, playback speed, scenario and city, Quick settings, Settings, Metrics, Agent, the light and dark themes, and a menu for the other panels (Certificate system, Compare two runs, Runs and recordings, Run details, Commands).
-- **3D scene:**
-  - Map, Chase, Driver's view and Free cameras;
-  - layers for radio links, messages, signals and certificate states;
-  - click-to-inspect for any vehicle, radio link or roadside unit.
-- **Settings:**
-  - grouped in the sections a researcher expects: Run, Traffic, Radio & Channel, Medium Access, Congestion Control, Messages, Networking, Security & Certificates, Backend & Cellular, Attackers, Output;
-  - Basic settings first, with Advanced behind a toggle; the panel is searchable;
-  - each setting has a plain explanation, a cited default and a recommended range;
-  - every SCMS and security setting is a menu, a switch or a number with its unit, never a bare text box. Values that are accepted only to be refused show as disabled options with the reason.
-- **Certificate system:**
-  - the trust topology (CTL, roots, ICAs, ECA, RA, ACA, MA, linkage authorities, CRL generator), with what each entity does;
-  - a vehicle's certificate life as a timeline, and a card for any one certificate with its chain up to the root;
-  - each misbehaviour case told as a story: report, MA decision, CRL, then devices refusing the revoked certificate;
-  - a readable decoder for any signed message, with the raw hex behind a toggle.
-- **Metrics:**
-  - every metric with its chart, health band and definition;
-  - the SCMS metrics are grouped by the question each answers: are devices getting certificates, is revocation working and how fast, is misbehaviour being caught, and what security costs the radio and the CPU;
-  - a run summary.
-- **Compare:** "Compare with previous run" or any two saved runs: which settings changed and how every metric moved.
-- **Agent:** type a request such as "Midtown Manhattan, 400 vehicles, DSRC, US SCMS, 5% Sybil attackers, run 2 minutes". The agent stages the settings for you to run, watches the run, flags unhealthy metrics and answers questions from the real numbers.
+## Documentation
 
-## Command line
+The documentation site is at **https://ak3zaidan.github.io/SCMS-Simulator/**. It is
+built from [`docs/`](docs/README.md) in this repository.
 
-The `v2xw` binary (`cargo build --release -p v2xw-cli`) runs everything headless. Its commands are defined in [`cli.rs`](crates/v2xw-cli/src/cli.rs):
-
-| Command | What it does |
+| Page | What it covers |
 |---|---|
-| `v2xw run <scenario> [--city <id>]` | Run a scenario and write its recording, metrics and manifest |
-| `v2xw validate <scenario>` | Check a scenario without running it |
-| `v2xw serve <scenario>` | Serve a run to the Studio, with the agent endpoints |
-| `v2xw cities` | List the city library |
-| `v2xw compare <runA> <runB>` | Settings that differ and every metric's change, with a noise test |
-| `v2xw sensitivity <spec>` | One-at-a-time same-seed sweeps; `--catalogue` sweeps every setting, `--expect` checks the expectation table |
-| `v2xw compare-signatures <scenario>` | Signing overhead of each signature scheme against ECDSA P-256 |
-| `v2xw ma-replay <run>` | Replay a run's recorded misbehaviour reports through a family of MA decision rules or policy presets: honest devices blocked and the attacker's time to act, per policy |
-| `v2xw check-traffic <run>` | Traffic invariants: stalls on green, overlaps, jumps, braking bounds, red entries |
-| `v2xw experiment run\|status\|resume <scenario>` | Expand a scenario's experiment block into runs and aggregate them |
-| `v2xw agent "<prompt>"` | The agent builds a scenario, runs it and writes a report |
-| `v2xw energy <run>` | Fuel, emissions and EV energy from a recording |
-| `v2xw export-sumo <scenario>` | Write the network and demand in SUMO formats |
-| `v2xw import-osm <extract>` | Import an OpenStreetMap extract |
-| `v2xw info <recording>` | Print a recording's manifest and channels |
-| `v2xw resume <run>` | Continue a checkpointed run |
+| [Introduction](https://ak3zaidan.github.io/SCMS-Simulator/getting-started/introduction/) | What the simulator is for and how the parts fit together |
+| [Install and build](https://ak3zaidan.github.io/SCMS-Simulator/getting-started/) | Prerequisites, builds, the `v2xw` command and the server |
+| [Your first simulation](https://ak3zaidan.github.io/SCMS-Simulator/getting-started/first-simulation/) | A first run from scenario to metrics |
+| [Studio tour](https://ak3zaidan.github.io/SCMS-Simulator/getting-started/studio-tour/) | The browser interface, panel by panel |
+| [Configuration reference](https://ak3zaidan.github.io/SCMS-Simulator/configuration/reference/) | Every scenario setting with its default, range, unit and source |
+| [SCMS and credentials](https://ak3zaidan.github.io/SCMS-Simulator/models/scms/) | The credential-management model and how it follows the US deployment |
+| [Extending](https://ak3zaidan.github.io/SCMS-Simulator/extending/) | Adding your own models, detectors, metrics and settings |
+| [API](https://ak3zaidan.github.io/SCMS-Simulator/api/) | The Rust API and the Python API |
 
-## Python
+## Dataset
 
-The [`python/`](python/) package drives the engine from Python ([`python/README.md`](python/README.md)). With it you can:
-- load and run a scenario, read any metric as an Arrow table and open the recording;
-- write a missing model in Python and have the engine call it, including an MA decision policy (`v2xw.run(..., ma_policy=obj)`).
+<p>
+  <a href="https://huggingface.co/datasets/akzaidan/V2X-World"><picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/datasets/huggingface/badges/resolve/main/dataset-on-hf-lg-dark.svg"><img alt="V2X-World on Hugging Face" src="https://huggingface.co/datasets/huggingface/badges/resolve/main/dataset-on-hf-lg.svg"></picture></a>
+</p>
 
-## Scenarios and cities
+[**V2X-World**](https://huggingface.co/datasets/akzaidan/V2X-World) is the dataset built
+with this simulator, for misbehaviour detection and misbehaviour-authority research. Its
+schema publishes each run as two observer views of the same traffic plus the answers:
 
-[`scenarios/`](scenarios/) holds about 50 ready-made scenarios, covering:
-- traffic: Manhattan and Portland, rush hour and peak load, pedestrians, highway congestion;
-- radio: DSRC, LTE-V2X and NR-V2X comparisons;
-- the SCMS: the credential lifecycle on the real calendar, revocation latency, pseudonym strategies, attacks, threshold authorities, post-quantum signatures and the European CCMS.
+- **local**: what each vehicle's on-board unit sees (received messages, checks that fired,
+  reports it filed);
+- **global**: what the misbehaviour authority sees (decrypted reports, decisions, CRL
+  entries);
+- **truth**: the ground truth, kept out of the observer files (who really sent what, which
+  attack, what happened next).
 
-Any scenario can run on any of the 64 cities with `--city`. City maps are © OpenStreetMap contributors (ODbL 1.0).
+Tables are Apache Parquet, splits are by run rather than by message, and every run can be
+regenerated from its scenario file and seed. The full schema is in
+[`docs/dataset/schema.md`](docs/dataset/schema.md).
 
-A scenario is one YAML file holding the world, traffic, radio, network, messages, security, nodes, attackers, metrics and seed. Every field is validated when it loads, and a combination in which a setting would have no effect is refused with a plain message. [`configuration-reference.md`](docs/guides/configuration-reference.md) lists every setting with its default, range and source; [`config-inventory-scms.md`](docs/guides/config-inventory-scms.md) covers the SCMS settings in depth.
+> [!NOTE]
+> The first release is in preparation and its schema is a draft that may change. The
+> dataset is free for anyone to use, share and adapt under
+> [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); please cite it.
 
-## How it works
+## Paper and citation
 
-One discrete-event kernel ([`v2xw-core`](crates/v2xw-core/)) holds every future event in a single queue ordered by (time, priority, sequence) and jumps from one event to the next. Time is counted in nanoseconds, and the engine never reads the wall clock.
+A paper describing the simulator is in preparation; the link and the entry below will be
+filled in when it is available.
 
-- **Traffic** is one recurring event that moves every vehicle and pedestrian every 100 ms.
-- **Radio events** happen at their exact microsecond times in between. Each device generates and signs its messages, waits for the channel and transmits, and every receiver decides whether it decoded the frame.
-- **The SCMS backend** ([`v2xw-proto`](crates/v2xw-proto/)) runs on its own event kernel, advanced in step with the vehicles. Its messages travel over the modelled cellular and backhaul links.
-- **An actor is a body that moves; a node is a radio device.** Nodes only know what their GPS and their received messages tell them. Metrics compare that belief with the ground truth.
-- **Every random number** comes from a stream keyed by (seed, purpose, entity), so results do not depend on thread count or order. Parallel work inside an event is merged back in ID order.
-- **Every record** passes through one path that feeds both the recording and the metric providers, so metrics come only from recorded events.
+```bibtex
+@misc{zaidan_v2xworld_paper,
+  title         = {TODO: paper title},
+  author        = {Zaidan, Ahmed},
+  year          = {TODO},
+  eprint        = {XXXX.XXXXX},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/XXXX.XXXXX}
+}
+```
 
-The full architecture is in [`02-architecture.md`](docs/design/02-architecture.md), and the decisions behind it are in [`docs/adr/`](docs/adr/).
+To cite the software, use [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this repository"
+button reads it) or:
 
-## Validation
-
-- **Foundations:** a two-vehicle run in which every metric was computed by hand ([`foundations.md`](docs/validation/foundations.md)).
-- **Network and traffic suites:** each layer is held to its reference and each traffic model to its paper and field data, and every check is proved able to fail ([`v2xw-netval`](crates/v2xw-netval/), [`v2xw-trafficval`](crates/v2xw-trafficval/)).
-- **Cross-validation:** traffic against SUMO on the same networks, and radio against Veins, OpenCV2X, Artery and published curves ([`cross-validation.md`](docs/validation/cross-validation.md), [`radio-fidelity.md`](docs/validation/radio-fidelity.md)).
-- **Sensitivity:** a sweep of every setting, plus an expectation table of more than 150 rows, each with its source, that checks settings move metrics the way theory says ([`sensitivity-expectations.md`](docs/validation/sensitivity-expectations.md)).
-- **Security:**
-  - official IEEE 1609.2a, CAMP and NIST test vectors;
-  - an independent Python oracle written without reading the Rust ([`tools/oracle/`](tools/oracle/));
-  - the J2735 SPaT and MAP encoders, byte-checked against an ASN.1 compiler built from the public modules;
-  - cross-checks against the real trust lists and certificate chains that SCMS Manager publishes ([`vectors-provenance.md`](docs/design/scms-real/vectors-provenance.md)).
-- **Real-world SCMS cross-check:** each SCMS rule is graded against the deployment ([`04-validation-report.md`](docs/design/scms-real/04-validation-report.md), [`06-validation-summary.md`](docs/design/scms-real/06-validation-summary.md)).
-- **Determinism:** the same scenario and seed give byte-identical runs on 1 and 8 threads.
-
-All reports are indexed in [`docs/validation/README.md`](docs/validation/README.md).
+```bibtex
+@software{zaidan_v2xworld,
+  title   = {{V2X World}},
+  author  = {Zaidan, Ahmed},
+  version = {0.1.0},
+  year    = {2026},
+  license = {Apache-2.0},
+  url     = {https://github.com/ak3zaidan/SCMS-Simulator}
+}
+```
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| [`crates/v2xw-core`](crates/v2xw-core/) | Event kernel: clock, event queue, keyed RNG streams, registry, manifest |
-| [`crates/v2xw-engine`](crates/v2xw-engine/) | Scenario schema and loader, the main loop, wiring, the SCMS bridge, MA policies, sensitivity tools |
-| [`crates/v2xw-world`](crates/v2xw-world/) | Map model, OpenStreetMap and SUMO importers, procedural grids, spatial indices |
-| [`crates/v2xw-mobility`](crates/v2xw-mobility/) | Traffic: car-following, lane changing, junctions, signals, pedestrians, GNSS, meso tier |
-| [`crates/v2xw-demand`](crates/v2xw-demand/), [`v2xw-demand-cli`](crates/v2xw-demand-cli/) | Demand and route choice: OD matrices, traffic assignment, routes from counts, GTFS |
-| [`crates/v2xw-radio`](crates/v2xw-radio/) | Propagation, fading, shadowing, PHY, MAC, congestion control, sidelink, cellular |
-| [`crates/v2xw-net`](crates/v2xw-net/) | WSMP, GeoNetworking and BTP, fragmentation, byte accounting |
-| [`crates/v2xw-msg`](crates/v2xw-msg/) | ASN.1 encoders (J2735, ETSI, IEEE 1609.2, 1609.2.1 and 1609.3), message generators and size models |
-| [`crates/v2xw-sec`](crates/v2xw-sec/) | IEEE 1609.2 security: certificates, chains, ECIES, CCM, butterfly keys, linkage, CRL and CTL, cost tables |
-| [`crates/v2xw-node`](crates/v2xw-node/) | Device runtimes for OBUs, RSUs and pedestrian devices: queues, signer and verifier, stores, safety applications, P2PCD |
-| [`crates/v2xw-proto`](crates/v2xw-proto/) | Protocol host: the SCMS and CCMS entities, flows, governance, deployment, sites and capacity, threshold authorities |
-| [`crates/v2xw-threat`](crates/v2xw-threat/) | Attackers, jammers, misbehaviour detectors, SM-MBR reports, the misbehaviour authority and its policies, privacy observer |
-| [`crates/v2xw-metrics`](crates/v2xw-metrics/) | Metric providers and their definitions |
-| [`crates/v2xw-record`](crates/v2xw-record/) | Recording (MCAP), Parquet and dataset exporters |
-| [`crates/v2xw-energy`](crates/v2xw-energy/) | Emission, fuel and EV energy models |
-| [`crates/v2xw-experiment`](crates/v2xw-experiment/) | Parameter sweeps, replications and aggregation |
-| [`crates/v2xw-interop`](crates/v2xw-interop/) | SUMO TraCI co-simulation, route import and export, cross-validation |
-| [`crates/v2xw-server`](crates/v2xw-server/) | JSON-RPC control and the WebSocket stream the Studio uses ([`vwp-v1.md`](docs/protocol/vwp-v1.md)) |
-| [`crates/v2xw-copilot`](crates/v2xw-copilot/) | The built-in agent and its evaluation suite |
-| [`crates/v2xw-cli`](crates/v2xw-cli/) | The `v2xw` and `v2xw-server` binaries |
-| [`crates/v2xw-netval`](crates/v2xw-netval/), [`v2xw-trafficval`](crates/v2xw-trafficval/) | Network and traffic validation suites |
-| [`crates/v2xw-py`](crates/v2xw-py/), [`v2xw-wasm`](crates/v2xw-wasm/) | Python bindings and the WebAssembly replay reader |
-| [`ui/`](ui/) | pnpm workspace: [`apps/studio`](ui/apps/studio/) (the Studio), [`packages/viewer`](ui/packages/viewer/) (3D), [`packages/protocol`](ui/packages/protocol/), [`packages/mock-server`](ui/packages/mock-server/) |
-| [`python/`](python/) | The `v2xw` Python package, its examples and tests |
-| [`scenarios/`](scenarios/) | Ready-made scenarios |
-| [`worlds/`](worlds/) | The city library and imported map caches |
-| [`crates/v2xw-node/profiles/hardware/`](crates/v2xw-node/profiles/hardware/) | OBU, RSU, pedestrian-device and backend hardware profiles, each number cited |
-| [`examples/`](examples/), [`plugins/`](plugins/) | Worked examples of extending the engine with your own models |
-| [`tools/oracle/`](tools/oracle/) | The independent Python oracle for the security code |
-| [`third_party/`](third_party/) | The standards' ASN.1 modules, with provenance |
-| [`docs/`](docs/) | Design, guides, validation reports, model cards, decision records |
-| [`legacy/`](legacy/) | The original Python reference, kept for its conformance vectors |
+| [`crates/`](crates/) | The Rust workspace: the event kernel, the model crates, the CLI and server, the Python and WebAssembly bindings ([`docs/crates.md`](docs/crates.md)) |
+| [`ui/`](ui/) | The TypeScript workspace: the Studio, the protocol client, the Three.js viewer, a mock server |
+| [`python/`](python/) | The `v2xw` Python package, built with maturin from `crates/v2xw-py` |
+| [`scenarios/`](scenarios/) | Ready-made and study scenarios (YAML, schema `v2xw/scenario/1`) |
+| [`worlds/`](worlds/) | The city library, extract download scripts, SUMO networks and terrain |
+| [`examples/`](examples/) | Worked plug-ins, one per extension interface |
+| [`tests/`](tests/) | The conformance kit and committed fixtures |
+| [`tools/`](tools/) | Validation and conformance tools, including an independent Python oracle for the security code |
+| [`third_party/`](third_party/) | Committed ASN.1 modules with their licences and provenance |
+| [`docs/`](docs/) | The documentation sources ([`docs/README.md`](docs/README.md)) |
 
-## Development
+## Contributing
 
-The [`justfile`](justfile) holds the common tasks:
+Bug reports and questions are welcome on the
+[issue tracker](https://github.com/ak3zaidan/SCMS-Simulator/issues). For a larger change,
+open an issue first to agree the approach. Before sending a pull request, run `just ci`
+(formatting, clippy with warnings denied, and the test suite, as CI does). The codebase
+keeps a few rules: results must stay deterministic (keyed random streams, ordered
+collections, no wall clock), every constant cites its source or is labelled an assumption,
+and every new setting is a validated scenario field with a menu, labels and units in the
+Studio. [`docs/testing.md`](docs/testing.md) and [`docs/extending.md`](docs/extending.md)
+explain the tests and the extension points, and the
+[contributing guide](https://ak3zaidan.github.io/SCMS-Simulator/dev/contributing/) has the
+details.
 
-```bash
-just build           # cargo build --workspace
-just test            # cargo test --workspace
-just lint            # clippy and formatting checks
-just studio          # the Studio dev server
-just ui-test         # Studio unit and browser tests
-just validate <scenario>
-just validation-report
-just cross-validate
-just --list          # every recipe
-```
+## Licence
 
-Rules the codebase keeps:
-- **Determinism:** keyed RNG streams only, ordered collections only, no wall clock, and results that must not change with thread count.
-- **Citations:** every constant cites its source or is labelled as an assumption ([`constants.md`](docs/design/scms-real/constants.md) for the SCMS).
-- **Failing checks:** every test is shown to fail when its fault is injected.
-- **Settings:** a new option is a validated, published scenario field that actually changes the run, and it gets a menu, labels and units in the Studio.
-- **Goldens:** the default path's recorded digests change only through an explicit re-bless that names its cause.
+The source code is licensed under the [Apache License 2.0](LICENSE). The
+[V2X-World dataset](https://huggingface.co/datasets/akzaidan/V2X-World) is licensed under
+[Creative Commons Attribution 4.0 (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/):
+anyone may use, share and adapt it, for any purpose, with credit. Third-party material in
+the repository keeps its own terms:
 
-## Documentation
+| Material | Where | Terms |
+|---|---|---|
+| ETSI ITS ASN.1 modules (CDD, CAM, DENM, VAM, CPM, TS 103 097) | [`third_party/asn1/etsi/`](third_party/asn1/etsi/PROVENANCE.md) | BSD-3-Clause, © ETSI; a `LICENSE.txt` sits beside each module set |
+| IEEE 1609.2, 1609.2.1 and 1609.3 ASN.1 modules (with the ISO 17419 identifiers module) | [`third_party/asn1/etsi/`](third_party/asn1/etsi/PROVENANCE.md), [`third_party/asn1/ieee1609.3/`](third_party/asn1/ieee1609.3/PROVENANCE.md), `tools/oracle/asn1/` | IEEE copyright, taken from the ETSI forge and the Certification Operating Council mirrors. No licence is stated upstream; they are committed as the public interoperability definitions, and anyone redistributing them should confirm the terms with IEEE |
+| OpenStreetMap map fixture | [`tests/fixtures/midtown-6block.osm.xml`](tests/fixtures/midtown-6block.osm.xml) | © OpenStreetMap contributors, [ODbL 1.0](https://www.openstreetmap.org/copyright) |
+| City extracts | `worlds/cache/`, downloaded by [`worlds/fetch.sh`](worlds/fetch.sh), not committed | © OpenStreetMap contributors, [ODbL 1.0](https://www.openstreetmap.org/copyright) |
+| LuST scenario excerpts | [`worlds/sumo/`](worlds/sumo/lust-veremi-sub.PROVENANCE.md) (`lust-veremi-sub.net.xml`, `lust-sample.rou.xml`) | MIT, © 2016 Lara Codeca, VehicularLab; the network also carries the OpenStreetMap ODbL attribution |
+| Terrain cut for Portland | [`worlds/dem/portland-downtown.asc`](worlds/dem/portland-downtown.md) | From the AWS Terrain Tiles (SRTM or USGS 3DEP): "terrain data courtesy of the U.S. Geological Survey" |
+| Calibration statistics | [`data/calibration/`](data/calibration/) | Derived statistics only, fitted on public USDOT ITS connected-vehicle pilot data (data.transportation.gov); each file names its source queries |
+| SCMS Manager published trust lists and certificates | [`third_party/scms-artefacts/`](third_party/scms-artefacts/PROVENANCE.md) (provenance only; the files are not committed) | © SCMS Manager LLC, all rights reserved; fetched for tests only, by `tools/scms-artefacts/fetch.py` |
 
-| Where | What |
-|---|---|
-| [`docs/design/`](docs/design/) | Architecture, models, protocols, measurement and the [build status](docs/design/BUILD-STATUS.md) |
-| [`docs/design/scms-real/`](docs/design/scms-real/) | The SCMS realism work (see below) |
-| [`docs/guides/`](docs/guides/) | [Configuration reference](docs/guides/configuration-reference.md), parameter inventories ([traffic](docs/guides/config-inventory-traffic.md), [network](docs/guides/config-inventory-network.md), [SCMS](docs/guides/config-inventory-scms.md)), [comparing runs](docs/guides/compare-runs.md), [signature schemes](docs/guides/signature-schemes.md) |
-| [`docs/validation/`](docs/validation/) | Every validation, sensitivity and cross-validation report |
-| [`docs/models/`](docs/models/) | Model cards for the driving models and driver heterogeneity |
-| [`docs/benchmark/`](docs/benchmark/), [`docs/calibration/`](docs/calibration/) | The SCMS benchmark and the traffic calibration data |
-| [`docs/protocol/`](docs/protocol/) | The engine-to-Studio wire protocol and its vectors |
-| [`docs/redteam/`](docs/redteam/) | The PKI privacy review |
-| [`docs/adr/`](docs/adr/) | Architecture decision records |
-| [`docs/site/`](docs/site/) | Generator for a browsable site built from the model cards and schema |
+> [!NOTE]
+> The SAE J2735 ASN.1 modules are not redistributed: their embedded licence forbids it.
+> The J2735 codecs in [`crates/v2xw-msg`](crates/v2xw-msg/) are written by hand and checked
+> against an ASN.1 compiler run on a copy you supply yourself (`third_party/asn1/j2735/` is
+> git-ignored).
 
-The SCMS documents, in reading order:
+Rust crates and npm packages fetched at build time keep their own licences
+([`Cargo.lock`](Cargo.lock), [`ui/pnpm-lock.yaml`](ui/pnpm-lock.yaml)). Eclipse SUMO is
+optional, not bundled, and runs as a separate process.
 
-| Document | What it covers |
-|---|---|
-| [`00-gap-analysis-and-plan.md`](docs/design/scms-real/00-gap-analysis-and-plan.md) | Where the engine differed from the real US SCMS, and the build plan |
-| [`01-deployment-and-governance.md`](docs/design/scms-real/01-deployment-and-governance.md) | The US SCMS today: providers, governance, trust lists |
-| [`02-cryptography-and-formats.md`](docs/design/scms-real/02-cryptography-and-formats.md) | Certificates, keys, butterfly expansion, linkage values, CRL formats |
-| [`03-protocols-and-operations.md`](docs/design/scms-real/03-protocols-and-operations.md) | IEEE 1609.2.1 flows and the real operating parameters |
-| [`04-validation-report.md`](docs/design/scms-real/04-validation-report.md) | The real-world cross-check, rule by rule |
-| [`05-scale-and-regression.md`](docs/design/scms-real/05-scale-and-regression.md) | Scale, regression and test time |
-| [`06-conformance-run.md`](docs/design/scms-real/06-conformance-run.md), [`06-validation-summary.md`](docs/design/scms-real/06-validation-summary.md) | The end-to-end conformance run, and how close the engine is to the deployment |
-| [`07-config-testing-report.md`](docs/design/scms-real/07-config-testing-report.md) | Every SCMS setting run and checked |
-| [`08-settings-ux-and-gaps.md`](docs/design/scms-real/08-settings-ux-and-gaps.md) | A menu for every SCMS setting; server sites, capacity, MA policies and deeper hierarchies |
-| [`09-completion-plan.md`](docs/design/scms-real/09-completion-plan.md), [`10-completion-specs.md`](docs/design/scms-real/10-completion-specs.md) | The completion rounds and their specs |
-| [`11-j2945-1-conformance.md`](docs/design/scms-real/11-j2945-1-conformance.md) | The SAE J2945/1 conformance check and its fixes |
-| [`constants.md`](docs/design/scms-real/constants.md), [`vectors-provenance.md`](docs/design/scms-real/vectors-provenance.md) | Every SCMS constant with its source, and where each test vector came from |
+## Acknowledgements
 
-## Licensing
-
-Code is Apache-2.0 ([`LICENSE`](LICENSE)), and generated datasets are CC-BY-4.0. GPL tools (Veins, Artery, F2MD, ns-3) are read as references and re-implemented, never linked. SUMO is optional and runs out of process. City maps are © OpenStreetMap contributors under ODbL 1.0. Published SCMS Manager artefacts are fetched for tests, not redistributed. To cite the simulator, see [`CITATION.cff`](CITATION.cff).
+The engine implements, or models, published specifications: IEEE 1609.2, 1609.2.1, 1609.3
+and 1609.4; IEEE 802.11p; SAE J2735 and J2945/1; the ETSI ITS specifications for CAM, DENM,
+VAM, CPM, GeoNetworking, decentralised congestion control, security (TS 103 097,
+TS 102 941) and misbehaviour detection (TS 103 759); 3GPP TR 37.885; NTCIP 1211 and
+CTI 4501. It uses map data from OpenStreetMap contributors, public connected-vehicle pilot
+data from the US Department of Transportation, and the LuST scenario, and it is
+cross-checked against SUMO and published results. Naming a standard, an organisation or a
+project here does not imply that it endorses this simulator.

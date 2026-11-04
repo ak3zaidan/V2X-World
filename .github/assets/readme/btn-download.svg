@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="150" height="46" viewBox="0 0 150 46" role="img" aria-label="Download">
+  <title>Download</title>
+  <rect x="0.75" y="0.75" width="148.5" height="44.5" rx="9" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5"/>
+  <g transform="translate(22.00 13.00) scale(0.8333)" fill="none" stroke="#3f51b5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4 16.5v2A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-2"/></g>
+  <text x="51.00" y="28.60" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#1f2328">Download</text>
+</svg>
