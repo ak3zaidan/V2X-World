@@ -288,8 +288,6 @@
       
         
       
-        
-      
     
     
     
@@ -852,8 +850,6 @@
       
         
       
-        
-      
     
     
     
@@ -1156,33 +1152,6 @@
     
   
   Datasets and exports
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-                
-              
-                
-                  
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../dataset/schema/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-  Dataset schema
 
     
   </span>
@@ -5115,7 +5084,7 @@
 <td>number</td>
 <td>us</td>
 <td></td>
-<td>(0, 1000000]<br>recommended Unset (every signature at the CRATON2's published &lt;9 ms bound; no typical value is published); 613 us (software ECDSA P-256 on a Cortex-A53) to 9,000 us.</td>
+<td>(0, 1000000]<br>recommended Unset (every signature at the CRATON2's published &lt;9 ms bound; no typical value is published); 613 us (software ECDSA P-256 on a Cortex-A53: <code>openssl speed</code> on a Raspberry Pi 3B, community benchmark) to 9,000 us.</td>
 <td>advanced</td>
 <td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
 <td>The lower edge of the HSM signing time, microseconds, for a profile that publishes only an upper bound (the CRATON2's "&lt;9 ms"). Set, each signature takes a time drawn uniformly between this edge and the bound from the node's own random stream; unset, every signature takes the bound itself (the worst case). No typical value is published for the CRATON2/SECTON eHSM (searched 2026-10-13: Unex sheets, Autotalks pages, CMVP #3556/#4395 policies), so the default stays the bound. The fastest a hardware security module signs a message, when its maker only publishes a worst case; each signature then takes a random time between this and the worst case instead of always the worst case.</td>

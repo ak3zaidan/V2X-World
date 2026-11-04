@@ -290,8 +290,6 @@
       
         
       
-        
-      
     
     
     
@@ -827,8 +825,6 @@
   
     
     
-      
-        
       
         
       
@@ -3253,33 +3249,6 @@
     
   
   Datasets and exports
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-                
-              
-                
-                  
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../dataset/schema/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-  Dataset schema
 
     
   </span>
@@ -8914,8 +8883,6 @@
       
         
       
-        
-      
     
     
     
@@ -9298,7 +9265,7 @@
 <td>ratio</td>
 <td>ratio: Σ Σ_i w_i p_i / fragmented SDUs attempted</td>
 <td>gt</td>
-<td>The content loss predicts from each fragment's PHY success probability, weighted by its share of the payload</td>
+<td>The content loss the independent-loss formula predicts from each fragment's PHY success probability, weighted by its share of the payload</td>
 </tr>
 <tr>
 <td><a href="#m-frag-fragment-loss"><code>frag_fragment_loss</code></a></td>
@@ -9326,7 +9293,7 @@
 <td>ratio</td>
 <td>ratio: Σ (1 − Π (1 − p_i)) / fragmented SDUs attempted</td>
 <td>gt</td>
-<td>The SDU loss predicts from each fragment's PHY success probability at that receiver, if fragments were lost independently</td>
+<td>The SDU loss the independent-loss formula predicts from each fragment's PHY success probability at that receiver, if fragments were lost independently</td>
 </tr>
 <tr>
 <td><a href="#m-full-cert-share"><code>full_cert_share</code></a></td>
@@ -9651,6 +9618,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): traffic and safety metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -9692,6 +9663,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): the frame's layers and their sizes (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -9732,6 +9707,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -9905,6 +9884,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): bytes per accounting bucket (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -9945,6 +9928,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): bytes per accounting bucket (code)</td>
 </tr>
 </tbody>
 </table>
@@ -9987,6 +9974,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): bytes per accounting bucket (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10027,6 +10018,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): invariant I-N1: every byte in exactly one bucket (code)</td>
 </tr>
 </tbody>
 </table>
@@ -10069,6 +10064,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): invariant I-N1: every byte in exactly one accounting bucket (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10109,6 +10108,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): bytes per accounting bucket (code)</td>
 </tr>
 </tbody>
 </table>
@@ -10151,6 +10154,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): bytes per accounting bucket (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10191,6 +10198,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
 </tr>
 </tbody>
 </table>
@@ -10297,6 +10308,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): the frame's layers and their sizes (code)</td>
 </tr>
 </tbody>
 </table>
@@ -10449,6 +10464,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10489,6 +10508,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): revocation and residual-harm metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -10531,6 +10554,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): revocation and residual-harm metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10570,6 +10597,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): awareness metric nar (code)</td>
 </tr>
 </tbody>
 </table>
@@ -10657,6 +10688,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10696,6 +10731,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -10738,6 +10777,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10779,6 +10822,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10819,6 +10866,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -10880,6 +10931,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -10920,6 +10975,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -10982,6 +11041,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11023,6 +11086,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11063,6 +11130,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11170,6 +11241,10 @@
 <td>30</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): e2e_latency (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>lower (standard basis)</td>
 </tr>
@@ -11230,6 +11305,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11270,6 +11349,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11357,6 +11440,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): fragment loss amplification (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11364,7 +11451,7 @@
 <li>content a decoded piece carried of an SDU never reassembled</li>
 </ul>
 <h3 id="m-frag-content-loss-predicted"><code>frag_content_loss_predicted</code><a class="headerlink" href="#m-frag-content-loss-predicted" title="Permanent link">&para;</a></h3>
-<p>The content loss predicts from each fragment's PHY success probability, weighted by its share of the payload.</p>
+<p>The content loss the independent-loss formula predicts from each fragment's PHY success probability, weighted by its share of the payload.</p>
 <table>
 <thead>
 <tr>
@@ -11396,6 +11483,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): fragment loss amplification (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11437,6 +11528,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): fragment loss amplification (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11476,6 +11571,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): fragment loss amplification (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11517,6 +11616,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): fragment loss amplification (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11524,7 +11627,7 @@
 <li>the per-fragment loss's dependence on distance and size</li>
 </ul>
 <h3 id="m-frag-sdu-loss-predicted"><code>frag_sdu_loss_predicted</code><a class="headerlink" href="#m-frag-sdu-loss-predicted" title="Permanent link">&para;</a></h3>
-<p>The SDU loss predicts from each fragment's PHY success probability at that receiver, if fragments were lost independently.</p>
+<p>The SDU loss the independent-loss formula predicts from each fragment's PHY success probability at that receiver, if fragments were lost independently.</p>
 <table>
 <thead>
 <tr>
@@ -11556,6 +11659,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): fragment loss amplification (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11596,6 +11703,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11638,6 +11749,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11678,6 +11793,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11720,6 +11839,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): traffic and safety metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11760,6 +11883,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): traffic and safety metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11802,6 +11929,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): e2e_latency (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11842,6 +11973,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): e2e_latency (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11884,6 +12019,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): e2e_latency (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -11923,6 +12062,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): the frame's layers and their sizes (code)</td>
 </tr>
 </tbody>
 </table>
@@ -11964,6 +12107,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
 </tr>
 </tbody>
 </table>
@@ -12290,6 +12437,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): the frame's layers and their sizes (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -12331,6 +12482,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -12371,6 +12526,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -12479,6 +12638,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -12519,6 +12682,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): radio and network metric catalog (code)</td>
 </tr>
 </tbody>
 </table>
@@ -12605,6 +12772,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): traffic and safety metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -12733,6 +12904,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): traffic and safety metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -12931,6 +13106,10 @@
 <td>1</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): revocation latency decomposition and its stage ids (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>lower (engineering basis)</td>
 </tr>
@@ -12991,6 +13170,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): the frame's layers and their sizes (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -13032,6 +13215,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): traffic and safety metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -13071,6 +13258,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -13112,6 +13303,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): detection metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -13266,6 +13461,10 @@
 <td>30</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>lower (engineering basis)</td>
 </tr>
@@ -13325,6 +13524,10 @@
 <td>Min samples</td>
 <td>30</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -13365,6 +13568,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -13426,6 +13633,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -13466,6 +13677,10 @@
 <tr>
 <td>Min samples</td>
 <td>30</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -13571,6 +13786,10 @@
 <td>1</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): privacy metrics: pseudonym change rate and linkability (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>higher (engineering basis)</td>
 </tr>
@@ -13629,6 +13848,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): privacy metrics: pseudonym change rate and linkability (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -13691,6 +13914,10 @@
 <td>1</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): privacy metrics: pseudonym change rate and linkability (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>lower (engineering basis)</td>
 </tr>
@@ -13749,6 +13976,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): privacy metrics: pseudonym change rate and linkability (code)</td>
 </tr>
 </tbody>
 </table>
@@ -13833,6 +14064,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): application outcomes: false and missed warnings must be measured (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -13872,6 +14107,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): application outcomes: false and missed warnings must be measured (code)</td>
 </tr>
 </tbody>
 </table>
@@ -13913,6 +14152,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): application outcomes: false and missed warnings must be measured (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -13952,6 +14195,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): application outcomes: false and missed warnings must be measured (code)</td>
 </tr>
 </tbody>
 </table>
@@ -15447,6 +15694,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -15486,6 +15737,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -15527,6 +15782,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -15566,6 +15825,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -15628,6 +15891,10 @@
 <td>1</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>lower (engineering basis)</td>
 </tr>
@@ -15687,6 +15954,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -15726,6 +15997,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -15787,6 +16062,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -15826,6 +16105,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -15887,6 +16170,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -15926,6 +16213,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -15988,6 +16279,10 @@
 <td>1</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>lower (engineering basis)</td>
 </tr>
@@ -16046,6 +16341,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -16107,6 +16406,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -16146,6 +16449,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -16207,6 +16514,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -16246,6 +16557,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -16287,6 +16602,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -16326,6 +16645,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 </tbody>
 </table>
@@ -16367,6 +16690,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -16406,6 +16733,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -16467,6 +16798,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -16507,6 +16842,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -16546,6 +16885,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -16607,6 +16950,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -16646,6 +16993,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -16708,6 +17059,10 @@
 <td>1</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>higher (engineering basis)</td>
 </tr>
@@ -16768,6 +17123,10 @@
 <td>1</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
+</tr>
+<tr>
 <td>Better</td>
 <td>lower (engineering basis)</td>
 </tr>
@@ -16826,6 +17185,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): security processing metrics (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -16937,6 +17300,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): v2xw_engine::actuated (traffic.control) (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -16976,6 +17343,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): v2xw_engine::actuated (traffic.control) (code)</td>
 </tr>
 </tbody>
 </table>
@@ -17017,6 +17388,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): v2xw_engine::actuated (traffic.control) (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -17057,6 +17432,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): v2xw_engine::actuated (traffic.control) (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -17096,6 +17475,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): v2xw_engine::actuated (traffic.control) (code)</td>
 </tr>
 <tr>
 <td>Better</td>
@@ -17228,6 +17611,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): a per-message detection level and the MCC, informedness, markedness and Cohen's kappa scores, the way F2MD and VeReMi Extension results are reported (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -17267,6 +17654,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): a per-message detection level and the MCC, informedness, markedness and Cohen's kappa scores, the way F2MD and VeReMi Extension results are reported (code)</td>
 </tr>
 </tbody>
 </table>
@@ -17308,6 +17699,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): a per-message detection level and the MCC, informedness, markedness and Cohen's kappa scores, the way F2MD and VeReMi Extension results are reported (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -17347,6 +17742,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): a per-message detection level and the MCC, informedness, markedness and Cohen's kappa scores, the way F2MD and VeReMi Extension results are reported (code)</td>
 </tr>
 </tbody>
 </table>
@@ -17388,6 +17787,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): a per-message detection level and the MCC, informedness, markedness and Cohen's kappa scores, the way F2MD and VeReMi Extension results are reported (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -17427,6 +17830,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): a per-message detection level and the MCC, informedness, markedness and Cohen's kappa scores, the way F2MD and VeReMi Extension results are reported (code)</td>
 </tr>
 </tbody>
 </table>
@@ -17468,6 +17875,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): a per-message detection level and the MCC, informedness, markedness and Cohen's kappa scores, the way F2MD and VeReMi Extension results are reported (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -17507,6 +17918,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): a per-message detection level and the MCC, informedness, markedness and Cohen's kappa scores, the way F2MD and VeReMi Extension results are reported (code)</td>
 </tr>
 </tbody>
 </table>
@@ -18071,6 +18486,10 @@
 <td>1</td>
 </tr>
 <tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): runtime diagnostics (code)</td>
+</tr>
+<tr>
 <td>Diagnostic</td>
 <td>yes: machine-dependent, excluded from digests</td>
 </tr>
@@ -18115,6 +18534,10 @@
 <td>Min samples</td>
 <td>1</td>
 </tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): runtime diagnostics (code)</td>
+</tr>
 </tbody>
 </table>
 <p>Does not account for:</p>
@@ -18155,6 +18578,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): runtime diagnostics (code)</td>
 </tr>
 <tr>
 <td>Diagnostic</td>
@@ -18200,6 +18627,10 @@
 <tr>
 <td>Min samples</td>
 <td>1</td>
+</tr>
+<tr>
+<td>Source</td>
+<td>assumption (this engine's own definition, no external source): runtime diagnostics (code)</td>
 </tr>
 <tr>
 <td>Diagnostic</td>

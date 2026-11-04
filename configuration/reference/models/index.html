@@ -288,8 +288,6 @@
       
         
       
-        
-      
     
     
     
@@ -852,8 +850,6 @@
       
         
       
-        
-      
     
     
     
@@ -1156,33 +1152,6 @@
     
   
   Datasets and exports
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-                
-              
-                
-                  
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../dataset/schema/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-  Dataset schema
 
     
   </span>
@@ -8757,7 +8726,7 @@
 <td>-</td>
 <td><code>180</code></td>
 <td></td>
-<td>standard: : single-channel operation on the ITS-G5A control channel is the default</td>
+<td>standard: assumption, no external source: single-channel operation on the ITS-G5A control channel is the default</td>
 </tr>
 </tbody>
 </table>
@@ -8768,7 +8737,7 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>The jammer is on for the whole window it is asked about: it has no protocol and nothing to wait for.</li>
-<li>Its received power at a victim is computed by the engine with the same link budget a frame gets, so obstacles and shadowing bound its reach the way says they do.</li>
+<li>Its received power at a victim is computed by the engine with the same link budget a frame gets, so obstacles and shadowing bound its reach the way they bound any frame's.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -8778,12 +8747,12 @@
 <ul>
 <li>Subcarrier selectivity: a jammer here is wideband over the 10 MHz channel, so attacker/jammer/constant-pilot is not shipped (see the module docs).</li>
 <li>The jammer's own antenna pattern and its own duty-cycle-dependent power amplifier behaviour: the declared power is constant while it is on.</li>
-<li>GNSS jamming and spoofing, which are 's models and not this family's.</li>
+<li>GNSS jamming and spoofing, which are the GNSS models and not this family's.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
 <li>paper: Puñal, Aguiar and Gross, 'In VANEX There is No Such Thing as Jamming' (2012). The study's own receiver noise floor is −86 dBm; this crate keeps its own −98 dBm kTB-plus-noise-figure floor and does not mix the two.</li>
-<li>standard: (PHY jamming and flooding: constant, reactive, random duty cycle, modelled as an interferer in the SINR sums) and </li>
+<li>standard: assumption, no external source (PHY jamming and flooding: constant, reactive, random duty cycle, modelled as an interferer in the SINR sums); anchors from Puñal, Aguiar and Gross 2012</li>
 </ul>
 <h3 id="attackerjammerpulsed"><code>attacker/jammer/pulsed</code><a class="headerlink" href="#attackerjammerpulsed" title="Permanent link">&para;</a></h3>
 <p>A duty-cycle jammer: wideband noise for a fraction of a fixed period, with a per-jammer phase drawn from the Attack stream.</p>
@@ -8811,7 +8780,7 @@
 <td>ns</td>
 <td><code>100000000</code></td>
 <td></td>
-<td>todo-calibrate: names a 'random duty cycle' jammer but neither it nor prints a period; the default is one T_CBR so that the duty cycle is visible in the CBR a receiver reports (calibration pending)</td>
+<td>todo-calibrate: a 'random duty cycle' jammer is in the threat model, but no source prints a period; the default is one T_CBR so that the duty cycle is visible in the CBR a receiver reports (calibration pending)</td>
 </tr>
 <tr>
 <td><code>duty</code></td>
@@ -8838,12 +8807,12 @@
 <ul>
 <li>Subcarrier selectivity: a jammer here is wideband over the 10 MHz channel, so attacker/jammer/constant-pilot is not shipped (see the module docs).</li>
 <li>The jammer's own antenna pattern and its own duty-cycle-dependent power amplifier behaviour: the declared power is constant while it is on.</li>
-<li>GNSS jamming and spoofing, which are 's models and not this family's.</li>
+<li>GNSS jamming and spoofing, which are the GNSS models and not this family's.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
 <li>paper: Puñal, Aguiar and Gross, 'In VANEX There is No Such Thing as Jamming' (2012). The study's own receiver noise floor is −86 dBm; this crate keeps its own −98 dBm kTB-plus-noise-figure floor and does not mix the two.</li>
-<li>standard: (PHY jamming and flooding: constant, reactive, random duty cycle, modelled as an interferer in the SINR sums) and </li>
+<li>standard: assumption, no external source (PHY jamming and flooding: constant, reactive, random duty cycle, modelled as an interferer in the SINR sums); anchors from Puñal, Aguiar and Gross 2012</li>
 </ul>
 <h3 id="attackerjammerreactive"><code>attacker/jammer/reactive</code><a class="headerlink" href="#attackerjammerreactive" title="Permanent link">&para;</a></h3>
 <p>A reactive jammer: wideband noise only while energy above a trigger threshold is sensed, which is the profile whose losses are uncorrelated with SINR dips.</p>
@@ -8906,12 +8875,12 @@
 <ul>
 <li>Subcarrier selectivity: a jammer here is wideband over the 10 MHz channel, so attacker/jammer/constant-pilot is not shipped (see the module docs).</li>
 <li>The jammer's own antenna pattern and its own duty-cycle-dependent power amplifier behaviour: the declared power is constant while it is on.</li>
-<li>GNSS jamming and spoofing, which are 's models and not this family's.</li>
+<li>GNSS jamming and spoofing, which are the GNSS models and not this family's.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
 <li>paper: Puñal, Aguiar and Gross, 'In VANEX There is No Such Thing as Jamming' (2012). The study's own receiver noise floor is −86 dBm; this crate keeps its own −98 dBm kTB-plus-noise-figure floor and does not mix the two.</li>
-<li>standard: (PHY jamming and flooding: constant, reactive, random duty cycle, modelled as an interferer in the SINR sums) and </li>
+<li>standard: assumption, no external source (PHY jamming and flooding: constant, reactive, random duty cycle, modelled as an interferer in the SINR sums); anchors from Puñal, Aguiar and Gross 2012</li>
 </ul>
 <h2 id="backhaul">backhaul<a class="headerlink" href="#backhaul" title="Permanent link">&para;</a></h2>
 <h3 id="backhauldsl"><code>backhaul/dsl</code><a class="headerlink" href="#backhauldsl" title="Permanent link">&para;</a></h3>
@@ -9067,7 +9036,7 @@
 <td>ns</td>
 <td><code>402000</code></td>
 <td></td>
-<td>paper: Coll-Perales 2022 Table VI, transport network with the MEC at the gNB: 0.402 ms mean, 0.422 ms at the 99.99th percentile takes fibre and microwave from these figures (0.4-2.4 ms mean)</td>
+<td>paper: Coll-Perales 2022 Table VI, transport network with the MEC at the gNB: 0.402 ms mean, 0.422 ms at the 99.99th percentile; fibre and microwave are taken from these figures (0.4-2.4 ms mean)</td>
 </tr>
 <tr>
 <td><code>bandwidth_bps</code></td>
@@ -9081,7 +9050,7 @@
 <td>-</td>
 <td><code>10</code></td>
 <td></td>
-<td>todo-calibrate: specifies the <code>degraded</code> state as a 'backhaul latency multiplier' and gives no multiplier (calibration pending)</td>
+<td>todo-calibrate: the <code>degraded</code> state is a backhaul latency multiplier and no source gives a multiplier (calibration pending)</td>
 </tr>
 </tbody>
 </table>
@@ -9095,7 +9064,7 @@
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
-<li>No queueing, no loss, no jitter and no availability model, so the 99.99th percentile a study of an undersized link needs is not reachable here — that is exactly what says <code>backhaul/measured-tn</code> is for.</li>
+<li>No queueing, no loss, no jitter and no availability model, so the 99.99th percentile a study of an undersized link needs is not reachable here — that is what <code>backhaul/measured-tn</code> is for.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
@@ -9217,7 +9186,7 @@
 <td>m</td>
 <td><code>500.0</code></td>
 <td></td>
-<td>standard: TR 37.885 and TR 38.913, §10.1: ISD 500 m urban macro, 1,732 m highway (500 m optional); macro Tx 49 dBm below 6 GHz; BS noise figure 5 dB</td>
+<td>standard: TR 37.885 and TR 38.913: ISD 500 m urban macro, 1,732 m highway (500 m optional); macro Tx 49 dBm below 6 GHz; BS noise figure 5 dB</td>
 </tr>
 <tr>
 <td><code>no_coverage_below_dbm</code></td>
@@ -9244,11 +9213,11 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>The cell layout is a square lattice at the inter-site distance, which is the only number the sources fix; a hexagonal layout would change which cell serves a point near a boundary but not the distance distribution's scale.</li>
-<li><code>λ</code> is the sending node's own offered rate, so the queue is per node as specifies; Jackson's theorem for multi-node transit is not composed here because the chain's fixed latency already carries the measured per-hop figures.</li>
+<li><code>λ</code> is the sending node's own offered rate, so the queue is per node (an assumption of this engine); Jackson's theorem for multi-node transit is not composed here because the chain's fixed latency already carries the measured per-hop figures.</li>
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
-<li>Handover interruption, radio-link failure, and per-packet loss correlation ( "Ignores", medium row).</li>
+<li>Handover interruption, radio-link failure, and per-packet loss correlation.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
@@ -9294,11 +9263,11 @@
 </table>
 <p><strong>Equations.</strong></p>
 <ul>
-<li><em>one-way latency</em>: <code>L ~ max(0, N(mean, sigma)), with mean and sigma half the measured round trip</code> says "one way modeled as half"; halving the spread as well as the mean keeps the modelled jitter the measurement's rather than twice it. The draw is clamped at zero because a normal distribution has a left tail and a negative latency is not an answer.</li>
+<li><em>one-way latency</em>: <code>L ~ max(0, N(mean, sigma)), with mean and sigma half the measured round trip</code> One way is modelled as half the round trip; halving the spread as well as the mean keeps the modelled jitter the measurement's rather than twice it. The draw is clamped at zero because a normal distribution has a left tail and a negative latency is not an answer.</li>
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
-<li>Capacity, coverage geometry and handover ( "Ignores", abstract row).</li>
+<li>Capacity, coverage geometry and handover.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
@@ -9352,7 +9321,7 @@
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
-<li>Scheduler detail, HARQ on Uu, beam management; there is no LENA-level PHY here and ns-3 5G-LENA remains the external cross-check ( "Ignores", high row; ADR 0006).</li>
+<li>Scheduler detail, HARQ on Uu, beam management; there is no LENA-level PHY here and ns-3 5G-LENA remains the external cross-check (ADR 0006).</li>
 <li>Handover-failure recovery and gNB-side radio-link failure, which 5G-LENA does not implement either.</li>
 </ul>
 <p><strong>Sources.</strong></p>
@@ -9511,7 +9480,7 @@
 <td>1</td>
 <td><code>0.0</code></td>
 <td></td>
-<td>code: : <code>clock/drift/none</code> is drift-free by definition</td>
+<td>code: assumption (no external source): <code>clock/drift/none</code> is drift-free by definition</td>
 </tr>
 </tbody>
 </table>
@@ -9643,8 +9612,8 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>standard: (crypto modes)</li>
-<li>standard: (invariant I-S1)</li>
+<li>standard: assumption (this engine's crypto modes, no external source)</li>
+<li>standard: assumption (no external source): invariant I-S1</li>
 </ul>
 <h3 id="crypto-backendreal"><code>crypto-backend/real</code><a class="headerlink" href="#crypto-backendreal" title="Permanent link">&para;</a></h3>
 <p>Executes real cryptography: ECDSA over NIST P-256 with RFC 6979 deterministic nonces, SHA-256, and SEC 4 ECQV implicit-certificate reconstruction. Refuses the post-quantum primitives, which have descriptors and cost tables but no implementation.</p>
@@ -9696,63 +9665,63 @@
 <td>-</td>
 <td><code>0.016</code></td>
 <td>[0.0, 1.0]</td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>beta</code></td>
 <td>-</td>
 <td><code>0.0012</code></td>
 <td>[0.0, 1.0]</td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>cbr_target</code></td>
 <td>-</td>
 <td><code>0.68</code></td>
 <td>[0.0, 1.0]</td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>delta_max</code></td>
 <td>-</td>
 <td><code>0.03</code></td>
 <td>[0.0, 1.0]</td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>delta_min</code></td>
 <td>-</td>
 <td><code>0.0006</code></td>
 <td>[0.0, 1.0]</td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>g_max_plus</code></td>
 <td>-</td>
 <td><code>0.0005</code></td>
 <td>[0.0, 1.0]</td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>g_max_minus</code></td>
 <td>-</td>
 <td><code>-0.00025</code></td>
 <td>[-1.0, 0.0]</td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>t_cbr_ms</code></td>
 <td>ms</td>
 <td><code>100</code></td>
 <td></td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>update_period_ms</code></td>
 <td>ms</td>
 <td><code>200</code></td>
 <td></td>
-<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</td>
+<td>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</td>
 </tr>
 <tr>
 <td><code>t_on_max_ms</code></td>
@@ -9806,7 +9775,7 @@
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>CBR is measured by the access layer per and handed in once per T_CBR.</li>
+<li>CBR is measured by the access layer (ETSI EN 302 571 V2.1.1 §4.2.10.1) and handed in once per T_CBR.</li>
 <li>T_on is known per queued packet from Phy::air_time.</li>
 <li>δ starts at δ_max: an unloaded channel imposes nothing, and the loop reduces δ as the measured load rises.</li>
 </ul>
@@ -9818,7 +9787,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B,</li>
+<li>standard: ETSI TS 102 687 V1.2.1 §5.2, §5.4 Table 3 and Annex B</li>
 <li>standard: ETSI EN 302 571 V2.1.1 §4.2.10.2 Eq. 2-5 and TS 103 175 V1.1.1 §7.2 Eq. 1, REQ009/REQ022/REQ023. CTH 0.62 is a different tunable from the adaptive approach's 0.68 target; the two are independent.</li>
 </ul>
 <h3 id="dccetsireactive-ts102687"><code>dcc/etsi/reactive-ts102687</code><a class="headerlink" href="#dccetsireactive-ts102687" title="Permanent link">&para;</a></h3>
@@ -10281,77 +10250,77 @@
 <td>m</td>
 <td><code>12857.0</code></td>
 <td>[0.0, 1000000.0]</td>
-<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12) P9. the range in force: max_plausible_range_m when set, else art_highway_m; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in highway: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 5604 m, propagation/tr37885 (high) 12857 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
+<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12), derived from this engine's link budget per environment instead of F2MD's 420 m (Veins, 20 mW). the range in force: max_plausible_range_m when set, else art_highway_m; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in highway: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 5604 m, propagation/tr37885 (high) 12857 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
 </tr>
 <tr>
 <td><code>environment</code></td>
 <td>-</td>
 <td><code>highway</code></td>
 <td>['highway', 'rural', 'suburban', 'urban']</td>
-<td>code: P9 (ART per environment)</td>
+<td>code: assumption (this engine's own definition, no external source): the plausible-range threshold (ART) per environment, from this engine's link budget instead of F2MD's 420 m (Veins, 20 mW)</td>
 </tr>
 <tr>
 <td><code>art_highway_m</code></td>
 <td>m</td>
 <td><code>12857.0</code></td>
 <td>[0.0, 1000000.0]</td>
-<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12) P9. the highway acceptance range; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in highway: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 5604 m, propagation/tr37885 (high) 12857 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
+<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12), derived from this engine's link budget per environment instead of F2MD's 420 m (Veins, 20 mW). the highway acceptance range; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in highway: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 5604 m, propagation/tr37885 (high) 12857 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
 </tr>
 <tr>
 <td><code>art_rural_m</code></td>
 <td>m</td>
 <td><code>12857.0</code></td>
 <td>[0.0, 1000000.0]</td>
-<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12) P9. the rural acceptance range; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in rural: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 5604 m, propagation/tr37885 (high) 12857 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
+<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12), derived from this engine's link budget per environment instead of F2MD's 420 m (Veins, 20 mW). the rural acceptance range; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in rural: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 5604 m, propagation/tr37885 (high) 12857 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
 </tr>
 <tr>
 <td><code>art_suburban_m</code></td>
 <td>m</td>
 <td><code>41955.0</code></td>
 <td>[0.0, 1000000.0]</td>
-<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12) P9. the suburban acceptance range; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in suburban: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 6479 m, propagation/tr37885 (high) 41955 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
+<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12), derived from this engine's link budget per environment instead of F2MD's 420 m (Veins, 20 mW). the suburban acceptance range; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in suburban: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 6479 m, propagation/tr37885 (high) 41955 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
 </tr>
 <tr>
 <td><code>art_urban_m</code></td>
 <td>m</td>
 <td><code>41955.0</code></td>
 <td>[0.0, 1000000.0]</td>
-<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12) P9. the urban acceptance range; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in urban: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 6479 m, propagation/tr37885 (high) 41955 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
+<td>code: crates/v2xw-radio link budget (prop::friis_loss_db, LogDistancePreset::for_environment, prop::tr37885_*_los_db; phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12), derived from this engine's link budget per environment instead of F2MD's 420 m (Veins, 20 mW). the urban acceptance range; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in urban: propagation/free-space (abstract) 4537 m, propagation/log-distance-shadowing (medium) 6479 m, propagation/tr37885 (high) 41955 m. Replaces F2MD's 420 m (Veins at 20 mW).</td>
 </tr>
 <tr>
 <td><code>max_plausible_speed_mps</code></td>
 <td>m/s</td>
 <td><code>40.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>max_plausible_accel_mps2</code></td>
 <td>m/s^2</td>
 <td><code>6.0</code></td>
 <td></td>
-<td>code: vehicle classes (v2xw_mobility::classes, SUMO vType defaults): the largest accel_mps2 (6.0) and emergency_decel_mps2 (10.0) over the classes</td>
+<td>code: assumption (this engine's own definition, no external source): vehicle classes (v2xw_mobility::classes, SUMO vType defaults): the largest accel_mps2 (6.0) and emergency_decel_mps2 (10.0) over the classes</td>
 </tr>
 <tr>
 <td><code>max_plausible_decel_mps2</code></td>
 <td>m/s^2</td>
 <td><code>10.0</code></td>
 <td></td>
-<td>code: vehicle classes (v2xw_mobility::classes, SUMO vType defaults): the largest accel_mps2 (6.0) and emergency_decel_mps2 (10.0) over the classes</td>
+<td>code: assumption (this engine's own definition, no external source): vehicle classes (v2xw_mobility::classes, SUMO vType defaults): the largest accel_mps2 (6.0) and emergency_decel_mps2 (10.0) over the classes</td>
 </tr>
 <tr>
 <td><code>max_confidence_m</code></td>
 <td>m</td>
 <td><code>10.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>max_payload_bytes</code></td>
 <td>B</td>
 <td><code>2304</code></td>
 <td></td>
-<td>code: (maximum MSDU 2 304 B)</td>
+<td>standard: IEEE 802.11 maximum MSDU, 2 304 B</td>
 </tr>
 <tr>
 <td><code>beacon_profile</code></td>
@@ -10386,98 +10355,98 @@
 <td>s</td>
 <td><code>1.8599999999999999</code></td>
 <td></td>
-<td>code: P1 (beacon timing from the message profile). MAX_TIME_DELTA_INTERVALS (3.1, F2MD MAX_TIME_DELTA at 1 Hz) × beacon_max_interval_s; set explicitly to override</td>
+<td>code: beacon timing from the message profile: BSM 100 ms (SAE J2945/1), CAM T_GenCamMin 100 ms (ETSI EN 302 637-2). MAX_TIME_DELTA_INTERVALS (3.1, F2MD MAX_TIME_DELTA at 1 Hz) × beacon_max_interval_s; set explicitly to override</td>
 </tr>
 <tr>
 <td><code>mgt_rng_m</code></td>
 <td>m</td>
 <td><code>4.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>mgt_rng_up_mps</code></td>
 <td>m/s per s</td>
 <td><code>2.1</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>mgt_rng_down_mps</code></td>
 <td>m/s per s</td>
 <td><code>6.2</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>max_heading_change_deg</code></td>
 <td>deg</td>
 <td><code>90.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>pos_heading_time_s</code></td>
 <td>s</td>
 <td><code>1.1</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>min_beacon_interval_s</code></td>
 <td>s</td>
 <td><code>0.07500000000000001</code></td>
 <td></td>
-<td>code: P1 (beacon timing from the message profile). beacon_min_interval_s − beacon_jitter_tolerance_s (F2MD MAX_BEACON_FREQUENCY 0.9 s is the same rule at 1 Hz); set explicitly to override</td>
+<td>code: beacon timing from the message profile: BSM 100 ms (SAE J2945/1), CAM T_GenCamMin 100 ms (ETSI EN 302 637-2). beacon_min_interval_s − beacon_jitter_tolerance_s (F2MD MAX_BEACON_FREQUENCY 0.9 s is the same rule at 1 Hz); set explicitly to override</td>
 </tr>
 <tr>
 <td><code>max_sa_time_s</code></td>
 <td>s</td>
 <td><code>1.26</code></td>
 <td></td>
-<td>code: P1 (beacon timing from the message profile). MAX_SA_TIME_INTERVALS (2.1, F2MD MAX_SA_TIME at 1 Hz) × beacon_max_interval_s; set explicitly to override</td>
+<td>code: beacon timing from the message profile: BSM 100 ms (SAE J2945/1), CAM T_GenCamMin 100 ms (ETSI EN 302 637-2). MAX_SA_TIME_INTERVALS (2.1, F2MD MAX_SA_TIME at 1 Hz) × beacon_max_interval_s; set explicitly to override</td>
 </tr>
 <tr>
 <td><code>max_sa_range_m</code></td>
 <td>m</td>
 <td><code>420.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>sudden_appearance_m</code></td>
 <td>m</td>
 <td><code>30.0</code></td>
 <td></td>
-<td>todo-calibrate: lists MAX_SA_RANGE and MAX_SA_TIME for SuddenAppearence but not the predicate. the default is the F2MD longitudinal proximity box (MAX_PROXIMITY_RANGE_L = 30 m), which is a stand-in for the distance inside which a first sighting is implausible (calibration pending)</td>
+<td>todo-calibrate: veins-f2md F2MDParameters.h gives MAX_SA_RANGE and MAX_SA_TIME for SuddenAppearence but not the predicate. the default is the F2MD longitudinal proximity box (MAX_PROXIMITY_RANGE_L = 30 m), which is a stand-in for the distance inside which a first sighting is implausible (calibration pending)</td>
 </tr>
 <tr>
 <td><code>max_distance_from_route_m</code></td>
 <td>m</td>
 <td><code>2.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>proximity_distance_m</code></td>
 <td>m</td>
 <td><code>2.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>proximity_range_l_m</code></td>
 <td>m</td>
 <td><code>30.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>max_delta_inter_s</code></td>
 <td>s</td>
 <td><code>2.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>z_threshold</code></td>
@@ -10512,7 +10481,7 @@
 <td>-</td>
 <td><code>1.0</code></td>
 <td>[0.0, 1.0]</td>
-<td>todo-calibrate: requires CPM consistency and gives no threshold. 1.0 fires only when none of a CPM's visible objects is corroborated, which is the one fraction that is a structural statement rather than a chosen number (calibration pending)</td>
+<td>todo-calibrate: no source gives a CPM consistency threshold. 1.0 fires only when none of a CPM's visible objects is corroborated, which is the one fraction that is a structural statement rather than a chosen number (calibration pending)</td>
 </tr>
 <tr>
 <td><code>kalman_pos_floor_m</code></td>
@@ -10533,7 +10502,7 @@
 <td>-</td>
 <td><code>2.4477468306808263</code></td>
 <td></td>
-<td>code: gauss-markov card: reported confidence = RAYLEIGH_95 · √(σ² + σ_b²)</td>
+<td>code: assumption (this engine's own definition, no external source): models/gnss gauss-markov card: reported confidence = RAYLEIGH_95 · √(σ² + σ_b²)</td>
 </tr>
 <tr>
 <td><code>kalman_q_m2ps3</code></td>
@@ -10561,7 +10530,7 @@
 <td>m</td>
 <td><code>4.0</code></td>
 <td></td>
-<td>code: (detector/f2md-checks, veins-f2md F2MDParameters.h)</td>
+<td>code: veins-f2md F2MDParameters.h (detector/f2md-checks)</td>
 </tr>
 <tr>
 <td><code>psmax_margin_mps2</code></td>
@@ -10645,7 +10614,7 @@
 <td>s</td>
 <td><code>10.0</code></td>
 <td></td>
-<td>code: (bucket removal after the 10 s window)</td>
+<td>code: assumption (this engine's own definition, no external source): bucket removal after the 10 s window</td>
 </tr>
 </tbody>
 </table>
@@ -10663,8 +10632,13 @@
 <li><em>interval windows</em>: <code>MAX_TIME_DELTA = 3.1·T_max, MAX_SA_TIME = 2.1·T_max, T_max the profile's longest conforming interval (F2MD's 3.1 s and 2.1 s at 1 Hz)</code></li>
 <li><em>sudden appearance</em>: <code>on a first sighting after MAX_SA_TIME of listening and inside MAX_SA_RANGE: sudden_appearance_m / &#124;claim − self&#124;</code></li>
 <li><em>map position plausibility</em>: <code>distance to nearest known road / MAX_DISTANCE_FROM_ROUTE</code></li>
-<li><em>perception cross-check (class 4)</em>: <code>for a claim inside the sensor's coverage: min(d(claim, nearest sensed object) / (Z·max(conf, floor)), hard_fail); Score = Σ NIS over the last n messages / χ²(4n, z_gate) (Wilson–Hilferty)</code></li>
-<li><em>position/speed envelope (class 2 )</em>: <code>[d_min, d_max] reachable from v₀ to v₁ in Δt under a_env, b_env, v_max; / box_overlap_threshold</code></li>
+<li><em>perception cross-check (class 4)</em>: <code>for a claim inside the sensor's coverage: min(d(claim, nearest sensed object) / (Z·max(conf, floor)), hard_fail); saturates at hard_fail when nothing is sensed at all</code></li>
+<li><em>intersection (class 5)</em>: <code>MAX_PROXIMITY_DISTANCE / d(claim, nearest other station's claim in MAX_DELTA_INTER)</code></li>
+<li><em>CPM consistency (class 5)</em>: <code>(uncorroborated visible objects / visible objects) / cpm_unmatched_fraction</code></li>
+<li><em>Kalman consistency (class 2)</em>: <code>CV filter per sender and axis, x = (p, v), Q = q·[[Δt³/3, Δt²/2], [Δt²/2, Δt]], z = (x, v cos h, y, v sin h), R = diag(max(conf, 4 m)², max(σ_v, 1 m/s)² + (v·σ_h)²); score = Σ NIS over the last n messages / χ²(4n, z_gate) (Wilson–Hilferty)</code></li>
+<li><em>position/speed envelope (class 2)</em>: <code>[d_min, d_max] reachable from v₀ to v₁ in Δt under a_env, b_env, v_max; score = max(d_min·sinc(θ/2) − Δs, Δs − d_max, 0) / (MAX_MGT_RNG + Z·√(c₀² + c₁²))</code></li>
+<li><em>PositionSpeedMaxConsistency (class 2)</em>: <code>max(max(v) − Δs/Δt − (b_env + m)·Δt, Δs/Δt − min(v) − (a_env + m)·Δt, 0) / ((MAX_MGT_RNG + Z·√(c₀² + c₁²))/Δt)</code></li>
+<li><em>box intersection (class 5)</em>: <code>max over other claims within W of area(B ∩ B')/min(area) · (W − age)/W, B' moved on by v'·age along h', and over the receiver's own footprint; / box_overlap_threshold</code></li>
 <li><em>CaTCh scoring (scoring = catch)</em>: <code>score = (1 − f)/(1 − θ), f the plausible share of the confidence disc or interval</code></li>
 <li><em>windowed mean (fusion = windowed-mean)</em>: <code>fires when mean(current score, ≤ mean_history earlier within mean_window_s) ≥ 1</code></li>
 <li><em>leaky bucket (fusion = leaky-bucket)</em>: <code>TMO ← max(0, TMO + coeff·e^(exponent·(1 − f_min)) − leak), f_min = min over checks of 1 − s·(1 − θ); the failing checks fire while TMO &gt; bucket_threshold</code></li>
@@ -10679,21 +10653,22 @@
 <p><strong>Limitations.</strong></p>
 <ul>
 <li>The TS's DENM-specific observations (the 500 ms EEBL plausibility window, the detection-time consistency at 80 % of the minimum threshold, the same-event correlation distances of 1 km and 100 m) are not implemented here: they need the DENM event fields, which ObservedKind carries only as a cause code. The legacy suite's denmPlausibility check covers the speed contradiction.</li>
-<li>The TS's event-trust threshold (ETR ≥ TrustThreshold) is left to the deployment, as the TS does records it as todo-calibrate.</li>
+<li>The TS's event-trust threshold (ETR ≥ TrustThreshold) is left to the deployment, as the TS does; it is todo-calibrate here.</li>
 <li>Class 3 reads the map and the certificate region. Signal state is part of the class-3 LDM in the TS and does not reach a detector here: SPaT is encoded (v2xw_msg::j2735::spat) and broadcast (v2xw_node::rsu), but crate::obs carries no signal-state belief, so a false SPaT from a compromised road-side unit (crate::attack_rsu) cannot be cross-checked. Adding it means a LocalSignalState trait beside LocalEnvironment, on the same declared-capability footing.</li>
 <li>The class-4 cross-check needs a perception model. With NoPerception it runs on nothing, and class4_skipped_no_perception is the count that says so; a run that reports a class-4 recall without reading that counter is reporting nothing.</li>
-<li>The F2MD checks are re-implemented from the constant table and the published descriptions; no F2MD source was used. The scores are normalised on this crate's convention rather than F2MD's own, so a threshold matches but a score does not compare digit for digit with an F2MD run.</li>
+<li>The F2MD checks are re-implemented from the veins-f2md F2MDParameters.h constants and the published descriptions; no F2MD source was used. The scores are normalised on this crate's convention rather than F2MD's own, so a threshold matches but a score does not compare digit for digit with an F2MD run.</li>
 <li>The acceptance range is the line-of-sight reach of the longest-reaching tier-default law. In urban and suburban areas that is TR 37.885's urban LOS law, whose 16.7 dB per decade puts the range near 42 km, so range plausibility is close to inert there: in a city the obstacle stack, not the range, ends a link. The range includes no fast-fading upside (a Nakagami up-fade at the high tier), and it is taken at 23 dBm; a fleet radiating the US 33 dBm EIRP ceiling reaches about 7 dB further and needs art_*_m raised.</li>
 <li>The beacon-timing thresholds assume every sender in range uses the receiver's beacon_profile; a mixed BSM and CAM neighbourhood shares the 100 ms minimum but not the longest interval.</li>
-<li>The per-message CPU cost is a placeholder, not a measurement. TVT 2020, WCNC 2019 and Bar-Shalom et al. 2001. F2MD was read for behaviour only and no code was copied. The Kalman check divides the broadcast position confidence by kalman_conf_divisor (2.4477, this engine's 95 % radius; F2MD uses the confidence as one σ), and the envelope tolerance uses it undivided. The box check needs the frame's vehicle size (FrameExtras) and is unchecked without it.</li>
+<li>The per-message CPU cost is a placeholder, not a measurement.</li>
+<li>The class 2 and class 5 checks are re-implemented from Kamel et al. TVT 2020, WCNC 2019 and Bar-Shalom et al. 2001. F2MD was read for behaviour only and no code was copied. The Kalman check divides the broadcast position confidence by kalman_conf_divisor (2.4477, this engine's 95 % radius; F2MD uses the confidence as one σ), and the envelope tolerance uses it undivided. The box check needs the frame's vehicle size (FrameExtras) and is unchecked without it.</li>
 <li>The suite is not yet selectable in detection.local, so its settings (including fusion and scoring) reach it only through Ts103759Params::apply / apply_label.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
 <li>standard: ETSI TS 103 759 V2.2.1 (2026-01), misbehaviour observation classes 1–5</li>
-<li>code: (new detector families)</li>
-<li>code: (detector/ts103759-observations, detector/f2md-checks)</li>
-<li>code: (the perception model the class-4 check reads)</li>
+<li>code: assumption (this engine's own definition, no external source): local misbehaviour detection: new detector families</li>
+<li>code: veins-f2md F2MDParameters.h (detector/ts103759-observations, detector/f2md-checks)</li>
+<li>code: assumption (this engine's own definition, no external source): the perception model the class-4 check reads</li>
 <li>standard: ETSI TR 103 460 (misbehaviour-detection taxonomy: ART, eART, CoE, MPP, SAW)</li>
 <li>standard: ETSI TS 103 324 (collective perception, the class-5 CPM check's subject)</li>
 <li>paper: Kamel, Kaiser, Jemaa, Cincilla, Urien, 'Feasibility study of misbehavior detection mechanisms in cooperative intelligent transport systems', IEEE TVT 69(6), 2020 (F2MD check, aggregation and behavioural constants; F2MDParameters.h as read)</li>
@@ -11252,7 +11227,7 @@
 <li>standard: IEEE 1609.2 §5.3.1, §6.3.4, §6.3.29</li>
 <li>standard: IEEE 1609.2a-2017 §6.3.25-6.3.26, §8.1-8.2.4</li>
 <li>standard: ETSI TS 103 097 V2.1.1 §4.1, §5.1-5.2, §7.1</li>
-<li>standard: (envelope overhead)</li>
+<li>standard: IEEE 1609.2 and ETSI TS 103 097 V2.1.1 §5.1-5.2: envelope overhead derived from the ASN.1 (COER)</li>
 </ul>
 <h3 id="envelopeieee-1609-2"><code>envelope/ieee-1609-2</code><a class="headerlink" href="#envelopeieee-1609-2" title="Permanent link">&para;</a></h3>
 <p>IEEE 1609.2 SignedData: real COER encoding through the generated ASN.1 bindings, both signer identifiers, and a verification plan a node runtime can cost and queue.</p>
@@ -11283,7 +11258,7 @@
 <li>standard: IEEE 1609.2 §5.3.1, §6.3.4, §6.3.29</li>
 <li>standard: IEEE 1609.2a-2017 §6.3.25-6.3.26, §8.1-8.2.4</li>
 <li>standard: ETSI TS 103 097 V2.1.1 §4.1, §5.1-5.2, §7.1</li>
-<li>standard: (envelope overhead)</li>
+<li>standard: IEEE 1609.2 and ETSI TS 103 097 V2.1.1 §5.1-5.2: envelope overhead derived from the ASN.1 (COER)</li>
 </ul>
 <h2 id="fragmenter">fragmenter<a class="headerlink" href="#fragmenter" title="Permanent link">&para;</a></h2>
 <h3 id="fragmentercert-cycle-partial-hybrid"><code>fragmenter/cert-cycle-partial-hybrid</code><a class="headerlink" href="#fragmentercert-cycle-partial-hybrid" title="Permanent link">&para;</a></h3>
@@ -11305,28 +11280,28 @@
 <td>-</td>
 <td><code>5</code></td>
 <td>[1, 50]</td>
-<td>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — §IV: the certificate cycle is tau = 5 SPDUs. VERIFIED (secondary); see and.</td>
+<td>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — §IV: the certificate cycle is tau = 5 SPDUs. VERIFIED (secondary); Rostami et al. 2018 and NDSS 2024.</td>
 </tr>
 <tr>
 <td><code>cycle_period_ms</code></td>
 <td>ms</td>
 <td><code>500</code></td>
 <td>[100, 5000]</td>
-<td>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — §IV: tau = 5 SPDUs = 500 ms at the 10 Hz BSM rate; the industry certificate cadence is every fifth SPDU. VERIFIED (secondary); see and.</td>
+<td>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — §IV: tau = 5 SPDUs = 500 ms at the 10 Hz BSM rate; the industry certificate cadence is every fifth SPDU. VERIFIED (secondary); Rostami et al. 2018 and NDSS 2024.</td>
 </tr>
 <tr>
 <td><code>hybrid_cert_bytes</code></td>
 <td>B</td>
 <td><code>858</code></td>
 <td>[1, 65535]</td>
-<td>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — Fig. 4: the Falcon-512 hybrid certificate is 858 B; the general form is 30 + pk + sig. VERIFIED (secondary); see and.</td>
+<td>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — Fig. 4: the Falcon-512 hybrid certificate is 858 B; the general form is 30 + pk + sig. VERIFIED (secondary); Rostami et al. 2018 and NDSS 2024.</td>
 </tr>
 <tr>
 <td><code>base_frame_bytes</code></td>
 <td>B</td>
 <td><code>204</code></td>
 <td>[0, 2304]</td>
-<td>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — Fig. 4: the four digest-carrying frames of the Falcon-512 cycle are 204 B each, which is what a cycle frame costs before a certificate fragment. VERIFIED (secondary); see and.</td>
+<td>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — Fig. 4: the four digest-carrying frames of the Falcon-512 cycle are 204 B each, which is what a cycle frame costs before a certificate fragment. VERIFIED (secondary); Rostami et al. 2018 and NDSS 2024.</td>
 </tr>
 <tr>
 <td><code>learning_response_fragments</code></td>
@@ -11348,7 +11323,7 @@
 <ul>
 <li><em>fragment count</em>: <code>alpha = ceil(cert_bytes / (cap - base_frame_bytes)), 1 &lt;= alpha &lt;= tau</code> At the DSRC cap of 2,304 B with 204 B cycle frames, a Falcon-512 hybrid certificate of 858 B gives alpha = 1, which is the documented anchor. alpha &gt; tau is refused: the next cycle would start before the certificate finished.</li>
 <li><em>learning-response delay</em>: <code>T = sum_i U_i(0, p2pcd_max_backoff_ms), mean beta * 125 ms</code> The uniform draws are supplied by the caller from its own RNG stream, so this model draws nothing (ADR 0004 §3).</li>
-<li><em>loss amplification</em>: <code>P_sdu = 1 - prod_i (1 - p_i)</code>. Per-fragment p_i from the PHY, never the equal-p simplification. The product runs over fragments sorted by index, so the reduction is id-ordered. Independently interpretable segments report the content-weighted mean sum(w_i p_i) instead, because losing one segment loses only its own content.</li>
+<li><em>loss amplification</em>: <code>P_sdu = 1 - prod_i (1 - p_i)</code> Independent fragment loss, P(SDU lost) = 1 − Π(1 − p_i). Per-fragment p_i from the PHY, never the equal-p simplification. The product runs over fragments sorted by index, so the reduction is id-ordered. Independently interpretable segments report the content-weighted mean sum(w_i p_i) instead, because losing one segment loses only its own content.</li>
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
@@ -11378,10 +11353,10 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — §II-B, §III, §IV, §V-D — the Partially-Hybrid design and its measurements. VERIFIED (secondary); see and.</li>
+<li>paper: Twardokus, Bindel, Rahbari, McCarthy, "When Cryptography Needs a Hand: Practical Post-Quantum Authentication for V2V Communications", NDSS 2024 — §II-B, §III, §IV, §V-D — the Partially-Hybrid design and its measurements. VERIFIED (secondary); Rostami et al. 2018 and NDSS 2024.</li>
 <li>standard: IEEE 1609.2a-2017 §6.3.9, §8.1-8.2.4 — P2PCD, its backoff and its thresholds</li>
-<li>paper: and — the fact sheets these anchors were extracted from</li>
-<li>paper:, §7.4, §9.5</li>
+<li>paper: Rostami et al. 2018 and NDSS 2024 (Twardokus, Bindel, Rahbari, McCarthy) — the certificate attachment cadence and post-quantum sizes these anchors come from</li>
+<li>paper: assumption (no external source): this engine's fragmentation strategies and loss amplification</li>
 </ul>
 <h3 id="fragmenterfacilities-segmentation"><code>fragmenter/facilities-segmentation</code><a class="headerlink" href="#fragmenterfacilities-segmentation" title="Permanent link">&para;</a></h3>
 <p>ETSI facilities-layer segmentation (MAPEM layerID, CPM messageSegmentInfo): the service splits an oversize message into independently interpretable segments, each a complete separately signed message, so losing one segment loses only its own content.</p>
@@ -11423,7 +11398,7 @@
 <p><strong>Equations.</strong></p>
 <ul>
 <li><em>segment count</em>: <code>n = ceil(L / (min(threshold, MTU) - overhead))</code> MTU_CPM = MTU_AL - HD_CPM - HD_NT [TS 103 324 §6.1.3.1] is what the caller passes as MTU; the threshold is the ETSI simulation value of 1,100 B [TR 103 562 §5.5]. Payloads are split as equally as possible and sum to exactly L.</li>
-<li><em>loss amplification</em>: <code>P_sdu = 1 - prod_i (1 - p_i)</code>. Per-fragment p_i from the PHY, never the equal-p simplification. The product runs over fragments sorted by index, so the reduction is id-ordered. Independently interpretable segments report the content-weighted mean sum(w_i p_i) instead, because losing one segment loses only its own content.</li>
+<li><em>loss amplification</em>: <code>P_sdu = 1 - prod_i (1 - p_i)</code> Independent fragment loss, P(SDU lost) = 1 − Π(1 − p_i). Per-fragment p_i from the PHY, never the equal-p simplification. The product runs over fragments sorted by index, so the reduction is id-ordered. Independently interpretable segments report the content-weighted mean sum(w_i p_i) instead, because losing one segment loses only its own content.</li>
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
@@ -11451,7 +11426,7 @@
 <li>standard: ETSI TS 103 301 §6.4.1 — RLT service fragmentation of MAPEM by layerID (ISO/TS 19091 Annex G)</li>
 <li>standard: ETSI TS 103 324 V2.1.1 §6.1.2.1, §6.1.3.1, §5.3.3, §7.1 — CPM segmentation, MTU_CPM and the maximum packet lifetime</li>
 <li>standard: ETSI TR 103 562 §5.5, Table 3 — the simulation segmentation threshold and the mandatory CPM containers</li>
-<li>paper:, §7.4, §8.2</li>
+<li>paper: assumption (no external source): this engine's fragmentation strategies and loss amplification; message sizes from the facilities-layer standards cited on the generator cards</li>
 </ul>
 <h3 id="fragmentergeneric-sdu"><code>fragmenter/generic-sdu</code><a class="headerlink" href="#fragmentergeneric-sdu" title="Permanent link">&para;</a></h3>
 <p>Splits any SDU into ceil(L / MTU_eff) fragments with a four-byte fragment header (id 2 + index 1 + count 1, a design choice), and reassembles per (sender, SDU) with a timeout and tolerance for out-of-order arrival.</p>
@@ -11472,7 +11447,7 @@
 <td>B</td>
 <td><code>4</code></td>
 <td>[0, 64]</td>
-<td>todo-calibrate: A design choice, not a standard: no standard defines this strategy. fixes the layout as id 2 + index 1 + count 1 = 4 B and requires it to be recorded on this card.. The field widths are enforced rather than decorative: the one-octet count caps the split at 255 fragments. (calibration pending)</td>
+<td>todo-calibrate: A design choice, not a standard: no standard defines this strategy. This engine fixes the layout as id 2 + index 1 + count 1 = 4 B and records it on this card.. The field widths are enforced rather than decorative: the one-octet count caps the split at 255 fragments. (calibration pending)</td>
 </tr>
 <tr>
 <td><code>reassembly_timeout_ms</code></td>
@@ -11493,14 +11468,14 @@
 <p><strong>Equations.</strong></p>
 <ul>
 <li><em>fragment count</em>: <code>n = ceil(L / (MTU - 4)), n &lt;= 255</code> Payloads are split as equally as possible and sum to exactly L. An SDU that already fits the MTU is passed through whole, with no fragment header.</li>
-<li><em>loss amplification</em>: <code>P_sdu = 1 - prod_i (1 - p_i)</code>. Per-fragment p_i from the PHY, never the equal-p simplification. The product runs over fragments sorted by index, so the reduction is id-ordered. Independently interpretable segments report the content-weighted mean sum(w_i p_i) instead, because losing one segment loses only its own content.</li>
+<li><em>loss amplification</em>: <code>P_sdu = 1 - prod_i (1 - p_i)</code> Independent fragment loss, P(SDU lost) = 1 − Π(1 − p_i). Per-fragment p_i from the PHY, never the equal-p simplification. The product runs over fragments sorted by index, so the reduction is id-ordered. Independently interpretable segments report the content-weighted mean sum(w_i p_i) instead, because losing one segment loses only its own content.</li>
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>Reassembly is keyed per (sender, SDU). The sender is the transmitting node at these tiers; at the high tier it becomes the sender's pseudonym digest, which is what a receiver actually observes.</li>
 <li>Out-of-order arrival is normal and is tolerated: fragments are tracked as a set of indices, so any arrival order reassembles identically.</li>
 <li>A duplicate fragment is tolerated and its bytes are counted once, because a repeated fragment is what a sender's own repetition looks like. This holds after the set has completed too: a completed (sender, SDU) is remembered for one reassembly timeout and a fragment arriving against it is reported <code>duplicate</code>, which is not a loss, rather than opening a second reassembly that could never finish.</li>
-<li>The reassembly timer starts at the first fragment and is not extended, so the timeout bounds the whole set's lifetime — which is the condition assumption 4 is about (invariant I-N2).</li>
+<li>The reassembly timer starts at the first fragment and is not extended, so the timeout bounds the whole set's lifetime — which is the condition the independence assumption of the loss-amplification formula is about (invariant I-N2).</li>
 <li>A full buffer refuses the arriving SDU rather than evicting an older one, so the loss is attributed to the SDU that could not be admitted and does not depend on an eviction order.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
@@ -11521,20 +11496,20 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>paper: — 'fragmenter/generic-sdu: split any SDU into ceil(L/MTU_eff) fragments with a 4-byte fragment header (id 2 + index 1 + count 1, a design choice recorded in the card); reassembly buffer per (sender digest, sdu id) with timeout; out-of-order tolerated'</li>
+<li>paper: assumption (no external source) — 'fragmenter/generic-sdu: split any SDU into ceil(L/MTU_eff) fragments with a 4-byte fragment header (id 2 + index 1 + count 1, a design choice recorded in the card); reassembly buffer per (sender digest, sdu id) with timeout; out-of-order tolerated'</li>
 <li>standard: ETSI TS 103 324 §5.3.3 — the 1 000 ms GeoNetworking maximum packet lifetime the default timeout is anchored on</li>
-<li>paper: — loss amplification</li>
+<li>paper: assumption (no external source): independent fragment loss, P(SDU lost) = 1 − (1 − p)^n</li>
 </ul>
 <h3 id="fragmenternone"><code>fragmenter/none</code><a class="headerlink" href="#fragmenternone" title="Permanent link">&para;</a></h3>
 <p>Does not fragment: an SDU above the MTU is dropped with DropCause::Mtu. The default for BSM and CAM, whose sizes are far below either network layer's MTU.</p>
 <p>version <code>1.0.0</code>; tiers <code>abstract</code>, <code>medium</code>, <code>high</code>; hosting <code>in-process</code>; draws no random numbers.</p>
 <p><strong>Equations.</strong></p>
 <ul>
-<li><em>loss amplification</em>: <code>P_sdu = 1 - prod_i (1 - p_i)</code>. Per-fragment p_i from the PHY, never the equal-p simplification. The product runs over fragments sorted by index, so the reduction is id-ordered. Independently interpretable segments report the content-weighted mean sum(w_i p_i) instead, because losing one segment loses only its own content.</li>
+<li><em>loss amplification</em>: <code>P_sdu = 1 - prod_i (1 - p_i)</code> Independent fragment loss, P(SDU lost) = 1 − Π(1 − p_i). Per-fragment p_i from the PHY, never the equal-p simplification. The product runs over fragments sorted by index, so the reduction is id-ordered. Independently interpretable segments report the content-weighted mean sum(w_i p_i) instead, because losing one segment loses only its own content.</li>
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>The message set this strategy carries fits the MTU: a BSM SPDU is 180-250 B and a secured CAM 182-807 B (§9.3), against 1,398 B for GeoNetworking and 1,400 B for the WSMP MIB default. An SDU above the MTU is therefore a modelling error or a deliberately oversize payload, and both are better reported than split.</li>
+<li>The message set this strategy carries fits the MTU: a BSM SPDU is 180-250 B and a secured CAM 182-807 B, against 1,398 B for GeoNetworking and 1,400 B for the WSMP MIB default. An SDU above the MTU is therefore a modelling error or a deliberately oversize payload, and both are better reported than split.</li>
 <li>No reassembly state exists, so nothing can time out. Invariant I-N2's reassembly timeout is 'none' for this model, which Fragmenter::reassembly_timeout returns as None.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
@@ -11552,7 +11527,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>paper: — 'fragmenter/none: oversize SDUs are rejected (DropCause::Mtu); none; the default for BSM and CAM'</li>
+<li>paper: assumption (no external source) — 'fragmenter/none: oversize SDUs are rejected (DropCause::Mtu); none; the default for BSM and CAM'</li>
 </ul>
 <h2 id="generator">generator<a class="headerlink" href="#generator" title="Permanent link">&para;</a></h2>
 <h3 id="generatorbsm-j2945-1"><code>generator/bsm-j2945-1</code><a class="headerlink" href="#generatorbsm-j2945-1" title="Permanent link">&para;</a></h3>
@@ -11581,14 +11556,14 @@
 <td>ms</td>
 <td><code>100</code></td>
 <td></td>
-<td>todo-calibrate: vMinITT 100 ms is implied rather than sourced ( marks it UNVERIFIED) (calibration pending)</td>
+<td>todo-calibrate: vMinITT 100 ms is implied rather than sourced (UNVERIFIED) (calibration pending)</td>
 </tr>
 <tr>
 <td><code>max_itt_ms</code></td>
 <td>ms</td>
 <td><code>600</code></td>
 <td></td>
-<td>todo-calibrate: vMaxITT 600 ms is implied rather than sourced ( marks it UNVERIFIED) (calibration pending)</td>
+<td>todo-calibrate: vMaxITT 600 ms is implied rather than sourced (UNVERIFIED) (calibration pending)</td>
 </tr>
 </tbody>
 </table>
@@ -11598,13 +11573,13 @@
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
-<li>Part II is not generated: PathHistory (about 300 m, max 23 points) and PathPrediction are 's UNVERIFIED rows and arrive with the hand-written BSM codec.</li>
+<li>Part II is not generated: PathHistory (about 300 m, max 23 points) and PathPrediction are UNVERIFIED and arrive with the hand-written BSM codec.</li>
 <li>The EEBL event flag at a deceleration of 0,4 g is not raised here; on_event carries the HardBraking event that will raise it.</li>
 <li>The inter-transmission-time control of J2945/1 is not implemented here by design (see the type's documentation); DccState::t_off is honoured only as a floor.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>standard: SAE J2945/1 — BSM generation records which of its numbers are VERIFIED and which are not</li>
+<li>standard: SAE J2945/1 — BSM generation; not every one of its numbers is VERIFIED (each parameter says which)</li>
 <li>paper: Rostami 2018; Bindel 2021; NDSS 2024 §II — 10 Hz confirmed by secondary sources</li>
 </ul>
 <h3 id="generatorcam-en302637-2"><code>generator/cam-en302637-2</code><a class="headerlink" href="#generatorcam-en302637-2" title="Permanent link">&para;</a></h3>
@@ -11702,7 +11677,7 @@
 </ul>
 <h2 id="gnss">gnss<a class="headerlink" href="#gnss" title="Permanent link">&para;</a></h2>
 <h3 id="gnsserrorgauss-markov"><code>gnss/error/gauss-markov</code><a class="headerlink" href="#gnsserrorgauss-markov" title="Permanent link">&para;</a></h3>
-<p>A node's belief about its own position: a first-order Gauss-Markov bias per axis plus white noise, with outliers, degraded bursts and outages, whose scales are fitted at construction to the measured Reid 2019 error percentiles. The reported confidence comes from the receiver's own noise parameters and never from the bias it is carrying, which is the defect records in the legacy model.</p>
+<p>A node's belief about its own position: a first-order Gauss-Markov bias per axis plus white noise, with outliers, degraded bursts and outages, whose scales are fitted at construction to the measured Reid 2019 error percentiles. The reported confidence comes from the receiver's own noise parameters and never from the bias it is carrying, which is the defect of the legacy model.</p>
 <p>version <code>1.2.0</code>; tiers <code>abstract</code>, <code>medium</code>, <code>high</code>; hosting <code>in-process</code>; draws random numbers.</p>
 <table>
 <thead>
@@ -11929,7 +11904,7 @@
 <li>datasheet: MathWorks <code>gpsSensor</code> defaults: DecayFactor 0.999 per sample, horizontal accuracy 1.6 m, vertical 3 m. the sample rate the decay factor applies at is not in the sheet; 1 Hz is <code>gpsSensor</code>'s own default and is the assumption recorded here</li>
 </ul>
 <h3 id="gnsserrorou-bias-legacy"><code>gnss/error/ou-bias-legacy</code><a class="headerlink" href="#gnsserrorou-bias-legacy" title="Permanent link">&para;</a></h3>
-<p>The frozen reference engine's GNSS model: an Ornstein-Uhlenbeck bias per axis, white noise scaled by a per-vehicle quality draw and the weather, multipath outliers and transient degraded bursts. Kept as the abstract-tier preset and as the parity oracle for the frozen corpus, with the three fixes records.</p>
+<p>The frozen reference engine's GNSS model: an Ornstein-Uhlenbeck bias per axis, white noise scaled by a per-vehicle quality draw and the weather, multipath outliers and transient degraded bursts. Kept as the abstract-tier preset and as the parity oracle for the frozen corpus, with three fixes to the legacy model.</p>
 <p>version <code>1.0.0</code>; tiers <code>abstract</code>; hosting <code>in-process</code>; draws random numbers.</p>
 <table>
 <thead>
@@ -12256,7 +12231,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -12421,7 +12396,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -12563,7 +12538,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -12789,7 +12764,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -13071,7 +13046,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -13340,7 +13315,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -13597,7 +13572,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -13853,7 +13828,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -14010,7 +13985,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -14230,7 +14205,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -14448,7 +14423,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -14611,7 +14586,7 @@
 </table>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one ( rule H1).</li>
+<li>Service times come from the profile's own figures only; where a vendor publishes none, the profile says so and the scenario must supply one.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -14702,14 +14677,14 @@
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
-<li>No investigation stage: identity resolution and the revocation flow belong to v2xw-proto (§3.3).</li>
+<li>No investigation stage: identity resolution and the revocation flow belong to v2xw-proto.</li>
 <li>No service model: the authority's own processing cost is not charged here.</li>
 <li>Dismiss and Investigate are modelled as decisions the interface can express but the legacy operating point never produces; a replacement stage can.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
 <li>code: legacy/scms_sim_ref/mock_pipeline/run.py :: the online MA decision pass + trusted (legacy)</li>
-<li>code: </li>
+<li>code: assumption (this engine's own definition, no external source): misbehaviour-authority pipeline</li>
 </ul>
 <h2 id="metric">metric<a class="headerlink" href="#metric" title="Permanent link">&para;</a></h2>
 <h3 id="metricsenergy"><code>metrics/energy</code><a class="headerlink" href="#metricsenergy" title="Permanent link">&para;</a></h3>
@@ -15820,7 +15795,7 @@
 <td>-</td>
 <td><code>true</code></td>
 <td></td>
-<td>paper: Treiber, Hennecke &amp; Helbing 2000: s* is the <em>desired minimum gap</em>, and the acceleration reads it only as (s*/s)², so the model's domain is s* ≥ s0. The frozen engine's port writes the floor explicitly (run.py L2280-2281, checked); the physical-layer defect register reports that Treiber's own reference implementation does too, UNVERIFIED here. the printed expression of §2.1 and omits the max(0, ·); without it the two forms part company once the leader is T·2·√(a·b) faster (5.0 m/s, Kesting 2010 car), s* is a negative distance past (s0 + T·v)·2·√(a·b)/v (6.4 m/s at v = 5 m/s), and past (2·s0 + T·v)·2·√(a·b)/v (7.7 m/s at v = 5 m/s) a faster leader produces MORE braking, not less: at v = 5 m/s behind a leader 25 m ahead at 30 m/s the answer is −0.34 m/s² where a free road gives +1.40</td>
+<td>paper: Treiber, Hennecke &amp; Helbing 2000: s* is the <em>desired minimum gap</em>, and the acceleration reads it only as (s*/s)², so the model's domain is s* ≥ s0. The frozen engine's port writes the floor explicitly (run.py L2280-2281, checked); the physical-layer defect register reports that Treiber's own reference implementation does too, UNVERIFIED here. the expression as printed in Treiber, Hennecke &amp; Helbing 2000 omits the max(0, ·); without it the two forms part company once the leader is T·2·√(a·b) faster (5.0 m/s, Kesting 2010 car), s* is a negative distance past (s0 + T·v)·2·√(a·b)/v (6.4 m/s at v = 5 m/s), and past (2·s0 + T·v)·2·√(a·b)/v (7.7 m/s at v = 5 m/s) a faster leader produces MORE braking, not less: at v = 5 m/s behind a leader 25 m ahead at 30 m/s the answer is −0.34 m/s² where a free road gives +1.40</td>
 </tr>
 <tr>
 <td><code>lookahead</code></td>
@@ -15912,7 +15887,7 @@
 <ul>
 <li><em>acceleration</em>: <code>a = a_max · [ 1 − (v/v0)^δ − (s*(v,Δv)/s)² ]</code> s is the net gap (leader rear to ego front); on a free road the second interaction term is absent and a = a_max(1 − (v/v0)^δ)</li>
 <li><em>desired minimum gap</em>: <code>s*(v,Δv) = s0 + s1·√(v/v0) + max(0, T·v + v·Δv / (2·√(a_max·b)))</code> s1 = 0 in the base model (Treiber 2000 sets it so). The max(0, ·) is <code>clamp_s_star</code>: s* is a desired minimum <em>gap</em> and the equation reads it only as (s*/s)², so an unfloored negative value would brake a vehicle whose leader is pulling away</li>
-<li><em>weather</em>: <code>v0 ← desired_speed_factor · min(v0_driver, v_limit); T ← headway_factor · T; b ← min(b, decel_cap)</code> the order is a design choice recorded here: the legal limit and the driver's wish are reconciled first, then the weather slows the result </li>
+<li><em>weather</em>: <code>v0 ← desired_speed_factor · min(v0_driver, v_limit); T ← headway_factor · T; b ← min(b, decel_cap)</code> the order is a design choice recorded here: the legal limit and the driver's wish are reconciled first, then the weather slows the result</li>
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
@@ -16515,7 +16490,7 @@
 <td>-</td>
 <td><code>["car", "truck", "bus", "moto", "emergency"]</code></td>
 <td></td>
-<td>code: : a lane carries the class mask that may use it</td>
+<td>code: assumption (this engine's world format, no external source): a lane carries the class mask that may use it</td>
 </tr>
 </tbody>
 </table>
@@ -16717,7 +16692,7 @@
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
-<li>The drop places vehicles on the lanes the world has; it does not build the TR's own highway or urban geometry, which is 's business.</li>
+<li>The drop places vehicles on the lanes the world has; it does not build the TR's own highway or urban geometry, which is the world builder's business.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
@@ -16742,28 +16717,28 @@
 <td>s</td>
 <td><code>{"status": "secondary", "t_c_ge_4_lanes": 4.1, "t_c_lt_4_lanes": 4.1, "t_f": ...</code></td>
 <td></td>
-<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help []. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
+<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
 </tr>
 <tr>
 <td><code>minor-street-right-turn</code></td>
 <td>s</td>
 <td><code>{"status": "secondary", "t_c_ge_4_lanes": 6.9, "t_c_lt_4_lanes": 6.2, "t_f": ...</code></td>
 <td></td>
-<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help []. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
+<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
 </tr>
 <tr>
 <td><code>minor-street-through</code></td>
 <td>s</td>
 <td><code>{"status": "secondary", "t_c_ge_4_lanes": 6.5, "t_c_lt_4_lanes": 6.5, "t_f": ...</code></td>
 <td></td>
-<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help []. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
+<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
 </tr>
 <tr>
 <td><code>minor-street-left-turn</code></td>
 <td>s</td>
 <td><code>{"status": "secondary", "t_c_ge_4_lanes": 7.5, "t_c_lt_4_lanes": 7.1, "t_f": ...</code></td>
 <td></td>
-<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help []. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
+<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
 </tr>
 <tr>
 <td><code>stop_line_offset</code></td>
@@ -16777,7 +16752,7 @@
 <td>-</td>
 <td><code>true</code></td>
 <td></td>
-<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help []. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
+<td>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</td>
 </tr>
 <tr>
 <td><code>standing_speed_mps</code></td>
@@ -16798,7 +16773,7 @@
 <td>-</td>
 <td><code>0.0</code></td>
 <td></td>
-<td>paper: SUMO P1 as re-specified and 00-adoption-plan. 15-0.2), impatience = waiting / time-to-impatience; accepted gaps shrink with waiting (Polus, Lazar &amp; Livneh 2003, J. Transp. Eng. 129(2); Kittelson &amp; Vandehey 1991). Re-implemented from the documented behaviour. SUMO was read for behaviour only and no code was copied. The cv and the floor are this crate's choices inside the quoted ranges, not field-calibrated</td>
+<td>paper: SUMO junction-model gap acceptance, re-specified: lognormal per-driver critical gap (cv 0.15-0.2), impatience = waiting / time-to-impatience; accepted gaps shrink with waiting (Polus, Lazar &amp; Livneh 2003, J. Transp. Eng. 129(2); Kittelson &amp; Vandehey 1991). Re-implemented from the documented behaviour. SUMO was read for behaviour only and no code was copied. The cv and the floor are this crate's choices inside the quoted ranges, not field-calibrated</td>
 </tr>
 <tr>
 <td><code>patience_time_to_impatience</code></td>
@@ -16812,7 +16787,7 @@
 <td>-</td>
 <td><code>0.7</code></td>
 <td></td>
-<td>paper: SUMO P1 as re-specified and 00-adoption-plan. 15-0.2), impatience = waiting / time-to-impatience; accepted gaps shrink with waiting (Polus, Lazar &amp; Livneh 2003, J. Transp. Eng. 129(2); Kittelson &amp; Vandehey 1991). Re-implemented from the documented behaviour. SUMO was read for behaviour only and no code was copied. The cv and the floor are this crate's choices inside the quoted ranges, not field-calibrated</td>
+<td>paper: SUMO junction-model gap acceptance, re-specified: lognormal per-driver critical gap (cv 0.15-0.2), impatience = waiting / time-to-impatience; accepted gaps shrink with waiting (Polus, Lazar &amp; Livneh 2003, J. Transp. Eng. 129(2); Kittelson &amp; Vandehey 1991). Re-implemented from the documented behaviour. SUMO was read for behaviour only and no code was copied. The cv and the floor are this crate's choices inside the quoted ranges, not field-calibrated</td>
 </tr>
 <tr>
 <td><code>patience_foe_braking_decel</code></td>
@@ -16843,7 +16818,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help []. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</li>
+<li>standard: Highway Capacity Manual critical gaps and follow-up times, as reproduced by the PTV VISUM help. <strong>secondary</strong>: §2.3 flags the whole table, because the HCM and FHWA PDFs did not parse and the values were read from a help page that reproduces them</li>
 </ul>
 <h3 id="mobilityintersectionsignal-fixed-time"><code>mobility/intersection/signal-fixed-time</code><a class="headerlink" href="#mobilityintersectionsignal-fixed-time" title="Permanent link">&para;</a></h3>
 <p>Pre-timed signal control: runs the world's fixed-time plan, turns the state shown to a vehicle's movement into a stop-or-go decision, and generates a plan from the netconvert defaults for a junction whose source gave only signal presence.</p>
@@ -16864,28 +16839,28 @@
 <td>s</td>
 <td><code>90.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>green_time</code></td>
 <td>s</td>
 <td><code>31.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>red_time</code></td>
 <td>s</td>
 <td><code>5.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>yellow_min_decel</code></td>
 <td>m/s²</td>
 <td><code>3.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>yellow_reaction</code></td>
@@ -16906,56 +16881,56 @@
 <td>s</td>
 <td><code>0.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>crossing_min_time</code></td>
 <td>s</td>
 <td><code>4.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>crossing_clearance_time</code></td>
 <td>s</td>
 <td><code>5.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>left_green_time</code></td>
 <td>s</td>
 <td><code>6.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>min_dur</code></td>
 <td>s</td>
 <td><code>5.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>max_dur</code></td>
 <td>s</td>
 <td><code>50.0</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>match_cycle</code></td>
 <td>-</td>
 <td><code>true</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>permissive_left</code></td>
 <td>-</td>
 <td><code>true</code></td>
 <td></td>
-<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>) []</td>
+<td>code: SUMO <code>netconvert</code> traffic-light defaults (<code>--tls.*</code>)</td>
 </tr>
 <tr>
 <td><code>permitted_left_critical_headway</code></td>
@@ -16990,7 +16965,7 @@
 <td>-</td>
 <td><code>0.0</code></td>
 <td></td>
-<td>paper: SUMO P1 as re-specified and 00-adoption-plan. 15-0.2), impatience = waiting / time-to-impatience; accepted gaps shrink with waiting (Polus, Lazar &amp; Livneh 2003, J. Transp. Eng. 129(2); Kittelson &amp; Vandehey 1991). Re-implemented from the documented behaviour. SUMO was read for behaviour only and no code was copied. The cv and the floor are this crate's choices inside the quoted ranges, not field-calibrated</td>
+<td>paper: SUMO junction-model gap acceptance, re-specified: lognormal per-driver critical gap (cv 0.15-0.2), impatience = waiting / time-to-impatience; accepted gaps shrink with waiting (Polus, Lazar &amp; Livneh 2003, J. Transp. Eng. 129(2); Kittelson &amp; Vandehey 1991). Re-implemented from the documented behaviour. SUMO was read for behaviour only and no code was copied. The cv and the floor are this crate's choices inside the quoted ranges, not field-calibrated</td>
 </tr>
 <tr>
 <td><code>patience_time_to_impatience</code></td>
@@ -17004,7 +16979,7 @@
 <td>-</td>
 <td><code>0.7</code></td>
 <td></td>
-<td>paper: SUMO P1 as re-specified and 00-adoption-plan. 15-0.2), impatience = waiting / time-to-impatience; accepted gaps shrink with waiting (Polus, Lazar &amp; Livneh 2003, J. Transp. Eng. 129(2); Kittelson &amp; Vandehey 1991). Re-implemented from the documented behaviour. SUMO was read for behaviour only and no code was copied. The cv and the floor are this crate's choices inside the quoted ranges, not field-calibrated</td>
+<td>paper: SUMO junction-model gap acceptance, re-specified: lognormal per-driver critical gap (cv 0.15-0.2), impatience = waiting / time-to-impatience; accepted gaps shrink with waiting (Polus, Lazar &amp; Livneh 2003, J. Transp. Eng. 129(2); Kittelson &amp; Vandehey 1991). Re-implemented from the documented behaviour. SUMO was read for behaviour only and no code was copied. The cv and the floor are this crate's choices inside the quoted ranges, not field-calibrated</td>
 </tr>
 <tr>
 <td><code>patience_foe_braking_decel</code></td>
@@ -17130,7 +17105,7 @@
 <td>-</td>
 <td><code>["car", "truck", "bus", "moto", "emergency"]</code></td>
 <td></td>
-<td>code: : "Each actor follows its route at min(desired_speed, lane speed limit), stops for nothing, despawns at trip end"</td>
+<td>code: assumption (this engine's kinematic tier, no external source): "Each actor follows its route at min(desired_speed, lane speed limit), stops for nothing, despawns at trip end"</td>
 </tr>
 <tr>
 <td><code>max_lifetime</code></td>
@@ -17160,7 +17135,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>code: : "Each actor follows its route at min(desired_speed, lane speed limit), stops for nothing, despawns at trip end"</li>
+<li>code: assumption (this engine's kinematic tier, no external source): "Each actor follows its route at min(desired_speed, lane speed limit), stops for nothing, despawns at trip end"</li>
 </ul>
 <h3 id="mobilitylane-changemobil"><code>mobility/lane-change/mobil</code><a class="headerlink" href="#mobilitylane-changemobil" title="Permanent link">&para;</a></h3>
 <p>Discretionary lane changes by MOBIL: a safety criterion on the acceleration the change imposes on the new follower, and an incentive criterion that weighs the ego's own gain against a politeness-weighted sum of the two followers' losses. Every acceleration comes from the car-following model this instance was built with, evaluated with each vehicle's own driver parameters.</p>
@@ -17515,21 +17490,21 @@
 <td>-</td>
 <td><code>mobility/car-following/idm</code></td>
 <td></td>
-<td>code: (the native tiers) and (the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4)</td>
+<td>code: assumption (this engine's native mobility tiers, no external source): the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4</td>
 </tr>
 <tr>
 <td><code>intersections</code></td>
 <td>-</td>
 <td><code>SignalsAndGapAcceptance</code></td>
 <td></td>
-<td>code: (the native tiers) and (the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4)</td>
+<td>code: assumption (this engine's native mobility tiers, no external source): the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4</td>
 </tr>
 <tr>
 <td><code>lane_changes</code></td>
 <td>-</td>
 <td><code>true</code></td>
 <td></td>
-<td>code: (the native tiers) and (the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4)</td>
+<td>code: assumption (this engine's native mobility tiers, no external source): the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4</td>
 </tr>
 <tr>
 <td><code>lookahead</code></td>
@@ -17543,7 +17518,7 @@
 <td>-</td>
 <td><code>["car", "truck", "bus", "moto", "emergency"]</code></td>
 <td></td>
-<td>code: (the native tiers) and (the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4)</td>
+<td>code: assumption (this engine's native mobility tiers, no external source): the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4</td>
 </tr>
 <tr>
 <td><code>insertion_gap</code></td>
@@ -17564,7 +17539,7 @@
 <td>-</td>
 <td><code>true</code></td>
 <td></td>
-<td>code: (the native tiers) and (the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4)</td>
+<td>code: assumption (this engine's native mobility tiers, no external source): the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4</td>
 </tr>
 <tr>
 <td><code>no_change_zone</code></td>
@@ -17656,7 +17631,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>code: (the native tiers) and (the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4)</li>
+<li>code: assumption (this engine's native mobility tiers, no external source): the <code>Mobility</code> trait and its invariants I-M1, I-M2, I-M4</li>
 </ul>
 <h3 id="mobilityroutingdijkstra"><code>mobility/routing/dijkstra</code><a class="headerlink" href="#mobilityroutingdijkstra" title="Permanent link">&para;</a></h3>
 <p>Dijkstra on the lane graph with edge cost = length / speed limit, honouring turn restrictions and lane-class masks.</p>
@@ -17677,14 +17652,14 @@
 <td>-</td>
 <td><code>["car"]</code></td>
 <td></td>
-<td>code: : a lane carries the class mask that may use it</td>
+<td>code: assumption (this engine's world format, no external source): a lane carries the class mask that may use it</td>
 </tr>
 <tr>
 <td><code>allow_uturn</code></td>
 <td>-</td>
 <td><code>false</code></td>
 <td></td>
-<td>code: (edge cost = length / speed limit; closures raise the cost to infinity), from <code>roads.py</code> <code>CustomNetwork</code> []</td>
+<td>code: edge cost = length / speed limit; closures raise the cost to infinity, from the legacy <code>roads.py</code> <code>CustomNetwork</code></td>
 </tr>
 <tr>
 <td><code>max_settled</code></td>
@@ -17707,7 +17682,7 @@
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
-<li>One shortest path: no route-choice heterogeneity, no stochastic assignment ( lists this as ignored by all tiers).</li>
+<li>One shortest path: no route-choice heterogeneity, no stochastic assignment (ignored by every tier).</li>
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
@@ -17715,7 +17690,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>code: (edge cost = length / speed limit; closures raise the cost to infinity), from <code>roads.py</code> <code>CustomNetwork</code> []</li>
+<li>code: edge cost = length / speed limit; closures raise the cost to infinity, from the legacy <code>roads.py</code> <code>CustomNetwork</code></li>
 </ul>
 <h3 id="mobilityroutingdynamic-reroute"><code>mobility/routing/dynamic-reroute</code><a class="headerlink" href="#mobilityroutingdynamic-reroute" title="Permanent link">&para;</a></h3>
 <p>Dijkstra on the lane graph, re-run at the next junction when a closure event or a travel-time update changes the best route.</p>
@@ -17736,14 +17711,14 @@
 <td>-</td>
 <td><code>["car"]</code></td>
 <td></td>
-<td>code: : a lane carries the class mask that may use it</td>
+<td>code: assumption (this engine's world format, no external source): a lane carries the class mask that may use it</td>
 </tr>
 <tr>
 <td><code>allow_uturn</code></td>
 <td>-</td>
 <td><code>false</code></td>
 <td></td>
-<td>code: (edge cost = length / speed limit; closures raise the cost to infinity), from <code>roads.py</code> <code>CustomNetwork</code> []</td>
+<td>code: edge cost = length / speed limit; closures raise the cost to infinity, from the legacy <code>roads.py</code> <code>CustomNetwork</code></td>
 </tr>
 <tr>
 <td><code>max_settled</code></td>
@@ -17757,7 +17732,7 @@
 <td>-</td>
 <td><code>{"on_closure": true, "on_travel_time_change": false, "periodic_s": null}</code></td>
 <td></td>
-<td>code: (edge cost = length / speed limit; closures raise the cost to infinity), from <code>roads.py</code> <code>CustomNetwork</code> []</td>
+<td>code: edge cost = length / speed limit; closures raise the cost to infinity, from the legacy <code>roads.py</code> <code>CustomNetwork</code></td>
 </tr>
 </tbody>
 </table>
@@ -17773,7 +17748,7 @@
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
-<li>One shortest path: no route-choice heterogeneity, no stochastic assignment ( lists this as ignored by all tiers).</li>
+<li>One shortest path: no route-choice heterogeneity, no stochastic assignment (ignored by every tier).</li>
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
@@ -17781,7 +17756,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>code: (edge cost = length / speed limit; closures raise the cost to infinity), from <code>roads.py</code> <code>CustomNetwork</code> []</li>
+<li>code: edge cost = length / speed limit; closures raise the cost to infinity, from the legacy <code>roads.py</code> <code>CustomNetwork</code></li>
 </ul>
 <h3 id="mobilitytieredmeso-micro"><code>mobility/tiered/meso-micro</code><a class="headerlink" href="#mobilitytieredmeso-micro" title="Permanent link">&para;</a></h3>
 <p>Microscopic traffic (the native engine) inside a focus region and the mesoscopic queue network everywhere else, with vehicles handed across the boundary under one id, route and driver, and spill-back crossing it both ways.</p>
@@ -17802,7 +17777,7 @@
 <td>m</td>
 <td><code>{"centre_m": [0.0, 0.0], "kind": "circle", "radius_m": 500.0}</code></td>
 <td></td>
-<td>code: this crate: the coupling rules of crate::meso::tiered (hand-in on admission, hand-out with holds), with 's focus region as the region</td>
+<td>code: this crate: the coupling rules of crate::meso::tiered (hand-in on admission, hand-out with holds), with the scenario's focus region as the region</td>
 </tr>
 <tr>
 <td><code>meso</code></td>
@@ -17826,7 +17801,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>code: this crate: the coupling rules of crate::meso::tiered (hand-in on admission, hand-out with holds), with 's focus region as the region</li>
+<li>code: this crate: the coupling rules of crate::meso::tiered (hand-in on admission, hand-out with holds), with the scenario's focus region as the region</li>
 </ul>
 <h3 id="signalsnema-dual-ring"><code>signals/nema-dual-ring</code><a class="headerlink" href="#signalsnema-dual-ring" title="Permanent link">&para;</a></h3>
 <p>The NEMA dual-ring eight-phase actuated controller (<code>traffic.signals.control: nema</code>): two rings timing concurrently and crossing each barrier together, minimum green, passage, gap-out and max-out, yellow and red clearance, protected and protected-permissive lefts with the flashing yellow arrow, pedestrian intervals on push-button calls, coordination with force-offs, and priority service; the rings are re-projected into each mapped junction's plan, and junctions that do not map keep the single-ring controller. Re-implemented from FHWA STM 2nd ed. and NEMA TS 2-2016; SUMO was read for behaviour only.</p>
@@ -17893,7 +17868,7 @@
 <p><strong>Equations.</strong></p>
 <ul>
 <li><em>header size</em>: <code>H = GN(transport) + BTP + [LLC/SNAP]</code> GN(SHB) = 4 + 8 + 24 + 4 = 40; GN(GBC) = 4 + 8 + 2 + 2 + 24 + 4 + 4 + 2 + 2 + 2 + 2 = 56; GN(GUC) = 4 + 8 + 2 + 2 + 24 + 20 = 60; BTP-A and BTP-B are 4 each. Below a secured CAM on ITS-G5: 8 + 40 + 4 = 52.</li>
-<li><em>MTU rule</em>: <code>MTU = min(itsGnMaxSduSize, MTU_AL - GN_MAX - GNSEC_MAX) = min(1398, 1500 - 88 - 0) = 1398</code> EN 302 636-4-1 §9.2.3 states MTU_GN &lt;= MTU_AL - GEO_MAX; Annex H items 8-9 give itsGnMaxSduSize = 1 398 and GN_MAX = 88, both VERIFIED. The identity '1 398 = 1 500 - 88 - 0' quoted by does not evaluate (1 500 - 88 = 1 412), so the two verified numbers are kept separate and the smaller binds. GN_MAX is a provisioned ceiling that already includes a security allowance, which is why it exceeds the largest header this model sizes (GUC 60 + BTP 4).</li>
+<li><em>MTU rule</em>: <code>MTU = min(itsGnMaxSduSize, MTU_AL - GN_MAX - GNSEC_MAX) = min(1398, 1500 - 88 - 0) = 1398</code> EN 302 636-4-1 §9.2.3 states MTU_GN &lt;= MTU_AL - GEO_MAX; Annex H items 8-9 give itsGnMaxSduSize = 1 398 and GN_MAX = 88, both VERIFIED. The identity '1 398 = 1 500 - 88 - 0' quoted in secondary sources does not evaluate (1 500 - 88 = 1 412), so the two verified numbers are kept separate and the smaller binds. GN_MAX is a provisioned ceiling that already includes a security allowance, which is why it exceeds the largest header this model sizes (GUC 60 + BTP 4).</li>
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
@@ -17905,13 +17880,13 @@
 <ul>
 <li>The LLC/SNAP figure of 8 octets is DERIVED from IEEE 802.2 plus SNAP (DSAP/SSAP 0xAA, control 0x03, OUI 00-00-00, EtherType). EN 302 663 §4.3.1 Figure 3 shows "IEEE/ISO/IEC 8802-2 with SNAP" but does not quote the octet count, and TS 102 636-4-2 V1.1.1 does not contain it.</li>
 <li>The 52-octet total below a secured CAM is DERIVED by addition from three VERIFIED sizes; no capture was measured against it.</li>
-<li>The identity '1 398 = 1 500 - 88 - 0' that and quote for itsGnMaxSduSize does not evaluate: 1 500 - 88 is 1 412, and 1 398 + 88 is 1 486, so the MTU_AL the MIB's own subtraction used was not 1 500. The two Annex H values (1 398 and 88) are VERIFIED and are both kept; the MTU is the smaller of the MIB value and §9.2.3's rule, and no source is stretched to make the quoted subtraction come out.</li>
+<li>The identity '1 398 = 1 500 - 88 - 0' that secondary sources quote for itsGnMaxSduSize does not evaluate: 1 500 - 88 is 1 412, and 1 398 + 88 is 1 486, so the MTU_AL the MIB's own subtraction used was not 1 500. The two Annex H values (1 398 and 88) are VERIFIED and are both kept; the MTU is the smaller of the MIB value and §9.2.3's rule, and no source is stretched to make the quoted subtraction come out.</li>
 <li>GeoNetworking does not fragment: the full text of EN 302 636-4-1 V1.4.1 contains zero occurrences of "fragment" (VERIFIED by absence). An oversize SDU is refused here, and oversize content is segmented at the facilities layer (MAPEM layerID, CPM messageSegmentInfo) by the fragmenter/facilities-segmentation model.</li>
 <li>The CAM (2001), DENM (2002) and SSEM (2008) BTP ports are attributed to TS 103 248, which was not extracted, and are UNVERIFIED. A port changes no header size — a BTP header is four octets whatever the port — so the exposure is demultiplexing inside the model only.</li>
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
-<li>GN forwarding: GBC multi-hop forwarding, the DENM keep-alive forwarding algorithm, the location table, duplicate-packet detection and the contention-based forwarding timers, all of which belong to the high net tier (§7.5).</li>
+<li>GN forwarding: GBC multi-hop forwarding, the DENM keep-alive forwarding algorithm, the location table, duplicate-packet detection and the contention-based forwarding timers, all of which belong to the high net tier.</li>
 <li>DCC_NET, the GeoNetworking CBR-sharing mechanism of TS 102 636-4-2.</li>
 <li>The secured-packet extension header: the security envelope's own bytes are v2xw-sec's and arrive here inside the SDU.</li>
 </ul>
@@ -17920,7 +17895,7 @@
 <li>standard: ETSI EN 302 636-4-1 V1.4.1 (2020-01) §9.5-9.7, §9.2.3, Tables 11-17, Annex H. Header sizes and the MTU rule, all VERIFIED.</li>
 <li>standard: ETSI EN 302 636-5-1 V2.2.1 (2019-05) §7.2-7.3, Tables 1-3. BTP-A and BTP-B, 4 octets each, VERIFIED.</li>
 <li>standard: ETSI TS 103 301 CSP_PortNo tables — well-known BTP ports (MAPEM 2003, SPATEM 2004, IVIM 2006, SREM 2007, RTCMEM 2013)</li>
-<li>paper: -F.3 — the fact sheet these sizes were extracted from</li>
+<li>paper: ETSI EN 302 636-4-1 V1.4.1 §9.5-9.7, Tables 11-17 and Annex H, and EN 302 636-5-1 V2.2.1 §7.2-7.3 — the clauses these sizes were extracted from</li>
 </ul>
 <h3 id="netwsmp1609-3"><code>net/wsmp/1609-3</code><a class="headerlink" href="#netwsmp1609-3" title="Permanent link">&para;</a></h3>
 <p>Exact IEEE 1609.3 WSMP v3 header sizes: the one-octet N-header, the optional three-octet channel / data-rate / transmit-power extensions, the TPID octet, the p-encoded PSID and the variable length field. Exposes the WSM payload cap and fragments nothing.</p>
@@ -17952,16 +17927,16 @@
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Only the PSID-addressed WSMP transport forms are modelled. IEEE 1609.3 also offers UDP/IPv6 and TCP/IPv6, which puts outside Phases 1-2.</li>
+<li>Only the PSID-addressed WSMP transport forms are modelled. IEEE 1609.3 also offers UDP/IPv6 and TCP/IPv6, which this engine does not model.</li>
 <li>The TPID octet is counted once and its value is not modelled, because both PSID-only forms cost the same single octet.</li>
 <li>Header sizes are exact; the header's octets are not synthesised (see the crate documentation). The SDU's bytes are the codec's own.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
-<li>The width of the WSMP-T length field is DERIVED. gives a one-octet length in the 4-octet minimum and gives a two-octet length for a BSM with a payload of at least 128 B; the p-encoding boundary at 0x80 is the only rule that yields both, and the standard's clause for it is not accessible.</li>
+<li>The width of the WSMP-T length field is DERIVED. The Wireshark WSMP dissector and the 1609.3 ASN.1 give a one-octet length in the 4-octet minimum and a two-octet length for a BSM with a payload of at least 128 B; the p-encoding boundary at 0x80 is the only rule that yields both, and the standard's clause for it is not accessible.</li>
 <li>The snippet "minimum 5 bytes ... rarely exceeding 20" attributed to the 1609.3 text is UNVERIFIED and is not used for anything.</li>
 <li>The two payload maxima and the MSDU cap are not mutually consistent. A 2,302 B "supported" WSM payload plus even a minimum 4-octet WSMP header is 2,306 B, two octets above the 2,304 B MSDU cap, so the figures come from different accounting conventions (payload versus MSDU). The model enforces max_wsm_payload_bytes and leaves the MSDU cap to the MAC model, which is where the frame is assembled.</li>
-<li>WSMP does not fragment, so this layer refuses an oversize SDU rather than splitting it: finds no fragmentation field in ShortMsgNpdu, ShortMsgData is annotated "maximum size is given by access technology", and the Wireshark dissector has no reassembly (VERIFIED by absence; the clause number is UNVERIFIED).</li>
+<li>WSMP does not fragment, so this layer refuses an oversize SDU rather than splitting it: the 1609.3 ASN.1 has no fragmentation field in ShortMsgNpdu, ShortMsgData is annotated "maximum size is given by access technology", and the Wireshark dissector has no reassembly (VERIFIED by absence; the clause number is UNVERIFIED).</li>
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
@@ -17973,7 +17948,7 @@
 <li>code: Wireshark epan/dissectors/packet-wsmp.c (dissect_wsmp_v3), epan/etypes.h. Field-by-field layout and EtherType 0x88DC.</li>
 <li>standard: IEEE 1609.3 ASN.1 modules wsm.asn and wee.asn (ShortMsgNpdu, ShortMsgTpdus, ShortMsgNextensions, VarLengthNumber)</li>
 <li>standard: USDOT CTI 4501 v01.01 §4.3.3.1.3.1 — WSM payload maxima</li>
-<li>paper: — the fact sheet these sizes were extracted from</li>
+<li>paper: Wireshark packet-wsmp.c and the IEEE 1609.3 ASN.1 (wsm.asn, wee.asn) — the secondary sources these sizes were extracted from</li>
 </ul>
 <h2 id="primitive">primitive<a class="headerlink" href="#primitive" title="Permanent link">&para;</a></h2>
 <h3 id="primitiveaes-128"><code>primitive/aes-128</code><a class="headerlink" href="#primitiveaes-128" title="Permanent link">&para;</a></h3>
@@ -18122,8 +18097,8 @@
 <li>datasheet: Infineon AURIX training document</li>
 <li>paper: CAMP EE Requirements 2016 p. 75</li>
 <li>paper: NDSS 2024 Table V</li>
-<li>code: gist</li>
-<li>code: gist</li>
+<li>code: github.com/dchest gist, Raspberry Pi 3B and 3B+ openssl speed</li>
+<li>code: github.com/dchest gist, Raspberry Pi 3B and 3B+ openssl speed</li>
 <li>code: gist, OpenSSL 1.1.1d on Raspberry Pi 4</li>
 <li>datasheet: wolfSSL benchmark blog, mbedTLS 3.6.6</li>
 <li>datasheet: wolfSSL benchmark blog, wolfSSL 5.9.1</li>
@@ -18141,7 +18116,7 @@
 <p>version <code>1.0.0</code>; tiers <code>abstract</code>, <code>medium</code>, <code>high</code>; hosting <code>in-process</code>; draws no random numbers.</p>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>Covers brainpoolP384r1 too gives the two the same sizes.</li>
+<li>Covers brainpoolP384r1 too; the two have the same sizes.</li>
 <li>listed no P-384 anchor; WP-C4 adds the published <code>openssl speed</code> and HSM figures. The P-256 anchors are never a proxy: P-384 is materially slower.</li>
 <li>§9.4 states the level as "192-bit" rather than as a NIST category; 3 is the category that 192-bit classical strength sits in.</li>
 <li>hw-profile/cortex-a72-pi4-openssl-1.1.1d: recorded as published: OpenSSL 1.1.1d signs P-384 slower here than 1.1.0f does on the slower Pi 3B (no constant-time nistp384 assembly in 1.1.1d)</li>
@@ -18526,7 +18501,7 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>The SHAKE parameter set has identical sizes; only the hash family differs.</li>
-<li>publishes cost anchors for the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
+<li>Published cost anchors cover the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
 <li>hw-profile/xeon-e3-1220-ref-c: simple variant</li>
 </ul>
 <p><strong>Limitations.</strong></p>
@@ -18546,7 +18521,7 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>The SHAKE parameter set has identical sizes; only the hash family differs.</li>
-<li>publishes cost anchors for the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
+<li>Published cost anchors cover the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
 <li>hw-profile/cohda-mk6-liboqs: published as "SPHINCS+" with no parameter set; the 5.485 ms sign is anomalous next to the reference 2.7e9 cycles and is recorded as published rather than corrected</li>
 <li>hw-profile/xeon-e3-1220-ref-c: simple variant</li>
 </ul>
@@ -18568,7 +18543,7 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>The SHAKE parameter set has identical sizes; only the hash family differs.</li>
-<li>publishes cost anchors for the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
+<li>Published cost anchors cover the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -18584,7 +18559,7 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>The SHAKE parameter set has identical sizes; only the hash family differs.</li>
-<li>publishes cost anchors for the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
+<li>Published cost anchors cover the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -18600,7 +18575,7 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>The SHAKE parameter set has identical sizes; only the hash family differs.</li>
-<li>publishes cost anchors for the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
+<li>Published cost anchors cover the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -18616,7 +18591,7 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>The SHAKE parameter set has identical sizes; only the hash family differs.</li>
-<li>publishes cost anchors for the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
+<li>Published cost anchors cover the 128s and 128f parameter sets only; the 192 and 256 sets carry no cost anchor and none is inferred, because SLH-DSA's cost scales with its tree parameters and not with its signature size.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
@@ -18766,7 +18741,7 @@
 <td>d</td>
 <td><code>90</code></td>
 <td></td>
-<td>standard: EU C-ITS Certificate Policy 1.1 §2.2: trust-material update cadence &lt;= 3 months, with stations obliged to update within 1 week (via )</td>
+<td>standard: EU C-ITS Certificate Policy 1.1 §2.2: trust-material update cadence &lt;= 3 months, with stations obliged to update within 1 week</td>
 </tr>
 <tr>
 <td><code>etsi_butterfly_response_bytes</code></td>
@@ -19052,7 +19027,7 @@
 <td>-</td>
 <td><code>156</code></td>
 <td></td>
-<td>paper: : the CAMP end-entity certificate lifetime, 156 weekly periods; also a denial-of-service bound, see v2xw-sec's linkage module</td>
+<td>paper: the CAMP end-entity certificate lifetime, 156 weekly periods; also a denial-of-service bound, see v2xw-sec's linkage module</td>
 </tr>
 <tr>
 <td><code>pseudonym_change_interval_s</code></td>
@@ -19080,7 +19055,7 @@
 <td>-</td>
 <td><code>hw-profile/i9-11950h-wolfssl</code></td>
 <td></td>
-<td>datasheet: wolfSSL benchmark, Intel i9-11950H leaves appliance-level RA/PCA/MA transaction rates NOT PUBLISHED, so the service model composes them from these per-operation costs</td>
+<td>datasheet: wolfSSL benchmark, Intel i9-11950H; appliance-level RA/PCA/MA transaction rates are NOT PUBLISHED, so the service model composes them from these per-operation costs</td>
 </tr>
 <tr>
 <td><code>device_hw_profile</code></td>
@@ -19277,12 +19252,12 @@
 <p><strong>Assumptions.</strong></p>
 <ul>
 <li>Root CA, the Policy Generator and the electors are offline, as in the CAMP PoC, so they place no messages on any link.</li>
-<li>Service times are deterministic sums of per-operation costs plus a fixed overhead: the <code>medium</code> tier without its stochastic variant, whose log-normal parameters the design leaves todo-calibrate.</li>
+<li>Service times are deterministic sums of per-operation costs plus a fixed overhead: the <code>medium</code> M/M/c tier without its stochastic variant, whose log-normal parameters the design leaves todo-calibrate.</li>
 <li>SHA-256 and AES-128 have no cost anchor on any hardware profile, so their operations are counted and charged zero time rather than given an invented rate.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
 <ul>
-<li>Availability (entity outages) is a declared hook and is not modelled: leaves the two-state Markov parameters todo-calibrate.</li>
+<li>Availability (entity outages) is a declared hook and is not modelled: the two-state Markov parameters are todo-calibrate.</li>
 <li>Epidemic V2V CRL exchange and RSU-relayed <em>provisioning</em> are not built. CRL <em>distribution</em> has both paths: the cellular fetch from the CRL Store and the roadside broadcast, the latter as a point-to-point link at the OFDM rate. Contention, fragmentation and the loss process on that link belong to the radio crates, so a scenario that needs them drives the broadcast through the engine's PHY rather than through this link.</li>
 <li>The CRL expansion cost is counted and charged zero time, because no hardware profile publishes a SHA-256 or AES-128 anchor. A device's <code>processed</code> and <code>enforced</code> stages therefore share their <code>downloaded</code> instant, and the expansion's operation counts — not its duration — are what the metric reports.</li>
 <li>The P2PCD and certificate-attachment policies are declared as parameters here and enforced by the envelope in <code>v2xw-sec</code>, not by this crate.</li>
@@ -19326,14 +19301,14 @@
 <td>m/s2</td>
 <td><code>3.92</code></td>
 <td></td>
-<td>standard: SAE J2945/1 BSM Part II emergency-brake event flag at 0.4 g = 3.92 m/s² [ and §11, both VERIFIED]</td>
+<td>standard: SAE J2945/1 BSM Part II emergency-brake event flag at 0.4 g = 3.92 m/s² [both VERIFIED]</td>
 </tr>
 <tr>
 <td><code>estimate_window_ms</code></td>
 <td>ms</td>
 <td><code>500</code></td>
 <td></td>
-<td>standard: ETSI TS 103 759 V2.2.1: the EEBL plausibility gate requires the preceding vehicle's deceleration to be positive within 500 ms before the claimed detectionTime []</td>
+<td>standard: ETSI TS 103 759 V2.2.1: the EEBL plausibility gate requires the preceding vehicle's deceleration to be positive within 500 ms before the claimed detectionTime</td>
 </tr>
 <tr>
 <td><code>hold_ms</code></td>
@@ -19350,7 +19325,7 @@
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
-<li>A receiver at this fidelity has no brake-event flag: BSM Part II is not encoded ( marks its cadence UNVERIFIED) and a CAM's basic vehicle container carries none, so the deceleration is differentiated from claimed speeds.</li>
+<li>A receiver at this fidelity has no brake-event flag: BSM Part II is not encoded (its cadence is UNVERIFIED) and a CAM's basic vehicle container carries none, so the deceleration is differentiated from claimed speeds.</li>
 <li>The interval is measured between the two <em>claimed</em> generation times, so a peer with a drifting clock produces a wrong deceleration — which is the real consequence and the one a clock attack should have.</li>
 </ul>
 <p><strong>Limitations.</strong></p>
@@ -19382,7 +19357,7 @@
 <td>s</td>
 <td><code>1.5</code></td>
 <td></td>
-<td>todo-calibrate: marks the FCW time-to-collision threshold UNVERIFIED (calibration pending)</td>
+<td>todo-calibrate: the FCW time-to-collision threshold is UNVERIFIED (calibration pending)</td>
 </tr>
 <tr>
 <td><code>ttc_imminent_s</code></td>
@@ -19396,7 +19371,7 @@
 <td>m</td>
 <td><code>0.9</code></td>
 <td></td>
-<td>todo-calibrate: marks the VSC-A zone geometry TODO: calibrate (calibration pending)</td>
+<td>todo-calibrate: the VSC-A zone geometry is TODO: calibrate (calibration pending)</td>
 </tr>
 <tr>
 <td><code>heading_tolerance_rad</code></td>
@@ -19429,7 +19404,7 @@
 <ul>
 <li>Gaps are between reported reference points, so vehicle length is not accounted for and every time to collision is correspondingly optimistic — the same limitation v2xw-metrics records for the ground-truth ttc_min.</li>
 <li><code>required_decel_mps2</code> is the deceleration the ego would need, not FHWA-HRT-08-051's DRAC, which is the deceleration the second vehicle was observed to apply. The two are not interchangeable and the field name says which this is.</li>
-<li>Every numeric trigger is uncalibrated: 's FCW row has no verified number in it.</li>
+<li>Every numeric trigger is uncalibrated: no FCW trigger value is verified.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
@@ -19455,21 +19430,21 @@
 <td>s</td>
 <td><code>4.0</code></td>
 <td></td>
-<td>todo-calibrate: marks the IMA time-to-intersection threshold UNVERIFIED and notes it is 'not in the accessible report' (calibration pending)</td>
+<td>todo-calibrate: the IMA time-to-intersection threshold is UNVERIFIED: it is not in the accessible VSC-A report (calibration pending)</td>
 </tr>
 <tr>
 <td><code>pet_warn_s</code></td>
 <td>s</td>
 <td><code>1.5</code></td>
 <td></td>
-<td>todo-calibrate: no source gives the post-encroachment time at which an intersection application should warn records the PET threshold itself as UNVERIFIED (calibration pending)</td>
+<td>todo-calibrate: no source gives the post-encroachment time at which an intersection application should warn; the PET threshold itself is UNVERIFIED (calibration pending)</td>
 </tr>
 <tr>
 <td><code>pet_conflict_s</code></td>
 <td>s</td>
 <td><code>5.0</code></td>
 <td></td>
-<td>todo-calibrate: records the PET threshold as UNVERIFIED (calibration pending)</td>
+<td>todo-calibrate: the PET threshold is UNVERIFIED (calibration pending)</td>
 </tr>
 <tr>
 <td><code>moving_threshold_mps</code></td>
@@ -19490,7 +19465,7 @@
 <p><strong>Equations.</strong></p>
 <ul>
 <li><em>conflict point</em>: <code>solve p_ego + t·v_ego = p_peer + s·v_peer by Cramer's rule; a determinant below 1e-9 is treated as parallel</code></li>
-<li><em>post-encroachment time</em>: <code>pet = &#124;t_ego − t_peer&#124;, the interval between one road user leaving the conflict point and the other arriving </code></li>
+<li><em>post-encroachment time</em>: <code>pet = &#124;t_ego − t_peer&#124;, the interval between one road user leaving the conflict point and the other arriving</code></li>
 </ul>
 <p><strong>Assumptions.</strong></p>
 <ul>
@@ -19501,7 +19476,7 @@
 <ul>
 <li>Road users are points: neither vehicle's extent beyond the conflict point is accounted for, so the post-encroachment time is an over-estimate of the safety margin in exactly the way v2xw-metrics records for its cell-based pet.</li>
 <li>A curving approach is a straight line here, so a vehicle turning into the ego's path is seen late.</li>
-<li>Every numeric trigger is uncalibrated: 's IMA row has no verified number in it.</li>
+<li>Every numeric trigger is uncalibrated: no IMA trigger value is verified.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
@@ -19538,7 +19513,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>paper: Krishnan &amp; Weimerskirch, 'Verify-on-Demand', SAE Int. J. Passenger Cars - Mech. Syst. 4:536-546, 2011 [, cited via ePrint 2022/133 ref. 7]</li>
+<li>paper: Krishnan &amp; Weimerskirch, 'Verify-on-Demand', SAE Int. J. Passenger Cars - Mech. Syst. 4:536-546, 2011 [cited via ePrint 2022/133 ref. 7]</li>
 </ul>
 <h3 id="verification-policyprioritized"><code>verification-policy/prioritized</code><a class="headerlink" href="#verification-policyprioritized" title="Permanent link">&para;</a></h3>
 <p>Order the verification queue by application relevance and by how close the sender claims to be; drop the oldest entry when the queue overflows.</p>
@@ -19573,7 +19548,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>todo-calibrate: (prioritized policy: 'priority by relevance score and distance; oldest-drop when the queue exceeds queue_depth')</li>
+<li>todo-calibrate: assumption, no external source (prioritized policy: 'priority by relevance score and distance; oldest-drop when the queue exceeds queue_depth')</li>
 </ul>
 <h3 id="verification-policyverify-all"><code>verification-policy/verify-all</code><a class="headerlink" href="#verification-policyverify-all" title="Permanent link">&para;</a></h3>
 <p>Verify every received SPDU in arrival order; drop on queue overflow. Nothing unverified reaches an application.</p>
@@ -19676,7 +19651,7 @@
 <td>m</td>
 <td><code>10.0</code></td>
 <td></td>
-<td>code: SUMO <code>jmCrossingGap</code> default 10 m [, §B13]</td>
+<td>code: SUMO <code>jmCrossingGap</code> default 10 m</td>
 </tr>
 <tr>
 <td><code>elliptical</code></td>
@@ -19774,14 +19749,14 @@
 <td>m/s²</td>
 <td><code>0.0</code></td>
 <td></td>
-<td>todo-calibrate: Helbing &amp; Molnár write "+ fluctuations" and records no magnitude (calibration pending)</td>
+<td>todo-calibrate: Helbing &amp; Molnár write "+ fluctuations" and give no magnitude (calibration pending)</td>
 </tr>
 </tbody>
 </table>
 <p><strong>Equations.</strong></p>
 <ul>
 <li><em>acceleration</em>: <code>dv/dt = (v0·e − v)/τ + Σ f_αβ + Σ f_αB + fluctuations</code></li>
-<li><em>pedestrian repulsion</em>: <code>f_αβ = −∇_r V(b), V(b) = V0·exp(−b/σ), b = ½√((&#124;r&#124; + &#124;r − y&#124;)² − &#124;y&#124;²), y = v_β·Δt·e_β</code> the closed-form gradient ∇_r b = ((&#124;r&#124; + &#124;r−y&#124;)/(4b))·(r̂ + (r−y)ˆ) is the standard reduction and is <strong>transcribed, not quoted</strong>: records the parameter table and the model's form, not this expression. <code>elliptical = false</code> falls back to the isotropic b = &#124;r&#124;.</li>
+<li><em>pedestrian repulsion</em>: <code>f_αβ = −∇_r V(b), V(b) = V0·exp(−b/σ), b = ½√((&#124;r&#124; + &#124;r − y&#124;)² − &#124;y&#124;²), y = v_β·Δt·e_β</code> the closed-form gradient ∇_r b = ((&#124;r&#124; + &#124;r−y&#124;)/(4b))·(r̂ + (r−y)ˆ) is the standard reduction and is <strong>transcribed, not quoted</strong>: the source read gives the parameter table and the model's form, not this expression. <code>elliptical = false</code> falls back to the isotropic b = &#124;r&#124;.</li>
 <li><em>border repulsion</em>: <code>f_αB = (U0/R)·exp(−d/R) away from the border</code></li>
 <li><em>field of view</em>: <code>w = 1 if e·f ≥ &#124;f&#124;·cos(φ), else c</code> 2φ = 200°, c = 0.5</li>
 </ul>
@@ -19829,14 +19804,14 @@
 <td>-</td>
 <td><code>true</code></td>
 <td></td>
-<td>code: : SUMO net.xml is the interchange format, and the table of what a SUMO import preserves and loses</td>
+<td>code: assumption (this engine's format decision, no external source): SUMO net.xml is the interchange format, and the table of what a SUMO import preserves and loses</td>
 </tr>
 <tr>
 <td><code>roads_licence</code></td>
 <td>-</td>
 <td><code>UNSTATED</code></td>
 <td></td>
-<td>code: : "the format has no separate license". The network's data licence depends on where it came from, so the importer claims none unless the caller states one.</td>
+<td>code: SUMO project licence EPL-2.0 (exact wording unverified): the net.xml format has no separate license. The network's data licence depends on where it came from, so the importer claims none unless the caller states one.</td>
 </tr>
 <tr>
 <td><code>default_lane_width_m</code></td>
@@ -19892,12 +19867,12 @@
 <ul>
 <li><code>&amp;lt;roundabout edges&amp;gt;</code>: only its <code>nodes</code> are read, to set the junction control.</li>
 <li>Lane <code>acceleration</code>, <code>changeLeft</code>, <code>changeRight</code>, <code>endOffset</code>, <code>customShape</code> and the <code>&amp;lt;neigh&amp;gt;</code> element.</li>
-<li>Actuated, delay-based and NEMA traffic-light programmes are carried into <code>World::signal_programmes</code> with their phases' <code>minDur</code>/<code>maxDur</code> (and NEMA's <code>name</code>, <code>vehext</code>, <code>yellow</code>, <code>red</code>) and <code>&amp;lt;param&amp;gt; A delay-based programme runs as actuated (</code>delay-based-as-actuated`), and SUMO's induction-loop detectors are not imported: the engine's own detectors call the phases.</li>
+<li>Actuated, delay-based and NEMA traffic-light programmes are carried into <code>World::signal_programmes</code> with their phases' <code>minDur</code>/<code>maxDur</code> (and NEMA's <code>name</code>, <code>vehext</code>, <code>yellow</code>, <code>red</code>) and <code>&amp;lt;param&amp;gt;</code>s, each counted in the report's <code>tl_ledger</code>; a delay-based programme runs as actuated (<code>delay-based-as-actuated</code>), and SUMO's induction-loop detectors are not imported: the engine's own detectors call the phases.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
 <li>code: SUMO Road Networks documentation: the elements &lt;edge&gt;, &lt;lane&gt;, &lt;junction&gt;, &lt;connection&gt;, &lt;tlLogic&gt;, &lt;request&gt;</li>
-<li>code: : SUMO net.xml is the interchange format, and the table of what a SUMO import preserves and loses</li>
+<li>code: assumption (this engine's format decision, no external source): SUMO net.xml is the interchange format, and the table of what a SUMO import preserves and loses</li>
 <li>code: netconvert import formats: plain XML, OSM, VISUM, Vissim, OpenDRIVE, MATSim, SUMO, Shapefile, RoboCup, DlrNavteq/GDF</li>
 </ul>
 <h3 id="worldsourceosm"><code>world/source/osm</code><a class="headerlink" href="#worldsourceosm" title="Permanent link">&para;</a></h3>
@@ -19968,70 +19943,70 @@
 <td>m</td>
 <td><code>2.0</code></td>
 <td></td>
-<td>code: osm2streets README (lane inference and the simplification list),</td>
+<td>code: osm2streets README (lane inference and the simplification list)</td>
 </tr>
 <tr>
 <td><code>cycleway_width_m</code></td>
 <td>m</td>
 <td><code>1.5</code></td>
 <td></td>
-<td>code: osm2streets README (lane inference and the simplification list),</td>
+<td>code: osm2streets README (lane inference and the simplification list)</td>
 </tr>
 <tr>
 <td><code>junction_join_m</code></td>
 <td>m</td>
 <td><code>10.0</code></td>
 <td></td>
-<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2), and §2.3</td>
+<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2)</td>
 </tr>
 <tr>
 <td><code>guess_signals_m</code></td>
 <td>m</td>
 <td><code>25.0</code></td>
 <td></td>
-<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2), and §2.3</td>
+<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2)</td>
 </tr>
 <tr>
 <td><code>cycle_s</code></td>
 <td>s</td>
 <td><code>90.0</code></td>
 <td></td>
-<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2), and §2.3</td>
+<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2)</td>
 </tr>
 <tr>
 <td><code>green_s</code></td>
 <td>s</td>
 <td><code>31.0</code></td>
 <td></td>
-<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2), and §2.3</td>
+<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2)</td>
 </tr>
 <tr>
 <td><code>all_red_s</code></td>
 <td>s</td>
 <td><code>0.0</code></td>
 <td></td>
-<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2), and §2.3</td>
+<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2)</td>
 </tr>
 <tr>
 <td><code>yellow_min_decel_mps2</code></td>
 <td>m/s^2</td>
 <td><code>3.0</code></td>
 <td></td>
-<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2), and §2.3</td>
+<td>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2)</td>
 </tr>
 <tr>
 <td><code>yellow_min_s</code></td>
 <td>s</td>
 <td><code>3.0</code></td>
 <td></td>
-<td>standard: FHWA Signal Timing Manual 2008 Ch. 5 (amber 3-6 s, all-red guidance),</td>
+<td>standard: FHWA Signal Timing Manual 2008 Ch. 5 (amber 3-6 s, all-red guidance)</td>
 </tr>
 <tr>
 <td><code>yellow_max_s</code></td>
 <td>s</td>
 <td><code>6.0</code></td>
 <td></td>
-<td>standard: FHWA Signal Timing Manual 2008 Ch. 5 (amber 3-6 s, all-red guidance),</td>
+<td>standard: FHWA Signal Timing Manual 2008 Ch. 5 (amber 3-6 s, all-red guidance)</td>
 </tr>
 <tr>
 <td><code>bus_lane_width_m</code></td>
@@ -20115,7 +20090,7 @@
 <td>-</td>
 <td><code>height</code></td>
 <td></td>
-<td>dataset: OSM Simple 3D Buildings (height, building:levels, min_height, building:min_level),</td>
+<td>dataset: OSM Simple 3D Buildings (height, building:levels, min_height, building:min_level)</td>
 </tr>
 <tr>
 <td><code>building_part_parent_rule</code></td>
@@ -20222,10 +20197,10 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>code: osm2streets README (lane inference and the simplification list),</li>
-<li>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2), and §2.3</li>
-<li>dataset: OSM Simple 3D Buildings (height, building:levels, min_height, building:min_level),</li>
-<li>standard: FHWA Signal Timing Manual 2008 Ch. 5 (amber 3-6 s, all-red guidance),</li>
+<li>code: osm2streets README (lane inference and the simplification list)</li>
+<li>code: SUMO netconvert option defaults (--junctions.join 10 m, --tls.guess-signals 25 m, --tls.cycle.time 90 s, --tls.green.time 31 s, --tls.allred.time 0 s, --tls.yellow.min-decel 3 m/s^2)</li>
+<li>dataset: OSM Simple 3D Buildings (height, building:levels, min_height, building:min_level)</li>
+<li>standard: FHWA Signal Timing Manual 2008 Ch. 5 (amber 3-6 s, all-red guidance)</li>
 <li>standard: AASHTO Green Book (9-12 ft lanes; 12 ft on freeways and major arterials) and NACTO Urban Street Design Guide (10-11 ft urban street lanes)</li>
 <li>standard: New York City citywide 25 mph default speed limit (NYC Local Law 139 of 2014, under NY Vehicle &amp; Traffic Law §1643) and the NY State statutory maximum of 55 mph (NY VTL §1180(b))</li>
 <li>code: SUMO default vType <code>passenger</code> length 5.0 m: a lane shorter than one vehicle cannot hold one, which is the threshold short-driving-lane is counted against</li>
@@ -20577,7 +20552,7 @@
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
-<li>code: legacy engine roads.py L683-702 spider_graph(arms, rings, block), with arms/rings/block from grid_w/grid_h/grid_block_m </li>
+<li>code: legacy engine roads.py L683-702 spider_graph(arms, rings, block), with arms/rings/block from grid_w/grid_h/grid_block_m</li>
 <li>code: legacy/reference/sumo/mapgen.py L234-241: netgenerate --spider --spider.arm-number --spider.circle-number --spider.space-radius 100 --no-turnarounds --default.lanenumber 2, keys such as spider_8a4c</li>
 </ul>
 <h3 id="worldsourceprocedural-random"><code>world/source/procedural-random</code><a class="headerlink" href="#worldsourceprocedural-random" title="Permanent link">&para;</a></h3>
@@ -20741,14 +20716,14 @@
 <td>-</td>
 <td><code>true</code></td>
 <td></td>
-<td>code: : SUMO net.xml is the interchange format, and the table of what a SUMO import preserves and loses</td>
+<td>code: assumption (this engine's format decision, no external source): SUMO net.xml is the interchange format, and the table of what a SUMO import preserves and loses</td>
 </tr>
 <tr>
 <td><code>roads_licence</code></td>
 <td>-</td>
 <td><code>UNSTATED</code></td>
 <td></td>
-<td>code: : "the format has no separate license". The network's data licence depends on where it came from, so the importer claims none unless the caller states one.</td>
+<td>code: SUMO project licence EPL-2.0 (exact wording unverified): the net.xml format has no separate license. The network's data licence depends on where it came from, so the importer claims none unless the caller states one.</td>
 </tr>
 <tr>
 <td><code>default_lane_width_m</code></td>
@@ -20801,12 +20776,12 @@
 <ul>
 <li><code>&amp;lt;roundabout edges&amp;gt;</code>: only its <code>nodes</code> are read, to set the junction control.</li>
 <li>Lane <code>acceleration</code>, <code>changeLeft</code>, <code>changeRight</code>, <code>endOffset</code>, <code>customShape</code> and the <code>&amp;lt;neigh&amp;gt;</code> element.</li>
-<li>Actuated, delay-based and NEMA traffic-light programmes are carried into <code>World::signal_programmes</code> with their phases' <code>minDur</code>/<code>maxDur</code> (and NEMA's <code>name</code>, <code>vehext</code>, <code>yellow</code>, <code>red</code>) and <code>&amp;lt;param&amp;gt; A delay-based programme runs as actuated (</code>delay-based-as-actuated`), and SUMO's induction-loop detectors are not imported: the engine's own detectors call the phases.</li>
+<li>Actuated, delay-based and NEMA traffic-light programmes are carried into <code>World::signal_programmes</code> with their phases' <code>minDur</code>/<code>maxDur</code> (and NEMA's <code>name</code>, <code>vehext</code>, <code>yellow</code>, <code>red</code>) and <code>&amp;lt;param&amp;gt;</code>s, each counted in the report's <code>tl_ledger</code>; a delay-based programme runs as actuated (<code>delay-based-as-actuated</code>), and SUMO's induction-loop detectors are not imported: the engine's own detectors call the phases.</li>
 </ul>
 <p><strong>Sources.</strong></p>
 <ul>
 <li>code: SUMO Road Networks documentation: the elements &lt;edge&gt;, &lt;lane&gt;, &lt;junction&gt;, &lt;connection&gt;, &lt;tlLogic&gt;, &lt;request&gt;</li>
-<li>code: : SUMO net.xml is the interchange format, and the table of what a SUMO import preserves and loses</li>
+<li>code: assumption (this engine's format decision, no external source): SUMO net.xml is the interchange format, and the table of what a SUMO import preserves and loses</li>
 </ul>
 <h3 id="worldterraincopernicus-glo-30"><code>world/terrain/copernicus-glo-30</code><a class="headerlink" href="#worldterraincopernicus-glo-30" title="Permanent link">&para;</a></h3>
 <p>Reads a raster digital elevation model and resamples it bilinearly onto the world's own metre grid, so that the world's ground height comes from measured terrain instead of the z = 0 plane.</p>
@@ -20827,14 +20802,14 @@
 <td>m</td>
 <td><code>30.0</code></td>
 <td></td>
-<td>code: (both DEMs are 30 m posts, so 30 m is the resolution the data carries)</td>
+<td>code: assumption (this importer's DEM handling, no external source): both DEMs are 30 m posts, so 30 m is the resolution the data carries</td>
 </tr>
 <tr>
 <td><code>interpolation</code></td>
 <td>-</td>
 <td><code>bilinear</code></td>
 <td></td>
-<td>code: ("resampled onto the world grid with bilinear interpolation")</td>
+<td>code: assumption (this importer's DEM handling, no external source): "resampled onto the world grid with bilinear interpolation"</td>
 </tr>
 <tr>
 <td><code>margin_m</code></td>
@@ -20893,7 +20868,7 @@
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
-<li>Slope-aware or bicubic resampling: specifies bilinear and the grid records that it was used.</li>
+<li>Slope-aware or bicubic resampling: this importer uses bilinear and the grid records that it was used.</li>
 <li>Buildings and vegetation: both DEMs are surface-ish models whose treatment of canopy and roofs is not separated here.</li>
 </ul>
 <p><strong>Sources.</strong></p>
@@ -20988,14 +20963,14 @@
 <td>m</td>
 <td><code>30.0</code></td>
 <td></td>
-<td>code: (both DEMs are 30 m posts, so 30 m is the resolution the data carries)</td>
+<td>code: assumption (this importer's DEM handling, no external source): both DEMs are 30 m posts, so 30 m is the resolution the data carries</td>
 </tr>
 <tr>
 <td><code>interpolation</code></td>
 <td>-</td>
 <td><code>bilinear</code></td>
 <td></td>
-<td>code: ("resampled onto the world grid with bilinear interpolation")</td>
+<td>code: assumption (this importer's DEM handling, no external source): "resampled onto the world grid with bilinear interpolation"</td>
 </tr>
 <tr>
 <td><code>margin_m</code></td>
@@ -21054,7 +21029,7 @@
 </ul>
 <p><strong>Ignores.</strong></p>
 <ul>
-<li>Slope-aware or bicubic resampling: specifies bilinear and the grid records that it was used.</li>
+<li>Slope-aware or bicubic resampling: this importer uses bilinear and the grid records that it was used.</li>
 <li>Buildings and vegetation: both DEMs are surface-ish models whose treatment of canopy and roofs is not separated here.</li>
 </ul>
 <p><strong>Sources.</strong></p>
