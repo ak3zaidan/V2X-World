@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ak3zaidan/SCMS-Simulator/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ak3zaidan/SCMS-Simulator/ci.yml?branch=main&label=CI&logo=github"></a>
-  <a href="https://github.com/ak3zaidan/SCMS-Simulator/actions/workflows/docs.yml"><img alt="Docs" src="https://img.shields.io/github/actions/workflow/status/ak3zaidan/SCMS-Simulator/docs.yml?branch=main&label=docs&logo=materialformkdocs"></a>
+  <a href="https://github.com/ak3zaidan/V2X-World/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/ak3zaidan/V2X-World/ci.yml?branch=main&label=CI&logo=github"></a>
+  <a href="https://github.com/ak3zaidan/V2X-World/actions/workflows/docs.yml"><img alt="Docs" src="https://img.shields.io/github/actions/workflow/status/ak3zaidan/V2X-World/docs.yml?branch=main&label=docs&logo=materialformkdocs"></a>
   <a href="LICENSE"><img alt="Code licence: Apache-2.0" src="https://img.shields.io/badge/code-Apache--2.0-blue"></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img alt="Data licence: CC BY 4.0" src="https://img.shields.io/badge/data-CC%20BY%204.0-lightgrey"></a>
   <a href="rust-toolchain.toml"><img alt="Rust 1.98.1" src="https://img.shields.io/badge/rust-1.98.1-orange?logo=rust"></a>
@@ -20,12 +20,12 @@
 </p>
 
 <p align="center">
-  <a href="https://ak3zaidan.github.io/SCMS-Simulator/"><img alt="Website" src=".github/assets/readme/btn-website.svg" width="128"></a>
-  <a href="https://github.com/ak3zaidan/SCMS-Simulator/releases"><img alt="Download" src=".github/assets/readme/btn-download.svg" width="128"></a>
-  <a href="https://ak3zaidan.github.io/SCMS-Simulator/getting-started/introduction/"><img alt="Docs" src=".github/assets/readme/btn-docs.svg" width="128"></a>
+  <a href="https://ak3zaidan.github.io/V2X-World/"><img alt="Website" src=".github/assets/readme/btn-website.svg" width="128"></a>
+  <a href="https://github.com/ak3zaidan/V2X-World/releases"><img alt="Download" src=".github/assets/readme/btn-download.svg" width="128"></a>
+  <a href="https://ak3zaidan.github.io/V2X-World/getting-started/introduction/"><img alt="Docs" src=".github/assets/readme/btn-docs.svg" width="128"></a>
   <a href="https://arxiv.org/abs/XXXX.XXXXX"><img alt="Paper" src=".github/assets/readme/btn-paper.svg" width="128"></a>
   <a href="https://huggingface.co/datasets/akzaidan/V2X-World"><img alt="Dataset" src=".github/assets/readme/btn-dataset.svg" width="128"></a>
-  <a href="https://ak3zaidan.github.io/SCMS-Simulator/try/"><img alt="Try online" src=".github/assets/readme/btn-try.svg" width="128"></a>
+  <a href="https://ak3zaidan.github.io/V2X-World/try/"><img alt="Try online" src=".github/assets/readme/btn-try.svg" width="128"></a>
 </p>
 
 https://github.com/user-attachments/assets/527e9bd5-5d25-4480-9bf7-0818f529f154
@@ -63,7 +63,7 @@ any number of threads.
 | **Python** | The `v2xw` package: load and run scenarios, read metrics as Arrow tables, open recordings, and write car-following models, detectors or misbehaviour-authority policies in Python. |
 
 Each model has a model card with its equations, parameters, assumptions and validation:
-see [Models](https://ak3zaidan.github.io/SCMS-Simulator/models/) in the documentation.
+see [Models](https://ak3zaidan.github.io/V2X-World/models/) in the documentation.
 
 ## Recommended system
 
@@ -83,8 +83,8 @@ Build the command-line tool and run a scenario on a procedural road network, wit
 download:
 
 ```sh
-git clone https://github.com/ak3zaidan/SCMS-Simulator.git
-cd SCMS-Simulator
+git clone https://github.com/ak3zaidan/V2X-World.git
+cd V2X-World
 
 cargo build --release -p v2xw-cli          # rustup installs the pinned toolchain first
 ./target/release/v2xw validate scenarios/highway-congestion.yaml
@@ -131,19 +131,19 @@ Python package with `cd python && maturin develop` inside a virtual environment
 
 ## Documentation
 
-The documentation site is at **https://ak3zaidan.github.io/SCMS-Simulator/**. It is
+The documentation site is at **https://ak3zaidan.github.io/V2X-World/**. It is
 built from [`docs/`](docs/README.md) in this repository.
 
 | Page | What it covers |
 |---|---|
-| [Introduction](https://ak3zaidan.github.io/SCMS-Simulator/getting-started/introduction/) | What the simulator is for and how the parts fit together |
-| [Install and build](https://ak3zaidan.github.io/SCMS-Simulator/getting-started/) | Prerequisites, builds, the `v2xw` command and the server |
-| [Your first simulation](https://ak3zaidan.github.io/SCMS-Simulator/getting-started/first-simulation/) | A first run from scenario to metrics |
-| [Studio tour](https://ak3zaidan.github.io/SCMS-Simulator/getting-started/studio-tour/) | The browser interface, panel by panel |
-| [Configuration reference](https://ak3zaidan.github.io/SCMS-Simulator/configuration/reference/) | Every scenario setting with its default, range, unit and source |
-| [SCMS and credentials](https://ak3zaidan.github.io/SCMS-Simulator/models/scms/) | The credential-management model and how it follows the US deployment |
-| [Extending](https://ak3zaidan.github.io/SCMS-Simulator/extending/) | Adding your own models, detectors, metrics and settings |
-| [API](https://ak3zaidan.github.io/SCMS-Simulator/api/) | The Rust API and the Python API |
+| [Introduction](https://ak3zaidan.github.io/V2X-World/getting-started/introduction/) | What the simulator is for and how the parts fit together |
+| [Install and build](https://ak3zaidan.github.io/V2X-World/getting-started/) | Prerequisites, builds, the `v2xw` command and the server |
+| [Your first simulation](https://ak3zaidan.github.io/V2X-World/getting-started/first-simulation/) | A first run from scenario to metrics |
+| [Studio tour](https://ak3zaidan.github.io/V2X-World/getting-started/studio-tour/) | The browser interface, panel by panel |
+| [Configuration reference](https://ak3zaidan.github.io/V2X-World/configuration/reference/) | Every scenario setting with its default, range, unit and source |
+| [SCMS and credentials](https://ak3zaidan.github.io/V2X-World/models/scms/) | The credential-management model and how it follows the US deployment |
+| [Extending](https://ak3zaidan.github.io/V2X-World/extending/) | Adding your own models, detectors, metrics and settings |
+| [API](https://ak3zaidan.github.io/V2X-World/api/) | The Rust API and the Python API |
 
 ## Dataset
 
@@ -197,7 +197,7 @@ button reads it) or:
   version = {0.1.0},
   year    = {2026},
   license = {Apache-2.0},
-  url     = {https://github.com/ak3zaidan/SCMS-Simulator}
+  url     = {https://github.com/ak3zaidan/V2X-World}
 }
 ```
 
@@ -219,7 +219,7 @@ button reads it) or:
 ## Contributing
 
 Bug reports and questions are welcome on the
-[issue tracker](https://github.com/ak3zaidan/SCMS-Simulator/issues). For a larger change,
+[issue tracker](https://github.com/ak3zaidan/V2X-World/issues). For a larger change,
 open an issue first to agree the approach. Before sending a pull request, run `just ci`
 (formatting, clippy with warnings denied, and the test suite, as CI does). The codebase
 keeps a few rules: results must stay deterministic (keyed random streams, ordered
@@ -227,7 +227,7 @@ collections, no wall clock), every constant cites its source or is labelled an a
 and every new setting is a validated scenario field with a menu, labels and units in the
 Studio. [`docs/testing.md`](docs/testing.md) and [`docs/extending.md`](docs/extending.md)
 explain the tests and the extension points, and the
-[contributing guide](https://ak3zaidan.github.io/SCMS-Simulator/dev/contributing/) has the
+[contributing guide](https://ak3zaidan.github.io/V2X-World/dev/contributing/) has the
 details.
 
 ## Licence

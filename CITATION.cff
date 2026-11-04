@@ -5,8 +5,8 @@ abstract: "A deterministic, discrete-event simulator of connected-vehicle (V2X) 
 version: "0.1.0"
 license: Apache-2.0
 type: software
-repository-code: "https://github.com/ak3zaidan/SCMS-Simulator"
-url: "https://ak3zaidan.github.io/SCMS-Simulator/"
+repository-code: "https://github.com/ak3zaidan/V2X-World"
+url: "https://ak3zaidan.github.io/V2X-World/"
 authors:
   - given-names: "Ahmed"
     family-names: "Zaidan"
