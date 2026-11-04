@@ -4901,6 +4901,12 @@ and served under this section of the site. Every library crate except <code>v2xw
 <code>v2xw-interop</code> and <code>v2xw-netval</code> denies missing docs, so every public item is documented.
 Each crate's front page opens with a module table naming where each concern lives. Crate
 roles and dependency order: <a href="../crates/">Crates</a>.</p>
+<div class="admonition note">
+<p class="admonition-title">If a crate link below does not open</p>
+<p>The rustdoc pages are published by the site's automatic deployment. Until a
+deployment has included them, build them locally with the commands below; they are
+the same pages.</p>
+</div>
 <h2 id="build-locally">Build locally<a class="headerlink" href="#build-locally" title="Permanent link">&para;</a></h2>
 <div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>cargo<span class="w"> </span>doc<span class="w"> </span>--workspace<span class="w"> </span>--no-deps<span class="w"> </span>--open<span class="w">      </span><span class="c1"># all crates, opens target/doc in a browser</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>cargo<span class="w"> </span>doc<span class="w"> </span>-p<span class="w"> </span>v2xw-engine<span class="w"> </span>--no-deps<span class="w"> </span>--open<span class="w">   </span><span class="c1"># one crate</span>
