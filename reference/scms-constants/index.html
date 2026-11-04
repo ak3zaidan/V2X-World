@@ -1,0 +1,6647 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A deterministic, discrete-event simulator of connected-vehicle (V2X) systems: traffic, radio, network, IEEE 1609.2 security, the SCMS and ETSI PKI, attackers and misbehaviour detection.">
+      
+      
+      
+        <link rel="canonical" href="https://ak3zaidan.github.io/V2X-World/reference/scms-constants/">
+      
+      
+      
+        <link rel="prev" href="../config-inventory-scms/">
+      
+      
+        <link rel="next" href="../sensitivity-catalogue/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="zensical-0.0.74">
+    
+    
+      
+        <title>SCMS constants - V2X World</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.4ab2de0c.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.b60ce83d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-hidden="true"></label>
+    <div data-md-component="skip">
+      <a href="#__skip" class="md-skip">
+        Skip to content
+      </a>
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="V2X World" class="md-header__button md-logo" aria-label="V2X World" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="V2X World">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+      <span class="md-visually-hidden">Navigation</span>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            V2X World
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              SCMS constants
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+          <span class="md-visually-hidden">Search</span>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/ak3zaidan/V2X-World" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ak3zaidan/V2X-World
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/introduction/" class="md-tabs__link">
+          
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/" class="md-tabs__link">
+          
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../models/" class="md-tabs__link">
+          
+  
+  Models
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../configuration/overview/" class="md-tabs__link">
+          
+  
+  Configuration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../glossary/" class="md-tabs__link">
+        
+  
+  Glossary
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../about/standards/" class="md-tabs__link">
+          
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="V2X World" class="md-nav__button md-logo" aria-label="V2X World" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="V2X World">
+
+    </a>
+    V2X World
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ak3zaidan/V2X-World" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ak3zaidan/V2X-World
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Home
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Getting started
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_2">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Getting started
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/introduction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Introduction
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Install and build
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/first-simulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Your first simulation
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/studio-tour/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Studio tour
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Command-line tool
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  User guide
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  User guide
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Scenarios
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/worlds-and-maps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Worlds and maps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/traffic-demand/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic demand
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/running-and-recording/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Running and recording
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../recording-and-metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metrics and outputs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/catalogue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metric catalogue
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/comparing-runs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Comparing runs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/experiments-and-sweeps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Experiments and sweeps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/sensitivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity analysis
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/datasets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Datasets and exports
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dataset/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Dataset schema
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/sumo-cosimulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SUMO co-simulation
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../studio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Studio
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/assistant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Assistant
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../models/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Models
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic and mobility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Messages
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/applications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  V2X applications
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/energy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Energy and emissions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/scms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS and credentials
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and crypto
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/threats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Threats and misbehaviour detection
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/privacy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Privacy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/determinism-and-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Determinism and time
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Configuration
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Configuration
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Overview
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  How settings work
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../configuration/reference/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Generated reference
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5_3" id="__nav_5_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Generated reference
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_2" id="__nav_5_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Run
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_2_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_2">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Run
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/meta/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  meta
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  schema
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/seed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  seed
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  time
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_3" id="__nav_5_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  World
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  World
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/city/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  city
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/world/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  world
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_4" id="__nav_5_3_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Traffic
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/actors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  actors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/mobility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  mobility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  traffic
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/scale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  scale
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_5" id="__nav_5_3_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Environment
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_5_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Environment
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/weather/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  weather
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_6" id="__nav_5_3_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Radio
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/radio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  radio
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_7" id="__nav_5_3_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Network
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Network
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  net
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_8" id="__nav_5_3_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Messages
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_8_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_8">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Messages
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  messages
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/perception/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  perception
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_9" id="__nav_5_3_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Security
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  security
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_10" id="__nav_5_3_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Nodes
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_10_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_10">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Nodes
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/nodes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  nodes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_11" id="__nav_5_3_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Threats
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_11_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_11">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Threats
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/threats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  threats
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_12" id="__nav_5_3_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Detection
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_12_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_12">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Detection
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/detection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  detection
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_13" id="__nav_5_3_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Measurement
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_13_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_13">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Measurement
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  metrics
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/exporters/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  exporters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/experiment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  experiment
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_14" id="__nav_5_3_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Applications
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_14_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_14">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Applications
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  apps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_15" id="__nav_5_3_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Energy
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_15_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_15">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Energy
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/energy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  energy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_16" id="__nav_5_3_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Timeline
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_16_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_16">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Timeline
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  events
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Model parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Curated tables
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_4_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Curated tables
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings by research question
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config-inventory-traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic, world and run inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config-inventory-network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config-inventory-scms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and SCMS inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS constants
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS constants
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-model-card-protocolscmscamp-cratesv2xw-protosrcscmsmodrs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1. The model card (<code>protocol/scms/camp</code>, <code>crates/v2xw-proto/src/scms/mod.rs</code>)
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. The model card (protocol&#x2f;scms&#x2f;camp, crates&#x2f;v2xw-proto&#x2f;src&#x2f;scms&#x2f;mod.rs)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-calendar-and-provisioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.1 Calendar and provisioning
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-enrolment-and-re-enrolment" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.2 Enrolment and re-enrolment
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-shuffles-privacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.3 Shuffles (privacy)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-revocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.4 Revocation
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#15-misbehaviour-authority-and-linkage-authorities" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.5 Misbehaviour Authority and Linkage Authorities
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#16-backend-service-and-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.6 Backend service and links
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#17-wire-sizes" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.7 Wire sizes
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-engine-node-and-security-constants-on-the-scms-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2. Engine, node and security constants on the SCMS path
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Engine, node and security constants on the SCMS path">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-roadside-relay-and-backhaul-cratesv2xw-enginesrcbackendrs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2.1 Roadside relay and backhaul (<code>crates/v2xw-engine/src/backend.rs</code>)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-tls-sessions-backendrs-measured-by-toolsscms_constantstls_handshake_sizespy" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2.2 TLS sessions (<code>backend.rs</code>, measured by <code>tools/scms_constants/tls_handshake_sizes.py</code>)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-crl-distribution-and-reports-cratesv2xw-enginesrcphase2rs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2.3 CRL distribution and reports (<code>crates/v2xw-engine/src/phase2.rs</code>)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-receiver-validation-and-p2pcd-v2xw-nodesrcrxvalrs-v2xw-secsrcp2pcdrs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2.4 Receiver validation and P2PCD (<code>v2xw-node/src/rxval.rs</code>, <code>v2xw-sec/src/p2pcd.rs</code>)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-topology-governance-and-certificates-listed-pinned-by-their-own-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        3. Topology, governance and certificates (listed; pinned by their own tests)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        4. Known limitations
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sensitivity-catalogue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity catalogue
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sensitivity-expectations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity expectations
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Development
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Development
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Architecture
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Crates
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Building and testing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Validation and conformance tools
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Conventions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_6" id="__nav_6_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Extending
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Extending
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../extending/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Overview
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/detectors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Detectors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metrics
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Scenarios
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Plugins
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Engine server and RPC
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protocol/vwp-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Engine-UI protocol (VWP v1)
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/recording-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Recording format
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contributing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  API
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  API
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python API
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Glossary
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  About
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  About
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Standards and references
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/citation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Citation and licence
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-model-card-protocolscmscamp-cratesv2xw-protosrcscmsmodrs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1. The model card (<code>protocol/scms/camp</code>, <code>crates/v2xw-proto/src/scms/mod.rs</code>)
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. The model card (protocol&#x2f;scms&#x2f;camp, crates&#x2f;v2xw-proto&#x2f;src&#x2f;scms&#x2f;mod.rs)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#11-calendar-and-provisioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.1 Calendar and provisioning
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-enrolment-and-re-enrolment" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.2 Enrolment and re-enrolment
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-shuffles-privacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.3 Shuffles (privacy)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-revocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.4 Revocation
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#15-misbehaviour-authority-and-linkage-authorities" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.5 Misbehaviour Authority and Linkage Authorities
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#16-backend-service-and-links" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.6 Backend service and links
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#17-wire-sizes" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        1.7 Wire sizes
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-engine-node-and-security-constants-on-the-scms-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2. Engine, node and security constants on the SCMS path
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Engine, node and security constants on the SCMS path">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-roadside-relay-and-backhaul-cratesv2xw-enginesrcbackendrs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2.1 Roadside relay and backhaul (<code>crates/v2xw-engine/src/backend.rs</code>)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-tls-sessions-backendrs-measured-by-toolsscms_constantstls_handshake_sizespy" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2.2 TLS sessions (<code>backend.rs</code>, measured by <code>tools/scms_constants/tls_handshake_sizes.py</code>)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-crl-distribution-and-reports-cratesv2xw-enginesrcphase2rs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2.3 CRL distribution and reports (<code>crates/v2xw-engine/src/phase2.rs</code>)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-receiver-validation-and-p2pcd-v2xw-nodesrcrxvalrs-v2xw-secsrcp2pcdrs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        2.4 Receiver validation and P2PCD (<code>v2xw-node/src/rxval.rs</code>, <code>v2xw-sec/src/p2pcd.rs</code>)
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-topology-governance-and-certificates-listed-pinned-by-their-own-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        3. Topology, governance and certificates (listed; pinned by their own tests)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        4. Known limitations
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../../configuration/overview/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../configuration-reference/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Curated tables
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                <a id="__skip" tabindex="-1"></a>
+                
+                  
+
+  
+    <a href="https://github.com/ak3zaidan/V2X-World/edit/main/docs/reference/scms-constants.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-pen" viewBox="0 0 24 24"><path d="M12.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v9.34"/><path d="M14 2v5a1 1 0 0 0 1 1h5M10.378 12.622a1 1 0 0 1 3 3.003L8.36 20.637a2 2 0 0 1-.854.506l-2.867.837a.5.5 0 0 1-.62-.62l.836-2.869a2 2 0 0 1 .506-.853z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/ak3zaidan/V2X-World/raw/main/docs/reference/scms-constants.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-code-2" viewBox="0 0 24 24"><path d="M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35"/><path d="M14 2v5a1 1 0 0 0 1 1h5M5 16l-3 3 3 3M9 22l3-3-3-3"/></svg>
+    </a>
+  
+
+
+<h1 id="scms-constants-and-their-sources">SCMS constants and their sources<a class="headerlink" href="#scms-constants-and-their-sources" title="Permanent link">&para;</a></h1>
+<p>Every default the SCMS code runs on, with where it lives and why it has the value it has.</p>
+<p><strong>Status</strong> is one of four:
+- <strong>CITED</strong>: a primary source prints the value. A unit conversion of a printed value, such as 6 years to seconds, still counts as cited.
+- <strong>DERIVED</strong>: computed from cited inputs, or produced by the engine's own real encoder and pinned by a test.
+- <strong>MEASURED</strong>: measured by a script in this repository that anyone can rerun.
+- <strong>ASSUMPTION</strong>: no source prints the value. The row gives the reason for the value chosen, and every such value can be changed in the scenario or the library.</p>
+<p><strong>How this file is checked.</strong> The tables are machine-read, so a value changed in the code but not here (or here but not in the code) fails a test:
+- <code>crates/v2xw-proto/tests/model_card.rs</code> (<code>constants_md_matches_the_scms_card</code>) checks every parameter on the <code>protocol/scms/camp</code> model card. Each one must have a row here with the same default. A row is ASSUMPTION exactly when the card marks it <code>todo-calibrate</code>, and each such row carries a plan.
+- <code>crates/v2xw-engine/tests/scms_constants.rs</code> does the same for the engine, node and security constants the SCMS path uses.
+- Rows that neither test reads are listed for completeness. Their values are pinned by the tests named in the row.</p>
+<p><strong>Sources.</strong> The tags in the tables are:
+- <strong>[CAMP122]</strong> CAMP VSC5, "SCMS PoC Implementation — EE Requirements and Specifications Supporting SCMS Software Release 1.2.2", 2016-11-15 (posted 2023-07-19), 653 pp. https://pronto-core-cdn.prontomarketing.com/2/wp-content/uploads/sites/2896/2023/07/SCMS-CV-Pilots-Documentation-20230719.pdf
+- <strong>[SMP]</strong> SCMS Manager, "IEEE 1609.2.1 Profile", v1.0.3, 2023-03-15. Profiles IEEE 1609.2.1-2022. https://www.scmsmanager.org/wp-content/uploads/2023/07/IEEE1609Dot2Dot1-SCMS_Manager_Profile_1_0_3.pdf
+- <strong>[SM-MBR]</strong> SCMS Manager, "Misbehavior Report and Application Specification for Connected Vehicle Pilot Deployment", v1.0, 2019-02-14. https://scmsmanager.org/wp-content/uploads/2020/01/Misbehavior-Report-and-Application-Specification-v1.0.pdf
+- <strong>[PRIMER]</strong> USDOT ITS JPO, "SCMS Technical Primer", FHWA-JPO-19-775, 2019. https://rosap.ntl.bts.gov/view/dot/43635
+- <strong>[SM-PROV]</strong> SCMS Manager, "Provider Requirements", v1.1, 2024-08-09. https://www.scmsmanager.org/wp-content/uploads/2024/10/SCMS-Manager-Provider-Requirements-v1_1.pdf
+- <strong>[CVP-P2]</strong> USDOT ITS JPO, "CV Pilot Deployment Program: Driving Towards Deployment — Lessons Learned from the Design/Build/Test Phase", 2018. https://rosap.ntl.bts.gov/view/dot/37681
+- <strong>[BRECHT]</strong> Brecht et al., "A Security Credential Management System for V2X Communications", IEEE T-ITS 2018, arXiv:1802.05323
+- <strong>[SM-REENR]</strong> SCMS Manager, "EE Certificate Rollover (Re-Enrollment) Technical Standard", v1.0, 2020-10-08. https://www.scmsmanager.org/wp-content/uploads/2020/10/SCMS-Manager-EE-Re-Enrollment-Technical-Specification-v1.0.pdf
+- <strong>[SM-MBR-ASN]</strong> SCMS Manager, "ASN.1 for Misbehavior Reporting", v1.1. https://scmsmanager.org/wp-content/uploads/2020/01/ASN.1-for-Misbehavior-Reporting-v1.1.pdf
+- <strong>[SM-EESEC]</strong> SCMS Manager, "End-Entity Security Requirements, Design Guidance, and Validation Approach", v2.04, 2023-10-12. https://www.scmsmanager.org/wp-content/uploads/2023/10/SCMS-Manager-End-Entity-Security-Requirements-v2_04.pdf
+- <strong>[CVP-LOG]</strong> USDOT ITS JPO, "CV Pilot Deployment Lessons Learned Logbook Synthesis", 2022. https://rosap.ntl.bts.gov/view/dot/66286
+- <strong>[RSU41]</strong> USDOT, <em>Specifications for DSRC Roadside Unit v4.1</em>, 2016-10-31 (FHWA-JPO-17-589), §2.1, §2.2 and Appendix C. The PDF is not committed: it is a federal work, but its licence was not confirmed.
+- <strong>[ISART05]</strong> R. Roebuck (Sirit), <em>Emerging DSRC Technology</em>, ISART 2005 slides, p.8: https://its.ntia.gov/media/33194/fre_j_slides.pdf. A vendor figure, so a secondary source.</p>
+<hr />
+<h2 id="1-the-model-card-protocolscmscamp-cratesv2xw-protosrcscmsmodrs">1. The model card (<code>protocol/scms/camp</code>, <code>crates/v2xw-proto/src/scms/mod.rs</code>)<a class="headerlink" href="#1-the-model-card-protocolscmscamp-cratesv2xw-protosrcscmsmodrs" title="Permanent link">&para;</a></h2>
+<h3 id="11-calendar-and-provisioning">1.1 Calendar and provisioning<a class="headerlink" href="#11-calendar-and-provisioning" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>i_period_minutes</code></td>
+<td>10080</td>
+<td>min</td>
+<td>CITED</td>
+<td><code>params.rs</code> <code>i_period</code></td>
+<td>One week. [SMP] §2.1.17 Table 2; [CAMP122] Table 3; CAMP-EE R1.1 §2.1.5.3.2</td>
+</tr>
+<tr>
+<td><code>cert_lifetime_minutes</code></td>
+<td>10140</td>
+<td>min</td>
+<td>CITED</td>
+<td><code>params.rs</code> <code>cert_lifetime</code></td>
+<td>One week plus the 1 h overlap. [SMP] Table 2 overlap = 1 h; CAMP-EE R1.1 §2.1.5.3.2</td>
+</tr>
+<tr>
+<td><code>calendar_epoch_unix_s</code></td>
+<td>1420534800</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>US_IPERIOD_EPOCH_UNIX_S</code></td>
+<td>iPeriodEpoch, 2015-01-06 04:00 EST = 09:00 UTC. [SMP] §2.1.17 Table 2. Gives i = 614 on 2026-10-16 (<code>tests/calendar.rs</code>)</td>
+</tr>
+<tr>
+<td><code>epoch_ns</code></td>
+<td>0</td>
+<td>ns</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code> <code>epoch</code></td>
+<td>Used only by library runs and the compressed calendar, where i-period 0 starts at the run's origin. The real calendar ignores it</td>
+</tr>
+<tr>
+<td><code>certs_per_period</code></td>
+<td>20</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>[CAMP122] Table 67 certs_per_i_period; [PRIMER] p.8. NYC used 60 ([CVP-P2] item 24)</td>
+</tr>
+<tr>
+<td><code>initial_batch_certs</code></td>
+<td>3120</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>20 × 52 × 3 = 3,120. [PRIMER] p.7</td>
+</tr>
+<tr>
+<td><code>max_periods_ahead</code></td>
+<td>156</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>Three years of weekly batches. [PRIMER] p.7; [CAMP122] Table 67 max_available_cert_supply</td>
+</tr>
+<tr>
+<td><code>ra_min_preload_periods</code></td>
+<td>2</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code> <code>RA_MIN_PRELOAD_PERIODS</code></td>
+<td>ra-maxPreloadTime ≥ 2 weeks. [SMP] §2.1.21 Table 3</td>
+</tr>
+<tr>
+<td><code>ra_max_preload_periods</code></td>
+<td>156</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code> <code>RA_MAX_PRELOAD_PERIODS</code></td>
+<td>ra-maxPreloadTime ≤ 3 years. [SMP] Table 3</td>
+</tr>
+<tr>
+<td><code>device_pool_periods</code></td>
+<td>2</td>
+<td>week</td>
+<td>ASSUMPTION</td>
+<td><code>scms/mod.rs</code> <code>DEVICE_POOL_PERIODS</code>; engine <code>pool_periods</code></td>
+<td>The device's own download strategy, configured by the OEM. The pilots bracket it: NYC kept 1 week ahead ([CVP-P2] items 21, 24) and THEA took 156 weeks at once ([CVP-LOG] p.16). <code>params::PreloadPolicy</code> selects either one. It replaces the card-only <code>download_horizon_weeks</code> (4), which no code read</td>
+</tr>
+<tr>
+<td><code>first_batch_delay_s</code></td>
+<td>60</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>[CAMP122] §5.2.7.6.7.1 allows "some delay" for shuffling and generation but prints no number. Take the value from the RA being modelled</td>
+</tr>
+<tr>
+<td><code>download_poll_interval_s</code></td>
+<td>300</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>download-minWait 5 min. [SMP] Table 3, §4.3.1</td>
+</tr>
+<tr>
+<td><code>max_download_polls</code></td>
+<td>100</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>download-maxReqs 100. [SMP] Table 3</td>
+</tr>
+<tr>
+<td><code>ee_retry_timeout_s</code></td>
+<td>10</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>params.rs</code> <code>EE_RETRY_TIMEOUT_S</code></td>
+<td>The EE retries a request with no response in 10 s. [CAMP122] §5.2.8.3 SCMS-522. Applies to the butterfly request (sent again byte for byte), the <code>.info</code> top-off and each batch download. Scenario key <code>ee_retry_timeout_s</code>; 0 turns it off</td>
+</tr>
+<tr>
+<td><code>ee_retry_max_per_hour</code></td>
+<td>10</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code> <code>EE_RETRY_MAX_PER_HOUR</code></td>
+<td>At most 10 retries per 60 min. [CAMP122] §5.2.8.3 SCMS-523. The RA re-acks a byte-identical retransmission (ASSUMPTION: CAMP states the retry, not the answer)</td>
+</tr>
+<tr>
+<td><code>download_request_tolerance_s</code></td>
+<td>5</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>ra.client-signature-ttl-sec. [CAMP122] SCMS-1203</td>
+</tr>
+</tbody>
+</table>
+<h3 id="12-enrolment-and-re-enrolment">1.2 Enrolment and re-enrolment<a class="headerlink" href="#12-enrolment-and-re-enrolment" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enrolment_lifetime_s</code></td>
+<td>189216000</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>6 years. [CAMP122] Table 3, SCMS-1307. Other values in the sources: 7 y (CAMP R1.1) and 3 y (5GAA draft CP (419)).</td>
+</tr>
+<tr>
+<td><code>reenrol_lead_s</code></td>
+<td>47347200</td>
+<td>s</td>
+<td>DERIVED</td>
+<td><code>params.rs</code></td>
+<td>548 days, the midpoint of the "12–24 months before expiry" that [SM-REENR] §1–3 recommends</td>
+</tr>
+<tr>
+<td><code>reenrol_download_delay_s</code></td>
+<td>300</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>The RA's nextDlTime. download-minWait 5 min, [SMP] Table 3. The flow is two-phase per [SM-REENR]</td>
+</tr>
+<tr>
+<td><code>electors</code></td>
+<td>5</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code> (= <code>deployment::US_ELECTORS</code>)</td>
+<td>Elector Tech Spec v1.1 §2.1; [SMP] §2.1.15; every published CTL lists five</td>
+</tr>
+<tr>
+<td><code>elector_quorum</code></td>
+<td>3</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code> (= <code>deployment::US_QUORUM</code>)</td>
+<td>Any 3 of 5. Elector Tech Spec v1.1 §2.4 ("any three (3) are necessary and sufficient"); the published CTLs since sequence 1 carry quorum 3 (decoded, validation/governance-deployment.md)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="13-shuffles-privacy">1.3 Shuffles (privacy)<a class="headerlink" href="#13-shuffles-privacy" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>shuffle_threshold_requests</code></td>
+<td>1000</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>service.rs</code> <code>CAMP_122_CERT_SHUFFLE</code></td>
+<td>[CAMP122] §5.2.15.5 Table 67 shuffle_threshold, SCMS-631. The conflict with [BRECHT] is settled in favour of CAMP 1.2.2. [BRECHT]'s 10,000 per day is available as a setting</td>
+</tr>
+<tr>
+<td><code>shuffle_window_s</code></td>
+<td>172800</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>service.rs</code> <code>CAMP_122_CERT_SHUFFLE</code></td>
+<td>[CAMP122] Table 67 max_cert_request_age, 2 days</td>
+</tr>
+<tr>
+<td><code>report_shuffle_threshold</code></td>
+<td>10000</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>service.rs</code> <code>CAMP_SHUFFLE</code></td>
+<td>[CAMP122] §5.2.8.4, SCMS-765</td>
+</tr>
+<tr>
+<td><code>report_shuffle_window_s</code></td>
+<td>86400</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>service.rs</code> <code>CAMP_SHUFFLE</code></td>
+<td>One day. [CAMP122] SCMS-765</td>
+</tr>
+<tr>
+<td><code>pseudonym_change_interval_s</code></td>
+<td>300</td>
+<td>s</td>
+<td>CITED</td>
+<td>card</td>
+<td>SAE J2945/1 6.5.3, Table 21 <code>vCertChangeInterval</code> 5 min (primary); also [PRIMER] pp.8–9, [CVP-P2] item 25</td>
+</tr>
+<tr>
+<td><code>pseudonym_change_distance_m</code></td>
+<td>2000</td>
+<td>m</td>
+<td>CITED</td>
+<td>card</td>
+<td>NYC rule: every 2 km or 5 min. [PRIMER] pp.8–9. The J2945/1 rule is 2,100 m ± 100 m of straight-line distance (Table 21 <code>vCertChangeDistance</code>), see 11 J8</td>
+</tr>
+<tr>
+<td><code>cert_attach_interval_ms</code></td>
+<td>450</td>
+<td>ms</td>
+<td>CITED</td>
+<td>card</td>
+<td>SAE J2945/1 6.5.2 <code>BSMSIGN-003</code>, Table 21 <code>vMaxCertDigestInterval</code> 450 ms (primary). The scenario default is 1,000 ms</td>
+</tr>
+</tbody>
+</table>
+<h3 id="14-revocation">1.4 Revocation<a class="headerlink" href="#14-revocation" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>crl_cadence_s</code></td>
+<td>86400</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>Publish within 1 business day of a change, [SM-PROV] §3.4.10. The US presets run that rule exactly (<code>crl.business_day_sla</code>). The 5GAA draft CP (255) says within 24 h</td>
+</tr>
+<tr>
+<td><code>next_crl_s</code></td>
+<td>604800</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>params.rs</code> <code>CrlIssuance::next_crl</code></td>
+<td>Devices fetch "no later than once a week", [CAMP122] §3 item 10. The draft CP's ceiling is monthly ([5GAA] (254))</td>
+</tr>
+<tr>
+<td><code>crl_slot_et_hour</code></td>
+<td>10</td>
+<td>h</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code> <code>CrlIssuance::slot_et</code></td>
+<td>[SM-PROV] §3.4.10 fixes the deadline, not the hour</td>
+</tr>
+<tr>
+<td><code>crl_entry_bytes</code></td>
+<td>40</td>
+<td>B</td>
+<td>CITED</td>
+<td><code>sizes.rs</code> <code>CRL_LINKAGE_ENTRY_BYTES</code></td>
+<td>[BRECHT] §VI-F: 32 B of seeds plus group overhead. Used only on the modelled path: since the edge-case package a device's CRL download (cellular, RSU backhaul, MBMS) is charged the encoded <code>CompositeCrlSpdu</code></td>
+</tr>
+<tr>
+<td><code>crl_max_forward_periods</code></td>
+<td>156</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>v2xw-sec</code> <code>linkage::DEFAULT_MAX_FORWARD_PERIODS</code></td>
+<td>The CAMP end-entity lifetime of 156 weekly periods</td>
+</tr>
+</tbody>
+</table>
+<h3 id="15-misbehaviour-authority-and-linkage-authorities">1.5 Misbehaviour Authority and Linkage Authorities<a class="headerlink" href="#15-misbehaviour-authority-and-linkage-authorities" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ma_max_open_cases</code></td>
+<td>1000</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code> <code>MaPolicy</code></td>
+<td>No MA capacity is published. Sweep it in a saturation study</td>
+</tr>
+<tr>
+<td><code>ma_review_s</code></td>
+<td>28800</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code> <code>MaMode::ManualReview</code></td>
+<td>The default is the pilots' manual MA ([CAMP122] §4.2–4.3; [PRIMER] pp.6, 8), which prints no review time. 8 h is one working shift. 0 selects the automatic MA</td>
+</tr>
+<tr>
+<td><code>la_aca_key_rotation_s</code></td>
+<td>604800</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code> <code>PduLayer</code></td>
+<td>[CAMP122] Table 68 shared_key_update_interval is a local option with no published value. It is set to one i-period</td>
+</tr>
+<tr>
+<td><code>seed_retry_s</code></td>
+<td>30</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>CAMP describes no MA-to-LA retry. The value keeps a two-of-two LA retry comparable to a committee session</td>
+</tr>
+</tbody>
+</table>
+<h3 id="16-backend-service-and-links">1.6 Backend service and links<a class="headerlink" href="#16-backend-service-and-links" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backend_hw_profile</code></td>
+<td><code>hw-profile/i9-11950h-wolfssl</code></td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>the published wolfSSL benchmark. Appliance transaction rates are NOT PUBLISHED</td>
+</tr>
+<tr>
+<td><code>device_hw_profile</code></td>
+<td><code>hw-profile/cohda-mk6-botan</code></td>
+<td>-</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>Cohda MK6 with Botan (published benchmark)</td>
+</tr>
+<tr>
+<td><code>hybrid_backend_pq_profile</code></td>
+<td><code>hw-profile/cortex-a76-pi5-liboqs</code></td>
+<td>-</td>
+<td>CITED</td>
+<td><code>hybrid.rs</code></td>
+<td>arXiv 2503.10238 Table 8</td>
+</tr>
+<tr>
+<td><code>hybrid_device_pq_keygen_profile</code></td>
+<td><code>hw-profile/cortex-a72-pi4-liboqs</code></td>
+<td>-</td>
+<td>CITED</td>
+<td><code>hybrid.rs</code></td>
+<td>arXiv 2503.10238 Table 8</td>
+</tr>
+<tr>
+<td><code>backend_servers</code></td>
+<td>4</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>The c of M/M/c. No provider publishes its server count. Record it per scenario</td>
+</tr>
+<tr>
+<td><code>backend_overhead_us</code></td>
+<td>1000</td>
+<td>us</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>Per-request cost on top of the cryptography. RA, PCA and MA transaction rates are NOT PUBLISHED</td>
+</tr>
+<tr>
+<td><code>device_overhead_us</code></td>
+<td>1000</td>
+<td>us</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>Per-request cost on the OBU outside the crypto engine. Not published</td>
+</tr>
+<tr>
+<td><code>backend_link_latency_ms</code></td>
+<td>10</td>
+<td>ms</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>Used only by library runs that have no deployment. Under <code>security.scms.deployment</code> (every engine run) it is replaced by the deployment's intra-region latency (§3)</td>
+</tr>
+<tr>
+<td><code>backend_link_bandwidth_bps</code></td>
+<td>1000000000</td>
+<td>bit/s</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>No provider publishes its provisioned capacity</td>
+</tr>
+<tr>
+<td><code>uu_link_latency_ms</code></td>
+<td>50</td>
+<td>ms</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>Used only by library runs. An engine run carries every device leg over <code>net.uu</code> (cited presets)</td>
+</tr>
+<tr>
+<td><code>uu_link_bandwidth_bps</code></td>
+<td>10000000</td>
+<td>bit/s</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>As <code>uu_link_latency_ms</code></td>
+</tr>
+<tr>
+<td><code>v2x_air_bandwidth_bps</code></td>
+<td>6000000</td>
+<td>bit/s</td>
+<td>CITED</td>
+<td><code>params.rs</code></td>
+<td>QPSK rate 1/2 on the 10 MHz OFDM PHY. EN 302 663 V1.3.1 Annex C.3 Table C.1</td>
+</tr>
+<tr>
+<td><code>v2x_air_latency_ms</code></td>
+<td>1</td>
+<td>ms</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code></td>
+<td>Library-only channel-access delay. The engine puts roadside broadcasts through its MAC instead</td>
+</tr>
+<tr>
+<td><code>availability.model</code></td>
+<td><code>always-up</code></td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>service.rs</code> <code>AvailabilityModel</code>, <code>kernel.rs</code> <code>availability_windows</code></td>
+<td>Off by default. <code>two-state</code>: up times exponential with mean MTBF, down times exponential with mean MTTR (<code>todo-calibrate</code>), each interval a keyed hash of (seed, entity, k, kind). Every entity starts up at 0. No provider publishes its availability; the values are for the sensitivity sweeps</td>
+</tr>
+<tr>
+<td><code>availability.mtbf_h</code></td>
+<td>720</td>
+<td>h</td>
+<td>ASSUMPTION</td>
+<td><code>AvailabilityModel::mtbf</code></td>
+<td>Mean time between failures. Not published. Menu 24, 168, 720, 8,760 h</td>
+</tr>
+<tr>
+<td><code>availability.mttr_min</code></td>
+<td>30</td>
+<td>min</td>
+<td>ASSUMPTION</td>
+<td><code>AvailabilityModel::mttr</code></td>
+<td>Mean time to repair. Not published. Menu 5, 30, 60, 240 min. A drawn outage is an <code>offline</code> fault, so the backend retry (<code>BACKEND_RETRY</code>) and the EE timeout handle it as a <code>failures[]</code> window</td>
+</tr>
+<tr>
+<td><code>service_time.model</code></td>
+<td><code>deterministic</code></td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>service.rs</code> <code>ServiceTimeModel</code>, <code>ServiceQueue::admit</code></td>
+<td>Off by default. <code>log-normal</code>: each request's <code>work + fixed_overhead</code> times <code>exp(σ·z)</code>, <code>μ = 0</code>, <code>σ = sqrt(ln(1 + cv²))</code>, so the median is the cost table's time; <code>z</code> is a Box-Muller normal from two keyed hashes of (seed, entity, request index, kind), integer ns after rounding. The shape is the <code>high</code> node tier's, not measured</td>
+</tr>
+<tr>
+<td><code>service_time.cv</code></td>
+<td>0.25</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>ServiceTimeModel::LogNormal::cv_milli</code> (thousandths)</td>
+<td>Spread of service times (coefficient of variation). Not published. Menu 0.1, 0.25, 0.5, 1.0 (range 0-3, step 0.05)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="17-wire-sizes">1.7 Wire sizes<a class="headerlink" href="#17-wire-sizes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>report_payload_bytes</code></td>
+<td>524</td>
+<td>B</td>
+<td>DERIVED</td>
+<td><code>sizes.rs</code>; <code>mbr.rs</code> <code>REFERENCE_REPORT_COER_BYTES</code></td>
+<td>The real COER <code>EndEntityMaInterfacePDU</code> of the reference US report: 1VInconsistent/ConstantPosition, two signed BSMs (the engine's evidence depth) and the accused's certificate. Format per [SM-MBR] v1.0 and [SM-MBR-ASN] v1.1. <code>tests/mbr.rs</code> (<code>the_reference_report_sizes_are_the_real_encoders</code>) pins it</td>
+</tr>
+<tr>
+<td><code>repo_url_bytes</code></td>
+<td>64</td>
+<td>B</td>
+<td>ASSUMPTION</td>
+<td><code>sizes.rs</code></td>
+<td>The CAMP RA acknowledgement's repository URL. No sample has been measured</td>
+</tr>
+<tr>
+<td><code>batch_container_bytes</code></td>
+<td>76</td>
+<td>B</td>
+<td>ASSUMPTION</td>
+<td><code>sizes.rs</code></td>
+<td>Framing of the <code>X_Y.zip</code> around one i-period. No real batch file has been measured</td>
+</tr>
+<tr>
+<td><code>linkage_chain_identifier_bytes</code></td>
+<td>16</td>
+<td>B</td>
+<td>ASSUMPTION</td>
+<td><code>sizes.rs</code></td>
+<td>CAMP names the LCI but does not publish its encoding (1609.2.1 leaves LA–RA as NULL)</td>
+</tr>
+<tr>
+<td><code>etsi_subject_attributes_bytes</code></td>
+<td>64</td>
+<td>B</td>
+<td>ASSUMPTION</td>
+<td><code>sizes.rs</code></td>
+<td>ETSI InnerEcRequest block. It waits on the D5 ASN.1 defect</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="2-engine-node-and-security-constants-on-the-scms-path">2. Engine, node and security constants on the SCMS path<a class="headerlink" href="#2-engine-node-and-security-constants-on-the-scms-path" title="Permanent link">&para;</a></h2>
+<h3 id="21-roadside-relay-and-backhaul-cratesv2xw-enginesrcbackendrs">2.1 Roadside relay and backhaul (<code>crates/v2xw-engine/src/backend.rs</code>)<a class="headerlink" href="#21-roadside-relay-and-backhaul-cratesv2xw-enginesrcbackendrs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>relay_range_m</code></td>
+<td>300</td>
+<td>m</td>
+<td>ASSUMPTION</td>
+<td><code>RELAY_RANGE_M</code></td>
+<td>Nominal 5.9 GHz DSRC range: "300 m nominal, up to 1000 m" ([ISART05] p.8, a secondary vendor figure). [RSU41] §2.2 confirms that vehicles reach the SCMS through the RSU's IPv6 service, and may request at one RSU and receive at another, but prints no range. This radius gates only the batch download. A relayed report is a real frame, and the radio decides whether it arrives</td>
+</tr>
+<tr>
+<td><code>backhaul_latency_ms</code></td>
+<td>10</td>
+<td>ms</td>
+<td>ASSUMPTION</td>
+<td><code>BACKHAUL_LATENCY_MS</code></td>
+<td>No source gives the latency of an RSU's field network to the internet. The value reuses the library backend figure so the two are not separate invented numbers. The deployment's city-to-region leg is added on top. <code>backhaul/fibre</code>, <code>dsl</code> or <code>microwave</code> with a distance replaces it</td>
+</tr>
+<tr>
+<td><code>backhaul_capacity_mbps</code></td>
+<td>1000</td>
+<td>Mbit/s</td>
+<td>ASSUMPTION</td>
+<td><code>BACKHAUL_CAPACITY_MBPS</code></td>
+<td>A gigabit Ethernet port. [RSU41] §2.1 requires a PoE (IEEE 802.3at) Ethernet interface with IPv4 and IPv6 but gives no rate</td>
+</tr>
+<tr>
+<td><code>internet_one_way_ms</code></td>
+<td>14.4</td>
+<td>ms</td>
+<td>DERIVED</td>
+<td><code>INTERNET_ONE_WAY_MS</code></td>
+<td>(58.0 − 29.2) / 2, from Narayanan et al. WWW'20 Table 2</td>
+</tr>
+<tr>
+<td><code>wired_rto_ms</code></td>
+<td>200</td>
+<td>ms</td>
+<td>CITED</td>
+<td><code>WIRED_RTO_MS</code></td>
+<td>Linux <code>TCP_RTO_MIN</code> (include/net/tcp.h)</td>
+</tr>
+<tr>
+<td><code>reconnect_s</code></td>
+<td>1</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>RECONNECT_S</code></td>
+<td>RFC 6298 §2.1 initial RTO</td>
+</tr>
+<tr>
+<td><code>mbms_carousel_s</code></td>
+<td>10</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>MBMS_CAROUSEL_S</code></td>
+<td>TS 26.346 §7 leaves the FLUTE carousel interval to the operator</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-tls-sessions-backendrs-measured-by-toolsscms_constantstls_handshake_sizespy">2.2 TLS sessions (<code>backend.rs</code>, measured by <code>tools/scms_constants/tls_handshake_sizes.py</code>)<a class="headerlink" href="#22-tls-sessions-backendrs-measured-by-toolsscms_constantstls_handshake_sizespy" title="Permanent link">&para;</a></h3>
+<p>The script runs a real handshake between two OpenSSL 3.0.15 endpoints over memory BIOs, restricted to the US profile: server-only X.509 authentication, ECDHE-ECDSA suites and no session tickets ([SMP] §2.1.18, §3.2; [SM-EESEC] §5.2.3). It counts the bytes of each TLS-record flight. Nothing goes on the network.</p>
+<p>The results rest on three assumptions:
+- The server sends a two-certificate ECDSA P-256 chain: a leaf of 367 B DER and an issuing CA of 323 B. No provider publishes its TLS chain.
+- The client sends OpenSSL's ClientHello restricted to the profile's suites. No OBU publishes its TLS stack.
+- The host name is a neutral 26-character one.</p>
+<p>Rerun it with <code>python -I tools/scms_constants/tls_handshake_sizes.py</code>. It needs <code>cryptography</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tls_session_max_s</code></td>
+<td>300</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>TLS_SESSION_MAX</code></td>
+<td>"The max lifetime of a session shall be 5 minutes", and resumption is not supported. [SMP] §3.2</td>
+</tr>
+<tr>
+<td><code>tls13_client_hello_bytes</code></td>
+<td>256</td>
+<td>B</td>
+<td>MEASURED</td>
+<td><code>SCMS_TLS13_FLIGHTS.0</code></td>
+<td>The script above</td>
+</tr>
+<tr>
+<td><code>tls13_server_flight_bytes</code></td>
+<td>1066</td>
+<td>B</td>
+<td>MEASURED</td>
+<td><code>SCMS_TLS13_FLIGHTS.1</code></td>
+<td>ServerHello through server Finished, with the 2-certificate chain</td>
+</tr>
+<tr>
+<td><code>tls13_client_finish_bytes</code></td>
+<td>80</td>
+<td>B</td>
+<td>MEASURED</td>
+<td><code>SCMS_TLS13_FLIGHTS.2</code></td>
+<td>Rides with the first request. Not charged separately (open item 4)</td>
+</tr>
+<tr>
+<td><code>tls12_client_hello_bytes</code></td>
+<td>173</td>
+<td>B</td>
+<td>MEASURED</td>
+<td><code>SCMS_TLS12_FLIGHTS.0</code></td>
+<td>ECDHE-ECDSA-AES128-GCM-SHA256</td>
+</tr>
+<tr>
+<td><code>tls12_server_flight_bytes</code></td>
+<td>934</td>
+<td>B</td>
+<td>MEASURED</td>
+<td><code>SCMS_TLS12_FLIGHTS.1</code></td>
+<td>ServerHello through ServerHelloDone</td>
+</tr>
+<tr>
+<td><code>tls12_client_finish_bytes</code></td>
+<td>43</td>
+<td>B</td>
+<td>MEASURED</td>
+<td><code>SCMS_TLS12_FLIGHTS.2</code></td>
+<td>The measured flight is 93 B. The engine adds 50 B for ChangeCipherSpec and record headers. The server's last flight of 51 B matches the transport's fixed 51</td>
+</tr>
+</tbody>
+</table>
+<p>The engine's earlier defaults were a 512 B ClientHello and a 4,000 B server flight, both <code>todo-calibrate</code> and sized for an RSA chain. The SCMS carrier no longer uses them. The other transport figures (MSS, CUBIC, RTO, HTTP headers) stay on the generic <code>v2xw-radio</code> card with their own status.</p>
+<h3 id="23-crl-distribution-and-reports-cratesv2xw-enginesrcphase2rs">2.3 CRL distribution and reports (<code>crates/v2xw-engine/src/phase2.rs</code>)<a class="headerlink" href="#23-crl-distribution-and-reports-cratesv2xw-enginesrcphase2rs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>crl_fetch_interval_s</code></td>
+<td>3600</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>CRL_FETCH_INTERVAL_S</code></td>
+<td>Sits inside a cited bound. Devices fetch "as often as possible but no later than once a week" ([CAMP122] §3 item 10) and "on every RA connection" ([PRIMER] pp.5, 8), but no interval is printed. One hour is far inside the weekly bound and matches the profile's RA polling granularity (ra-minWait 1 h, [SMP] Table 3)</td>
+</tr>
+<tr>
+<td><code>crl_background_entries</code></td>
+<td>0</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td>engine <code>phase2.rs</code> <code>LifecycleParams::background_entries</code>; <code>run/crl.rs</code> <code>ScmsRun::seed_standing_crl</code></td>
+<td>The revocations already on the home provider's CRL at t0 (a standing list of earlier years). No deployment publishes its CRL length; 0 keeps the clean-slate run. Set it to size the list a vehicle downloads: every download (cellular, RSU backhaul, MBMS) is charged the encoded <code>CompositeCrlSpdu</code> (<code>ctl::encode_composite_crl_coer</code>), 33.08 B per linkage entry at 10,000 (<code>edge_cases.rs</code>)</td>
+</tr>
+<tr>
+<td><code>clock_skew_s</code></td>
+<td>0</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td>engine <code>phase2.rs</code> <code>Phase2::clock_skew_for</code>; node <code>secure.rs</code> <code>NodeSecurity::set_clock_offset</code></td>
+<td>A scenario setting; the default is the no-fault case. A vehicle clock's believed-minus-true offset (a GNSS time error held while the fix holds, or a spoofed time source). The node signs (<code>generationTime</code>, IEEE 1609.2 §6.3.9), rotates and judges validity (§5.2) on its own clock. 0 is a true clock</td>
+</tr>
+<tr>
+<td><code>clock_skew_share</code></td>
+<td>1</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td>engine <code>phase2.rs</code></td>
+<td>A scenario setting; the default is the no-fault case. The share of vehicles that carry <code>clock_skew_s</code>, taken by a fixed hash of the node index so a base and a variant skew the same vehicles</td>
+</tr>
+<tr>
+<td><code>peer_root_removal_at_s</code></td>
+<td>unset</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td>engine <code>phase2.rs</code> <code>governance_due</code>, <code>take_ctl_install</code></td>
+<td>A scenario setting; the default is the no-fault case. The EAC removes the second provider's root; the CTL is published 48 h later (Elector Policy v1.0 §2.2.4). Devices install a newer CTL with their next composite CRL download (the file carries the home CTL, IEEE 1609.2.1) and drop the root; RAs stop serving that provider's CRL</td>
+</tr>
+<tr>
+<td><code>crl_not_modified_bytes</code></td>
+<td>92</td>
+<td>B</td>
+<td>ASSUMPTION</td>
+<td><code>CRL_NOT_MODIFIED_BYTES</code></td>
+<td>The RA's HTTP 412 answer to a conditional CRL poll whose copy is current ([SMP] §4.3.1, §4.3.2: <code>If-Modified-Since</code> on 6.3.5.8 composite CRL and 6.3.5.14 information status). A minimal HTTP/1.1 response: status line 34 B, <code>Date:</code> 37 B, <code>Content-Length: 0</code> 19 B, blank line 2 B. Every due poll now sends its request; before, a poll that would find nothing new put nothing on the air</td>
+</tr>
+<tr>
+<td><code>http_header_set</code></td>
+<td>Host; Content-Type, Content-Length with a body; Date on answers</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>scms/http.rs</code> (<code>post_bytes</code>, <code>download_bytes</code>, <code>conditional_get_bytes</code>, <code>upload_bytes</code>, <code>answer_bytes</code>)</td>
+<td>Every EE-RA request is charged its request line, <code>Host: ra.&lt;provider&gt;:8892</code> (the RA certificate's name, which its TLS certificate must match, [SMP] §3.2), and <code>Content-Type: application/octet-stream</code> and <code>Content-Length</code> when it has a body ([CAMP122] §6.1); a <code>GET</code> download carries its <code>SecuredAuthenticatedDownloadRequest</code> Base64 in <code>Download-Req</code>, padded <code>4·⌈n/3⌉</code> (RFC 4648 §4), never also as a body; the file check is two conditional <code>GET</code>s with <code>If-None-Match</code> (<code>"local_policy_&lt;g&gt;_&lt;l&gt;.oer"</code>, SCMS-544; the LCCF's tag <code>"local_certificate_chain_&lt;v&gt;.oer"</code> is unpublished), answered <code>200</code> or <code>304</code>. Answers carry <code>Date</code> (29 B IMF-fixdate, RFC 9110 §6.6.1) and <code>Content-Length</code>, plus <code>Content-Type</code> with a body; <code>304</code> carries <code>Date</code> only; a resumed batch is <code>206</code> with <code>Content-Range</code>; refusals are <code>500</code> around the modelled refusal body. No <code>User-Agent</code>, <code>Accept</code>, <code>Connection</code> or <code>Server</code>. Paths are [CAMP122] Table 79's; the 1609.2.1 v3 paths are paywalled (UNCONFIRMED). The 412 answer this set gives is <code>crl_not_modified_bytes</code> (92 B)</td>
+</tr>
+<tr>
+<td><code>crl_store_path</code></td>
+<td><code>/download-crl/</code> on <code>ma.&lt;provider&gt;:8894</code></td>
+<td>-</td>
+<td>CITED</td>
+<td><code>phase2::CRL_STORE_PATH</code>, <code>Phase2::crl_poll_request_bytes</code></td>
+<td>CAMP; the IEEE 1609.2.1 path string is UNCONFIRMED. A vehicle's composite CRL poll is an unauthenticated conditional <code>GET</code> ([CAMP122] §6.2.1, §6.2.3; [SMP] §4.3.2 <code>If-Modified-Since</code>), no body: 107 B with the 29 B IMF-fixdate. Before B9b it was charged the size model's signed request (<code>crl_request</code>, 97 B). The answer is <code>http::answer_bytes</code>: <code>200</code> with the composite, or the 92 B <code>412</code>. The roadside unit's download answer is framed the same way; its request is still not charged.</td>
+</tr>
+<tr>
+<td><code>info_status_path</code></td>
+<td><code>/download/info-status</code> on <code>ra.&lt;provider&gt;:8892</code></td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>phase2::INFO_STATUS_PATH</code>, <code>Phase2::info_status_request_bytes</code></td>
+<td>The information-status poll (1609.2.1 §6.3.5.14, <code>If-Modified-Since</code>). No CAMP table names its path and the 1609.2.1 string is UNCONFIRMED; a path beside Table 79's <code>/download/info</code>.</td>
+</tr>
+<tr>
+<td><code>backend_retry_s</code></td>
+<td>10</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>v2xw-proto/src/fault.rs</code> <code>BACKEND_RETRY</code></td>
+<td>How often an SCMS component retries a message to a component that is down (an LA's PLVs or the ACA's certificates to a down RA). No document specifies inter-component retry: 1609.2.1 leaves RA↔LA <code>NULL</code>, and CAMP gives only the EE's 10 s (SCMS-522), reused here. A down component's own timers run when it restarts</td>
+</tr>
+<tr>
+<td><code>crl_broadcast_interval_s</code></td>
+<td>5</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>CRL_BROADCAST_INTERVAL_S</code></td>
+<td>The interval is cited; the mechanism is an assumption. No document specifies a roadside CRL broadcast: [PRIMER] p.5 names the path, and TS 102 941 Annex D.3 gives no rate. A US RSU repeats back-office content as Store and Repeat, whose TxInterval "1 to 5" seconds ([RSU41] Appendix C, p.117) bounds this. 5 s is the longest allowed and costs the least channel time</td>
+</tr>
+<tr>
+<td><code>report_bytes</code></td>
+<td>1119</td>
+<td>B</td>
+<td>DERIVED</td>
+<td><code>report_bytes()</code>; <code>mbr.rs</code> <code>REFERENCE_UPLOAD_BYTES</code></td>
+<td>The upload of the reference report: 804 B signed and encrypted plus a 315 B Download-Req header, from the real encoder (<code>tests/mbr.rs</code>). It is charged only where a run has no real report to send; a real report is charged its own length</td>
+</tr>
+<tr>
+<td><code>report_store_quota_bytes</code></td>
+<td>65536</td>
+<td>B</td>
+<td>ASSUMPTION</td>
+<td><code>REPORT_STORE_QUOTA_BYTES</code></td>
+<td>[SM-MBR] §2.2 leaves the quota to the device. 64 KiB holds 58 reference reports</td>
+</tr>
+<tr>
+<td><code>report_daily_multiplier</code></td>
+<td>0.9</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>ReportStorePolicy</code>; <code>mbr.rs</code> <code>SubtypeWeights</code></td>
+<td>[SM-MBR] §2.3.1 <code>DailyMultiplier</code>, every PSID-0x20 subtype. The spec gives each subtype its own; one knob moves all</td>
+</tr>
+<tr>
+<td><code>report_decay_hour_et</code></td>
+<td>5</td>
+<td>h</td>
+<td>CITED</td>
+<td><code>ReportStorePolicy</code>; <code>mbr.rs</code> <code>DECAY_HOUR_ET</code></td>
+<td>[SM-MBR] §2.2: "Every day, at 5 am Eastern time"</td>
+</tr>
+<tr>
+<td><code>report_weight_*</code></td>
+<td>1.0</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>ReportStorePolicy</code>; <code>mbr.rs</code> <code>SubtypeWeights</code></td>
+<td>[SM-MBR] §2.3.1.2.2–§2.3.1.3.4 <code>initialWeight</code> per subtype. A report listing several subtypes takes the largest (ASSUMPTION: §2.2 does not say)</td>
+</tr>
+<tr>
+<td><code>report_interval_s</code></td>
+<td>1</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>REPORT_INTERVAL_S</code></td>
+<td>A one-second reporting step. [SM-MBR] prints no re-report interval</td>
+</tr>
+<tr>
+<td><code>topup_below_periods</code></td>
+<td>1</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>LifecycleParams</code></td>
+<td>Top up when only the current week remains. A device strategy, as <code>device_pool_periods</code></td>
+</tr>
+<tr>
+<td><code>evidence_bsms</code></td>
+<td>2</td>
+<td>-</td>
+<td>DERIVED</td>
+<td><code>EVIDENCE_BSMS</code></td>
+<td>The fewest BSMs a 1VInconsistent report needs ([SM-MBR] §2.3). An Implausible report keeps the last one</td>
+</tr>
+</tbody>
+</table>
+<h3 id="24-receiver-validation-and-p2pcd-v2xw-nodesrcrxvalrs-v2xw-secsrcp2pcdrs">2.4 Receiver validation and P2PCD (<code>v2xw-node/src/rxval.rs</code>, <code>v2xw-sec/src/p2pcd.rs</code>)<a class="headerlink" href="#24-receiver-validation-and-p2pcd-v2xw-nodesrcrxvalrs-v2xw-secsrcp2pcdrs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>overdue_crl_tolerance_s</code></td>
+<td>1209600</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>rxval.rs</code> <code>OVERDUE_CRL_TOLERANCE_S</code></td>
+<td>Two weeks. [CAMP122] Table 67 overdue_CRL_tolerance</td>
+</tr>
+<tr>
+<td><code>p2pcd_max_response_backoff_ms</code></td>
+<td>250</td>
+<td>ms</td>
+<td>CITED</td>
+<td><code>p2pcd.rs</code> <code>P2pcdParams::RECOMMENDED</code></td>
+<td>IEEE 1609.2a-2017 Annex C.2.1.3.1</td>
+</tr>
+<tr>
+<td><code>p2pcd_response_count_threshold</code></td>
+<td>3</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>p2pcd.rs</code></td>
+<td>1609.2a Annex C.2.1.3.1</td>
+</tr>
+<tr>
+<td><code>p2pcd_max_active_responses</code></td>
+<td>8</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>p2pcd.rs</code></td>
+<td>The standard says "implementation-specific" (§8.2.4.2.2, PICS A.2.3.3)</td>
+</tr>
+<tr>
+<td><code>rxval_ee_cache</code></td>
+<td>4096</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>rxval.rs</code> <code>EE_CACHE</code></td>
+<td>A bounded verdict cache. An implementation choice that has no protocol effect</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3-topology-governance-and-certificates-listed-pinned-by-their-own-tests">3. Topology, governance and certificates (listed; pinned by their own tests)<a class="headerlink" href="#3-topology-governance-and-certificates-listed-pinned-by-their-own-tests" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Default</th>
+<th>Unit</th>
+<th>Status</th>
+<th>Where</th>
+<th>Source or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>us_electors</code></td>
+<td>5</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>deployment.rs</code> <code>US_ELECTORS</code></td>
+<td>Elector Tech Spec §2.1</td>
+</tr>
+<tr>
+<td><code>us_quorum</code></td>
+<td>3</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>deployment.rs</code> <code>US_QUORUM</code></td>
+<td>Elector Tech Spec v1.1 §2.4</td>
+</tr>
+<tr>
+<td><code>elector_years</code></td>
+<td><code>12,15,18,21,24</code></td>
+<td>y</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>ELECTOR_YEARS</code></td>
+<td>Elector Policy v1.0 §2.3.1 ("the first 5 Electors' validity shall be staggered … 12, 15, 18, 21 and 24 years"); the published production and test elector certificates decode to exactly these</td>
+</tr>
+<tr>
+<td><code>elector_default_years</code></td>
+<td>15</td>
+<td>y</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>ELECTOR_DEFAULT_YEARS</code></td>
+<td>Elector Policy v1.0 §2.3.1: "By default, an Elector certificate shall be valid for 15 years". Every replacement elector takes it. It took the fifth elector's 24 y until the governance validation</td>
+</tr>
+<tr>
+<td><code>ctl_add_root_business_days</code></td>
+<td>3</td>
+<td>business day</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>CTL_ADD_ROOT_BUSINESS_DAYS</code></td>
+<td>Provider Req. v1.1 §3.4.11 ("published by the Provider within three (3) business days"). Counted on the Eastern date, weekends and federal holidays skipped (<code>calendar.rs</code>)</td>
+</tr>
+<tr>
+<td><code>ctl_add_elector_business_days</code></td>
+<td>5</td>
+<td>business day</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>CTL_ADD_ELECTOR_BUSINESS_DAYS</code></td>
+<td>Elector Policy v1.0 §2.2.5, §2.4.2: an elector has up to 5 business days for an addition ballot. An elector replacement adds one. It used the root rule's 3 days until the governance validation</td>
+</tr>
+<tr>
+<td><code>ctl_genesis_sequence</code></td>
+<td><code>auto</code></td>
+<td>-</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>genesis_ctl_sequence</code>, <code>PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S</code>; <code>params.rs</code> <code>ctl_genesis_sequence</code></td>
+<td>The genesis CTL's sequence: 1 when <code>t0</code> is on or after 2025-07-16 00:00 UTC, 0 before, as the decoded production series (sequence 0 of 2019-12-12; sequence 1 effective 2025-07-16 08:00 UTC, published 2025-08-13). <code>Some(n)</code> in <code>ScmsParams</code> states it; the scenario key takes <code>auto</code>, <code>0</code> or <code>1</code></td>
+</tr>
+<tr>
+<td><code>la_ids</code></td>
+<td><code>4,5</code> (ISS); <code>1,2</code> (others)</td>
+<td>-</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>la_ids</code>; <code>run/mod.rs</code> <code>LaState</code>; <code>pdu.rs</code> LA certificates</td>
+<td>The <code>laId</code> of a provider's LA1 and LA2. ISS's pre-production LA certificates carry <code>LaSsp</code> version 1 with 4 and 5 (decoded, SCMS Manager 2025-07-17 test chain file; validation/governance-deployment.md L-11). No other US provider has published an LA certificate; <code>laId</code> is provider-local, so they keep 1 and 2</td>
+</tr>
+<tr>
+<td><code>ctl_removal_carries_root</code></td>
+<td><code>once</code></td>
+<td>-</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>build_ctl</code> (<code>removed_root</code>), <code>remove_root</code></td>
+<td>The CTL that removes a root carries the dropped root's certificate in <code>unsigned</code> once, beside the approved ones, with <code>rootCaRemove</code> empty; later CTLs carry the approved roots only. Seen in the test CTL only (2025-07-17, sequence 3, the Eviden root); production practice unknown (no production CTL has removed a root)</td>
+</tr>
+<tr>
+<td><code>ctl_removal_hours</code></td>
+<td>48</td>
+<td>h</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>CTL_REMOVAL_HOURS</code></td>
+<td>Elector Policy v1.0 §2.2.4 ("executed within as little as 48 hours of receipt of the task order"; §2.4.4 for a root)</td>
+</tr>
+<tr>
+<td><code>review_add_business_days</code></td>
+<td>10</td>
+<td>business day</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>REVIEW_ADD_BUSINESS_DAYS</code>, <code>review_vote_at</code></td>
+<td>Elector Policy v1.0 §2.4.2: the BOD reviews an addition within 10 business days before the EAC votes. Counted as the publication deadlines are. The vote is placed at the end of the window (when within it the Board finishes is unpublished). Used only under <code>eac_review: elector-policy</code></td>
+</tr>
+<tr>
+<td><code>review_removal_hours</code></td>
+<td>24</td>
+<td>h</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>REVIEW_REMOVAL_HOURS</code></td>
+<td>Elector Policy v1.0 §2.4.4–2.4.5: a removal is investigated within 24 h before the vote</td>
+</tr>
+<tr>
+<td><code>root_termination_notice_days</code></td>
+<td>365</td>
+<td>d</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>ROOT_TERMINATION_NOTICE_DAYS</code>, <code>termination_notice</code>, <code>remove_root</code></td>
+<td>[SM-PROV] §3.5.6: a Root CA's termination needs 365 days' notice (gov L-8). A noticed root cannot be removed earlier, emergency or not (the override is unpublished, an ASSUMPTION); the subscriber-majority transfer vote is not modelled</td>
+</tr>
+<tr>
+<td><code>test_ballot_max_idle_days</code></td>
+<td>365</td>
+<td>d</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>TEST_BALLOT_MAX_IDLE_DAYS</code>, <code>test_ballot_due</code></td>
+<td>Elector Policy v1.0 §1.1: a Test Ballot at least yearly, so no elector is idle for more than a year (gov G-10). The engine's interval key (off by default) is D1's</td>
+</tr>
+<tr>
+<td><code>business_day_holidays</code></td>
+<td><code>5 USC 6103</code></td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>calendar.rs</code> <code>federal_holidays</code></td>
+<td>SCMS Manager LLC and the providers do not publish their business-day calendar. The engine uses the US federal holidays with the E.O. 11582 observed-date rule, on the Eastern civil date</td>
+</tr>
+<tr>
+<td><code>elector_start_time32</code></td>
+<td>503136005</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>governance.rs</code></td>
+<td>Published elector certificates (2019-12-11)</td>
+</tr>
+<tr>
+<td><code>component_lifetimes</code></td>
+<td><code>ROLE_SPECS</code></td>
+<td>y</td>
+<td>CITED</td>
+<td><code>governance.rs</code> <code>ROLE_SPECS</code></td>
+<td>Each comes from a published production or test certificate named in its <code>source</code>. DCM, LOP and DC take the RA's 6 y as an ASSUMPTION, because none of them has a published certificate. The root's 30 y is the SAESOL production root's; Provider Req. v1.1 §3.6.4 requires 70 y (20 y key), which the other production root (<code>v2xrootca.ghsiss.com</code>, 2016-03-22, 70 y) has. One profile serves every provider (validation/governance-deployment.md G-14)</td>
+</tr>
+<tr>
+<td><code>genesis_backdate_s</code></td>
+<td>31556952</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>governance.rs</code></td>
+<td>One 1609.2 year. A deployed hierarchy predates any run, so the current week's pseudonyms must fall inside their issuers' validity</td>
+</tr>
+<tr>
+<td><code>default_t0_unix_s</code></td>
+<td>1767690000</td>
+<td>s</td>
+<td>DERIVED</td>
+<td><code>governance.rs</code> <code>DEFAULT_T0_UNIX_S</code></td>
+<td>The start of US i-period 574, used only when a scenario gives no <code>time.t0</code></td>
+</tr>
+<tr>
+<td><code>provider_regions</code></td>
+<td><code>REGIONS</code></td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>deployment.rs</code></td>
+<td>No provider publishes where it runs. Each provider is placed in a representative public-cloud metro</td>
+</tr>
+<tr>
+<td><code>fibre_fraction</code></td>
+<td>0.6667</td>
+<td>c</td>
+<td>ASSUMPTION</td>
+<td><code>deployment.rs</code> <code>LatencyModel::DEFAULT_REGION</code></td>
+<td>2/3 c, the usual figure for silica fibre (n ≈ 1.47). The radio crate's 4.9 µs/km corresponds to 0.68 c</td>
+</tr>
+<tr>
+<td><code>per_link_overhead_ms</code></td>
+<td>1</td>
+<td>ms</td>
+<td>ASSUMPTION</td>
+<td><code>deployment.rs</code></td>
+<td>Routing, switching and TLS record processing. A placeholder</td>
+</tr>
+<tr>
+<td><code>fleet_share</code></td>
+<td>preset</td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>deployment.rs</code></td>
+<td>No market share is published</td>
+</tr>
+<tr>
+<td><code>appcert_backhaul_latency_ms</code></td>
+<td>10</td>
+<td>ms</td>
+<td>ASSUMPTION</td>
+<td><code>run/appcert.rs</code> <code>RSU_BACKHAUL_LATENCY</code></td>
+<td>The library default when a driver gives no backhaul (<code>ScmsRun::add_rsu</code>); equal to the engine's <code>BACKHAUL_LATENCY_MS</code> (checked by <code>scms_constants</code>). In the engine the RSU's own backhaul line carries every message of its certificate cycle (<code>ScmsRun::add_rsu_with</code> and the carrier), so the medium model (<code>backhaul/fibre</code>, <code>dsl</code>, <code>microwave</code>, <code>cellular</code>) decides</td>
+</tr>
+<tr>
+<td><code>appcert_backhaul_capacity_mbps</code></td>
+<td>1000</td>
+<td>Mbit/s</td>
+<td>ASSUMPTION</td>
+<td><code>run/appcert.rs</code> <code>RSU_BACKHAUL_BPS</code></td>
+<td>As <code>backhaul_capacity_mbps</code>: a gigabit Ethernet port, [RSU41] §2.1 gives the interface and no rate</td>
+</tr>
+<tr>
+<td><code>appcert_id_period_s</code></td>
+<td>2592000</td>
+<td>s</td>
+<td>ASSUMPTION</td>
+<td><code>run/appcert.rs</code></td>
+<td>CAMP says "1 month", taken here as 30 days</td>
+</tr>
+<tr>
+<td><code>appcert_max_gen_ahead_s</code></td>
+<td>604800</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>run/appcert.rs</code></td>
+<td>ra-maxGenDelay 1 week, [SMP] Table 3</td>
+</tr>
+<tr>
+<td><code>appcert_retry_wait_s</code></td>
+<td>3600</td>
+<td>s</td>
+<td>CITED</td>
+<td><code>run/appcert.rs</code></td>
+<td>ra-minWait 1 h, [SMP] Table 3</td>
+</tr>
+<tr>
+<td><code>threshold_round_timeout_ms</code></td>
+<td>500</td>
+<td>ms</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code> <code>ThresholdDeployment</code></td>
+<td>Research option (FROST). No deployment publishes a value</td>
+</tr>
+<tr>
+<td><code>threshold_member_link_latency_ms</code></td>
+<td>20</td>
+<td>ms</td>
+<td>ASSUMPTION</td>
+<td><code>params.rs</code> <code>ThresholdDeployment</code></td>
+<td>WAN latency between member organisations. Not published</td>
+</tr>
+<tr>
+<td><code>ma_share_envelope</code></td>
+<td><code>1609.2 encryption to the peer MA</code></td>
+<td>-</td>
+<td>ASSUMPTION</td>
+<td><code>mbr.rs</code> <code>reencrypt_for_ma</code></td>
+<td>No published specification defines the MA-to-MA sharing format. The forwarding MA re-encrypts the reporter-signed inner SPDU it opened, byte for byte, to the receiving provider's MA certificate as a device encrypts its report ([SM-MBR] §3, without the signing step and with no <code>Download-Req</code> header), so the receiving MA verifies the reporter's signature and the evidence itself, and the link carries the real ciphertext length. Draws come from the run's own <code>ma-share</code> stream</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-known-limitations">4. Known limitations<a class="headerlink" href="#4-known-limitations" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>Real artefacts would replace these assumptions.</strong> A provider's TLS chain, an RA acknowledgement and a batch <code>.zip</code> would turn <code>repo_url_bytes</code>, <code>batch_container_bytes</code> and the TLS chain into measurements. The SCMS Manager publications carry no such samples.</li>
+<li><strong>MA review time and capacity.</strong> No public figure exists. They stay ASSUMPTIONs that can be swept.</li>
+<li><strong>TLS 1.3 client Finished.</strong> These 80 B ride with the first request and are not counted in the handshake bytes. The undercount is small and known.</li>
+<li><strong>Report sizes for other evidence.</strong> <code>report_bytes</code> assumes two BSMs. An Implausible report with one BSM is 918 B as measured (603 + 315), and a real report is always charged its own length.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-circle-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4M12 16V8"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../config-inventory-scms/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Security and SCMS inventory">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Security and SCMS inventory
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../sensitivity-catalogue/" class="md-footer__link md-footer__link--next" aria-label="Next: Sensitivity catalogue">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Sensitivity catalogue
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      © 2026 Ahmed Zaidan · code <a href="https://github.com/ak3zaidan/V2X-World/blob/main/LICENSE">Apache-2.0</a> · dataset <a href="https://huggingface.co/datasets/akzaidan/V2X-World">CC BY 4.0</a>
+    </div>
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/ak3zaidan/V2X-World" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog" role="status" aria-atomic="true">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      
+<div class="md-progress" data-md-component="progress" role="progressbar" aria-label="Loading"></div>
+    
+    
+    
+      
+      
+      
+      
+        
+        
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["navigation.tabs","navigation.tabs.sticky","navigation.sections","navigation.instant","navigation.instant.progress","navigation.tracking","navigation.indexes","navigation.top","navigation.footer","navigation.path","toc.follow","search.highlight","search.share","search.suggest","content.code.copy","content.code.annotate","content.tabs.link","content.action.edit","content.action.view"],"redirect":null,"search":"../../assets/javascripts/workers/search.719e0d91.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","clipboard.error":"Could not copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d31f0ffa.min.js"></script>
+      
+        <script src="../../javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

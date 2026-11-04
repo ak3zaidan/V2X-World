@@ -1,0 +1,6084 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A deterministic, discrete-event simulator of connected-vehicle (V2X) systems: traffic, radio, network, IEEE 1609.2 security, the SCMS and ETSI PKI, attackers and misbehaviour detection.">
+      
+      
+      
+        <link rel="canonical" href="https://ak3zaidan.github.io/V2X-World/reference/config-inventory-network/">
+      
+      
+      
+        <link rel="prev" href="../config-inventory-traffic/">
+      
+      
+        <link rel="next" href="../config-inventory-scms/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="zensical-0.0.74">
+    
+    
+      
+        <title>Radio and network inventory - V2X World</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.4ab2de0c.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.b60ce83d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-hidden="true"></label>
+    <div data-md-component="skip">
+      <a href="#__skip" class="md-skip">
+        Skip to content
+      </a>
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="V2X World" class="md-header__button md-logo" aria-label="V2X World" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="V2X World">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+      <span class="md-visually-hidden">Navigation</span>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            V2X World
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Radio and network inventory
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+          <span class="md-visually-hidden">Search</span>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/ak3zaidan/V2X-World" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ak3zaidan/V2X-World
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/introduction/" class="md-tabs__link">
+          
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/" class="md-tabs__link">
+          
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../models/" class="md-tabs__link">
+          
+  
+  Models
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../configuration/overview/" class="md-tabs__link">
+          
+  
+  Configuration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../glossary/" class="md-tabs__link">
+        
+  
+  Glossary
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../about/standards/" class="md-tabs__link">
+          
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="V2X World" class="md-nav__button md-logo" aria-label="V2X World" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="V2X World">
+
+    </a>
+    V2X World
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ak3zaidan/V2X-World" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ak3zaidan/V2X-World
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Home
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Getting started
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_2">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Getting started
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/introduction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Introduction
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Install and build
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/first-simulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Your first simulation
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/studio-tour/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Studio tour
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Command-line tool
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  User guide
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  User guide
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Scenarios
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/worlds-and-maps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Worlds and maps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/traffic-demand/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic demand
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/running-and-recording/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Running and recording
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../recording-and-metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metrics and outputs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/catalogue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metric catalogue
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/comparing-runs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Comparing runs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/experiments-and-sweeps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Experiments and sweeps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/sensitivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity analysis
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/datasets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Datasets and exports
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dataset/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Dataset schema
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/sumo-cosimulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SUMO co-simulation
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../studio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Studio
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/assistant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Assistant
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../models/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Models
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic and mobility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Messages
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/applications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  V2X applications
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/energy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Energy and emissions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/scms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS and credentials
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and crypto
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/threats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Threats and misbehaviour detection
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/privacy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Privacy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/determinism-and-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Determinism and time
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Configuration
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Configuration
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Overview
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  How settings work
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../configuration/reference/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Generated reference
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5_3" id="__nav_5_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Generated reference
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_2" id="__nav_5_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Run
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_2_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_2">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Run
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/meta/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  meta
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  schema
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/seed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  seed
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  time
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_3" id="__nav_5_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  World
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  World
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/city/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  city
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/world/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  world
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_4" id="__nav_5_3_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Traffic
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/actors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  actors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/mobility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  mobility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  traffic
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/scale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  scale
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_5" id="__nav_5_3_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Environment
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_5_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Environment
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/weather/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  weather
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_6" id="__nav_5_3_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Radio
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/radio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  radio
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_7" id="__nav_5_3_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Network
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Network
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  net
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_8" id="__nav_5_3_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Messages
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_8_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_8">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Messages
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  messages
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/perception/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  perception
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_9" id="__nav_5_3_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Security
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  security
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_10" id="__nav_5_3_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Nodes
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_10_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_10">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Nodes
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/nodes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  nodes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_11" id="__nav_5_3_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Threats
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_11_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_11">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Threats
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/threats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  threats
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_12" id="__nav_5_3_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Detection
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_12_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_12">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Detection
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/detection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  detection
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_13" id="__nav_5_3_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Measurement
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_13_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_13">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Measurement
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  metrics
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/exporters/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  exporters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/experiment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  experiment
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_14" id="__nav_5_3_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Applications
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_14_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_14">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Applications
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  apps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_15" id="__nav_5_3_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Energy
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_15_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_15">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Energy
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/energy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  energy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_16" id="__nav_5_3_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Timeline
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_16_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_16">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Timeline
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  events
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Model parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Curated tables
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_4_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Curated tables
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings by research question
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config-inventory-traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic, world and run inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network inventory
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#exposed-as-scenario-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Exposed as scenario fields
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-configurable-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Other configurable settings
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kept-fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Kept fixed
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Kept fixed">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-radio" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-radio
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-net" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-net
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-msg" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-msg
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-sec" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-sec
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-node
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config-inventory-scms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and SCMS inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scms-constants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS constants
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sensitivity-catalogue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity catalogue
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sensitivity-expectations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity expectations
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Development
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Development
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Architecture
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Crates
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Building and testing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Validation and conformance tools
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Conventions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_6" id="__nav_6_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Extending
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Extending
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../extending/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Overview
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/detectors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Detectors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metrics
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Scenarios
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Plugins
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Engine server and RPC
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protocol/vwp-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Engine-UI protocol (VWP v1)
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/recording-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Recording format
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contributing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  API
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  API
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python API
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Glossary
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  About
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  About
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Standards and references
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/citation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Citation and licence
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#exposed-as-scenario-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Exposed as scenario fields
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-configurable-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Other configurable settings
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kept-fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Kept fixed
+      </span>
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Kept fixed">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-radio" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-radio
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-net" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-net
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-msg" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-msg
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-sec" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-sec
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#v2xw-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        v2xw-node
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../../configuration/overview/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../configuration-reference/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Curated tables
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                <a id="__skip" tabindex="-1"></a>
+                
+                  
+
+  
+    <a href="https://github.com/ak3zaidan/V2X-World/edit/main/docs/reference/config-inventory-network.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-pen" viewBox="0 0 24 24"><path d="M12.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v9.34"/><path d="M14 2v5a1 1 0 0 0 1 1h5M10.378 12.622a1 1 0 0 1 3 3.003L8.36 20.637a2 2 0 0 1-.854.506l-2.867.837a.5.5 0 0 1-.62-.62l.836-2.869a2 2 0 0 1 .506-.853z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/ak3zaidan/V2X-World/raw/main/docs/reference/config-inventory-network.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-code-2" viewBox="0 0 24 24"><path d="M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35"/><path d="M14 2v5a1 1 0 0 0 1 1h5M5 16l-3 3 3 3M9 22l3-3-3-3"/></svg>
+    </a>
+  
+
+
+<h1 id="network-parameter-inventory">Network parameter inventory<a class="headerlink" href="#network-parameter-inventory" title="Permanent link">&para;</a></h1>
+<p>Every hard-coded number and every model-struct field in the network stack: <code>v2xw-radio</code>, <code>v2xw-net</code>, <code>v2xw-msg</code>, <code>v2xw-sec</code> and <code>v2xw-node</code>,
+plus the backend links. Every row says where the number is and either the scenario path
+that sets it or why it is kept fixed.</p>
+<p>The rule used to classify:</p>
+<ul>
+<li><strong>IMPORTANT</strong> means it changes a metric a researcher would study (PDR, CBR, latency,
+  channel load, verification load). These are exposed under the settings contract: a
+  validated scenario field, with its unit, guide text, label and Basic/Advanced level, a
+  default equal to the built-in value, read by the model, and refused where it would do nothing.</li>
+<li><strong>MINOR</strong> means a numerical tolerance, an implementation detail, a protocol encoding,
+  an identifier, or a validation anchor. These are kept.</li>
+</ul>
+<p>Protocol constants that a standard fixes (ASN.1 bounds, header sizes, PSIDs, PHY timing)
+are kept on purpose. A simulator that let them vary would no longer simulate the protocol.</p>
+<h2 id="exposed-as-scenario-fields">Exposed as scenario fields<a class="headerlink" href="#exposed-as-scenario-fields" title="Permanent link">&para;</a></h2>
+<p>Each group has a same-seed test in <code>crates/v2xw-engine/tests/network_audit_config.rs</code>.
+The test runs a baseline and the setting side by side and requires the output to change.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Exposed as</th>
+<th>Default (source)</th>
+<th>Range</th>
+<th>Test</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sidelink UE noise figure</td>
+<td><code>v2xw-radio/src/cv2x.rs</code> <code>UE_NOISE_FIGURE_DB</code></td>
+<td><code>radio.sidelink.noise_figure_db</code></td>
+<td>9 dB (3GPP TR 36.885 Annex A.1.1)</td>
+<td>0 to 15 dB</td>
+<td>15 dB decodes less</td>
+</tr>
+<tr>
+<td>Sidelink CBR S-RSSI threshold</td>
+<td><code>v2xw-radio/src/sidelink.rs</code> <code>CBR_SRSSI_THRESHOLD_DBM</code> → <code>SpsParams::cbr_threshold_dbm</code></td>
+<td><code>radio.sidelink.cbr_threshold_dbm</code></td>
+<td>-94 dBm</td>
+<td>-112 to -8 dBm in 2 dB steps (TS 36.331 <code>sl-ThresS-RSSI-CBR</code>)</td>
+<td>-112 dBm raises mean CBR</td>
+</tr>
+<tr>
+<td>ETSI reactive DCC table</td>
+<td><code>v2xw-radio/src/dcc.rs</code> <code>ReactiveDcc::with_table</code></td>
+<td><code>radio.dcc.reactive_table</code></td>
+<td><code>a1</code> (TS 102 687 V1.2.1 Table A.1)</td>
+<td><code>a1</code>, <code>a2</code></td>
+<td>A.2 moves the transmit instants</td>
+</tr>
+<tr>
+<td>ETSI reactive DCC state hold</td>
+<td><code>dcc.rs</code> <code>ReactiveDcc::with_hold</code></td>
+<td><code>radio.dcc.reactive_hold_ms</code></td>
+<td>0 (the tables give no hysteresis)</td>
+<td>0 to 5000 ms</td>
+<td>covered by the loader test (reactive only)</td>
+</tr>
+<tr>
+<td>GN CBF minimum time</td>
+<td><code>v2xw-net/src/stack/mib.rs</code> <code>CBF_MIN_TIME_MS</code></td>
+<td><code>net.geonet.cbf_min_time_ms</code></td>
+<td>1 ms (EN 302 636-4-1 Annex H)</td>
+<td>0 to 1000 ms, below the max</td>
+<td></td>
+</tr>
+<tr>
+<td>GN CBF maximum time</td>
+<td><code>mib.rs</code> <code>CBF_MAX_TIME_MS</code></td>
+<td><code>net.geonet.cbf_max_time_ms</code></td>
+<td>100 ms (Annex H)</td>
+<td>(0, 1000] ms</td>
+<td>400 ms raises the p95 forwarding latency</td>
+</tr>
+<tr>
+<td>GN <code>DIST_MAX</code></td>
+<td><code>mib.rs</code> <code>DEFAULT_MAX_COMM_RANGE_M</code></td>
+<td><code>net.geonet.max_comm_range_m</code></td>
+<td>1000 m (Annex H)</td>
+<td>(0, 5000] m</td>
+<td></td>
+</tr>
+<tr>
+<td>SPaT interval</td>
+<td><code>v2xw-node/src/generate.rs</code> <code>SPAT_INTERVAL</code></td>
+<td><code>messages.spat_interval_ms</code></td>
+<td>100 ms (CTI 4501)</td>
+<td>100 to 10 000 ms</td>
+<td>200 ms sends about half the SPaTs</td>
+</tr>
+<tr>
+<td>MAP interval</td>
+<td><code>generate.rs</code> <code>MAP_INTERVAL</code></td>
+<td><code>messages.map_interval_ms</code></td>
+<td>1000 ms (CTI 4501)</td>
+<td>100 to 60 000 ms</td>
+<td>500 ms sends more than 1.5× the MAPs</td>
+</tr>
+<tr>
+<td>CPM generation interval <code>T_GenCpm</code></td>
+<td><code>v2xw-node/src/cpm.rs</code> <code>T_GEN_CPM</code></td>
+<td><code>messages.cpm_interval_ms</code></td>
+<td>100 ms (ETSI TS 103 324 §6.1.2.3)</td>
+<td>100 to 1000 ms (<code>T_GenCpmMax</code>)</td>
+<td>500 ms sends fewer CPMs</td>
+</tr>
+<tr>
+<td>CPM <code>T_GenCpm</code> under DCC</td>
+<td><code>v2xw-node/src/cpm.rs</code> <code>CpmService::generation_interval</code></td>
+<td><code>messages.cpm_dcc_limited</code></td>
+<td>off</td>
+<td>bool</td>
+<td>300 ms DCC gap gives 3.3 CPM/s (<code>cpm::tests</code>)</td>
+</tr>
+<tr>
+<td>CPM <code>ObjectPerceptionQualityThreshold</code></td>
+<td><code>cpm.rs</code> <code>OBJECT_PERCEPTION_QUALITY_THRESHOLD</code></td>
+<td><code>messages.cpm_quality_threshold</code></td>
+<td>unset (TS 103 324 Table F.1: 3)</td>
+<td>0 to 15</td>
+<td>lost tracks are held back</td>
+</tr>
+<tr>
+<td>CPM objects per message</td>
+<td><code>cpm.rs</code> <code>MAX_OBJECTS</code></td>
+<td><code>messages.cpm_max_objects</code></td>
+<td>255</td>
+<td>1 to 255</td>
+<td>the cut keeps the highest-utility objects</td>
+</tr>
+<tr>
+<td>DENM traffic condition</td>
+<td><code>v2xw-node/src/denm_triggers.rs</code></td>
+<td><code>messages.denm_traffic_condition</code></td>
+<td>off (C2C-CC RS 2007 R1.6.10)</td>
+<td>bool</td>
+<td>a queue on a non-urban road raises <code>trafficCondition</code></td>
+</tr>
+<tr>
+<td>DENM traction loss</td>
+<td><code>denm_triggers.rs</code></td>
+<td><code>messages.denm_traction_loss</code></td>
+<td>off (C2C-CC RS 2002 R1.6.10)</td>
+<td>bool</td>
+<td>an ABS stop on ice raises <code>adhesion</code></td>
+</tr>
+<tr>
+<td>Verification queue depth</td>
+<td><code>v2xw-node/src/runtime.rs</code> <code>NodeConfig::queue_capacity[1]</code></td>
+<td><code>nodes.verify_queue_depth</code></td>
+<td>64 (engine default, no profile publishes one)</td>
+<td>1 to 4096</td>
+<td>depth 1 drops (<code>verify_overflow</code>) under load</td>
+</tr>
+</tbody>
+</table>
+<p>The loader refuses each field where the run would not read it:</p>
+<ul>
+<li>the sidelink fields on an 802.11p run;</li>
+<li>a CBR threshold off the 2 dB grid;</li>
+<li>the reactive fields unless the reactive algorithm runs;</li>
+<li>the CBF fields when neither forwarding algorithm is <code>cbf</code>, and a minimum at or above the maximum;</li>
+<li>the SPaT, MAP and CPM intervals when <code>messages.sets</code> lacks that message.</li>
+</ul>
+<h2 id="other-configurable-settings">Other configurable settings<a class="headerlink" href="#other-configurable-settings" title="Permanent link">&para;</a></h2>
+<p>These are listed so that the inventory is complete. The paths and sources are in
+<code>configuration-reference.md</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Exposed as</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>802.11p data rate, noise figure, sensitivity, CCA/CBR threshold, capture threshold</td>
+<td><code>phy.rs</code> <code>NOISE_FIGURE_HARDWARE_DB</code>, <code>CBR_BUSY_THRESHOLD_DBM</code>, <code>CAPTURE_THRESHOLD_DB</code></td>
+<td><code>radio.phy.*</code></td>
+</tr>
+<tr>
+<td>Per-rate sensitivity tables (<code>MEASURED_OBU_MARGIN_DB</code>, ETSI, Cohda)</td>
+<td><code>phy.rs</code></td>
+<td><code>radio.models.phy</code></td>
+</tr>
+<tr>
+<td>CCA presets ETSI/ns-3/Veins</td>
+<td><code>phy.rs</code> <code>CcaConfig</code></td>
+<td><code>radio.phy.cca_threshold_dbm</code></td>
+</tr>
+<tr>
+<td>PER implementation loss, PER tables</td>
+<td><code>per.rs</code></td>
+<td><code>radio.models.per</code></td>
+</tr>
+<tr>
+<td>Transmit power, antenna gain, cable loss, height, pattern (OBU, RSU, VRU), sidelink power</td>
+<td><code>radio.devices</code> (sidelink uses the device power, <code>CV2X_TX_POWER_DBM</code> only labels the card)</td>
+<td><code>radio.devices.*</code></td>
+</tr>
+<tr>
+<td>Region, channel, EIRP caps, spectrum masks</td>
+<td><code>regulation.rs</code></td>
+<td><code>radio.region</code>, <code>radio.channel</code>, <code>radio.adjacent_channel</code></td>
+</tr>
+<tr>
+<td>Own channel map, second radio, own-channel leakage</td>
+<td><code>run/channels.rs</code>, <code>regulation.rs</code> <code>own_channel_leakage</code>, <code>phy.rs</code> <code>leaked_dbm</code></td>
+<td><code>radio.channels: [{channel (channel number), messages: [spat, map, wsa, ...]}]</code> (default empty: one channel); <code>radio.devices.{obu,vru}.radios</code> (default 1), <code>radio.devices.rsu.radios</code> (default 2; USDOT RSU Spec v4.1); <code>radio.channel_leakage</code> (default on: ACIR from the EN 302 571 mask and Table 8 ACS, TR 36.942 §5.1.1.3)</td>
+</tr>
+<tr>
+<td>RSU away from the safety channel in IEEE 1609.4 sync intervals (P1-E5, Tampa-fitted)</td>
+<td><code>run/off_channel.rs</code>, cause <code>off-channel</code></td>
+<td><code>radio.devices.rsu.off_channel: {probability, from_ms, min_duration_ms, max_duration_ms}</code> (default unset: always on the channel)</td>
+</tr>
+<tr>
+<td>Path-loss law, presets, exponent, shadowing sigma and decorrelation, fading law and shapes</td>
+<td><code>prop.rs</code>, <code>fading.rs</code>, <code>winner.rs</code></td>
+<td><code>radio.models.propagation</code>, <code>radio.channel_model.*</code></td>
+</tr>
+<tr>
+<td>Sommer building loss β, γ; vehicle blockage</td>
+<td><code>prop.rs</code> <code>SommerCoefficients</code>, <code>obstacle.rs</code></td>
+<td><code>radio.channel_model.building_*</code>, <code>.vehicle_blockage</code>, <code>radio.models.obstacle</code></td>
+</tr>
+<tr>
+<td>Rain attenuation (ITU-R P.838)</td>
+<td><code>prop.rs</code></td>
+<td><code>weather.*</code></td>
+</tr>
+<tr>
+<td>Candidate range margin</td>
+<td><code>abstract_tier.rs</code>, wiring</td>
+<td><code>radio.range.*</code></td>
+</tr>
+<tr>
+<td>EDCA AC mapping, CWmin/AIFSN vo/vi, MAC queue (<code>mac.rs</code> <code>DEFAULT_QUEUE_DEPTH</code>)</td>
+<td><code>mac.rs</code>, <code>types.rs</code></td>
+<td><code>radio.mac.*</code></td>
+</tr>
+<tr>
+<td>DCC on/off, ETSI adaptive target/α/β (<code>AdaptiveParams::TS102687</code>), J2945/1 <code>vMax_ITT</code>, <code>B</code>, power control, <code>vRP_Min</code></td>
+<td><code>dcc.rs</code></td>
+<td><code>radio.dcc.*</code>, <code>radio.models.dcc</code></td>
+</tr>
+<tr>
+<td>Sidelink profile, MCS, blind retransmissions, CR-limit table, J3161 rate control, conformance sensitivity</td>
+<td><code>sidelink.rs</code>, <code>sps.rs</code>, <code>cv2x.rs</code> <code>SIDELINK_SENSITIVITY_DBM</code></td>
+<td><code>radio.models.sidelink.params.*</code></td>
+</tr>
+<tr>
+<td>SPS RRI, keep probability, RSRP threshold, sensing, candidate %, T2</td>
+<td><code>sps.rs</code> <code>SpsParams</code></td>
+<td><code>radio.sidelink.*</code></td>
+</tr>
+<tr>
+<td>Cellular Uu: background and neighbour load (<code>DEFAULT_BACKGROUND_LOAD</code>), up/downlink rate, ISD, sites, loss percentile, MBMS</td>
+<td><code>cellular.rs</code>, <code>cellular_packet.rs</code></td>
+<td><code>net.uu.params.*</code></td>
+</tr>
+<tr>
+<td>Backhaul fibre/DSL/microwave</td>
+<td><code>ip_transport.rs</code></td>
+<td><code>net.backhaul</code>, <code>net.backend_net</code></td>
+</tr>
+<tr>
+<td>Jammer power, period, duty, reaction delay</td>
+<td><code>jamming.rs</code></td>
+<td><code>threats.jammers[].params</code></td>
+</tr>
+<tr>
+<td>Net layer, GN forwarding, CBF variant, hop limit (<code>DEFAULT_HOP_LIMIT</code>), area, repetition, keep-alive</td>
+<td><code>stack/*</code>, <code>gn.rs</code></td>
+<td><code>net.layer</code>, <code>net.geonet.*</code></td>
+</tr>
+<tr>
+<td>1609.4 switching</td>
+<td><code>stack/wave.rs</code></td>
+<td><code>net.channel_access</code></td>
+</tr>
+<tr>
+<td>Fragmenters: header bytes, reassembly timeout, open SDUs, CPM lifetime, cert-cycle period, P2PCD back-off</td>
+<td><code>frag/generic.rs</code>, <code>frag/facilities.rs</code>, <code>frag/cert_cycle.rs</code></td>
+<td><code>net.fragmenter.params.*</code></td>
+</tr>
+<tr>
+<td>BSM ITT, CAM triggers (<code>ca.rs</code> thresholds), phase and jitter, fixed rate</td>
+<td><code>generator.rs</code>, <code>stack/ca.rs</code></td>
+<td><code>messages.generator</code>, <code>messages.rate_hz</code></td>
+</tr>
+<tr>
+<td>Codec or size model</td>
+<td><code>codec.rs</code>, <code>size_model.rs</code>, <code>etsi_size.rs</code></td>
+<td><code>messages.codec_tier</code></td>
+</tr>
+<tr>
+<td>Envelope, signature, KEM, crypto mode, verification policy, certificate attach cadence</td>
+<td><code>envelope.rs</code> <code>SignerIdPolicy</code> presets, <code>scheme/*</code></td>
+<td><code>security.*</code></td>
+</tr>
+<tr>
+<td>Pseudonym rotation (<code>stores.rs</code> <code>RotationPolicy</code> presets)</td>
+<td><code>stores.rs</code></td>
+<td><code>security.pseudonym_change.*</code></td>
+</tr>
+<tr>
+<td>Crypto hardware timing (<code>profile.rs</code>, <code>profiles/</code>)</td>
+<td><code>v2xw-node</code></td>
+<td><code>nodes.default_obu</code>, <code>nodes.per_class</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="kept-fixed">Kept fixed<a class="headerlink" href="#kept-fixed" title="Permanent link">&para;</a></h2>
+<h3 id="v2xw-radio">v2xw-radio<a class="headerlink" href="#v2xw-radio" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Kept because</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>THERMAL_NOISE_10MHZ_DBM</code>, <code>THERMAL_NOISE_DBM_PER_HZ</code>, <code>SPEED_OF_LIGHT_M_S</code>, <code>FRIIS_CONST_DB</code></td>
+<td><code>phy.rs</code>, <code>cv2x.rs</code>, <code>numeric.rs</code>, <code>prop.rs</code></td>
+<td>Physical constants.</td>
+</tr>
+<tr>
+<td><code>Q_DB</code>, <code>Q_RATIO</code>, <code>DEG_PER_RAD</code>, <code>ENVELOPE_PAD_M</code></td>
+<td><code>numeric.rs</code>, <code>antenna.rs</code>, <code>obstacle.rs</code></td>
+<td>Numerical quanta (determinism contract).</td>
+</tr>
+<tr>
+<td><code>NOISE_FIGURE_3GPP_DB</code> 9 dB</td>
+<td><code>phy.rs</code></td>
+<td>Labels the 3GPP comparison preset. The run's NF is <code>radio.phy.noise_figure_db</code>.</td>
+</tr>
+<tr>
+<td><code>TX_INTERVAL_RETENTION_NS</code></td>
+<td><code>phy.rs</code></td>
+<td>Bookkeeping horizon for the airtime ledger.</td>
+</tr>
+<tr>
+<td><code>SLOT_TIME</code>, <code>SIFS</code>, <code>PREAMBLE</code>, <code>SIGNAL</code>, <code>SYMBOL</code>, <code>N_SERVICE</code>, <code>N_TAIL</code>, <code>SIGNAL_BITS</code></td>
+<td><code>types.rs</code></td>
+<td>IEEE 802.11-2020 §17 OFDM 10 MHz timing. Fixed by the PHY.</td>
+</tr>
+<tr>
+<td><code>A_CW_MIN</code>, <code>A_CW_MAX</code>, BE/BK CWmin/AIFSN</td>
+<td><code>types.rs</code></td>
+<td>Standard defaults. No safety message uses BE/BK, and broadcast never doubles CW (EN 302 663 Annex C.4.2).</td>
+</tr>
+<tr>
+<td><code>MAX_MSDU_BYTES</code>, <code>MAC_HEADER_*</code>, <code>FCS_BYTES</code>, <code>LLC_SNAP_BYTES</code></td>
+<td><code>types.rs</code>, <code>v2xw-net/frame.rs</code></td>
+<td>Frame format.</td>
+</tr>
+<tr>
+<td><code>CCH</code>, <code>SCH1</code>, <code>SCH2</code></td>
+<td><code>types.rs</code></td>
+<td>Channel identifiers. The channel is <code>radio.channel</code>.</td>
+</tr>
+<tr>
+<td><code>T_CBR</code> 100 ms, <code>T_DCC</code> 200 ms</td>
+<td><code>types.rs</code></td>
+<td>TS 102 687 measurement and evaluation intervals. Fixed by the standard that the DCC models implement.</td>
+</tr>
+<tr>
+<td><code>En302571Floor::CONFORMANT</code></td>
+<td><code>dcc.rs</code></td>
+<td>Regulatory floor (EN 302 571). A non-conformant floor is not a study setting.</td>
+</tr>
+<tr>
+<td><code>AdaptiveDcc</code> <code>WINDOW</code> 1 s</td>
+<td><code>dcc.rs</code></td>
+<td>TS 102 687 averaging window.</td>
+</tr>
+<tr>
+<td><code>J2945Params::{J2945_1, J3161_1, ROSTAMI}</code>: PER interval, vMax power, smoothing</td>
+<td><code>dcc.rs</code></td>
+<td>SAE J2945/1 Table constants. The four that studies vary (<code>max_itt_ms</code>, <code>density_coefficient</code>, <code>power_control</code>, <code>min_power_dbm</code>) are exposed.</td>
+</tr>
+<tr>
+<td>Reactive CBR state bands (30/40/50/60 %) and rates</td>
+<td><code>dcc.rs</code> <code>ReactiveTable::limits</code></td>
+<td>These are the tables themselves. The choice between them is <code>radio.dcc.reactive_table</code>.</td>
+</tr>
+<tr>
+<td><code>SIDELINK_MAX_INPUT_DBM</code> -22 dBm</td>
+<td><code>cv2x.rs</code></td>
+<td>Receiver overload at under 1 m. It never binds in vehicle spacing.</td>
+</tr>
+<tr>
+<td><code>NR_MCS_TABLE*</code>, <code>LTE_*</code> MCS specs, <code>REPRESENTATIVE</code></td>
+<td><code>sidelink.rs</code>, <code>bler_nr.rs</code></td>
+<td>Standard tables. The choice is <code>radio.models.sidelink.params.mcs</code>.</td>
+</tr>
+<tr>
+<td>Numerology, sub-channel sizes and counts, PSCCH PRBs</td>
+<td><code>sidelink.rs</code></td>
+<td>Fixed by the profile, because the BLER curves were computed for those pools (see the reference's "Not configurable yet").</td>
+</tr>
+<tr>
+<td><code>SciSize</code>, <code>TB_CRC_BITS</code></td>
+<td><code>sidelink.rs</code></td>
+<td>TS 36.212 / 38.212 formats.</td>
+</tr>
+<tr>
+<td><code>CR_LIMIT_R1_1611594</code>, <code>CrLimitTable::{ETSI_TS_103_574, SAE_J3161}</code></td>
+<td><code>sidelink.rs</code></td>
+<td>Published tables, chosen by <code>congestion_control</code>.</td>
+</tr>
+<tr>
+<td><code>Pppp::BSM</code> 5</td>
+<td><code>sidelink.rs</code></td>
+<td>J3161/1 priority of the BSM.</td>
+</tr>
+<tr>
+<td><code>PREEMPTION_MARGIN_DB</code> 6 dB</td>
+<td><code>sps.rs</code></td>
+<td>NR pre-emption check margin. Studies vary the RSRP threshold it is added to, which is exposed.</td>
+</tr>
+<tr>
+<td><code>IbeMask::adjacent_db</code></td>
+<td><code>sidelink.rs</code> (card <code>todo: calibrate</code>)</td>
+<td>Profile in-band emission mask (TS 36.101 §6.5.2A.3). It is a calibration item, not a study knob.</td>
+</tr>
+<tr>
+<td>BLER and PER look-up tables (<code>WILAB_*</code>, <code>NR_TB_LUTS</code>, <code>TABLE_10PCT</code>, <code>CONTROL_ADVANTAGE_DB</code>)</td>
+<td><code>bler.rs</code>, <code>bler_nr.rs</code>, <code>per.rs</code></td>
+<td>Transcribed link-level curves. The choice is a model preset.</td>
+</tr>
+<tr>
+<td><code>D0_M</code>, <code>D_MIN_M</code></td>
+<td><code>prop.rs</code></td>
+<td>Reference distance and singularity guard of the log-distance law.</td>
+</tr>
+<tr>
+<td><code>LogDistancePreset::ALL</code>, <code>NakagamiPreset::ALL</code></td>
+<td><code>prop.rs</code>, <code>fading.rs</code></td>
+<td>Published fits, offered as presets. The exponent, sigma and m override them.</td>
+</tr>
+<tr>
+<td><code>MANGEL_*</code> coefficients</td>
+<td><code>prop.rs</code></td>
+<td>Mangel 2011 fitted constants of the geometric law. <code>path_loss_exponent</code> switches to the single-slope law.</td>
+</tr>
+<tr>
+<td><code>DECORRELATION_INFRASTRUCTURE_M</code> 50 m</td>
+<td><code>prop.rs</code></td>
+<td>The RSU-link decorrelation. <code>shadowing_decorrelation_m</code> overrides decorrelation.</td>
+</tr>
+<tr>
+<td><code>TR37885::RESTATE_INTERVAL</code> 100 ms</td>
+<td><code>prop.rs</code></td>
+<td>LOS-state update cadence (TR 37.885 §6.2.3).</td>
+</tr>
+<tr>
+<td><code>P838_*</code></td>
+<td><code>prop.rs</code></td>
+<td>ITU-R P.838 coefficients. Weather intensity is <code>weather.*</code>.</td>
+</tr>
+<tr>
+<td>WINNER+ B1 constants (<code>SIGMA_*</code>, <code>HALF_STREET_WIDTH_M</code>, heights)</td>
+<td><code>winner.rs</code></td>
+<td>Published model constants. Sigma is overridable.</td>
+</tr>
+<tr>
+<td>TR 37.885 antenna pattern (<code>THETA_3DB_DEG</code>, <code>SLA_V_DB</code>, ...)</td>
+<td><code>antenna.rs</code></td>
+<td>Standard pattern. The choice is <code>radio.devices.obu.antenna_pattern</code>.</td>
+</tr>
+<tr>
+<td>Two-ray interference ground permittivity (<code>GROUND_EPSILON_R</code> 1.02)</td>
+<td><code>prop.rs</code></td>
+<td>Sommer 2012 Figure 4. Overridable: <code>radio.models.propagation: {id: propagation/two-ray-interference, params: {epsilon_r}}</code> (1 to 100).</td>
+</tr>
+<tr>
+<td>Measured antenna table (<code>antenna/sampled</code>)</td>
+<td><code>antenna.rs</code></td>
+<td><code>radio.devices.obu.sampled_pattern: {csv, rotation_deg (0, deg), rotation_jitter (none/uniform/normal), rotation_jitter_deg (0, deg)}</code>; gains dB relative to <code>antenna_gain_dbi</code> (Eckhoff 2016). Unset by default.</td>
+</tr>
+<tr>
+<td><code>DETOUR_RATIO</code>, <code>MAX_CANDIDATES</code>, <code>MAX_WALL_M</code>, <code>GAP_M</code>, <code>SNAP_M</code></td>
+<td><code>obstacle.rs</code></td>
+<td>Building-geometry search limits.</td>
+</tr>
+<tr>
+<td><code>DEFAULT_PROFILE_SAMPLES</code>, <code>DEFAULT_MAX_EDGES</code></td>
+<td><code>terrain.rs</code></td>
+<td>Terrain profile sampling resolution.</td>
+</tr>
+<tr>
+<td>Band-plan rules and spectrum masks</td>
+<td><code>regulation.rs</code></td>
+<td>Regulatory tables, chosen by <code>radio.region</code> and <code>radio.channel</code>.</td>
+</tr>
+<tr>
+<td><code>DISTANCE_BIN_M</code>, <code>RANGE_MAX_M</code>, <code>CBR_BIN</code>, <code>HEARD_BIN</code>, <code>DEFAULT_SEEDS</code>, <code>*_TOLERANCE</code>, <code>LegacyParams</code></td>
+<td><code>abstract_tier.rs</code>, <code>focus.rs</code></td>
+<td>Calibration grid and tolerances of the abstract tier.</td>
+</tr>
+<tr>
+<td><code>MOLINA_*</code>, sweep tables</td>
+<td><code>sweep.rs</code>, <code>sweep/*</code></td>
+<td>Validation anchors.</td>
+</tr>
+<tr>
+<td><code>PUNAL_*</code>, <code>BLIND_AREA_TOLERANCE_M</code></td>
+<td><code>jamming.rs</code></td>
+<td>Validation anchors of the jammer model (Punal et al.). The jammer's own numbers are its params.</td>
+</tr>
+<tr>
+<td><code>ADJACENT_CHANNEL_SOURCE_BASE</code></td>
+<td><code>jamming.rs</code></td>
+<td>Identifier range.</td>
+</tr>
+<tr>
+<td><code>SHANNON_ALPHA</code>, <code>SHANNON_SNR_EFF</code>, <code>PF_WINDOW_TTI</code>, <code>HIST_BINS</code>, <code>ROLLOUT_LIMIT</code></td>
+<td><code>cellular_packet.rs</code></td>
+<td>Internals of the packet-level Uu scheduler (attenuated Shannon, proportional fair). Load and rates are exposed.</td>
+</tr>
+<tr>
+<td><code>T_IU_MS</code>, <code>KNOWN_TARGET_MS</code>, <code>T_SEARCH_MS</code>, <code>RRC_PROCEDURE_MS</code>, <code>EUTRA_TO_UTRA_*</code></td>
+<td><code>cellular.rs</code></td>
+<td>TS 36.133 handover interruption figures.</td>
+</tr>
+<tr>
+<td><code>MOSAIC_UPLINK_BPS</code>, <code>MOSAIC_DOWNLINK_BPS</code>, <code>ARRIVAL_WINDOW</code>, <code>LOSS_PERCENTILES</code></td>
+<td><code>cellular.rs</code></td>
+<td>Preset anchors. <code>uplink_mbps</code>, <code>downlink_mbps</code> and <code>loss_percentile</code> override them.</td>
+</tr>
+<tr>
+<td><code>FIBRE_US_PER_KM</code>, <code>AIR_US_PER_KM</code>, <code>DSL_INTERLEAVE_MS</code>, <code>MICROWAVE_OUTAGE</code></td>
+<td><code>ip_transport.rs</code></td>
+<td>Physical and technology constants of the backhaul presets.</td>
+</tr>
+<tr>
+<td><code>TRAFFIC_MODEL_1_BUDGET</code>, <code>DIRECT_ONE_HOP_MS</code>, <code>CELLULAR_ONE_HOP_MS</code>, <code>OFFLOAD_LOAD_THRESHOLD</code></td>
+<td><code>hybrid.rs</code></td>
+<td>The hybrid policy is not built by the engine yet (no <code>radio/hybrid/policy</code> in the run), so a setting would do nothing.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="v2xw-net">v2xw-net<a class="headerlink" href="#v2xw-net" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Kept because</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GN header sizes, BTP header, EtherTypes, LLC/SNAP, <code>ITS_GN_MAX_*</code>, <code>MTU_AL_BYTES</code>, <code>BELOW_SECURED_CAM_BYTES</code></td>
+<td><code>netlayer.rs</code>, <code>gn.rs</code></td>
+<td>EN 302 636-4-1 / -5-1 formats.</td>
+</tr>
+<tr>
+<td>WSMP header sizes, <code>WSMP_MAX_LENGTH_FIELD_PAYLOAD</code>, P-encoding limits</td>
+<td><code>wsmp.rs</code>, <code>netlayer.rs</code></td>
+<td>IEEE 1609.3 formats.</td>
+</tr>
+<tr>
+<td><code>WSM_MAX_PAYLOAD_MIB_DEFAULT</code> 1400 B</td>
+<td><code>wsmp.rs</code></td>
+<td>IEEE 1609.3 MIB default. An oversize SDU is the fragmenter's job (<code>net.fragmenter</code>).</td>
+</tr>
+<tr>
+<td>PSIDs, BTP ports</td>
+<td><code>netlayer.rs</code>, <code>msg/registry.rs</code></td>
+<td>Identifiers.</td>
+</tr>
+<tr>
+<td><code>LIFETIME_LOC_TE_MS</code> 20 s, <code>BEACON_RETRANSMIT_MS</code> 3 s, <code>BEACON_MAX_JITTER_MS</code></td>
+<td><code>stack/mib.rs</code></td>
+<td>Annex H defaults. A station that sends CAMs never beacons (§10.3.6.2), and the location table outlives the warning window.</td>
+</tr>
+<tr>
+<td><code>DEFAULT_PACKET_LIFETIME_MS</code>, <code>MAX_PACKET_LIFETIME_MS</code></td>
+<td><code>stack/mib.rs</code></td>
+<td>Annex H. DENM lifetime is set by the repetition settings and the warning window.</td>
+</tr>
+<tr>
+<td><code>DPL_LENGTH</code> 8, <code>MAX_GEO_AREA_SIZE_KM2</code></td>
+<td><code>stack/mib.rs</code></td>
+<td>Duplicate-list size and an area-validation limit.</td>
+</tr>
+<tr>
+<td><code>DEFAULT_VALIDITY_MS</code> (stack DEN)</td>
+<td><code>stack/den.rs</code></td>
+<td>Used by the protocol-evaluation harness, not the run.</td>
+</tr>
+<tr>
+<td><code>SYNC_INTERVAL_MS</code> 100, <code>CCH_INTERVAL_MS</code> 50, <code>GUARD_INTERVAL_MS</code> 4, <code>CCH_CHANNEL</code></td>
+<td><code>stack/wave.rs</code></td>
+<td>IEEE 1609.4 fixed intervals. Switching itself is <code>net.channel_access</code>.</td>
+</tr>
+<tr>
+<td><code>REASSEMBLY_MAX_FRAGMENTS</code>, <code>MAX_FRAGMENTS</code>, <code>MAX_OPEN_CERTIFICATES</code></td>
+<td><code>frag.rs</code>, <code>frag/*</code></td>
+<td>Format and memory guards.</td>
+</tr>
+<tr>
+<td>Cert-cycle size anchors (<code>ECDSA_CERTIFICATE_BYTES</code>, <code>CYCLE_*</code>, <code>*_PAYLOAD_CAP_BYTES</code>)</td>
+<td><code>frag/cert_cycle.rs</code></td>
+<td>Published frame-size anchors of the model.</td>
+</tr>
+<tr>
+<td><code>ETSI_SEGMENTATION_THRESHOLD_BYTES</code>, <code>CPM_REPEATED_CONTAINERS_BYTES</code></td>
+<td><code>frag/facilities.rs</code></td>
+<td>TS 103 324 segmentation rule.</td>
+</tr>
+<tr>
+<td><code>AMADOR_*</code>, <code>LEARNING_RESPONSE_ANCHORS</code>, <code>FRAME_SIZE_ANCHORS</code></td>
+<td><code>stack/eval.rs</code>, <code>frag/cert_cycle.rs</code></td>
+<td>Validation anchors.</td>
+</tr>
+<tr>
+<td><code>Csma::AC_VO</code></td>
+<td><code>stack/dissem.rs</code></td>
+<td>MAC preset of the evaluation harness. The run's EDCA is <code>radio.mac</code>.</td>
+</tr>
+<tr>
+<td><code>ASSUMPTIONS</code>, <code>MODELS</code></td>
+<td><code>amplification.rs</code>, <code>lib.rs</code></td>
+<td>Card text and registry.</td>
+</tr>
+</tbody>
+</table>
+<p>There is no unicast retry in the run. Every safety frame is OCB broadcast, so a retry
+limit would do nothing (EN 302 663 Annex C.4.2).</p>
+<h3 id="v2xw-msg">v2xw-msg<a class="headerlink" href="#v2xw-msg" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Kept because</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>About 340 ASN.1 bounds and encodings</td>
+<td><code>j2735/bsm.rs</code>, <code>map.rs</code>, <code>spat.rs</code>, <code>psm.rs</code>, <code>infra.rs</code></td>
+<td>SAE J2735 definitions.</td>
+</tr>
+<tr>
+<td>Protocol versions and message ids (CAM, DENM, VAM, CPM, SREM, SSEM)</td>
+<td><code>cam.rs</code>, <code>denm.rs</code>, <code>vam.rs</code>, <code>cpm.rs</code>, <code>node/events.rs</code></td>
+<td>Identifiers.</td>
+</tr>
+<tr>
+<td>PSIDs and ITS-AIDs</td>
+<td><code>registry.rs</code></td>
+<td>Identifiers.</td>
+</tr>
+<tr>
+<td><code>MAX_PATH_POINTS</code> 40</td>
+<td><code>cam.rs</code></td>
+<td>EN 302 637-2 limit.</td>
+</tr>
+<tr>
+<td><code>ExteriorLightMask</code> bits</td>
+<td><code>cam.rs</code></td>
+<td>Format.</td>
+</tr>
+<tr>
+<td>CAM/DENM size-check constants (<code>ENVELOPE_*</code>, <code>AT_*</code>, <code>LOWER_LAYERS</code>)</td>
+<td><code>cam.rs</code>, <code>denm.rs</code></td>
+<td>Test anchors.</td>
+</tr>
+<tr>
+<td>DENM <code>DEFAULT_VALIDITY</code> 600 s, <code>MAX_VALIDITY_S</code>, <code>FORWARDING_JITTER</code> 150 ms</td>
+<td><code>denm.rs</code></td>
+<td>EN 302 637-3 defaults. Repetition and area are <code>net.geonet.*</code>.</td>
+</tr>
+<tr>
+<td>Size-model coefficients (<code>CPM_*_B</code>, <code>ENVELOPE_*_B</code>, <code>WSMP_HEADER_B</code>, <code>MESSAGE_FRAME_B</code>)</td>
+<td><code>size_model.rs</code>, <code>etsi_size.rs</code></td>
+<td>Validated size model (<code>messages.codec_tier: size-model</code>).</td>
+</tr>
+<tr>
+<td><code>Q_*</code> unit quanta, <code>FINEST_QUANTUM</code></td>
+<td><code>units.rs</code>, <code>lib.rs</code></td>
+<td>J2735 LSBs and determinism quanta.</td>
+</tr>
+<tr>
+<td><code>PathHistoryParams::J2945_1</code>, <code>PathPredictionParams::J2945_1</code>, <code>LIGHTS_CHANGED_HOLD_NS</code>, <code>G_MPS2</code></td>
+<td><code>j2945.rs</code></td>
+<td>SAE J2945/1 §6.3 Part II construction rules. They move a BSM's size by a few octets.</td>
+</tr>
+<tr>
+<td><code>NS3_TX_MAX_DELAY</code>, <code>GenerationTiming::SYNCHRONISED</code></td>
+<td><code>generator.rs</code></td>
+<td>Comparison presets. Jitter is <code>generator/timing-phase-jitter</code>.</td>
+</tr>
+<tr>
+<td><code>PLACEHOLDER_FILL</code></td>
+<td><code>codec.rs</code></td>
+<td>Padding byte.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="v2xw-sec">v2xw-sec<a class="headerlink" href="#v2xw-sec" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Kept because</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Primitive sizes and ids (51 constants)</td>
+<td><code>primitive.rs</code></td>
+<td>Algorithm definitions. The choice is <code>security.signature</code> and <code>security.kem</code>.</td>
+</tr>
+<tr>
+<td>Scheme definitions (ECDSA, ML-DSA, Falcon, SLH-DSA, hybrids, KEMs)</td>
+<td><code>scheme/*</code></td>
+<td>Chosen by <code>security.signature</code> and <code>security.kem</code>.</td>
+</tr>
+<tr>
+<td><code>BASELINE_*_OCTETS</code>, <code>ECIES_EPHEMERAL_OCTETS</code>, <code>WRAPPED_KEY_AND_TAG_OCTETS</code></td>
+<td><code>scheme/mod.rs</code></td>
+<td>Size baselines.</td>
+</tr>
+<tr>
+<td><code>PROTOCOL_VERSION</code>, <code>CERT_VERSION</code>, <code>COMPRESSED_KEY_BYTES</code>, <code>PUBLIC_MATERIAL_BYTES</code></td>
+<td><code>envelope.rs</code>, <code>cert.rs</code>, <code>crypto.rs</code></td>
+<td>IEEE 1609.2 formats.</td>
+</tr>
+<tr>
+<td><code>SignerIdPolicy</code> presets (digest only, always, SAE 450 ms, ETSI 1 s)</td>
+<td><code>envelope.rs</code></td>
+<td>Exposed as <code>security.signer_id_policy</code>.</td>
+</tr>
+<tr>
+<td><code>EXPANDED_PERIODS</code></td>
+<td><code>envelope.rs</code></td>
+<td>Implementation detail.</td>
+</tr>
+<tr>
+<td>Linkage sizes, <code>DEFAULT_JMAX</code> 20, <code>DEFAULT_MAX_FORWARD_PERIODS</code></td>
+<td><code>linkage.rs</code></td>
+<td>SCMS linkage-value format (IEEE 1609.2.1). It is backend-side and does not change on-air metrics.</td>
+</tr>
+<tr>
+<td>AES and butterfly sizes, curve order</td>
+<td><code>aes128.rs</code>, <code>butterfly.rs</code>, <code>ec.rs</code></td>
+<td>Cryptographic definitions.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="v2xw-node">v2xw-node<a class="headerlink" href="#v2xw-node" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Kept because</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rx, app, Tx and CRL queue depths (64, 64, 32, 16)</td>
+<td><code>runtime.rs</code> <code>NodeConfig::queue_capacity</code></td>
+<td>They do not saturate before the verification queue (exposed) in any shipped scenario. Candidates if a study shows otherwise.</td>
+</tr>
+<tr>
+<td><strong>Peer certificate cache size 128</strong></td>
+<td><code>runtime.rs</code> <code>peer_cache_capacity</code>, <code>stores.rs</code> <code>PeerCertCache</code></td>
+<td><strong>Finding.</strong> Eviction removes the digest from the LRU list but not the certificate from the verification store (<code>note_insert</code> never touches <code>inner</code>). The size changes only storage and P2PCD counters, not what is verifiable. Exposing it would promise an effect the model lacks, so fix the eviction first.</td>
+</tr>
+<tr>
+<td><strong><code>prioritized</code> horizon 300 m</strong></td>
+<td><code>wiring.rs</code> <code>Prioritized::new(300.0)</code></td>
+<td><strong>Finding.</strong> The policy computes a priority, but the runtime's verification queue is FIFO and ignores it (<code>runtime.rs</code> <code>VerifyDecision::Verify { .. }</code>). The setting changed no output even with a saturated queue.</td>
+</tr>
+<tr>
+<td><strong><code>on-demand</code> relevance threshold 0.5</strong></td>
+<td><code>wiring.rs</code> <code>OnDemand::new(0.5)</code></td>
+<td><strong>Finding.</strong> Nothing calls <code>ObuRuntime::set_relevance</code>, so every message has no relevance. On-demand therefore verifies only unknown signers, whatever the threshold (thresholds 0 and 1 gave identical runs).</td>
+</tr>
+<tr>
+<td><code>neighbor_capacity</code> 256, <code>telemetry_period</code> 1 s</td>
+<td><code>runtime.rs</code></td>
+<td>Table bound, and the telemetry cadence (aligned with <code>time.metric_period_s</code>).</td>
+</tr>
+<tr>
+<td><code>DEFAULT_T_NEIGHBOR</code> 3 s, <code>PLAUSIBLE_PERIOD_SKEW</code>, <code>REPORT_MAX_AGE</code></td>
+<td><code>stores.rs</code></td>
+<td>Neighbour expiry and misbehaviour-report housekeeping.</td>
+</tr>
+<tr>
+<td><code>SRM_RANGE_M</code> 300, <code>SRM_INTERVAL</code> 1 s, <code>SSM_MIN_INTERVAL</code> 100 ms, <code>MAP_MEMORY</code> 5 s</td>
+<td><code>events.rs</code></td>
+<td>Signal-priority request rules (J2735 / CTI 4501). These are application layer.</td>
+</tr>
+<tr>
+<td><code>ESS_ON_MPS2</code> 6, <code>ESS_OFF_MPS2</code> 2.5, <code>DENM_REPETITION</code> 100 ms, <code>DENM_VALIDITY</code> 2 s, stationary-vehicle timers</td>
+<td><code>events.rs</code></td>
+<td>C2C-CC triggering conditions for EEBL and stationary-vehicle DENMs. These are application triggers.</td>
+</tr>
+<tr>
+<td><code>T_GEN_CPM_MAX</code> 1 s, inclusion thresholds (4 m, 0.5 m/s, 4°), <code>OBJECT_REFRESH</code>, <code>VRU_REFRESH</code>, <code>SENSOR_INFORMATION_EVERY</code>, <code>MAX_OBJECTS</code></td>
+<td><code>cpm.rs</code></td>
+<td>TS 103 324 fixed inclusion rules. <code>T_GenCpm</code> is exposed.</td>
+</tr>
+<tr>
+<td><code>T_ASSEMBLE_VAM</code> 50 ms, <code>VAM_FRAME_BYTES</code>, <code>DEFAULT_PA_EFFICIENCY</code> 0.35</td>
+<td><code>vru.rs</code></td>
+<td>VAM assembly latency (TS 103 300-3) and a device-energy constant.</td>
+</tr>
+<tr>
+<td><code>BRAKE_SWITCH_DECEL_MPS2</code>, <code>TURN_SIGNAL_LEAD_M</code>, <code>HEADLIGHT_VISIBILITY_M</code></td>
+<td><code>vehicle.rs</code></td>
+<td>Vehicle-bus emulation for BSM Part II flags.</td>
+</tr>
+<tr>
+<td><code>TTC_CONFLICT_THRESHOLD_S</code> 1.5, <code>EEBL_DECEL_THRESHOLD_MPS2</code> 3.92</td>
+<td><code>safety.rs</code></td>
+<td>Safety-application thresholds. These are application layer.</td>
+</tr>
+<tr>
+<td><code>CLEAR_HOLD</code>, <code>UPDATE_EVERY</code>, <code>FUSION_GATE_M</code>, <code>LANE_MATCH_SLACK_M</code></td>
+<td><code>apps.rs</code></td>
+<td>Application internals.</td>
+</tr>
+<tr>
+<td><code>DEFAULT_DEGRADED_MULTIPLIER</code> 10, <code>FORWARD_MAX_AGE</code></td>
+<td><code>rsu.rs</code></td>
+<td>RSU degraded-mode and forwarding housekeeping.</td>
+</tr>
+<tr>
+<td><code>SOFTWARE_ECDSA_P256_A53_US</code></td>
+<td><code>profile.rs</code></td>
+<td>Profile figure. The choice is <code>nodes.default_obu</code>.</td>
+</tr>
+<tr>
+<td><code>PSID_SAFETY</code>, <code>SIGN_PRIMITIVE</code>, <code>SUB_CAUSE_*</code>, <code>*_MESSAGE_ID</code></td>
+<td><code>secure.rs</code>, <code>events.rs</code></td>
+<td>Identifiers.</td>
+</tr>
+<tr>
+<td><code>SURROGATE_Q</code>, <code>MAX_SAMPLES</code>, telemetry <code>MAX</code>, <code>UNLIMITED_COST</code></td>
+<td><code>safety.rs</code>, <code>queue.rs</code>, <code>telemetry.rs</code>, <code>server.rs</code></td>
+<td>Quanta and buffer bounds.</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-circle-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4M12 16V8"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../config-inventory-traffic/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Traffic, world and run inventory">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Traffic, world and run inventory
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../config-inventory-scms/" class="md-footer__link md-footer__link--next" aria-label="Next: Security and SCMS inventory">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Security and SCMS inventory
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      © 2026 Ahmed Zaidan · code <a href="https://github.com/ak3zaidan/V2X-World/blob/main/LICENSE">Apache-2.0</a> · dataset <a href="https://huggingface.co/datasets/akzaidan/V2X-World">CC BY 4.0</a>
+    </div>
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/ak3zaidan/V2X-World" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog" role="status" aria-atomic="true">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      
+<div class="md-progress" data-md-component="progress" role="progressbar" aria-label="Loading"></div>
+    
+    
+    
+      
+      
+      
+      
+        
+        
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["navigation.tabs","navigation.tabs.sticky","navigation.sections","navigation.instant","navigation.instant.progress","navigation.tracking","navigation.indexes","navigation.top","navigation.footer","navigation.path","toc.follow","search.highlight","search.share","search.suggest","content.code.copy","content.code.annotate","content.tabs.link","content.action.edit","content.action.view"],"redirect":null,"search":"../../assets/javascripts/workers/search.719e0d91.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","clipboard.error":"Could not copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d31f0ffa.min.js"></script>
+      
+        <script src="../../javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

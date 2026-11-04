@@ -1,0 +1,7232 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A deterministic, discrete-event simulator of connected-vehicle (V2X) systems: traffic, radio, network, IEEE 1609.2 security, the SCMS and ETSI PKI, attackers and misbehaviour detection.">
+      
+      
+      
+        <link rel="canonical" href="https://ak3zaidan.github.io/V2X-World/configuration/reference/radio/">
+      
+      
+      
+        <link rel="prev" href="../weather/">
+      
+      
+        <link rel="next" href="../net/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/logo.svg">
+      <meta name="generator" content="zensical-0.0.74">
+    
+    
+      
+        <title>radio - V2X World</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../../../assets/stylesheets/modern/main.4ab2de0c.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/modern/palette.b60ce83d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-hidden="true"></label>
+    <div data-md-component="skip">
+      <a href="#__skip" class="md-skip">
+        Skip to content
+      </a>
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="V2X World" class="md-header__button md-logo" aria-label="V2X World" data-md-component="logo">
+      
+  <img src="../../../assets/logo.svg" alt="V2X World">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+      <span class="md-visually-hidden">Navigation</span>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            V2X World
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              radio
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+          <span class="md-visually-hidden">Search</span>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/ak3zaidan/V2X-World" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ak3zaidan/V2X-World
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/introduction/" class="md-tabs__link">
+          
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../scenarios/" class="md-tabs__link">
+          
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../models/" class="md-tabs__link">
+          
+  
+  Models
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../overview/" class="md-tabs__link">
+          
+  
+  Configuration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../architecture/" class="md-tabs__link">
+          
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../api/" class="md-tabs__link">
+          
+  
+  API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../glossary/" class="md-tabs__link">
+        
+  
+  Glossary
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../about/standards/" class="md-tabs__link">
+          
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="V2X World" class="md-nav__button md-logo" aria-label="V2X World" data-md-component="logo">
+      
+  <img src="../../../assets/logo.svg" alt="V2X World">
+
+    </a>
+    V2X World
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ak3zaidan/V2X-World" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ak3zaidan/V2X-World
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Home
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Getting started
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_2">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Getting started
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/introduction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Introduction
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Install and build
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/first-simulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Your first simulation
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/studio-tour/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Studio tour
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Command-line tool
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  User guide
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  User guide
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Scenarios
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/worlds-and-maps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Worlds and maps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/traffic-demand/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic demand
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/running-and-recording/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Running and recording
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../recording-and-metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metrics and outputs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../metrics/catalogue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metric catalogue
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/comparing-runs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Comparing runs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/experiments-and-sweeps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Experiments and sweeps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/sensitivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity analysis
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/datasets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Datasets and exports
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dataset/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Dataset schema
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/sumo-cosimulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SUMO co-simulation
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../studio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Studio
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/assistant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Assistant
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../models/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Models
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic and mobility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Messages
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/applications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  V2X applications
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/energy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Energy and emissions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/scms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS and credentials
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and crypto
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/threats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Threats and misbehaviour detection
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/privacy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Privacy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../models/determinism-and-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Determinism and time
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Configuration
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Configuration
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Overview
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  How settings work
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Generated reference
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5_3" id="__nav_5_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_3_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Generated reference
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_2" id="__nav_5_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Run
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_2_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_2">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Run
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../meta/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  meta
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  schema
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../seed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  seed
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  time
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_3" id="__nav_5_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  World
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  World
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../city/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  city
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../world/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  world
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_4" id="__nav_5_3_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Traffic
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../actors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  actors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mobility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  mobility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  traffic
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  scale
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_5" id="__nav_5_3_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Environment
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_5_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Environment
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../weather/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  weather
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_6" id="__nav_5_3_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_6_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5_3_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Radio
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  radio
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  radio
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#general" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        General
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        tiers
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#models" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        models
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#devices" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        devices
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#range" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        range
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adjacent_channel" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        adjacent_channel[]
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#channels" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        channels[]
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phy" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        phy
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mac" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        mac
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#channel_model" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        channel_model
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dcc" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        dcc
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sidelink" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        sidelink
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choices" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Choices
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_7" id="__nav_5_3_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Network
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Network
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  net
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_8" id="__nav_5_3_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Messages
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_8_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_8">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Messages
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  messages
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../perception/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  perception
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_9" id="__nav_5_3_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Security
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  security
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_10" id="__nav_5_3_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Nodes
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_10_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_10">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Nodes
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nodes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  nodes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_11" id="__nav_5_3_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Threats
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_11_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_11">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Threats
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../threats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  threats
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_12" id="__nav_5_3_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Detection
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_12_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_12">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Detection
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../detection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  detection
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_13" id="__nav_5_3_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Measurement
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_13_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_13">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Measurement
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  metrics
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../exporters/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  exporters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../experiment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  experiment
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_14" id="__nav_5_3_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Applications
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_14_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_14">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Applications
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  apps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_15" id="__nav_5_3_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Energy
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_15_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_15">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Energy
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../energy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  energy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_16" id="__nav_5_3_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Timeline
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_16_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_16">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Timeline
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  events
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Model parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Curated tables
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Curated tables
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/configuration-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings by research question
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config-inventory-traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic, world and run inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config-inventory-network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/config-inventory-scms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and SCMS inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/scms-constants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS constants
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/sensitivity-catalogue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity catalogue
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/sensitivity-expectations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity expectations
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Development
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Development
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Architecture
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Crates
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Building and testing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Validation and conformance tools
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Conventions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_6" id="__nav_6_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Extending
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Extending
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../extending/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Overview
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/extending/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/extending/detectors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Detectors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/extending/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metrics
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/extending/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/extending/scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Scenarios
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/extending/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Plugins
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Engine server and RPC
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../protocol/vwp-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Engine-UI protocol (VWP v1)
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/recording-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Recording format
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../dev/contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contributing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  API
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  API
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../api/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python API
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Glossary
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  About
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  About
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../about/standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Standards and references
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../about/citation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Citation and licence
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#general" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        General
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        tiers
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#models" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        models
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#devices" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        devices
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#range" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        range
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adjacent_channel" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        adjacent_channel[]
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#channels" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        channels[]
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phy" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        phy
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mac" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        mac
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#channel_model" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        channel_model
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dcc" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        dcc
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sidelink" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        sidelink
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choices" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Choices
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../../overview/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Generated reference
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="././" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Radio
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                <a id="__skip" tabindex="-1"></a>
+                
+                  
+
+  
+    <a href="https://github.com/ak3zaidan/V2X-World/edit/main/docs/configuration/reference/radio.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-pen" viewBox="0 0 24 24"><path d="M12.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v9.34"/><path d="M14 2v5a1 1 0 0 0 1 1h5M10.378 12.622a1 1 0 0 1 3 3.003L8.36 20.637a2 2 0 0 1-.854.506l-2.867.837a.5.5 0 0 1-.62-.62l.836-2.869a2 2 0 0 1 .506-.853z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/ak3zaidan/V2X-World/raw/main/docs/configuration/reference/radio.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-code-2" viewBox="0 0 24 24"><path d="M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35"/><path d="M14 2v5a1 1 0 0 0 1 1h5M5 16l-3 3 3 3M9 22l3-3-3-3"/></svg>
+    </a>
+  
+
+
+<!-- GENERATED by tools/docs/gen_config_reference.py from the engine's published settings surface (crates/v2xw-engine/examples/dump_settings.rs). Do not edit by hand: change the engine and run `just docs-gen`. -->
+
+<h1 id="radio"><code>radio</code><a class="headerlink" href="#radio" title="Permanent link">&para;</a></h1>
+<p>Group: <strong>Radio</strong>. The radio stack: which technology, at which fidelity, with which models.</p>
+<p>98 settings. The status column says whether editing a setting changes a run; see <a href="../../overview/">how to read these tables</a>. Paths use <code>[]</code> for a list element and <code>*</code> for a map key.</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span></td>
+<td><code>wired</code></td>
+</tr>
+<tr>
+<td><span class="twemoji" title="Partly active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m0 2a8 8 0 0 1 8 8 8 8 0 0 1-8 8z"/></svg></span></td>
+<td><code>partial</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="general">General<a class="headerlink" href="#general" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-rat"></span><code>radio.rat</code></td>
+<td>string</td>
+<td></td>
+<td><code>dsrc-80211p</code></td>
+<td><code>dsrc-80211p</code>, <code>lte-v2x-pc5</code>, <code>nr-v2x-pc5</code>, <code>hybrid</code><br>recommended DSRC or LTE-V2X: the two deployed today.</td>
+<td>basic</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Which radio access technology. Which V2X radio vehicles use: DSRC (IEEE 802.11p, the original Wi-Fi-based standard), LTE-V2X (4G sidelink, 3GPP Release 14) or NR-V2X (5G sidelink, Release 16).</td>
+</tr>
+<tr>
+<td><span id="s-radio-region"></span><code>radio.region</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>us</code>, <code>us-2016</code>, <code>eu</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The regulatory region: its band plan, the channel each technology deploys on and the EIRP limits (<code>v2xw_radio::regulation</code>). Unset, the region the technology was deployed under: <code>us-2016</code> for 802.11p (the DSRC band plan SAE J2945/1 was written for), <code>us</code> for LTE-V2X and NR-V2X (FCC 24-123).</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel"></span><code>radio.channel</code></td>
+<td>integer</td>
+<td>channel number</td>
+<td></td>
+<td>[170, 184]<br><code>172</code>, <code>174</code>, <code>176</code>, <code>178</code>, <code>180</code>, <code>181</code>, <code>182</code>, <code>183</code>, <code>184</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The channel number within the region's band plan. Unset, the region's deployment channel for the technology.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-leakage"></span><code>radio.channel_leakage</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether the run's own channels leak into each other through the transmitter mask and the receiver's selectivity (the ACIR of <code>v2xw_radio::regulation</code>). Unset is on; <code>false</code> is ideal channel filters. Only acts with <code>radio.channels</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="tiers">tiers<a class="headerlink" href="#tiers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-tiers-propagation"></span><code>radio.tiers.propagation</code></td>
+<td>string</td>
+<td></td>
+<td><code>high</code></td>
+<td><code>abstract</code>, <code>medium</code>, <code>high</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Path loss.</td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-phy"></span><code>radio.tiers.phy</code></td>
+<td>string</td>
+<td></td>
+<td><code>medium</code></td>
+<td><code>abstract</code>, <code>medium</code>, <code>high</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The physical layer.</td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-mac"></span><code>radio.tiers.mac</code></td>
+<td>string</td>
+<td></td>
+<td><code>medium</code></td>
+<td><code>abstract</code>, <code>medium</code>, <code>high</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Medium access.</td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-focus-region-node"></span><code>radio.tiers.focus.region.node</code></td>
+<td>integer</td>
+<td>node id</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Partly active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m0 2a8 8 0 0 1 8 8 8 8 0 0 1-8 8z"/></svg></span> <code>partial</code></td>
+<td>Which node. <em>Status: A region — a disc following one node, or a map box — whose links run the propagation and the receiver at the focus tier (at high: weather attenuation, and 802.11p preamble capture or the sidelink's SCI stage). Links entering it use the surrounding propagation with no fading draw. Every phy.rx record is tagged inside, outside, inbound or outbound; outbound links carry the region's stated bias. Medium access stays one model for the whole world.</em></td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-focus-region-radius-m"></span><code>radio.tiers.focus.region.radius_m</code></td>
+<td>number</td>
+<td>m</td>
+<td></td>
+<td>(0, ∞)</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Partly active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m0 2a8 8 0 0 1 8 8 8 8 0 0 1-8 8z"/></svg></span> <code>partial</code></td>
+<td>The radius around it, metres. <em>Status: A region — a disc following one node, or a map box — whose links run the propagation and the receiver at the focus tier (at high: weather attenuation, and 802.11p preamble capture or the sidelink's SCI stage). Links entering it use the surrounding propagation with no fading draw. Every phy.rx record is tagged inside, outside, inbound or outbound; outbound links carry the region's stated bias. Medium access stays one model for the whole world.</em></td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-focus-region-bbox-min-lat-deg"></span><code>radio.tiers.focus.region.bbox.min_lat_deg</code></td>
+<td>number</td>
+<td>°</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Partly active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m0 2a8 8 0 0 1 8 8 8 8 0 0 1-8 8z"/></svg></span> <code>partial</code></td>
+<td>South edge, degrees north. <em>Status: A region — a disc following one node, or a map box — whose links run the propagation and the receiver at the focus tier (at high: weather attenuation, and 802.11p preamble capture or the sidelink's SCI stage). Links entering it use the surrounding propagation with no fading draw. Every phy.rx record is tagged inside, outside, inbound or outbound; outbound links carry the region's stated bias. Medium access stays one model for the whole world.</em></td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-focus-region-bbox-min-lon-deg"></span><code>radio.tiers.focus.region.bbox.min_lon_deg</code></td>
+<td>number</td>
+<td>°</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Partly active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m0 2a8 8 0 0 1 8 8 8 8 0 0 1-8 8z"/></svg></span> <code>partial</code></td>
+<td>West edge, degrees east. <em>Status: A region — a disc following one node, or a map box — whose links run the propagation and the receiver at the focus tier (at high: weather attenuation, and 802.11p preamble capture or the sidelink's SCI stage). Links entering it use the surrounding propagation with no fading draw. Every phy.rx record is tagged inside, outside, inbound or outbound; outbound links carry the region's stated bias. Medium access stays one model for the whole world.</em></td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-focus-region-bbox-max-lat-deg"></span><code>radio.tiers.focus.region.bbox.max_lat_deg</code></td>
+<td>number</td>
+<td>°</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Partly active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m0 2a8 8 0 0 1 8 8 8 8 0 0 1-8 8z"/></svg></span> <code>partial</code></td>
+<td>North edge, degrees north. <em>Status: A region — a disc following one node, or a map box — whose links run the propagation and the receiver at the focus tier (at high: weather attenuation, and 802.11p preamble capture or the sidelink's SCI stage). Links entering it use the surrounding propagation with no fading draw. Every phy.rx record is tagged inside, outside, inbound or outbound; outbound links carry the region's stated bias. Medium access stays one model for the whole world.</em></td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-focus-region-bbox-max-lon-deg"></span><code>radio.tiers.focus.region.bbox.max_lon_deg</code></td>
+<td>number</td>
+<td>°</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Partly active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m0 2a8 8 0 0 1 8 8 8 8 0 0 1-8 8z"/></svg></span> <code>partial</code></td>
+<td>East edge, degrees east. <em>Status: A region — a disc following one node, or a map box — whose links run the propagation and the receiver at the focus tier (at high: weather attenuation, and 802.11p preamble capture or the sidelink's SCI stage). Links entering it use the surrounding propagation with no fading draw. Every phy.rx record is tagged inside, outside, inbound or outbound; outbound links carry the region's stated bias. Medium access stays one model for the whole world.</em></td>
+</tr>
+<tr>
+<td><span id="s-radio-tiers-focus-tier"></span><code>radio.tiers.focus.tier</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>abstract</code>, <code>medium</code>, <code>high</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Partly active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2A10 10 0 0 0 2 12a10 10 0 0 0 10 10 10 10 0 0 0 10-10A10 10 0 0 0 12 2m0 2a8 8 0 0 1 8 8 8 8 0 0 1-8 8z"/></svg></span> <code>partial</code></td>
+<td>The tier inside it. <em>Status: A region — a disc following one node, or a map box — whose links run the propagation and the receiver at the focus tier (at high: weather attenuation, and 802.11p preamble capture or the sidelink's SCI stage). Links entering it use the surrounding propagation with no fading draw. Every phy.rx record is tagged inside, outside, inbound or outbound; outbound links carry the region's stated bias. Medium access stays one model for the whole world.</em></td>
+</tr>
+</tbody>
+</table>
+<h2 id="models">models<a class="headerlink" href="#models" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-models-id"></span><code>radio.models.*.id</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The model's registry id.</td>
+</tr>
+<tr>
+<td><span id="s-radio-models-params"></span><code>radio.models.*.params</code></td>
+<td>json (serde_json::Value)</td>
+<td></td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Overrides for its card's defaults. Anything not named here keeps the card's value, which is what makes the parameter set content-addressable.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="devices">devices<a class="headerlink" href="#devices" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-devices-obu-tx-power-dbm"></span><code>radio.devices.obu.tx_power_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td><code>23.0</code></td>
+<td>[-20, 33]<br>recommended 20 dBm (SAE J2945/1) to 23 dBm (3GPP TR 36.885).</td>
+<td>basic</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Conducted transmit power at the antenna port, dBm; congestion control may lower it. How loudly each vehicle transmits. Louder reaches farther but interferes with more neighbours.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-antenna-gain-dbi"></span><code>radio.devices.obu.antenna_gain_dbi</code></td>
+<td>number</td>
+<td>dBi</td>
+<td><code>3.0</code></td>
+<td>[-10, 20]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Antenna gain, dBi, transmitting and receiving.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-cable-loss-db"></span><code>radio.devices.obu.cable_loss_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td><code>0.0</code></td>
+<td>[0, 20]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Loss of the cable between radio and antenna, dB, transmitting and receiving.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-antenna-height-m"></span><code>radio.devices.obu.antenna_height_m</code></td>
+<td>number</td>
+<td>m</td>
+<td></td>
+<td>[0.1, 15]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Antenna height above the road, metres; unset, 1.5 m on a car and 3 m on a truck or bus.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-antenna-pattern"></span><code>radio.devices.obu.antenna_pattern</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>tr37885</code>, <code>rooftop</code>, <code>isotropic</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The antenna's radiation pattern (<code>v2xw_radio::antenna</code>): TR 37.885's per vehicle type by default — a rooftop antenna on a car or van, front and rear panels on a truck or bus — every vehicle's on the roof, or none.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-sampled-pattern-csv"></span><code>radio.devices.obu.sampled_pattern.csv</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The table, as CSV text (a YAML block scalar): a header naming <code>gain_db</code> (dB relative to <code>antenna_gain_dbi</code>), <code>azimuth_deg</code> (counter-clockwise from the heading) or <code>azimuth_cw_deg</code> (clockwise), and optionally <code>elevation_deg</code>; then one sample a line. Interpolated linearly in dB. No default: the measurement is the scenario's.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-sampled-pattern-rotation-deg"></span><code>radio.devices.obu.sampled_pattern.rotation_deg</code></td>
+<td>number</td>
+<td>°</td>
+<td></td>
+<td>[-360, 360]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The mount's rotation from the heading, degrees counter-clockwise; default 0 (Veins <code>SampledAntenna1D</code> rotation, behaviour only).</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-sampled-pattern-rotation-jitter"></span><code>radio.devices.obu.sampled_pattern.rotation_jitter</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>none</code>, <code>uniform</code>, <code>normal</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>A per-vehicle random mount rotation on top: <code>none</code> (default), <code>uniform</code> in ±<code>rotation_jitter_deg</code>, or <code>normal</code> with σ = <code>rotation_jitter_deg</code> (Veins <code>SampledAntenna1D</code> random rotation, behaviour only). Keyed by seed and node.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-sampled-pattern-rotation-jitter-deg"></span><code>radio.devices.obu.sampled_pattern.rotation_jitter_deg</code></td>
+<td>number</td>
+<td>°</td>
+<td></td>
+<td>[0, 180]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The width of that rotation, degrees; default 0.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-obu-radios"></span><code>radio.devices.obu.radios</code></td>
+<td>integer</td>
+<td>radios</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How many 802.11p radios the unit carries: 1, the default (SAE J2945/1's on-board unit, continuously on the safety channel), or 2, which adds one on the service channel of <code>radio.channels</code>. Acts only with <code>radio.channels</code>.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-tx-power-dbm"></span><code>radio.devices.rsu.tx_power_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td><code>23.0</code></td>
+<td>[-20, 33]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Conducted transmit power at the antenna port, dBm.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-antenna-gain-dbi"></span><code>radio.devices.rsu.antenna_gain_dbi</code></td>
+<td>number</td>
+<td>dBi</td>
+<td><code>3.0</code></td>
+<td>[-10, 20]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Antenna gain, dBi, transmitting and receiving.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-cable-loss-db"></span><code>radio.devices.rsu.cable_loss_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td><code>0.0</code></td>
+<td>[0, 20]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Loss of the cable between radio and antenna, dB, transmitting and receiving.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-antenna-height-m"></span><code>radio.devices.rsu.antenna_height_m</code></td>
+<td>number</td>
+<td>m</td>
+<td></td>
+<td>[0.1, 15]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Antenna height above the ground, metres; unset, the site's own mast height.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-radios"></span><code>radio.devices.rsu.radios</code></td>
+<td>integer</td>
+<td>radios</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How many 802.11p radios the unit carries: 2, the default, one on the safety channel and one on the service channel of <code>radio.channels</code> (the USDOT DSRC Roadside Unit Specification v4.1 calls for two radios), or 1. Acts only with <code>radio.channels</code>.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-off-channel-probability"></span><code>radio.devices.rsu.off_channel.probability</code></td>
+<td>number</td>
+<td></td>
+<td></td>
+<td>[0, 1]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The share of sync intervals the unit leaves in, 0 to 1.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-off-channel-from-ms"></span><code>radio.devices.rsu.off_channel.from_ms</code></td>
+<td>number</td>
+<td>ms</td>
+<td></td>
+<td>[0, 100]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>When it leaves, after the start of the UTC 100 ms sync interval, ms.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-off-channel-min-duration-ms"></span><code>radio.devices.rsu.off_channel.min_duration_ms</code></td>
+<td>number</td>
+<td>ms</td>
+<td></td>
+<td>[0, 100]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The shortest time away, ms.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-rsu-off-channel-max-duration-ms"></span><code>radio.devices.rsu.off_channel.max_duration_ms</code></td>
+<td>number</td>
+<td>ms</td>
+<td></td>
+<td>[0, 100]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The longest time away, ms.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-vru-tx-power-dbm"></span><code>radio.devices.vru.tx_power_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td><code>23.0</code></td>
+<td>[-20, 33]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Conducted transmit power at the antenna port, dBm.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-vru-antenna-gain-dbi"></span><code>radio.devices.vru.antenna_gain_dbi</code></td>
+<td>number</td>
+<td>dBi</td>
+<td><code>0.0</code></td>
+<td>[-10, 20]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Antenna gain, dBi, transmitting and receiving.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-vru-cable-loss-db"></span><code>radio.devices.vru.cable_loss_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td><code>0.0</code></td>
+<td>[0, 20]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Loss of the cable between radio and antenna, dB, transmitting and receiving.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-vru-antenna-height-m"></span><code>radio.devices.vru.antenna_height_m</code></td>
+<td>number</td>
+<td>m</td>
+<td><code>1.5</code></td>
+<td>[0.1, 15]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Antenna height above the ground, metres.</td>
+</tr>
+<tr>
+<td><span id="s-radio-devices-vru-radios"></span><code>radio.devices.vru.radios</code></td>
+<td>integer</td>
+<td>radios</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How many 802.11p radios the device carries: 1, the default (SAE J2945/9's personal device on the safety channel), or 2. Acts only with <code>radio.channels</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="range">range<a class="headerlink" href="#range" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-range-margin-db"></span><code>radio.range.margin_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td><code>10.0</code></td>
+<td>[0, 40]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How far below the receiver's noise floor a line-of-sight arrival may fall before the transmission is no longer followed there, dB.</td>
+</tr>
+<tr>
+<td><span id="s-radio-range-max-m"></span><code>radio.range.max_m</code></td>
+<td>number</td>
+<td>m</td>
+<td></td>
+<td>[50, 100000]</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>A cap on the fully evaluated range, metres; beyond it only line-of-sight interference is counted. Unset, the link budget alone decides.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="adjacent_channel">adjacent_channel[]<a class="headerlink" href="#adjacent_channel" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-adjacent-channel-rat"></span><code>radio.adjacent_channel[].rat</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>dsrc-80211p</code>, <code>lte-v2x-pc5</code>, <code>nr-v2x-pc5</code>, <code>hybrid</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Its technology.</td>
+</tr>
+<tr>
+<td><span id="s-radio-adjacent-channel-channel"></span><code>radio.adjacent_channel[].channel</code></td>
+<td>integer</td>
+<td>channel number</td>
+<td></td>
+<td><code>172</code>, <code>174</code>, <code>176</code>, <code>178</code>, <code>180</code>, <code>181</code>, <code>182</code>, <code>183</code>, <code>184</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Its channel number; unset, the region's deployment channel for its technology.</td>
+</tr>
+<tr>
+<td><span id="s-radio-adjacent-channel-acir-db"></span><code>radio.adjacent_channel[].acir_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The adjacent-channel interference ratio, dB; unset, the region's mask for the emitter's technology combined with the minimum selectivity of this run's receivers (<code>v2xw_radio::regulation::adjacent_acir_db</code>).</td>
+</tr>
+<tr>
+<td><span id="s-radio-adjacent-channel-params"></span><code>radio.adjacent_channel[].params</code></td>
+<td>json (serde_json::Value)</td>
+<td></td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Where it is and when it transmits, as a jammer's: <code>position_m</code>, <code>follow_node</code> or <code>path_m</code> (with <code>speed_mps</code>, <code>loop_path</code>); <code>power_dbm</code> (23 by default), <code>from_s</code>, <code>to_s</code>, and <code>period_ms</code> with <code>duty</code> for an emitter that is not on all the time.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="channels">channels[]<a class="headerlink" href="#channels" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-channels-channel"></span><code>radio.channels[].channel</code></td>
+<td>integer</td>
+<td>channel number</td>
+<td></td>
+<td><code>172</code>, <code>174</code>, <code>176</code>, <code>178</code>, <code>180</code>, <code>181</code>, <code>182</code>, <code>183</code>, <code>184</code></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The IEEE channel number in the region's band plan (US 2016: 172-184; EU 172-184).</td>
+</tr>
+<tr>
+<td><span id="s-radio-channels-messages"></span><code>radio.channels[].messages[]</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td></td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Messages[]</td>
+</tr>
+</tbody>
+</table>
+<h2 id="phy">phy<a class="headerlink" href="#phy" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-phy-data-rate-mbps"></span><code>radio.phy.data_rate_mbps</code></td>
+<td>number</td>
+<td>Mbit/s</td>
+<td></td>
+<td>[3, 27]<br>recommended 6 Mbit/s (the US default); 3 for range, 12 to 18 for crowded channels.</td>
+<td>basic</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The data rate every safety frame is sent at, Mbit/s: one of 3, 4.5, 6, 9, 12, 18, 24 or 27 (the eight 10 MHz OFDM rates of IEEE 802.11-2020 Table 17-4). A higher rate takes less air time per frame but needs a stronger signal, so it trades range for channel capacity. Unset is 6 Mbit/s, the SAE J2945/1 default. The 802.11p data rate (modulation and coding). Faster rates finish each frame sooner, so more radios fit on the channel, but they need a stronger signal, so range shrinks.</td>
+</tr>
+<tr>
+<td><span id="s-radio-phy-noise-figure-db"></span><code>radio.phy.noise_figure_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td></td>
+<td>[0, 15]<br>recommended 6 dB (automotive module) to 9 dB (3GPP UE).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The receiver noise figure, dB: how much noise the receiver's own electronics add on top of the thermal floor of −104 dBm in 10 MHz. Unset is the hardware figure the PHY card cites (6 dB). How much noise the receiver's own electronics add; every extra dB costs about 10 % of range in free space.</td>
+</tr>
+<tr>
+<td><span id="s-radio-phy-sensitivity-dbm"></span><code>radio.phy.sensitivity_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td></td>
+<td>[-105, -60]<br>recommended -92 dBm (fielded units) to -85 dBm (ETSI minimum).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>One receiver sensitivity at every data rate, dBm: a frame weaker than this is not decoded (Veins' <code>minPowerLevel</code>). Unset uses the per-rate table that <code>radio.models.phy</code> selects (fielded units, −92 dBm at 6 Mbit/s). The weakest frame the receiver decodes, at every data rate (Veins' minPowerLevel).</td>
+</tr>
+<tr>
+<td><span id="s-radio-phy-cca-threshold-dbm"></span><code>radio.phy.cca_threshold_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td></td>
+<td>[-100, -50]<br>recommended -85 dBm (ETSI); -82 (ns-3); -65 (Veins).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The carrier-sense (CCA) threshold, dBm: energy above it makes a radio treat the channel as busy, defer its transmission and count the time in the channel busy ratio. Unset is −85 dBm (ETSI EN 302 571 §4.2.10.1). The signal level at which a radio hears the channel as busy and holds back; it also sets what the channel busy ratio counts.</td>
+</tr>
+<tr>
+<td><span id="s-radio-phy-energy-detect-dbm"></span><code>radio.phy.energy_detect_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td></td>
+<td>[-100, -50]<br>recommended -65 dBm (IEEE 802.11-2020 §17.3.10.6, 10 MHz); -62 (ns-3); -85 reproduces the older single-threshold carrier sense.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The energy-detect level, dBm: another channel's frame leaking through the channel filter holds carrier sense busy only above it (and, under SAE J2945/1, counts in the CBP only above it). Unset is −65 dBm, 20 dB above the 10 MHz minimum sensitivity (IEEE 802.11-2020 §17.3.10.6); never below <code>cca_threshold_dbm</code>. −85 dBm is the carrier sense before radio-fix4, which held a leak to the preamble level. The level at which another channel's frame, leaking through the filter, makes the radio hear its own channel as busy.</td>
+</tr>
+<tr>
+<td><span id="s-radio-phy-capture-threshold-db"></span><code>radio.phy.capture_threshold_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td></td>
+<td>[0, 30]<br>recommended Unset (error model); 4 to 10 dB to compare with threshold-based simulators.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>A hard capture threshold, dB: a frame is decoded only while it stays this far above the interference plus noise (Torrent-Moreno 2009, Eq. 1). Unset uses the SINR trace against the error model, as Veins does. Replaces the error model with a hard rule: a frame survives only if it stays this many dB above interference plus noise.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="mac">mac<a class="headerlink" href="#mac" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-mac-edca-profile"></span><code>radio.mac.edca_profile</code></td>
+<td>string</td>
+<td></td>
+<td><code>by-region</code></td>
+<td><code>by-region</code>, <code>sae-j2945-1</code>, <code>en-302-663</code><br>recommended By region (the default); SAE J2945/1 or EN 302 663 to compare the two on one map.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Which EDCA table the MAC contends with, and so where a BSM waits (<code>EdcaProfileSpec</code>). Unset is <code>by-region</code>: SAE J2945/1 Table 18 for 802.11p under a US region, ETSI EN 302 663 elsewhere (<code>wiring::edca_profile</code>). An explicit <code>cw_min_*</code> or <code>aifsn_*</code> below still wins over the table's own value. Which table of waiting times the radio uses before it sends: the US safety-message standard's, where a routine safety message waits a little longer than an emergency one, or the European default.</td>
+</tr>
+<tr>
+<td><span id="s-radio-mac-periodic-access-category"></span><code>radio.mac.periodic_access_category</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>vo</code>, <code>vi</code>, <code>be</code>, <code>bk</code><br>recommended Video for a US BSM (SAE J2945/1 user priority 5) or a European CAM; voice is a critical BSM's.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The access category periodic awareness messages (BSM, CAM, PSM, VAM, CPM, SPaT, MAP) are queued in: <code>vo</code>, <code>vi</code>, <code>be</code> or <code>bk</code>. Unset is <code>vo</code>, the highest, except for a BSM under SAE J2945/1 Table 18 (below). SAE J2945/1 §6.3.4 puts a BSM without a critical event flag at user priority 5, which is AC_VI (<code>UPEDCA-001</code>), and one with a flag at user priority 7, AC_VO (<code>UPEDCA-002</code>); EN 302 663 Annex C puts the CAM at <code>vi</code>. Unset under SAE J2945/1 Table 18 (<code>MacSettings::edca_profile</code>), a BSM is queued by its flags in exactly that way (<code>wiring::bsm_queue_by_flags</code>); set, it names the queue of every periodic message, the BSM included. The priority queue awareness messages wait in; higher priorities wait less before sending.</td>
+</tr>
+<tr>
+<td><span id="s-radio-mac-event-access-category"></span><code>radio.mac.event_access_category</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>vo</code>, <code>vi</code>, <code>be</code>, <code>bk</code><br>recommended Voice.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The access category event messages (DENM, forwarded hazard warnings) are queued in. Unset is <code>vo</code> (EN 302 663 Annex C). The priority queue hazard warnings (DENM) wait in.</td>
+</tr>
+<tr>
+<td><span id="s-radio-mac-cw-min-vo"></span><code>radio.mac.cw_min_vo</code></td>
+<td>integer</td>
+<td>slots</td>
+<td></td>
+<td>[1, 1023]<br>recommended 3 (standard) to 15 in dense traffic.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td><code>CWmin</code> of the voice category, slots: a frame waits a random 0 to <code>CWmin</code> idle slots before it may start. A larger window means fewer collisions and more delay. Unset is 3 (EN 302 663 Table C.4). Broadcast never doubles it, so there is no <code>CWmax</code> to set. The random back-off window of the voice queue: a wider window spreads transmissions out, which means fewer collisions and more delay.</td>
+</tr>
+<tr>
+<td><span id="s-radio-mac-aifsn-vo"></span><code>radio.mac.aifsn_vo</code></td>
+<td>integer</td>
+<td>slots</td>
+<td></td>
+<td>[2, 15]<br>recommended 2 (standard).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td><code>AIFSN</code> of the voice category, slots: the fixed idle wait before the countdown. Unset is 2. The fixed idle wait of the voice queue before its back-off countdown.</td>
+</tr>
+<tr>
+<td><span id="s-radio-mac-cw-min-vi"></span><code>radio.mac.cw_min_vi</code></td>
+<td>integer</td>
+<td>slots</td>
+<td></td>
+<td>[1, 1023]<br>recommended 15 under a US region (SAE J2945/1 Table 18), 7 elsewhere (EN 302 663).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td><code>CWmin</code> of the video category, slots. Unset is 15 for 802.11p under a US region (SAE J2945/1 Table 18) and 7 elsewhere (EN 302 663). The random back-off window of the video queue.</td>
+</tr>
+<tr>
+<td><span id="s-radio-mac-aifsn-vi"></span><code>radio.mac.aifsn_vi</code></td>
+<td>integer</td>
+<td>slots</td>
+<td></td>
+<td>[2, 15]<br>recommended 4 under a US region (SAE J2945/1 Table 18), 3 elsewhere (EN 302 663).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td><code>AIFSN</code> of the video category, slots. Unset is 4 for 802.11p under a US region (SAE J2945/1 Table 18) and 3 elsewhere (EN 302 663). The fixed idle wait of the video queue.</td>
+</tr>
+<tr>
+<td><span id="s-radio-mac-queue-length"></span><code>radio.mac.queue_length</code></td>
+<td>integer</td>
+<td>frames</td>
+<td></td>
+<td>[1, 1024]<br>recommended 16 to 64.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How many frames each access category queues before it drops the next. Unset is 64. How many frames wait in each priority queue before new ones are dropped.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="channel_model">channel_model<a class="headerlink" href="#channel_model" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-channel-model-path-loss-exponent"></span><code>radio.channel_model.path_loss_exponent</code></td>
+<td>number</td>
+<td></td>
+<td></td>
+<td>[1.5, 6]<br>recommended 1.8 (highway) to 3.5 (dense city).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>A single-slope path-loss exponent: 2 is free space, about 2.7 to 3.5 a city street. Setting it, or the shadowing spread, runs the log-distance law (<code>propagation/log-distance-shadowing</code>) with these numbers over a free-space anchor at 10 m. Unset keeps the measured dual-slope fits. How fast the signal weakens with distance: 2 in free space, near 3 in a built-up street. Setting it runs the log-distance law.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-shadowing-sigma-db"></span><code>radio.channel_model.shadowing_sigma_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td></td>
+<td>[0, 15]<br>recommended 3 to 4 dB in line of sight, 6 to 7 dB obstructed.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The log-normal shadowing standard deviation, dB: how much the received power wanders around the path-loss mean as buildings and trucks come and go. Unset keeps the fit's own (about 4 dB in line of sight, 6 to 7 dB obstructed, Abbas 2015). How much the signal wanders around its average as buildings and trucks block it.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-shadowing-decorrelation-m"></span><code>radio.channel_model.shadowing_decorrelation_m</code></td>
+<td>number</td>
+<td>m</td>
+<td></td>
+<td>(0, 500]<br>recommended 10 m (city) to 50 m (highway).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How far a vehicle moves before its shadowing is uncorrelated with what it was, metres (Gudmundson 1991). Unset is the environment's (about 10 m in a city). How far a vehicle travels before its shadowing changes completely.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-fading"></span><code>radio.channel_model.fading</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>none</code>, <code>rayleigh</code>, <code>rice</code>, <code>nakagami</code><br>recommended Leave unset (Nakagami m = 3); Rayleigh for a worst case.</td>
+<td>basic</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The small-scale fading law: <code>none</code>, <code>rayleigh</code> (no direct path), <code>rice</code> (a direct path <code>rice_k_db</code> stronger than the scatter) or <code>nakagami</code> (shape <code>nakagami_shape</code>). Unset keeps the tier's choice (Nakagami m = 3 for 802.11p). The fast signal fluctuation as vehicles move a few centimetres: Rayleigh has no direct path, Rice and Nakagami have one. It is the main cause of losses well inside range.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-fading-coherence"></span><code>radio.channel_model.fading_coherence</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>independent</code>, <code>doppler</code><br>recommended independent (today's behaviour); doppler for burst-loss studies (Akki &amp; Haber 1986; Rappaport 2002 Eq. 5.40c).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How the fade of one link changes from frame to frame: <code>independent</code> (each frame draws its own, the default) or <code>doppler</code> (one fade per coherence time, <code>0.423 / f_D</code> with <code>f_D</code> from both ends' speeds and the carrier, so slow links fade in bursts and fast links decorrelate; Akki &amp; Haber 1986, Rappaport 2002 Eq. 5.40c). Whether a link's fade carries over from one message to the next: with doppler, vehicles standing still (a queue at a red light) keep a bad fade for many messages in a row, while fast vehicles get a fresh fade with every message.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-nakagami-shape"></span><code>radio.channel_model.nakagami_shape</code></td>
+<td>number</td>
+<td></td>
+<td></td>
+<td>[0.5, 20]<br>recommended 1 to 5.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The Nakagami shape <code>m</code> when <code>fading</code> is <code>nakagami</code> (written <code>m</code> in the literature): 1 is Rayleigh, larger is milder. Unset is 3. The Nakagami shape m: 1 is Rayleigh, larger values are milder fading.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-rice-k-db"></span><code>radio.channel_model.rice_k_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td></td>
+<td>[-10, 30]<br>recommended 3 to 10 dB.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The Rice factor <code>K</code> when <code>fading</code> is <code>rice</code>, dB: the direct path's power over the scattered power's. Unset is 6 dB. The strength of the direct path over the scattered ones in a Rice channel.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-nakagami-shape-far"></span><code>radio.channel_model.nakagami_shape_far</code></td>
+<td>number</td>
+<td></td>
+<td></td>
+<td>[0.5, 20]<br>recommended 0.75 to 1 beyond about 80-100 m.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The Nakagami <code>m</code> beyond <code>nakagami_breakpoint_m</code>, when <code>fading</code> is <code>nakagami</code>, for a channel that gets harsher with range (Veins-style: about 1.5 near, 0.75 far). Needs the breakpoint. Unset keeps <code>nakagami_shape</code> at every distance. The fading severity beyond the breakpoint distance, for a channel that gets harsher with range.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-nakagami-breakpoint-m"></span><code>radio.channel_model.nakagami_breakpoint_m</code></td>
+<td>number</td>
+<td>m</td>
+<td></td>
+<td>(0, 5000]<br>recommended 80 to 100 m.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The distance at which the Nakagami <code>m</code> switches to <code>nakagami_shape_far</code>, metres. The distance at which the fading switches to its far-away severity.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-building-wall-loss-db"></span><code>radio.channel_model.building_wall_loss_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td></td>
+<td>[0, 40]<br>recommended 9 dB (Sommer 2011 default); 2.4 dB for light construction.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How much each building wall the signal passes through costs (Sommer 2011 β), dB: 9 dB for the fitted default, about 2.4 dB for light construction. How much each building wall between two cars costs the signal (Sommer 2011's β, as Veins models it).</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-building-loss-db-per-m"></span><code>radio.channel_model.building_loss_db_per_m</code></td>
+<td>number</td>
+<td>dB/m</td>
+<td></td>
+<td>[0, 10]<br>recommended 0.4 dB/m (Sommer 2011 default); 0.1-0.63 dB/m across the fitted rows.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How much each metre of path inside a building costs (Sommer 2011 γ), dB per metre: 0.4 for the fitted default. How much each metre of the path inside a building costs (Sommer 2011's γ).</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-vehicle-blockage"></span><code>radio.channel_model.vehicle_blockage</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td>recommended On for realism; off to measure what blockage costs.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether other vehicles between two antennas attenuate the signal (3GPP TR 37.885 NLOSv blockage). On by default with the city-street law; off makes vehicles radio-transparent, on charges them under every law. Whether trucks and cars between two antennas weaken the signal (3GPP TR 37.885 NLOSv).</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-foliage"></span><code>radio.channel_model.foliage</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td>recommended Off (today); on with world.vegetation for suburban and rural maps with woods and tree-lined streets.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether a path through trees loses the foliage excess (ITU-R P.833 §3.1 with GEMV²'s 2.3 dB/m at 5.9 GHz, capped at the diffraction over the canopy: <code>obstacle/foliage/p833</code>). Needs <code>world.vegetation</code>. Unset is off. Whether trees between two antennas weaken the signal: about 2.3 dB per metre of trees at 5.9 GHz, up to what bending over the treetops would cost. Needs world.vegetation.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-density-sigma"></span><code>radio.channel_model.density_sigma</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td>recommended Off (today, a fixed spread); on for the measured dependence on surroundings.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether the log-distance law's shadowing σ grows with the vehicles and buildings around the link (GEMV², Boban et al. 2014 eq. 10: 3.3 dB on an empty road to 5.2 dB downtown for line of sight). Unset keeps the preset's fixed σ. Whether the signal's random variation grows with the traffic and buildings around each link, as measured in Porto (GEMV2): calmer on an empty road, rougher downtown.</td>
+</tr>
+<tr>
+<td><span id="s-radio-channel-model-reflection"></span><code>radio.channel_model.reflection</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td>recommended Off (today); on for downtown maps, where reflections carry links round corners.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether a building-blocked link also receives the strongest single specular reflection off a building wall, power-summed with the shadowed path (GEMV², Boban et al. 2014 §IV-B.3, eqs. 6-8; ITU-R P.2040-3 Table 3 for the walls: <code>obstacle/reflection/gemv2-single-bounce</code>). Needs buildings. Unset is off. Whether a signal blocked by a building can still arrive by bouncing once off another building's wall, as it does down a street canyon: the bounce costs its longer path and the wall's reflection loss.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="dcc">dcc<a class="headerlink" href="#dcc" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-dcc-enabled"></span><code>radio.dcc.enabled</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td>recommended On, except as the baseline of a congestion study.</td>
+<td>basic</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether 802.11p congestion control runs at all. <code>false</code> lets every radio send at its full rate and power however busy the channel is: the baseline a DCC study compares against. Unset is on (EN 302 571 requires it in Europe). Congestion control: radios slow down or turn their power down when the channel is busy, so the channel stays usable. Turn it off to measure what it buys.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-cbr-target"></span><code>radio.dcc.cbr_target</code></td>
+<td>number</td>
+<td></td>
+<td></td>
+<td>[0.1, 0.95]<br>recommended 0.6 to 0.7 (standard 0.68).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The channel load the ETSI adaptive algorithm steers towards, as a fraction of time busy. Unset is 0.68 (TS 102 687 V1.2.1 Table 3). The share of time busy the ETSI adaptive algorithm aims the channel at.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-adaptive-alpha"></span><code>radio.dcc.adaptive_alpha</code></td>
+<td>number</td>
+<td></td>
+<td></td>
+<td>[0.001, 0.5]<br>recommended 0.016 (standard).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The ETSI adaptive smoothing factor α: how much of each new load measurement enters the running average. Unset is 0.016 (ibid.). How quickly the ETSI adaptive algorithm's load average follows new measurements.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-adaptive-beta"></span><code>radio.dcc.adaptive_beta</code></td>
+<td>number</td>
+<td></td>
+<td></td>
+<td>[0.0001, 0.05]<br>recommended 0.0012 (standard).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The ETSI adaptive gain β: how hard the allowed duty cycle reacts to the gap from the target. Unset is 0.0012 (ibid.). How strongly the ETSI adaptive algorithm changes the allowed airtime when the load is off target.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-max-itt-ms"></span><code>radio.dcc.max_itt_ms</code></td>
+<td>number</td>
+<td>ms</td>
+<td></td>
+<td>[100, 2000]<br>recommended 600 ms (standard).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The longest interval SAE J2945/1 may stretch a BSM's spacing to under congestion, ms (<code>vMax_ITT</code>). Unset is 600 ms. The longest gap J2945/1 allows between one vehicle's BSMs under congestion.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-density-coefficient"></span><code>radio.dcc.density_coefficient</code></td>
+<td>number</td>
+<td>vehicles</td>
+<td></td>
+<td>[1, 200]<br>recommended 25 (standard).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The vehicle density at which SAE J2945/1 starts to stretch the interval (<code>B</code>, vehicles within 100 m). Unset is 25. How many neighbours within 100 m J2945/1 tolerates before it stretches the BSM interval.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-power-control"></span><code>radio.dcc.power_control</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td>recommended On (J2945/1); off for rate-only control.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether SAE J2945/1 also lowers the radiated power as the channel fills. Unset is on (J2945/1 §6.3.8); J3161/1 for LTE-V2X has none. Whether J2945/1 also turns the radiated power down as the channel fills.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-min-power-dbm"></span><code>radio.dcc.min_power_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td></td>
+<td>[-10, 20]<br>recommended 10 dBm (standard).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The lowest power J2945/1's power control may go to, dBm (<code>vRP_Min</code>). Unset is 10. The lowest power J2945/1's power control may reach.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-reactive-table"></span><code>radio.dcc.reactive_table</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>a1</code>, <code>a2</code><br>recommended A.1 for secured CAMs at 6 Mbit/s; A.2 only for short frames.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>ETSI reactive DCC's table (TS 102 687 V1.2.1 Annex A): <code>a1</code> (frames up to 1 ms on air, Table A.1, the default) or <code>a2</code> (up to 500 µs, Table A.2, twice the rates). Which ETSI reactive table sets the message rate in each congestion state: A.1 for frames up to 1 ms on air, A.2 (twice the rates) for frames up to 500 µs.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-reactive-hold-ms"></span><code>radio.dcc.reactive_hold_ms</code></td>
+<td>number</td>
+<td>ms</td>
+<td></td>
+<td>[0, 5000]<br>recommended 0 (the tables give none) to 1,000 ms.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>ETSI reactive DCC's state-hold time, ms: how long a state is held before the next step. 0 unless set (the tables specify no hysteresis). How long reactive congestion control stays in a state before it may step again; longer holds damp oscillation.</td>
+</tr>
+<tr>
+<td><span id="s-radio-dcc-channel-quality"></span><code>radio.dcc.channel_quality</code></td>
+<td>string</td>
+<td></td>
+<td></td>
+<td><code>sae-j2945-1</code>, <code>fmvss150-nprm</code><br>recommended SAE J2945/1 Eq. 4 (the default); the FMVSS 150 NPRM smoothing only to reproduce older results.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>SAE J2945/1's channel-quality indicator Π: <code>sae-j2945-1</code> (unset) is 6.3.8.1 Eq. 4, the mean PER of the neighbours within 100 m capped at 0.3; <code>fmvss150-nprm</code> smooths it with weight 0.9 on the previous value, as the withdrawn FMVSS 150 NPRM transcribed it (11-j2945-1-conformance.md J3a). How SAE J2945/1 judges the channel from its neighbours' lost messages, which decides how often it assumes they missed its last BSM and sends an extra one.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="sidelink">sidelink<a class="headerlink" href="#sidelink" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Unit</th>
+<th>Default</th>
+<th>Range or choices</th>
+<th>Level</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span id="s-radio-sidelink-reservation-interval-ms"></span><code>radio.sidelink.reservation_interval_ms</code></td>
+<td>integer</td>
+<td>ms</td>
+<td></td>
+<td>[1, 1000]<br>recommended 100 ms for 10 Hz BSMs; 20 or 50 ms for faster traffic.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How often a radio's reserved resource repeats, ms (the resource reservation interval, RRI). LTE allows 20, 50, 100 or a multiple of 100 up to 1,000 (TS 36.331 <code>sl-ResourceReservationPeriod</code>); NR also 1 to 99. Unset is 100 ms, one BSM period. How often a C-V2X radio's booked slot repeats; it should match how often the radio has a message to send.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-resource-keep-probability"></span><code>radio.sidelink.resource_keep_probability</code></td>
+<td>number</td>
+<td></td>
+<td></td>
+<td>[0, 0.8]<br>recommended 0.8 (J3161/1); 0 to study fast reselection.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The probability a radio keeps its resource when the reselection counter runs out (<code>probResourceKeep</code>): 0, 0.2, 0.4, 0.6 or 0.8 (TS 36.331). Higher keeps reservations stable for others to sense, but makes two radios that collide keep colliding. Unset is the profile's (0.8 under SAE J3161/1). The chance a radio keeps its booked slot when its counter runs out, rather than picking a new one.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-rsrp-threshold-dbm"></span><code>radio.sidelink.rsrp_threshold_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td></td>
+<td>[-128, -60]<br>recommended -128 dBm (NR studies) to -110 dBm (LTE studies).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The RSRP above which a resource another radio reserved is excluded from selection, dBm; it is raised 3 dB at a time until enough candidates remain (TS 36.213 §14.1.1.6). Unset is the profile's (−128 dBm NR, −110 dBm LTE studies). How strong another radio's booking must be for a radio to avoid that slot.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-sensing"></span><code>radio.sidelink.sensing</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td>recommended On; off only as a baseline.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether radios sense the channel before choosing a resource. <code>false</code> is the random selection baseline (Ali et al. 2021 §II.1). Unset is on. Whether radios listen before booking a slot. Off is the random-selection baseline.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-candidate-percent"></span><code>radio.sidelink.candidate_percent</code></td>
+<td>integer</td>
+<td>%</td>
+<td></td>
+<td>[20, 50]<br>recommended 20 % (LTE's fixed value); 35 or 50 % on NR.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The share of the selection window that must survive exclusion before a radio picks: 20 % (LTE's fixed value), 35 % or 50 % (NR only). Unset is 20 %. The share of resources that must remain after exclusion before a radio picks one.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-selection-window-ms"></span><code>radio.sidelink.selection_window_ms</code></td>
+<td>integer</td>
+<td>ms</td>
+<td></td>
+<td>[1, 100]<br>recommended 100 ms at 10 Hz; at most the message interval.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How late after a message is ready its new resource may be (the selection window's end T2), ms. Shorter cuts latency but leaves fewer resources to pick from; at most the message interval. Unset is the profile's (100 ms at 10 Hz). How late after a message is ready its new resource may be. Shorter cuts latency but leaves fewer resources to pick from.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-noise-figure-db"></span><code>radio.sidelink.noise_figure_db</code></td>
+<td>number</td>
+<td>dB</td>
+<td></td>
+<td>[0, 15]<br>recommended 9 dB (3GPP TR 36.885 UE); 6 dB for a good automotive module.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>The UE receiver noise figure, dB: TR 36.885 Annex A.1.1's 9 dB unless set. It moves every sidelink noise floor (and the candidate range measured against it). How much noise a C-V2X receiver's own electronics add; every extra dB shortens the range at which a transport block still decodes.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-cbr-threshold-dbm"></span><code>radio.sidelink.cbr_threshold_dbm</code></td>
+<td>number</td>
+<td>dBm</td>
+<td></td>
+<td>[-112, -8]<br>recommended -94 dBm (this build's default); -112 to -80 dBm in 2 dB steps (TS 36.331).</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td><code>sl-ThresS-RSSI-CBR</code>, dBm: the S-RSSI above which a sub-channel counts as busy in the channel busy ratio (TS 36.214 §5.1.30, TS 36.331 range -112 to -8 dBm in 2 dB steps). -94 dBm unless set; the CR limits and every CBR metric read it. The signal level above which a C-V2X sub-channel counts as busy in the channel busy ratio, which drives congestion control.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-align-generation"></span><code>radio.sidelink.align_generation</code></td>
+<td>boolean</td>
+<td></td>
+<td></td>
+<td>recommended Off (today's default, every LTE-V2X run unchanged); on for a deployment-faithful LTE-V2X latency.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>Whether each radio generates its periodic BSM just before its reserved resource, as SAE J3161/1 has the application do, instead of on its own 100 ms clock: the BSM then waits a margin for its resource rather than up to a whole period. The phase follows every reselection; an interval it changes stays inside J2945/1's bounds. Unset is off. Whether each C-V2X radio builds its safety message just before its reserved slot, as SAE J3161/1 has deployed radios do, so the message waits a millisecond or two for the air instead of up to a tenth of a second.</td>
+</tr>
+<tr>
+<td><span id="s-radio-sidelink-align-margin-ms"></span><code>radio.sidelink.align_margin_ms</code></td>
+<td>number</td>
+<td>ms</td>
+<td></td>
+<td>[0, 50]<br>recommended 1 ms (the radio's processing time T1); an assumption until J3161/1's own figure is read.</td>
+<td>advanced</td>
+<td><span class="twemoji" title="Active"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2m-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8z"/></svg></span> <code>wired</code></td>
+<td>How long before its reserved resource an aligned BSM reaches the radio, ms, on top of the device's longest signing time. Unset is the pool's processing time <code>T1</code> (1 ms on LTE-V2X): an ASSUMPTION until J3161/1's figure is read. With aligned generation, how long before its reserved slot the signed message reaches the radio, on top of the longest time the device takes to sign it.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="choices">Choices<a class="headerlink" href="#choices" title="Permanent link">&para;</a></h2>
+<p>The labelled values of every closed or model setting above.</p>
+<details class="note">
+<summary><code>radio.rat</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dsrc-80211p</code></td>
+<td>DSRC / ITS-G5 (IEEE 802.11p)</td>
+<td>Wi-Fi-based V2X: listen-before-talk on a 10 MHz channel. The US pilots' radio and Europe's ITS-G5.</td>
+</tr>
+<tr>
+<td><code>lte-v2x-pc5</code></td>
+<td>C-V2X, LTE sidelink (PC5 Mode 4)</td>
+<td>3GPP Release 14 cellular V2X without a network: sensing-based semi-persistent scheduling on the SAE J3161/1 profile.</td>
+</tr>
+<tr>
+<td><code>nr-v2x-pc5</code></td>
+<td>C-V2X, 5G NR sidelink (PC5 Mode 2)</td>
+<td>3GPP Release 16 sidelink at 30 kHz on the ETSI EN 303 798 pool. No US deployment profile exists yet.</td>
+</tr>
+<tr>
+<td><code>hybrid</code></td>
+<td>Hybrid (not available)</td>
+<td>Refused by this build: the hybrid selector arbitrates a direct radio against cellular, which is not wired.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.region</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>us</code></td>
+<td>United States, 2024 rules (FCC 24-123)</td>
+<td>C-V2X only on 5.905-5.925 GHz; DSRC is refused because its licences end in December 2026.</td>
+</tr>
+<tr>
+<td><code>us-2016</code></td>
+<td>United States, DSRC band plan (2016)</td>
+<td>802.11p on channel 172, the plan SAE J2945/1 was written for (47 CFR 90.377).</td>
+</tr>
+<tr>
+<td><code>eu</code></td>
+<td>Europe (ETSI EN 302 571)</td>
+<td>10 MHz channels at up to 33 dBm EIRP; ITS-G5, LTE-V2X and NR-V2X side by side.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.channel</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>172</code></td>
+<td>Channel 172 (5.860 GHz, 10 MHz)</td>
+<td>us-2016: Service channel for safety of life and property: the J2945/1 BSM channel; eu: ITS-G5B, non-safety ITS</td>
+</tr>
+<tr>
+<td><code>174</code></td>
+<td>Channel 174 (5.870 GHz, 10 MHz)</td>
+<td>us-2016: Service channel; eu: ITS-G5B, non-safety ITS</td>
+</tr>
+<tr>
+<td><code>176</code></td>
+<td>Channel 176 (5.880 GHz, 10 MHz)</td>
+<td>us-2016: Service channel; eu: ITS-G5A road safety (SCH1); 5GAA's 5G-V2X block</td>
+</tr>
+<tr>
+<td><code>178</code></td>
+<td>Channel 178 (5.890 GHz, 10 MHz)</td>
+<td>us-2016: Control channel (44.8 dBm for state or local government); eu: ITS-G5A road safety (SCH2); 5GAA's 5G-V2X block</td>
+</tr>
+<tr>
+<td><code>180</code></td>
+<td>Channel 180 (5.900 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; 23 dBm for an OBU without geofencing (federal radar); us-2016: Service channel; eu: ITS-G5A road safety, the control channel where ITS-G5 deploys</td>
+</tr>
+<tr>
+<td><code>181</code></td>
+<td>Channel 181 (5.905 GHz, 20 MHz)</td>
+<td>us: C-V2X 20 MHz including 5.895-5.905 GHz</td>
+</tr>
+<tr>
+<td><code>182</code></td>
+<td>Channel 182 (5.910 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; us-2016: Service channel; eu: Road safety ITS; the LTE-V2X day-1 channel 5GAA proposed</td>
+</tr>
+<tr>
+<td><code>183</code></td>
+<td>Channel 183 (5.915 GHz, 20 MHz)</td>
+<td>us: C-V2X 20 MHz: the SAE J3161/1 LTE-V2X deployment channel</td>
+</tr>
+<tr>
+<td><code>184</code></td>
+<td>Channel 184 (5.920 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; us-2016: Public safety, safety of life and property (40 dBm for public safety)</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.tiers.propagation</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>abstract</code></td>
+<td>Simplified (abstract) — free space, no buildings</td>
+<td>Free-space loss with no buildings, shadowing or fading: each link is cheaper to price, but with nothing in the way more links reach each receiver, so a city run costs about as much as Standard; cap radio.range.max_m to make a large fleet cheap.</td>
+</tr>
+<tr>
+<td><code>medium</code></td>
+<td>Standard (medium)</td>
+<td>The models the literature agrees on, without frame-level detail. The usual choice.</td>
+</tr>
+<tr>
+<td><code>high</code></td>
+<td>Detailed (high)</td>
+<td>Frame-level or geometry-traced detail: the most faithful and the slowest.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.tiers.phy</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>abstract</code></td>
+<td>Fast (abstract) — runs as Standard</td>
+<td>This build has no separate abstract PHY: the Standard (medium) reception model runs. Only propagation and channel access have an abstract tier.</td>
+</tr>
+<tr>
+<td><code>medium</code></td>
+<td>Standard (medium)</td>
+<td>The models the literature agrees on, without frame-level detail. The usual choice.</td>
+</tr>
+<tr>
+<td><code>high</code></td>
+<td>Detailed (high)</td>
+<td>Frame-level or geometry-traced detail: the most faithful and the slowest.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.tiers.mac</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>abstract</code></td>
+<td>Simplified (abstract) — no channel access</td>
+<td>Every frame goes on air when it is queued, with no carrier sense, backoff or channel busy ratio (so no congestion control); it saves little run time, because receptions, not channel access, are most of the cost.</td>
+</tr>
+<tr>
+<td><code>medium</code></td>
+<td>Standard (medium)</td>
+<td>The models the literature agrees on, without frame-level detail. The usual choice.</td>
+</tr>
+<tr>
+<td><code>high</code></td>
+<td>Detailed (high) — runs as Standard</td>
+<td>Channel access has no separate high tier in this build: the Standard EDCA model runs. Choosing it is what allows the Detailed physical layer.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.tiers.focus.tier</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>abstract</code></td>
+<td>Fast (abstract) — not possible here</td>
+<td>A focus region exists to run higher than the world around it, and no tier is below abstract; choose Standard or Detailed.</td>
+</tr>
+<tr>
+<td><code>medium</code></td>
+<td>Standard (medium)</td>
+<td>The models the literature agrees on, without frame-level detail. The usual choice.</td>
+</tr>
+<tr>
+<td><code>high</code></td>
+<td>Detailed (high)</td>
+<td>Frame-level or geometry-traced detail: the most faithful and the slowest.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.devices.obu.antenna_pattern</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tr37885</code></td>
+<td>By vehicle type (3GPP TR 37.885)</td>
+<td>A roof antenna on cars and vans, front and rear panels on trucks and buses. The default.</td>
+</tr>
+<tr>
+<td><code>rooftop</code></td>
+<td>Roof antenna on every vehicle</td>
+<td>The same all-round roof antenna on every vehicle, trucks included.</td>
+</tr>
+<tr>
+<td><code>isotropic</code></td>
+<td>No pattern (isotropic)</td>
+<td>The same gain in every direction: the textbook simplification.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.devices.obu.sampled_pattern.rotation_jitter</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td>None</td>
+<td>Every mount at <code>rotation_deg</code>.</td>
+</tr>
+<tr>
+<td><code>uniform</code></td>
+<td>Uniform</td>
+<td>Uniform in ±<code>rotation_jitter_deg</code> per vehicle.</td>
+</tr>
+<tr>
+<td><code>normal</code></td>
+<td>Normal</td>
+<td>Normal with σ = <code>rotation_jitter_deg</code> per vehicle.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.adjacent_channel[].rat</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dsrc-80211p</code></td>
+<td>DSRC / ITS-G5 (IEEE 802.11p)</td>
+<td>Wi-Fi-based V2X: listen-before-talk on a 10 MHz channel. The US pilots' radio and Europe's ITS-G5.</td>
+</tr>
+<tr>
+<td><code>lte-v2x-pc5</code></td>
+<td>C-V2X, LTE sidelink (PC5 Mode 4)</td>
+<td>3GPP Release 14 cellular V2X without a network: sensing-based semi-persistent scheduling on the SAE J3161/1 profile.</td>
+</tr>
+<tr>
+<td><code>nr-v2x-pc5</code></td>
+<td>C-V2X, 5G NR sidelink (PC5 Mode 2)</td>
+<td>3GPP Release 16 sidelink at 30 kHz on the ETSI EN 303 798 pool. No US deployment profile exists yet.</td>
+</tr>
+<tr>
+<td><code>hybrid</code></td>
+<td>Hybrid (not available)</td>
+<td>Refused by this build: the hybrid selector arbitrates a direct radio against cellular, which is not wired.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.adjacent_channel[].channel</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>172</code></td>
+<td>Channel 172 (5.860 GHz, 10 MHz)</td>
+<td>us-2016: Service channel for safety of life and property: the J2945/1 BSM channel; eu: ITS-G5B, non-safety ITS</td>
+</tr>
+<tr>
+<td><code>174</code></td>
+<td>Channel 174 (5.870 GHz, 10 MHz)</td>
+<td>us-2016: Service channel; eu: ITS-G5B, non-safety ITS</td>
+</tr>
+<tr>
+<td><code>176</code></td>
+<td>Channel 176 (5.880 GHz, 10 MHz)</td>
+<td>us-2016: Service channel; eu: ITS-G5A road safety (SCH1); 5GAA's 5G-V2X block</td>
+</tr>
+<tr>
+<td><code>178</code></td>
+<td>Channel 178 (5.890 GHz, 10 MHz)</td>
+<td>us-2016: Control channel (44.8 dBm for state or local government); eu: ITS-G5A road safety (SCH2); 5GAA's 5G-V2X block</td>
+</tr>
+<tr>
+<td><code>180</code></td>
+<td>Channel 180 (5.900 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; 23 dBm for an OBU without geofencing (federal radar); us-2016: Service channel; eu: ITS-G5A road safety, the control channel where ITS-G5 deploys</td>
+</tr>
+<tr>
+<td><code>181</code></td>
+<td>Channel 181 (5.905 GHz, 20 MHz)</td>
+<td>us: C-V2X 20 MHz including 5.895-5.905 GHz</td>
+</tr>
+<tr>
+<td><code>182</code></td>
+<td>Channel 182 (5.910 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; us-2016: Service channel; eu: Road safety ITS; the LTE-V2X day-1 channel 5GAA proposed</td>
+</tr>
+<tr>
+<td><code>183</code></td>
+<td>Channel 183 (5.915 GHz, 20 MHz)</td>
+<td>us: C-V2X 20 MHz: the SAE J3161/1 LTE-V2X deployment channel</td>
+</tr>
+<tr>
+<td><code>184</code></td>
+<td>Channel 184 (5.920 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; us-2016: Public safety, safety of life and property (40 dBm for public safety)</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.channels[].channel</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>172</code></td>
+<td>Channel 172 (5.860 GHz, 10 MHz)</td>
+<td>us-2016: Service channel for safety of life and property: the J2945/1 BSM channel; eu: ITS-G5B, non-safety ITS</td>
+</tr>
+<tr>
+<td><code>174</code></td>
+<td>Channel 174 (5.870 GHz, 10 MHz)</td>
+<td>us-2016: Service channel; eu: ITS-G5B, non-safety ITS</td>
+</tr>
+<tr>
+<td><code>176</code></td>
+<td>Channel 176 (5.880 GHz, 10 MHz)</td>
+<td>us-2016: Service channel; eu: ITS-G5A road safety (SCH1); 5GAA's 5G-V2X block</td>
+</tr>
+<tr>
+<td><code>178</code></td>
+<td>Channel 178 (5.890 GHz, 10 MHz)</td>
+<td>us-2016: Control channel (44.8 dBm for state or local government); eu: ITS-G5A road safety (SCH2); 5GAA's 5G-V2X block</td>
+</tr>
+<tr>
+<td><code>180</code></td>
+<td>Channel 180 (5.900 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; 23 dBm for an OBU without geofencing (federal radar); us-2016: Service channel; eu: ITS-G5A road safety, the control channel where ITS-G5 deploys</td>
+</tr>
+<tr>
+<td><code>181</code></td>
+<td>Channel 181 (5.905 GHz, 20 MHz)</td>
+<td>us: C-V2X 20 MHz including 5.895-5.905 GHz</td>
+</tr>
+<tr>
+<td><code>182</code></td>
+<td>Channel 182 (5.910 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; us-2016: Service channel; eu: Road safety ITS; the LTE-V2X day-1 channel 5GAA proposed</td>
+</tr>
+<tr>
+<td><code>183</code></td>
+<td>Channel 183 (5.915 GHz, 20 MHz)</td>
+<td>us: C-V2X 20 MHz: the SAE J3161/1 LTE-V2X deployment channel</td>
+</tr>
+<tr>
+<td><code>184</code></td>
+<td>Channel 184 (5.920 GHz, 10 MHz)</td>
+<td>us: C-V2X 10 MHz; us-2016: Public safety, safety of life and property (40 dBm for public safety)</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.mac.edca_profile</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>by-region</code></td>
+<td>By region</td>
+<td>SAE J2945/1 Table 18 for 802.11p under a US region, ETSI EN 302 663 everywhere else.</td>
+</tr>
+<tr>
+<td><code>sae-j2945-1</code></td>
+<td>SAE J2945/1 Table 18 (BSM at AC_VI, critical BSM at AC_VO)</td>
+<td>AC_VI CWmin 15, CWmax 1023, AIFSN 4 (UPEDCA-003); a BSM without a critical event flag waits at user priority 5, one with a flag at 7.</td>
+</tr>
+<tr>
+<td><code>en-302-663</code></td>
+<td>ETSI EN 302 663 (OCB defaults)</td>
+<td>The 802.11 OCB defaults: AC_VI CWmin 7, CWmax 15, AIFSN 3.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.mac.periodic_access_category</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vo</code></td>
+<td>Voice (AC_VO, highest)</td>
+<td>The shortest wait (AIFSN 2, CWmin 3): where SAE J2945/1 puts a BSM with a critical event flag (user priority 7) and EN 302 663 the DENM.</td>
+</tr>
+<tr>
+<td><code>vi</code></td>
+<td>Video (AC_VI) (SAE J2945/1 UP 5)</td>
+<td>Where SAE J2945/1 puts a BSM without a critical event flag (user priority 5, UPEDCA-001) and EN 302 663 Annex C the CAM: AIFSN 4, CWmin 15 under J2945/1 Table 18; AIFSN 3, CWmin 7 under EN 302 663.</td>
+</tr>
+<tr>
+<td><code>be</code></td>
+<td>Best effort (AC_BE)</td>
+<td>AIFSN 6, CWmin 15: ordinary data, yields to every safety message.</td>
+</tr>
+<tr>
+<td><code>bk</code></td>
+<td>Background (AC_BK, lowest)</td>
+<td>AIFSN 9, CWmin 15: the longest wait.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.mac.event_access_category</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vo</code></td>
+<td>Voice (AC_VO, highest)</td>
+<td>The shortest wait (AIFSN 2, CWmin 3): where SAE J2945/1 puts a BSM with a critical event flag (user priority 7) and EN 302 663 the DENM.</td>
+</tr>
+<tr>
+<td><code>vi</code></td>
+<td>Video (AC_VI)</td>
+<td>AIFSN 4, CWmin 15 under SAE J2945/1 Table 18; AIFSN 3, CWmin 7 under EN 302 663.</td>
+</tr>
+<tr>
+<td><code>be</code></td>
+<td>Best effort (AC_BE)</td>
+<td>AIFSN 6, CWmin 15: ordinary data, yields to every safety message.</td>
+</tr>
+<tr>
+<td><code>bk</code></td>
+<td>Background (AC_BK, lowest)</td>
+<td>AIFSN 9, CWmin 15: the longest wait.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.channel_model.fading</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td>None</td>
+<td>No small-scale fading: the received power is the path loss and shadowing only.</td>
+</tr>
+<tr>
+<td><code>rayleigh</code></td>
+<td>Rayleigh</td>
+<td>No direct path, only scattered copies: the harshest common fading (Nakagami m = 1).</td>
+</tr>
+<tr>
+<td><code>rice</code></td>
+<td>Rice</td>
+<td>A direct path plus scatter; its strength over the scatter is the Rice factor K.</td>
+</tr>
+<tr>
+<td><code>nakagami</code></td>
+<td>Nakagami-m</td>
+<td>The V2V literature's usual fit; its shape m runs from 1 (Rayleigh) up to milder channels.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.channel_model.fading_coherence</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>independent</code></td>
+<td>Independent per message</td>
+<td>Every message on a link gets its own fade, whatever the speeds.</td>
+</tr>
+<tr>
+<td><code>doppler</code></td>
+<td>Doppler (speed-dependent)</td>
+<td>A fade lasts one coherence time: long for vehicles standing still, a fraction of a millisecond at highway speed.</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.dcc.reactive_table</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>a1</code></td>
+<td>Table A.1 (frames up to 1 ms)</td>
+<td>10 Hz relaxed down to 1 Hz restrictive (TS 102 687 V1.2.1 Table A.1). The default.</td>
+</tr>
+<tr>
+<td><code>a2</code></td>
+<td>Table A.2 (frames up to 500 µs)</td>
+<td>20 Hz relaxed down to 1 Hz restrictive, for short frames (Table A.2).</td>
+</tr>
+</tbody>
+</table>
+<details class="note">
+<summary><code>radio.dcc.channel_quality</code></summary>
+</details>
+<table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sae-j2945-1</code></td>
+<td>SAE J2945/1 Eq. 4 (capped mean PER)</td>
+<td>The mean loss rate of the neighbours within 100 m over 5 s, capped at 0.3, recomputed every second. The default.</td>
+</tr>
+<tr>
+<td><code>fmvss150-nprm</code></td>
+<td>FMVSS 150 NPRM (0.9 smoothing)</td>
+<td>The same mean, smoothed with weight 0.9 on the previous value as the withdrawn 2017 NPRM transcribed it: reacts about ten times slower.</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-circle-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4M12 16V8"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../weather/" class="md-footer__link md-footer__link--prev" aria-label="Previous: weather">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                weather
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../net/" class="md-footer__link md-footer__link--next" aria-label="Next: net">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                net
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      © 2026 Ahmed Zaidan · code <a href="https://github.com/ak3zaidan/V2X-World/blob/main/LICENSE">Apache-2.0</a> · dataset <a href="https://huggingface.co/datasets/akzaidan/V2X-World">CC BY 4.0</a>
+    </div>
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/ak3zaidan/V2X-World" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog" role="status" aria-atomic="true">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      
+<div class="md-progress" data-md-component="progress" role="progressbar" aria-label="Loading"></div>
+    
+    
+    
+      
+      
+      
+      
+        
+        
+      <script id="__config" type="application/json">{"annotate":null,"base":"../../..","features":["navigation.tabs","navigation.tabs.sticky","navigation.sections","navigation.instant","navigation.instant.progress","navigation.tracking","navigation.indexes","navigation.top","navigation.footer","navigation.path","toc.follow","search.highlight","search.share","search.suggest","content.code.copy","content.code.annotate","content.tabs.link","content.action.edit","content.action.view"],"redirect":null,"search":"../../../assets/javascripts/workers/search.719e0d91.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","clipboard.error":"Could not copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.d31f0ffa.min.js"></script>
+      
+        <script src="../../../javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

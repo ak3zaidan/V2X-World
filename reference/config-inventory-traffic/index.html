@@ -1,0 +1,6549 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A deterministic, discrete-event simulator of connected-vehicle (V2X) systems: traffic, radio, network, IEEE 1609.2 security, the SCMS and ETSI PKI, attackers and misbehaviour detection.">
+      
+      
+      
+        <link rel="canonical" href="https://ak3zaidan.github.io/V2X-World/reference/config-inventory-traffic/">
+      
+      
+      
+        <link rel="prev" href="../configuration-reference/">
+      
+      
+        <link rel="next" href="../config-inventory-network/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.svg">
+      <meta name="generator" content="zensical-0.0.74">
+    
+    
+      
+        <title>Traffic, world and run inventory - V2X World</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.4ab2de0c.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.b60ce83d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-hidden="true"></label>
+    <div data-md-component="skip">
+      <a href="#__skip" class="md-skip">
+        Skip to content
+      </a>
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="V2X World" class="md-header__button md-logo" aria-label="V2X World" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="V2X World">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+      <span class="md-visually-hidden">Navigation</span>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            V2X World
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Traffic, world and run inventory
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="cyan"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+          <span class="md-visually-hidden">Search</span>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/ak3zaidan/V2X-World" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ak3zaidan/V2X-World
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/introduction/" class="md-tabs__link">
+          
+  
+  Getting started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../scenarios/" class="md-tabs__link">
+          
+  
+  User guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../models/" class="md-tabs__link">
+          
+  
+  Models
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../configuration/overview/" class="md-tabs__link">
+          
+  
+  Configuration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/" class="md-tabs__link">
+          
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  API
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../glossary/" class="md-tabs__link">
+        
+  
+  Glossary
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+      
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../about/standards/" class="md-tabs__link">
+          
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="V2X World" class="md-nav__button md-logo" aria-label="V2X World" data-md-component="logo">
+      
+  <img src="../../assets/logo.svg" alt="V2X World">
+
+    </a>
+    V2X World
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ak3zaidan/V2X-World" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ak3zaidan/V2X-World
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Home
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Getting started
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_2">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Getting started
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/introduction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Introduction
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Install and build
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/first-simulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Your first simulation
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/studio-tour/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Studio tour
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Command-line tool
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  User guide
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  User guide
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Scenarios
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/worlds-and-maps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Worlds and maps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/traffic-demand/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic demand
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/running-and-recording/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Running and recording
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../recording-and-metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metrics and outputs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../metrics/catalogue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metric catalogue
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/comparing-runs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Comparing runs
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/experiments-and-sweeps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Experiments and sweeps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/sensitivity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity analysis
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/datasets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Datasets and exports
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dataset/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Dataset schema
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/sumo-cosimulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SUMO co-simulation
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../studio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Studio
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/assistant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Assistant
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../models/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Models
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic and mobility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Messages
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/applications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  V2X applications
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/energy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Energy and emissions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/scms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS and credentials
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and crypto
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/threats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Threats and misbehaviour detection
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/privacy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Privacy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../models/determinism-and-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Determinism and time
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Configuration
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Configuration
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Overview
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  How settings work
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../configuration/reference/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Generated reference
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5_3" id="__nav_5_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Generated reference
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_2" id="__nav_5_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Run
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_2_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_2">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Run
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/meta/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  meta
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  schema
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/seed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  seed
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  time
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_3" id="__nav_5_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  World
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_3_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_3">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  World
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/city/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  city
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/world/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  world
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_4" id="__nav_5_3_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_4_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Traffic
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/actors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  actors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/mobility/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  mobility
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/traffic/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  traffic
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/scale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  scale
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_5" id="__nav_5_3_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Environment
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_5_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_5">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Environment
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/weather/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  weather
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_6" id="__nav_5_3_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Radio
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/radio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  radio
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_7" id="__nav_5_3_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Network
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Network
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/net/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  net
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_8" id="__nav_5_3_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Messages
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_8_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_8">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Messages
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/messages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  messages
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/perception/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  perception
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_9" id="__nav_5_3_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Security
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  security
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_10" id="__nav_5_3_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Nodes
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_10_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_10">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Nodes
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/nodes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  nodes
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_11" id="__nav_5_3_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Threats
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_11_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_11">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Threats
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/threats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  threats
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_12" id="__nav_5_3_12_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Detection
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_12_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_12">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Detection
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/detection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  detection
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_13" id="__nav_5_3_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Measurement
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_13_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_13">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Measurement
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  metrics
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/exporters/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  exporters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/experiment/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  experiment
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_14" id="__nav_5_3_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Applications
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_14_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_14">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Applications
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/apps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  apps
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_15" id="__nav_5_3_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Energy
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_15_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_15">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Energy
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/energy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  energy
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_3_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_5_3_16" id="__nav_5_3_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Timeline
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_3_16_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_5_3_16">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Timeline
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/events/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  events
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/reference/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Model parameters
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5_4" id="__nav_5_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Curated tables
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_5_4_label" aria-expanded="true">
+            <label class="md-nav__title" for="__nav_5_4">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Curated tables
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings by research question
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic, world and run inventory
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Traffic, world and run inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#exposed-as-scenario-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Exposed as scenario fields
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-configurable-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Other configurable settings
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-structs-and-settings-not-exposed" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Model structs and settings not exposed
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#every-named-numeric-constant-in-v2xw-mobility-and-v2xw-demand" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Every named numeric constant in <code>v2xw-mobility</code> and <code>v2xw-demand</code>
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config-inventory-network/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Radio and network inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config-inventory-scms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Security and SCMS inventory
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../scms-constants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  SCMS constants
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sensitivity-catalogue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity catalogue
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sensitivity-expectations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Sensitivity expectations
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Development
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Development
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Architecture
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../crates/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Crates
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Building and testing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Validation and conformance tools
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Conventions
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_6" id="__nav_6_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Extending
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_6_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_6_6">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Extending
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../extending/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Overview
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Models
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/detectors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Detectors
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Metrics
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Settings
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/scenarios/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Scenarios
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/extending/plugins/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Plugins
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/server/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Engine server and RPC
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protocol/vwp-v1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Engine-UI protocol (VWP v1)
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/recording-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Recording format
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dev/contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Contributing
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  API
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  API
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/python/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python API
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Glossary
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_9" id="__nav_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  About
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_9_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_9">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  About
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/standards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Standards and references
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/citation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Citation and licence
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#exposed-as-scenario-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Exposed as scenario fields
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-configurable-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Other configurable settings
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-structs-and-settings-not-exposed" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Model structs and settings not exposed
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#every-named-numeric-constant-in-v2xw-mobility-and-v2xw-demand" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Every named numeric constant in <code>v2xw-mobility</code> and <code>v2xw-demand</code>
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../../configuration/overview/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Configuration
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../configuration-reference/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Curated tables
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                <a id="__skip" tabindex="-1"></a>
+                
+                  
+
+  
+    <a href="https://github.com/ak3zaidan/V2X-World/edit/main/docs/reference/config-inventory-traffic.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-pen" viewBox="0 0 24 24"><path d="M12.659 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v9.34"/><path d="M14 2v5a1 1 0 0 0 1 1h5M10.378 12.622a1 1 0 0 1 3 3.003L8.36 20.637a2 2 0 0 1-.854.506l-2.867.837a.5.5 0 0 1-.62-.62l.836-2.869a2 2 0 0 1 .506-.853z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/ak3zaidan/V2X-World/raw/main/docs/reference/config-inventory-traffic.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-file-code-2" viewBox="0 0 24 24"><path d="M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35"/><path d="M14 2v5a1 1 0 0 0 1 1h5M5 16l-3 3 3 3M9 22l3-3-3-3"/></svg>
+    </a>
+  
+
+
+<h1 id="traffic-world-and-run-parameter-inventory">Traffic, world and run parameter inventory<a class="headerlink" href="#traffic-world-and-run-parameter-inventory" title="Permanent link">&para;</a></h1>
+<p>The hard-coded numbers and model fields of <code>crates/v2xw-mobility</code>, <code>crates/v2xw-demand</code>
+and the world's signal synthesis. Each one is either <strong>exposed</strong>, as a validated scenario field
+the Studio settings window and the agent pick up from <code>settings.describe</code>, or <strong>kept</strong>,
+with the reason. Every exposed field defaults to the built-in value, and the default serialises
+as absent, so a scenario that does not set it keeps its digest. The loader refuses
+combinations where a field would do nothing (see <code>traffic_audit_checks</code> in
+<code>crates/v2xw-engine/src/scenario/validate.rs</code>).</p>
+<p>Tests: <code>crates/v2xw-engine/tests/traffic_audit_config.rs</code> runs one same-seed test per
+group (driver speed and reaction, per-class drivers, junctions, kerbside, GNSS, signal
+timing), plus the loader refusals and the digest check. With the wiring removed, all six
+group tests fail.</p>
+<h2 id="exposed-as-scenario-fields">Exposed as scenario fields<a class="headerlink" href="#exposed-as-scenario-fields" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Scenario path</th>
+<th>Default</th>
+<th>Range</th>
+<th>What it is and the source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actors.vehicles.drivers.speed_factor</code></td>
+<td>1.0</td>
+<td>0.5-1.5</td>
+<td>Mean free speed / limit (SUMO <code>speedFactor</code>); <code>DriverTraits::draw_law</code></td>
+</tr>
+<tr>
+<td><code>actors.vehicles.drivers.speed_spread</code></td>
+<td>1</td>
+<td>0-3</td>
+<td>Multiplier on class <code>speedDev</code> (SUMO: 0.1 car, 0.05 truck/bus)</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.drivers.start_reaction_s</code></td>
+<td>1.08 s</td>
+<td>0.3-3 s</td>
+<td>Median reaction to a green (Bonneson 1992, TRR 1365: 1.22 s mean)</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.drivers.queue_start_delay_s</code></td>
+<td>0.5 s</td>
+<td>0.05-3 s</td>
+<td>Median queue start-up delay (calibrated to Greenshields 1947 headways); sets saturation flow</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.drivers.{truck,bus,motorcycle,bicycle}.{max_accel_mps2,comfort_decel_mps2,time_headway_s,min_gap_m}</code></td>
+<td>class's own</td>
+<td>as passenger rows</td>
+<td>Per-class IDM a, b, T, s0 over the model calibration (SUMO vTypes; Treiber &amp; Kesting 2013 Table 11.2); truck = truck+trailer, bus = bus+coach, motorcycle = motorcycle+moped</td>
+</tr>
+<tr>
+<td><code>traffic.critical_gap_factor</code></td>
+<td>1</td>
+<td>0.5-2</td>
+<td>Scales the HCM 6th ed. ch. 20 critical gaps and follow-up times (unsignalised junctions)</td>
+</tr>
+<tr>
+<td><code>traffic.permitted_left_gap_s</code></td>
+<td>4.5 s</td>
+<td>2.5-8 s</td>
+<td>Permitted left-turn critical headway (HCM 6th ed. ch. 31)</td>
+</tr>
+<tr>
+<td><code>traffic.critical_gap_cv</code></td>
+<td>0 (off)</td>
+<td>0-0.5</td>
+<td>Per-driver critical gap, lognormal with the HCM value as mean (realistic 0.18, field 0.15-0.2)</td>
+</tr>
+<tr>
+<td><code>traffic.time_to_impatience_s</code></td>
+<td>0 (off)</td>
+<td>0-3600 s</td>
+<td>Standing time to full impatience (SUMO <code>--time-to-impatience</code> 180 s); critical gap falls linearly to the floor</td>
+</tr>
+<tr>
+<td><code>traffic.impatience_gap_floor</code></td>
+<td>0.7</td>
+<td>0.3-1</td>
+<td>Critical gap at full impatience / the driver's own (this crate's choice; Polus et al. 2003)</td>
+</tr>
+<tr>
+<td><code>traffic.impatience_foe_braking</code></td>
+<td>off</td>
+<td>bool</td>
+<td>Impatient driver judges a foe as braking at impatience x 4.5 m/s² (SUMO blend)</td>
+</tr>
+<tr>
+<td><code>traffic.permissive_sneakers</code></td>
+<td>0 (off)</td>
+<td>0-4</td>
+<td>Permitted left turners per lane clearing at the end of a permissive green (HCM: 2): one waits inside the junction, others cross the line before the red</td>
+</tr>
+<tr>
+<td><code>traffic.turn_lateral_accel_mps2</code></td>
+<td>5.5 m/s²</td>
+<td>0-10</td>
+<td>Turn-speed cap sqrt(a·R) (SUMO <code>--junctions.limit-turn-speed</code>)</td>
+</tr>
+<tr>
+<td><code>traffic.turn_curve_window_m</code></td>
+<td>0 (average radius)</td>
+<td>0-30 m</td>
+<td>Radius over the tightest arc of this length; 6 m suggested (<code>DEFAULT_TURN_CURVE_WINDOW_M</code>, this crate's choice)</td>
+</tr>
+<tr>
+<td><code>traffic.kerbside.enabled</code></td>
+<td>on</td>
+<td>bool</td>
+<td>Kerbside stops on/off</td>
+</tr>
+<tr>
+<td><code>traffic.kerbside.bus_stop_spacing_m</code></td>
+<td>260 m</td>
+<td>100-2000 m</td>
+<td>Bus stop spacing (TCRP Report 19)</td>
+</tr>
+<tr>
+<td><code>traffic.kerbside.bus_dwell_mean_s</code></td>
+<td>60 s</td>
+<td>5-300 s</td>
+<td>Mean bus dwell (TCQSM 3rd ed. ch. 6)</td>
+</tr>
+<tr>
+<td><code>traffic.kerbside.taxi_share</code></td>
+<td>jurisdiction (0; 0.3 NYC)</td>
+<td>0-1</td>
+<td>Share of cars making a taxi stop</td>
+</tr>
+<tr>
+<td><code>traffic.kerbside.taxi_dwell_median_s</code></td>
+<td>30 s</td>
+<td>5-600 s</td>
+<td>Median taxi dwell</td>
+</tr>
+<tr>
+<td><code>traffic.kerbside.delivery_stop_share</code></td>
+<td>0.6</td>
+<td>0-1</td>
+<td>Share of vans/trucks making a delivery stop</td>
+</tr>
+<tr>
+<td><code>traffic.kerbside.delivery_dwell_median_s</code></td>
+<td>600 s</td>
+<td>30-3600 s</td>
+<td>Median delivery dwell</td>
+</tr>
+<tr>
+<td><code>world.signals.cycle_s</code></td>
+<td>90 s</td>
+<td>30-180 s</td>
+<td>Synthesised plan cycle (netconvert <code>--tls.cycle.time</code>; FHWA STM ch. 5); OSM worlds only</td>
+</tr>
+<tr>
+<td><code>world.signals.all_red_s</code></td>
+<td>0 s</td>
+<td>0-6 s</td>
+<td>All-red floor (netconvert <code>--tls.allred.time</code>; MUTCD §4D.26 max 6 s)</td>
+</tr>
+<tr>
+<td><code>world.signals.pedestrian_walk_s</code></td>
+<td>7 s</td>
+<td>4-30 s</td>
+<td>Walk interval (MUTCD 2009 §4E.06)</td>
+</tr>
+<tr>
+<td><code>world.signals.pedestrian_speed_mps</code></td>
+<td>1.067 m/s</td>
+<td>0.8-1.5 m/s</td>
+<td>Clearance walking speed (MUTCD 2009 §4E.06, 3.5 ft/s)</td>
+</tr>
+<tr>
+<td><code>world.source.params.ew_green_share</code></td>
+<td>0.5</td>
+<td>0.1-0.9</td>
+<td>Procedural grids: share of the green given to the east-west street (Webster 1958; HCM 6th ed. ch. 19, split by critical flow ratio)</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.gnss.rtk</code></td>
+<td>off</td>
+<td>bool</td>
+<td>Receiver grade: Reid 2019 standard vs RTK percentile rows</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.gnss.outlier_rate_hz</code></td>
+<td>0.01/s</td>
+<td>0-0.5</td>
+<td>Outlier rate (legacy engine draw)</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.gnss.outlier_magnitude_m</code></td>
+<td>12 m</td>
+<td>1-200 m</td>
+<td>Outlier size</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.gnss.burst_rate_hz</code></td>
+<td>0.006/s</td>
+<td>0-0.5</td>
+<td>Degraded-burst rate</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.gnss.outage_probability</code></td>
+<td>0</td>
+<td>0-1</td>
+<td>Probability each fix is lost</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.gnss.smoothing_tau_s</code></td>
+<td>0 (raw fixes)</td>
+<td>0-600 s</td>
+<td>Receiver's Doppler-aided position smoothing (Hatch 1982; RTCA DO-229 100 s); the US real-world presets set 100 s (R-USFP)</td>
+</tr>
+<tr>
+<td><code>actors.vehicles.gnss.static_hold_mps</code></td>
+<td>0 (off)</td>
+<td>0-1.5 m/s</td>
+<td>Receiver static hold: below it, position held and speed 0 (u-blox M8 Receiver Description); presets 0.3 m/s; needs the smoothing</td>
+</tr>
+</tbody>
+</table>
+<p>Limits:</p>
+<ul>
+<li>The meso tier draws its drivers with the default law, so it ignores the speed and
+ reaction fields. Micro vehicles in a tiered run read them.</li>
+<li>RTK lowers only the correlated part of the error. The 1.6 m white share stays, so the
+ mean error falls by about 40 %, not to RTK's 0.26 m. To make RTK precise, the white share
+ needs a figure per receiver grade.</li>
+<li>The right-on-red gap is not scaled by <code>critical_gap_factor</code>.</li>
+<li><code>gap_factor</code> is not on the gap-acceptance model card yet.</li>
+</ul>
+<h2 id="other-configurable-settings">Other configurable settings<a class="headerlink" href="#other-configurable-settings" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Scenario path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Demand level, fleet size, OD, time-of-day profile</td>
+<td><code>actors.vehicles.demand.{rate_veh_per_h,rate_veh_per_h_per_lane_km,fleet_size,kind,params}</code></td>
+</tr>
+<tr>
+<td>Vehicle mix</td>
+<td><code>actors.vehicles.classes.*.fraction</code></td>
+</tr>
+<tr>
+<td>Equipped fraction</td>
+<td><code>actors.vehicles.equipped_fraction</code>, <code>actors.vru.device_fraction</code></td>
+</tr>
+<tr>
+<td>Car-following model and its card parameters (IDM, EIDM, Krauss, Gipps, W99, ACC, CACC)</td>
+<td><code>actors.vehicles.driving.car_following</code></td>
+</tr>
+<tr>
+<td>Sub-lane / SL2015 lateral model</td>
+<td><code>actors.vehicles.driving.lateral</code></td>
+</tr>
+<tr>
+<td>Passenger IDM a, b, T, s0</td>
+<td><code>actors.vehicles.drivers.{max_accel_mps2,comfort_decel_mps2,time_headway_s,min_gap_m}</code></td>
+</tr>
+<tr>
+<td>MOBIL politeness and threshold (all classes)</td>
+<td><code>actors.vehicles.drivers.{politeness,lane_change_threshold_mps2}</code></td>
+</tr>
+<tr>
+<td>Driver heterogeneity preset, spread, reaction, perception</td>
+<td><code>actors.vehicles.drivers.{realism,parameter_spread,reaction_time_s,perception_error}</code></td>
+</tr>
+<tr>
+<td>Truck lane restriction, motorcycle filtering</td>
+<td><code>actors.vehicles.drivers.{truck_lane_restriction,motorcycle_filtering}</code></td>
+</tr>
+<tr>
+<td>Right turn on red, rerouting, lane changes, strategic lane choice, keep junctions clear, gridlock teleport</td>
+<td><code>traffic.*</code></td>
+</tr>
+<tr>
+<td>Actuated signals: min/max green, passage (gap-out), detector, green wave</td>
+<td><code>traffic.signals.*</code></td>
+</tr>
+<tr>
+<td>Signal coordination (OSM)</td>
+<td><code>world.signals.{coordinate,progression_speed_mps}</code></td>
+</tr>
+<tr>
+<td>Pedestrians: count, behaviour preset, mid-block rate, red crossing share, gap margin; cyclists, e-bike share</td>
+<td><code>actors.vru.*</code></td>
+</tr>
+<tr>
+<td>Weather kind, intensity, visibility, surface (drives FHWA speed/headway effects)</td>
+<td><code>weather.*</code></td>
+</tr>
+<tr>
+<td>Meso / tiered city scale</td>
+<td><code>scale.traffic.*</code></td>
+</tr>
+<tr>
+<td>Duration, warm-up, seed, replications, metric period, mobility step</td>
+<td><code>time.*</code>, <code>seed</code>, <code>experiment.*</code></td>
+</tr>
+<tr>
+<td>Metric selection, exporters</td>
+<td><code>metrics</code>, <code>exporters</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="model-structs-and-settings-not-exposed">Model structs and settings not exposed<a class="headerlink" href="#model-structs-and-settings-not-exposed" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Where</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TwoWheelerParams</code> lean angle, lane position</td>
+<td>mobility/engine.rs</td>
+<td>kept because they are rendering/lateral geometry; motorcycle a, b, T, s0 are exposed via <code>drivers.motorcycle</code></td>
+</tr>
+<tr>
+<td><code>CyclistSpeeds</code> conventional/e-bike speeds, spread, shared-lane cost</td>
+<td>mobility/engine.rs</td>
+<td>kept because they are field-measured (Copenhagen/Netherlands speed studies cited on the struct); e-bike share is exposed</td>
+</tr>
+<tr>
+<td><code>SocialForceParams</code> (Helbing 1995 forces, field of view, age-group walking speeds)</td>
+<td>mobility/vru/social_force.rs</td>
+<td>kept because they are model internals or field fits; behaviour preset and compliance numbers are exposed</td>
+</tr>
+<tr>
+<td><code>SignalDefaults</code> yellow decel/reaction/range, ITE red clearance, head height, split by lanes</td>
+<td>world/osm.rs</td>
+<td>kept because ITE/MUTCD formulas fix them; cycle, all-red and pedestrian timing are exposed</td>
+</tr>
+<tr>
+<td><code>SignalPlanParams</code> defaults for procedural/legacy plans</td>
+<td>mobility/intersection/signal_fixed_time.rs</td>
+<td>kept because procedural grids take <code>world.source.params.cycle_s</code>/<code>amber_s</code> and OSM plans come from <code>SignalDefaults</code></td>
+</tr>
+<tr>
+<td><code>GapAcceptanceParams</code> stop-line offset, queue follow-up, legacy fallback, standing speed</td>
+<td>mobility/intersection/gap_acceptance.rs</td>
+<td>kept because they are geometry and model switches; the gap scale is exposed</td>
+</tr>
+<tr>
+<td>Right-on-red critical gap (HCM minor right, 6.2/6.9 s)</td>
+<td>mobility/intersection/signal_fixed_time.rs</td>
+<td>kept because it is the HCM table value; not scaled by <code>traffic.critical_gap_factor</code> (stated in its note)</td>
+</tr>
+<tr>
+<td>Weather effect coefficients (FHWA speed/headway reductions, sight distance)</td>
+<td>mobility/weather.rs</td>
+<td>kept because they are the FHWA tables (<code>fhwa_parameters</code> publishes them on the card); weather inputs are exposed</td>
+</tr>
+<tr>
+<td>GNSS bias correlation, vertical sigma, burst factor/duration, velocity sigma</td>
+<td>mobility/gnss/gauss_markov.rs</td>
+<td>kept because they are card constants tied to the measured fits</td>
+</tr>
+<tr>
+<td>Meso tier internals (cell length, depart delay)</td>
+<td>mobility/meso/</td>
+<td>kept because the meso drivers draw default traits (they do not read the new speed/reaction fields) and the tier is chosen in <code>scale.traffic</code></td>
+</tr>
+<tr>
+<td>Insertion gap, lookahead, max lifetime</td>
+<td>mobility/engine.rs <code>EngineParams</code></td>
+<td>kept because they are numerical insertion/neighbour-query settings</td>
+</tr>
+<tr>
+<td>Recorder level</td>
+<td>CLI <code>--record-level</code></td>
+<td>kept because it is a CLI run option, not a scenario field</td>
+</tr>
+</tbody>
+</table>
+<h2 id="every-named-numeric-constant-in-v2xw-mobility-and-v2xw-demand">Every named numeric constant in <code>v2xw-mobility</code> and <code>v2xw-demand</code><a class="headerlink" href="#every-named-numeric-constant-in-v2xw-mobility-and-v2xw-demand" title="Permanent link">&para;</a></h2>
+<p>Extracted with <code>grep 'const NAME: f64|u32|u64|usize|Duration'</code> from the sources at this
+commit.</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Where</th>
+<th>Value</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FREEWAY_MIN_LIMIT_MPS</code></td>
+<td>mobility/weather.rs:67</td>
+<td><code>22.352</code></td>
+<td>kept: the FHWA freeway/arterial split (50 mph), a definition</td>
+</tr>
+<tr>
+<td><code>G_MPS2</code></td>
+<td>mobility/weather.rs:105</td>
+<td><code>9.806_65</code></td>
+<td>kept: physical constant</td>
+</tr>
+<tr>
+<td><code>T_S</code></td>
+<td>mobility/weather.rs:113</td>
+<td><code>2.5</code></td>
+<td>kept: AASHTO stopping-sight-distance perception-reaction time (2.5 s) in the visibility speed limit; visibility itself is <code>weather.visibility_m</code></td>
+</tr>
+<tr>
+<td><code>A_MPS2</code></td>
+<td>mobility/weather.rs:114</td>
+<td><code>3.4</code></td>
+<td>kept: AASHTO stopping-sight-distance deceleration (3.4 m/s²) in the visibility speed limit</td>
+</tr>
+<tr>
+<td><code>HEAVY_INTENSITY_THRESHOLD</code></td>
+<td>mobility/weather.rs:129</td>
+<td><code>0.5</code></td>
+<td>kept: a weather-intensity breakpoint; intensity itself is <code>weather.intensity</code></td>
+</tr>
+<tr>
+<td><code>AT_STOP_M</code></td>
+<td>mobility/kerbside.rs:70</td>
+<td><code>1.5</code></td>
+<td>kept: kerbside stop geometry</td>
+</tr>
+<tr>
+<td><code>OVERRUN_M</code></td>
+<td>mobility/kerbside.rs:73</td>
+<td><code>1.5</code></td>
+<td>kept: kerbside stop geometry</td>
+</tr>
+<tr>
+<td><code>RETRY_M</code></td>
+<td>mobility/kerbside.rs:76</td>
+<td><code>40.0</code></td>
+<td>kept: kerbside retry distance</td>
+</tr>
+<tr>
+<td><code>LOOK_LANES</code></td>
+<td>mobility/kerbside.rs:79</td>
+<td><code>5</code></td>
+<td>kept: kerbside search depth</td>
+</tr>
+<tr>
+<td><code>PASS_ROOM_M</code></td>
+<td>mobility/kerbside.rs:84</td>
+<td><code>10.0</code></td>
+<td>kept: kerbside passing geometry</td>
+</tr>
+<tr>
+<td><code>MIDTOWN_TAXI_SHARE</code></td>
+<td>mobility/kerbside.rs:164</td>
+<td><code>0.3</code></td>
+<td>exposed as <code>traffic.kerbside.taxi_share</code> (new; the Midtown preset value)</td>
+</tr>
+<tr>
+<td><code>UNDERGROUND_Z_M</code></td>
+<td>mobility/audit.rs:77</td>
+<td><code>3.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>PED_CONFLICT_TTC_S</code></td>
+<td>mobility/audit.rs:84</td>
+<td><code>3.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>TTC_NEAR_MISS_S</code></td>
+<td>mobility/audit.rs:89</td>
+<td><code>1.5</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>RIGHT_ON_RED_STOOD_M</code></td>
+<td>mobility/audit.rs:377</td>
+<td><code>6.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>HDM_DISTANCE_ERROR</code></td>
+<td>mobility/drivers.rs:70</td>
+<td><code>0.05</code></td>
+<td>exposed as <code>actors.vehicles.drivers.perception_error</code> (multiplier)</td>
+</tr>
+<tr>
+<td><code>HDM_RATE_ERROR_PER_S</code></td>
+<td>mobility/drivers.rs:72</td>
+<td><code>0.01</code></td>
+<td>exposed as <code>actors.vehicles.drivers.perception_error</code> (multiplier)</td>
+</tr>
+<tr>
+<td><code>HDM_ERROR_CORRELATION_S</code></td>
+<td>mobility/drivers.rs:74</td>
+<td><code>20.0</code></td>
+<td>kept: a published HDM constant (Treiber 2006); its magnitude is exposed via perception_error</td>
+</tr>
+<tr>
+<td><code>HUMAN_REACTION_S</code></td>
+<td>mobility/drivers.rs:77</td>
+<td><code>0.8</code></td>
+<td>exposed as <code>actors.vehicles.drivers.reaction_time_s</code> (the <code>human</code> preset value)</td>
+</tr>
+<tr>
+<td><code>MAX_REACTION_S</code></td>
+<td>mobility/drivers.rs:80</td>
+<td><code>2.0</code></td>
+<td>kept: a guard on the exposed reaction time</td>
+</tr>
+<tr>
+<td><code>STYLE_CUT_Z</code></td>
+<td>mobility/style.rs:93</td>
+<td><code>1.036_433</code></td>
+<td>kept: the tercile cut of the style split, a definition</td>
+</tr>
+<tr>
+<td><code>HEAVY_TURN_SPEED_MPS</code></td>
+<td>mobility/style.rs:173</td>
+<td><code>10.0 * 0.447_04</code></td>
+<td>kept: AASHTO design turning speed for heavy vehicles</td>
+</tr>
+<tr>
+<td><code>INTENT_HORIZON_M</code></td>
+<td>mobility/views.rs:622</td>
+<td><code>150.0</code></td>
+<td>kept: how far ahead a published intent looks; affects messages, not driving</td>
+</tr>
+<tr>
+<td><code>EMERGENCY_BRAKE_ONSET_JERK_MPS3</code></td>
+<td>mobility/views.rs:715</td>
+<td><code>25.0</code></td>
+<td>kept: jerk limit on emergency-brake onset, a vehicle-dynamics bound</td>
+</tr>
+<tr>
+<td><code>PAR_MIN_ITEMS</code></td>
+<td>mobility/par.rs:14</td>
+<td><code>64</code></td>
+<td>kept: a parallelism threshold; the result is bit-identical either way</td>
+</tr>
+<tr>
+<td><code>STANDING_MPS</code></td>
+<td>mobility/calibration.rs:58</td>
+<td><code>0.1</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>QUEUED_MPS</code></td>
+<td>mobility/calibration.rs:61</td>
+<td><code>1.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>QUEUE_HEAD_M</code></td>
+<td>mobility/calibration.rs:64</td>
+<td><code>10.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>QUEUE_LINK_M</code></td>
+<td>mobility/calibration.rs:66</td>
+<td><code>8.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>LAUNCH_TO_MPS</code></td>
+<td>mobility/calibration.rs:68</td>
+<td><code>8.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>STOP_FROM_MPS</code></td>
+<td>mobility/calibration.rs:70</td>
+<td><code>5.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>POSITIONS</code></td>
+<td>mobility/calibration.rs:72</td>
+<td><code>10</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>LEFT_ZONE_M</code></td>
+<td>mobility/calibration.rs:76</td>
+<td><code>6.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>HCM_BASE_SATURATION_FLOW</code></td>
+<td>mobility/calibration.rs:1285</td>
+<td><code>1900.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>HCM_CBD_AREA_FACTOR</code></td>
+<td>mobility/calibration.rs:1287</td>
+<td><code>0.90</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>HCM_STARTUP_LOST_TIME_S</code></td>
+<td>mobility/calibration.rs:1289</td>
+<td><code>2.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>HCM_QUEUE_SPACING_M</code></td>
+<td>mobility/calibration.rs:1291</td>
+<td><code>7.62</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>MANHATTAN_PEDESTRIAN_COMPLIANCE</code></td>
+<td>mobility/calibration.rs:1296</td>
+<td><code>1.0 - (974.0 / 0.42) / 21_760.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>MIDTOWN_AVENUE_VEH_PER_H</code></td>
+<td>mobility/calibration.rs:1300</td>
+<td><code>1400.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>MIDTOWN_STREET_VEH_PER_H</code></td>
+<td>mobility/calibration.rs:1303</td>
+<td><code>450.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>JAM_DENSITY_VEH_KM</code></td>
+<td>mobility/fd.rs:83</td>
+<td><code>140.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>WAVE_SPEED_KMH</code></td>
+<td>mobility/fd.rs:85</td>
+<td><code>-15.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>CONVECTIVE_STABILITY_VEH_H</code></td>
+<td>mobility/fd.rs:95</td>
+<td><code>1050.0</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>CAPACITY_BELOW_THEORY_TOLERANCE</code></td>
+<td>mobility/fd.rs:106</td>
+<td><code>0.20</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>ABOUT_TOLERANCE</code></td>
+<td>mobility/fd.rs:111</td>
+<td><code>0.20</code></td>
+<td>kept because it is a check or calibration reference, not a model input</td>
+</tr>
+<tr>
+<td><code>TR36885_ANTENNA_HEIGHT_M</code></td>
+<td>mobility/classes.rs:663</td>
+<td><code>1.5</code></td>
+<td>kept: 3GPP TR 36.885 fixed evaluation value</td>
+</tr>
+<tr>
+<td><code>WEIDMANN_V0_MPS</code></td>
+<td>mobility/network.rs:42</td>
+<td><code>1.34</code></td>
+<td>kept: pedestrian fundamental diagram (Weidmann 1993), used by the meso/network checks</td>
+</tr>
+<tr>
+<td><code>WEIDMANN_GAMMA</code></td>
+<td>mobility/network.rs:44</td>
+<td><code>1.913</code></td>
+<td>kept: Weidmann 1993 constant</td>
+</tr>
+<tr>
+<td><code>WEIDMANN_JAM_DENSITY</code></td>
+<td>mobility/network.rs:46</td>
+<td><code>5.4</code></td>
+<td>kept: Weidmann 1993 constant</td>
+</tr>
+<tr>
+<td><code>CROWD_RADIUS_M</code></td>
+<td>mobility/network.rs:73</td>
+<td><code>5.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>MOVING_MPS</code></td>
+<td>mobility/network.rs:85</td>
+<td><code>2.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>STOPPED_MPS</code></td>
+<td>mobility/network.rs:87</td>
+<td><code>0.1</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>RIGHT_HOOK_M</code></td>
+<td>mobility/network.rs:89</td>
+<td><code>12.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>DOOR_ZONE_M</code></td>
+<td>mobility/network.rs:91</td>
+<td><code>1.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>LANE_UTIL_MIN</code></td>
+<td>mobility/network.rs:93</td>
+<td><code>20</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>STEADY_MARGIN_M</code></td>
+<td>mobility/network.rs:97</td>
+<td><code>4.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>PED_CELL_M</code></td>
+<td>mobility/network.rs:100</td>
+<td><code>10.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>PED_INTERVAL_S</code></td>
+<td>mobility/network.rs:102</td>
+<td><code>5.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>REFERENCE_VEHICLE_M</code></td>
+<td>mobility/meso/mod.rs:97</td>
+<td><code>7.5</code></td>
+<td>kept: meso queue cell length (7.5 m, the HCM passenger-car equivalent); <code>scale.traffic.meso</code> exposes the tier</td>
+</tr>
+<tr>
+<td><code>MAX_DEPART_DELAY_S</code></td>
+<td>mobility/meso/mod.rs:101</td>
+<td><code>120.0</code></td>
+<td>kept: how long a trip waits to enter before it is dropped; minor</td>
+</tr>
+<tr>
+<td><code>CLOSURE_SIGHT_LANES</code></td>
+<td>mobility/engine.rs:102</td>
+<td><code>4</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>STOP_LINE_MARGIN_M</code></td>
+<td>mobility/engine.rs:109</td>
+<td><code>0.5</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>DEFAULT_NO_CHANGE_ZONE_M</code></td>
+<td>mobility/engine.rs:118</td>
+<td><code>30.0</code></td>
+<td>kept: lane-change geometry near the stop line; minor, and a lower value produces illegal last-moment changes</td>
+</tr>
+<tr>
+<td><code>DEFAULT_TURN_LATERAL_ACCEL_MPS2</code></td>
+<td>mobility/engine.rs:122</td>
+<td><code>5.5</code></td>
+<td>exposed as <code>traffic.turn_lateral_accel_mps2</code> (new)</td>
+</tr>
+<tr>
+<td><code>EXIT_QUEUE_MOVING_MPS</code></td>
+<td>mobility/engine.rs:134</td>
+<td><code>2.0</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>TRAIL_LANES</code></td>
+<td>mobility/engine.rs:138</td>
+<td><code>3</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>RELEASE_JERK_MPS3</code></td>
+<td>mobility/engine.rs:149</td>
+<td><code>10.0</code></td>
+<td>kept because it is a model internal</td>
+</tr>
+<tr>
+<td><code>PLANNED_BRAKE_JERK_MPS3</code></td>
+<td>mobility/engine.rs:153</td>
+<td><code>20.0</code></td>
+<td>kept because it is a model internal</td>
+</tr>
+<tr>
+<td><code>PLANNED_STOP_MAX_DECEL_MPS2</code></td>
+<td>mobility/engine.rs:158</td>
+<td><code>3.4</code></td>
+<td>kept: ITE 3.4 m/s² planned-stop deceleration, the same figure the yellow timing assumes</td>
+</tr>
+<tr>
+<td><code>CAP_MAX_DECEL_MPS2</code></td>
+<td>mobility/engine.rs:164</td>
+<td><code>8.5</code></td>
+<td>kept: a physical braking cap (dry road)</td>
+</tr>
+<tr>
+<td><code>STOP_FLOOR_BIND_MPS2</code></td>
+<td>mobility/engine.rs:171</td>
+<td><code>0.3</code></td>
+<td>kept because it is a model internal</td>
+</tr>
+<tr>
+<td><code>REACTION_MEDIAN_S</code></td>
+<td>mobility/engine.rs:193</td>
+<td><code>1.08</code></td>
+<td>exposed as <code>actors.vehicles.drivers.start_reaction_s</code> (new)</td>
+</tr>
+<tr>
+<td><code>REACTION_SIGMA</code></td>
+<td>mobility/engine.rs:191</td>
+<td><code>0.5</code></td>
+<td>kept: a fitted shape (Taoka 1989); the median is exposed</td>
+</tr>
+<tr>
+<td><code>FOLLOW_REACTION_MEDIAN_S</code></td>
+<td>mobility/engine.rs:208</td>
+<td><code>0.5</code></td>
+<td>exposed as <code>actors.vehicles.drivers.queue_start_delay_s</code> (new)</td>
+</tr>
+<tr>
+<td><code>AMBER_GO_MARGIN_S</code></td>
+<td>mobility/engine.rs:228</td>
+<td><code>0.3</code></td>
+<td>kept: a numerical margin on the amber decision; the dilemma zone itself is sourced (Zegeer &amp; Deen 1978)</td>
+</tr>
+<tr>
+<td><code>CLEARING_WINDOW_S</code></td>
+<td>mobility/engine.rs:234</td>
+<td><code>3.0</code></td>
+<td>kept: a numerical window for junction clearance</td>
+</tr>
+<tr>
+<td><code>QUEUE_FOLLOW_GAP_M</code></td>
+<td>mobility/engine.rs:240</td>
+<td><code>10.0</code></td>
+<td>kept: a queue-detection geometry threshold</td>
+</tr>
+<tr>
+<td><code>GO_ACCEL_MPS2</code></td>
+<td>mobility/engine.rs:245</td>
+<td><code>0.2</code></td>
+<td>kept because it is a model internal</td>
+</tr>
+<tr>
+<td><code>STANDSTILL_MPS</code></td>
+<td>mobility/engine.rs:248</td>
+<td><code>0.1</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>HEAVY_CRAWL_MPS</code></td>
+<td>mobility/engine.rs:253</td>
+<td><code>1.0</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>KERB_PASS_LOOK_M</code></td>
+<td>mobility/engine.rs:257</td>
+<td><code>60.0</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>PULL_OUT_FOLLOWER_DECEL_MPS2</code></td>
+<td>mobility/engine.rs:263</td>
+<td><code>2.0</code></td>
+<td>kept because it is a model internal</td>
+</tr>
+<tr>
+<td><code>PULL_OUT_SPEED_MPS</code></td>
+<td>mobility/engine.rs:269</td>
+<td><code>2.0</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>DIVERGED_M</code></td>
+<td>mobility/engine.rs:473</td>
+<td><code>2.5</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>PEDESTRIAN_WALK_LANES</code></td>
+<td>mobility/engine.rs:476</td>
+<td><code>12</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>GROUP_SPACING_M</code></td>
+<td>mobility/engine.rs:483</td>
+<td><code>0.7</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>GRAVITY_MPS2</code></td>
+<td>mobility/engine.rs:551</td>
+<td><code>9.80665</code></td>
+<td>kept: physical constant</td>
+</tr>
+<tr>
+<td><code>CYCLIST_MAX_DESIRED_MPS</code></td>
+<td>mobility/engine.rs:636</td>
+<td><code>25.0 / 3.6</code></td>
+<td>kept because it is the pedelec assistance cut-off (EU 25 km/h), a legal fact; <code>actors.vru.ebike_share</code> is exposed</td>
+</tr>
+<tr>
+<td><code>AMBER_COMMIT_LAPSE_MPS</code></td>
+<td>mobility/engine.rs:640</td>
+<td><code>1.0</code></td>
+<td>kept: an implementation threshold; the behaviour is an ablation switch for tests</td>
+</tr>
+<tr>
+<td><code>STRATEGIC_M_PER_CHANGE</code></td>
+<td>mobility/engine.rs:870</td>
+<td><code>25.0</code></td>
+<td>kept: a choice derived from MOBIL transition time; minor effect</td>
+</tr>
+<tr>
+<td><code>STRATEGIC_CHANGE_COST_S</code></td>
+<td>mobility/engine.rs:875</td>
+<td><code>4.0</code></td>
+<td>kept: a route-choice tie-breaker; minor effect</td>
+</tr>
+<tr>
+<td><code>STRATEGIC_GIVE_UP_S</code></td>
+<td>mobility/engine.rs:880</td>
+<td><code>8.0</code></td>
+<td>kept because it is a fallback timer, documented on <code>traffic.strategic_lane_choice</code> (which is exposed)</td>
+</tr>
+<tr>
+<td><code>CONGESTION_ADAPTATION_STEPS</code></td>
+<td>mobility/engine.rs:885</td>
+<td><code>180.0</code></td>
+<td>kept because it is SUMO's adaptation memory (180 s); the period is exposed as <code>traffic.reroute_period_s</code></td>
+</tr>
+<tr>
+<td><code>CONGESTION_FLOOR_MPS</code></td>
+<td>mobility/engine.rs:889</td>
+<td><code>0.5</code></td>
+<td>kept: a numerical floor that keeps a jammed lane routable</td>
+</tr>
+<tr>
+<td><code>STUCK_SPEED_MPS</code></td>
+<td>mobility/engine.rs:893</td>
+<td><code>0.1</code></td>
+<td>kept because it is SUMO's halting threshold (0.1 m/s), a definition; the timeout is <code>traffic.gridlock_timeout_s</code></td>
+</tr>
+<tr>
+<td><code>MAX_DEPART_DELAY</code></td>
+<td>mobility/engine.rs:4452</td>
+<td><code>Duration::from_secs(120)</code></td>
+<td>kept: how long a trip waits to enter before it is dropped; minor</td>
+</tr>
+<tr>
+<td><code>REDRAW_TRIES</code></td>
+<td>mobility/engine.rs:4643</td>
+<td><code>4</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>MIDBLOCK_HOLD_MARGIN_M</code></td>
+<td>mobility/engine.rs:6015</td>
+<td><code>0.3</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>MIDBLOCK_LOOKAHEAD_M</code></td>
+<td>mobility/engine.rs:6021</td>
+<td><code>2.0</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>STOP_LINE_OFFSET_M</code></td>
+<td>mobility/intersection/mod.rs:38</td>
+<td><code>2.0</code></td>
+<td>kept: geometry: where vehicles halt before the line</td>
+</tr>
+<tr>
+<td><code>MAX_CIRCULATING_SINGLE_LANE_VEH_H</code></td>
+<td>mobility/intersection/mod.rs:85</td>
+<td><code>1800.0</code></td>
+<td>kept: roundabout capacity reference (HCM), used for checks</td>
+</tr>
+<tr>
+<td><code>MAX_EXIT_SINGLE_LANE_VEH_H</code></td>
+<td>mobility/intersection/mod.rs:89</td>
+<td><code>1200.0</code></td>
+<td>kept: roundabout capacity reference (HCM), used for checks</td>
+</tr>
+<tr>
+<td><code>DESIGN_DEGREE_OF_SATURATION</code></td>
+<td>mobility/intersection/mod.rs:92</td>
+<td><code>0.85</code></td>
+<td>kept: a design reference used for checks</td>
+</tr>
+<tr>
+<td><code>LEGACY_LIGHT_CYCLE_S</code></td>
+<td>mobility/intersection/two_coloring.rs:46</td>
+<td><code>24.0</code></td>
+<td>kept because it applies only in the legacy-parity mode</td>
+</tr>
+<tr>
+<td><code>LEGACY_TURN_SPEED_MPS</code></td>
+<td>mobility/intersection/two_coloring.rs:49</td>
+<td><code>6.0</code></td>
+<td>kept because it applies only in the legacy-parity mode</td>
+</tr>
+<tr>
+<td><code>LEGACY_TURN_MIN_ANGLE_DEG</code></td>
+<td>mobility/intersection/two_coloring.rs:52</td>
+<td><code>40.0</code></td>
+<td>kept because it applies only in the legacy-parity mode</td>
+</tr>
+<tr>
+<td><code>OPPOSING_START_ACCEL_MPS2</code></td>
+<td>mobility/intersection/signal_fixed_time.rs:62</td>
+<td><code>1.4</code></td>
+<td>kept: kinematics of the opposing queue in the permitted-left model</td>
+</tr>
+<tr>
+<td><code>OPPOSING_CRUISE_CAP_MPS</code></td>
+<td>mobility/intersection/signal_fixed_time.rs:67</td>
+<td><code>11.176</code></td>
+<td>kept: kinematics of the opposing queue in the permitted-left model</td>
+</tr>
+<tr>
+<td><code>HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S</code></td>
+<td>mobility/intersection/signal_fixed_time.rs:71</td>
+<td><code>4.5</code></td>
+<td>exposed as <code>traffic.permitted_left_gap_s</code> (new)</td>
+</tr>
+<tr>
+<td><code>RIGHT_ON_RED_AT_LINE_M</code></td>
+<td>mobility/intersection/signal_fixed_time.rs:77</td>
+<td><code>3.0</code></td>
+<td>kept: geometry of a full stop at the line; right-on-red itself is exposed (<code>traffic.right_turn_on_red</code>)</td>
+</tr>
+<tr>
+<td><code>RIGHT_ON_RED_STANDING_MPS</code></td>
+<td>mobility/intersection/signal_fixed_time.rs:80</td>
+<td><code>0.1</code></td>
+<td>kept: definition of a full stop</td>
+</tr>
+<tr>
+<td><code>STANDING_SPEED_MPS</code></td>
+<td>mobility/intersection/gap_acceptance.rs:85</td>
+<td><code>crate::carfollowing::idm::LEGACY_V0_FLOOR_MPS</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>MIN_SIN_CROSSING</code></td>
+<td>mobility/intersection/zones.rs:77</td>
+<td><code>0.5</code></td>
+<td>kept because it is a model internal</td>
+</tr>
+<tr>
+<td><code>LEGACY_CIRCLE_FACTOR</code></td>
+<td>mobility/gnss/ou_bias_legacy.rs:50</td>
+<td><code>2.448</code></td>
+<td>kept because it applies only in the legacy-parity mode</td>
+</tr>
+<tr>
+<td><code>GPS_SENSOR_HORIZONTAL_M</code></td>
+<td>mobility/gnss/gauss_markov.rs:96</td>
+<td><code>1.6</code></td>
+<td>kept because it is the white share of the measured Reid 2019 total; the receiver grade is exposed as <code>actors.vehicles.gnss.rtk</code> (new)</td>
+</tr>
+<tr>
+<td><code>GPS_SENSOR_VERTICAL_M</code></td>
+<td>mobility/gnss/gauss_markov.rs:99</td>
+<td><code>3.0</code></td>
+<td>kept: vertical error does not reach a 2D BSM position test</td>
+</tr>
+<tr>
+<td><code>GPS_SENSOR_DECAY_FACTOR</code></td>
+<td>mobility/gnss/gauss_markov.rs:102</td>
+<td><code>0.999</code></td>
+<td>kept: MathWorks gpsSensor default (bias memory)</td>
+</tr>
+<tr>
+<td><code>GPS_SENSOR_SAMPLE_S</code></td>
+<td>mobility/gnss/gauss_markov.rs:108</td>
+<td><code>1.0</code></td>
+<td>kept: assumption recorded on the GNSS card</td>
+</tr>
+<tr>
+<td><code>SPS_OUTAGE_P95_S</code></td>
+<td>mobility/gnss/gauss_markov.rs:111</td>
+<td><code>7.0</code></td>
+<td>kept: GPS SPS performance standard figure</td>
+</tr>
+<tr>
+<td><code>RTK_OUTAGE_P95_S</code></td>
+<td>mobility/gnss/gauss_markov.rs:114</td>
+<td><code>60.0</code></td>
+<td>kept: measured RTK figure (Reid 2019)</td>
+</tr>
+<tr>
+<td><code>SPS_VELOCITY_P95_MPS</code></td>
+<td>mobility/gnss/gauss_markov.rs:117</td>
+<td><code>0.2</code></td>
+<td>kept: GPS SPS performance standard figure</td>
+</tr>
+<tr>
+<td><code>EVENT_STEP_S</code></td>
+<td>mobility/gnss/gauss_markov.rs:131</td>
+<td><code>1.0</code></td>
+<td>kept: the unit the event rates are stated per</td>
+</tr>
+<tr>
+<td><code>STOP_BEFORE_CROSSWALK_M</code></td>
+<td>mobility/vru/crosswalk.rs:37</td>
+<td><code>1.2</code></td>
+<td>kept because it is crosswalk-yield geometry; yielding is a fixed legal duty</td>
+</tr>
+<tr>
+<td><code>YIELD_DECEL_MPS2</code></td>
+<td>mobility/vru/crosswalk.rs:41</td>
+<td><code>3.4</code></td>
+<td>kept because it is crosswalk-yield geometry; yielding is a fixed legal duty</td>
+</tr>
+<tr>
+<td><code>PEDESTRIAN_REACTION_MARGIN_S</code></td>
+<td>mobility/vru/crosswalk.rs:45</td>
+<td><code>1.0</code></td>
+<td>kept because it is crosswalk-yield geometry; yielding is a fixed legal duty</td>
+</tr>
+<tr>
+<td><code>STANDING_MPS</code></td>
+<td>mobility/vru/crosswalk.rs:49</td>
+<td><code>1.0</code></td>
+<td>kept because it is crosswalk-yield geometry; yielding is a fixed legal duty</td>
+</tr>
+<tr>
+<td><code>HORIZON_M</code></td>
+<td>mobility/vru/crosswalk.rs:53</td>
+<td><code>80.0</code></td>
+<td>kept because it is crosswalk-yield geometry; yielding is a fixed legal duty</td>
+</tr>
+<tr>
+<td><code>APPROACHING_MPS</code></td>
+<td>mobility/vru/crosswalk.rs:372</td>
+<td><code>0.5</code></td>
+<td>kept because it is crosswalk-yield geometry; yielding is a fixed legal duty</td>
+</tr>
+<tr>
+<td><code>RAYLEIGH_95</code></td>
+<td>mobility/gnss/common.rs:13</td>
+<td><code>2.4477468306808265</code></td>
+<td>kept: mathematical constant</td>
+</tr>
+<tr>
+<td><code>SUMO_TAU_S</code></td>
+<td>mobility/carfollowing/krauss.rs:79</td>
+<td><code>1.0</code></td>
+<td>kept: Krauss model card default; overridable via <code>actors.vehicles.driving.car_following.params</code></td>
+</tr>
+<tr>
+<td><code>CROSSING_GAP_M</code></td>
+<td>mobility/vru/social_force.rs:84</td>
+<td><code>10.0</code></td>
+<td>kept: social-force crossing geometry; the gap margin is exposed (<code>actors.vru.crossing_gap_margin_s</code>)</td>
+</tr>
+<tr>
+<td><code>CROWD_SPEED_CAP</code></td>
+<td>mobility/vru/social_force.rs:89</td>
+<td><code>1.1</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>PED_MAX_YAW_RATE</code></td>
+<td>mobility/vru/social_force.rs:479</td>
+<td><code>4.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>PED_FACING_SPEED_MPS</code></td>
+<td>mobility/vru/social_force.rs:483</td>
+<td><code>0.25</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>LATERAL_SPEED_FACTOR</code></td>
+<td>mobility/vru/social_force.rs:487</td>
+<td><code>0.4</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>LATERAL_RELAX_S</code></td>
+<td>mobility/vru/social_force.rs:490</td>
+<td><code>1.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>SIDE_SPREAD</code></td>
+<td>mobility/vru/social_force.rs:494</td>
+<td><code>0.8</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>STEER_LOOKAHEAD_M</code></td>
+<td>mobility/vru/social_force.rs:497</td>
+<td><code>1.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>KERB_DECEL_MPS2</code></td>
+<td>mobility/vru/social_force.rs:500</td>
+<td><code>3.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>CARRY_CLOSE_MPS</code></td>
+<td>mobility/vru/social_force.rs:516</td>
+<td><code>0.7</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>CARRY_CLOSE_TAU_S</code></td>
+<td>mobility/vru/social_force.rs:519</td>
+<td><code>1.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>CARRY_MAX_M</code></td>
+<td>mobility/vru/social_force.rs:527</td>
+<td><code>12.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>CARRY_CLOSE_MAX_S</code></td>
+<td>mobility/vru/social_force.rs:531</td>
+<td><code>4.0</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>FLOOR_M</code></td>
+<td>mobility/vru/social_force.rs:959</td>
+<td><code>1e-3</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>MAX_WALK_LANES</code></td>
+<td>mobility/vru/social_force.rs:1845</td>
+<td><code>12</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>DYNAMIC_BASE</code></td>
+<td>mobility/vru/midblock.rs:52</td>
+<td><code>1 &lt;&lt; 24</code></td>
+<td>kept because it is pedestrian steering or crowd geometry (model internal); behaviour presets and compliance shares are exposed under <code>actors.vru</code></td>
+</tr>
+<tr>
+<td><code>GIPPS_A_MPS2</code></td>
+<td>mobility/carfollowing/gipps.rs:52</td>
+<td><code>1.7</code></td>
+<td>kept because it is a Gipps (1981) card default, overridable via <code>actors.vehicles.driving.car_following.params</code></td>
+</tr>
+<tr>
+<td><code>GIPPS_EFFECTIVE_SIZE_M</code></td>
+<td>mobility/carfollowing/gipps.rs:54</td>
+<td><code>6.5</code></td>
+<td>kept because it is a Gipps (1981) card default, overridable via <code>actors.vehicles.driving.car_following.params</code></td>
+</tr>
+<tr>
+<td><code>GIPPS_V_MPS</code></td>
+<td>mobility/carfollowing/gipps.rs:56</td>
+<td><code>20.0</code></td>
+<td>kept because it is a Gipps (1981) card default, overridable via <code>actors.vehicles.driving.car_following.params</code></td>
+</tr>
+<tr>
+<td><code>GIPPS_TAU_S</code></td>
+<td>mobility/carfollowing/gipps.rs:58</td>
+<td><code>2.0 / 3.0</code></td>
+<td>kept because it is a Gipps (1981) card default, overridable via <code>actors.vehicles.driving.car_following.params</code></td>
+</tr>
+<tr>
+<td><code>WINDOW_M</code></td>
+<td>mobility/lateral/mod.rs:167</td>
+<td><code>100.0</code></td>
+<td>kept because it is a numerical threshold or geometry tolerance with no behavioural meaning a user would vary</td>
+</tr>
+<tr>
+<td><code>V80_MPS</code></td>
+<td>mobility/carfollowing/w99.rs:70</td>
+<td><code>80.0 / 3.6</code></td>
+<td>kept: W99 card constant; overridable via <code>actors.vehicles.driving.car_following.params</code></td>
+</tr>
+<tr>
+<td><code>DEFAULT_STEP_S</code></td>
+<td>mobility/carfollowing/common.rs:38</td>
+<td><code>0.1</code></td>
+<td>kept: the car-following integration step; the run step is <code>time.mobility_step_ms</code></td>
+</tr>
+<tr>
+<td><code>LEGACY_A_MIN_MPS2</code></td>
+<td>mobility/carfollowing/idm.rs:96</td>
+<td><code>-6.0</code></td>
+<td>kept because it applies only in the legacy-parity mode</td>
+</tr>
+<tr>
+<td><code>LEGACY_V0_FLOOR_MPS</code></td>
+<td>mobility/carfollowing/idm.rs:99</td>
+<td><code>0.1</code></td>
+<td>kept: numerical floor (legacy parity)</td>
+</tr>
+<tr>
+<td><code>LEGACY_GAP_FLOOR_M</code></td>
+<td>mobility/carfollowing/idm.rs:102</td>
+<td><code>0.5</code></td>
+<td>kept because it applies only in the legacy-parity mode</td>
+</tr>
+<tr>
+<td><code>LEGACY_LOOKAHEAD_M</code></td>
+<td>mobility/carfollowing/idm.rs:105</td>
+<td><code>70.0</code></td>
+<td>kept because it applies only in the legacy-parity mode</td>
+</tr>
+<tr>
+<td><code>URBAN_HCM_TIME_HEADWAY_S</code></td>
+<td>mobility/carfollowing/idm.rs:111</td>
+<td><code>1.0</code></td>
+<td>exposed as <code>actors.vehicles.drivers.time_headway_s</code> (cars) and <code>.truck/.bus.time_headway_s</code> (new)</td>
+</tr>
+<tr>
+<td><code>URBAN_HCM_MAX_ACCEL_MPS2</code></td>
+<td>mobility/carfollowing/idm.rs:115</td>
+<td><code>1.7</code></td>
+<td>exposed as <code>actors.vehicles.drivers.max_accel_mps2</code> (cars) and per class (new)</td>
+</tr>
+<tr>
+<td><code>URBAN_HCM_TRUCK_TIME_HEADWAY_S</code></td>
+<td>mobility/carfollowing/idm.rs:123</td>
+<td><code>URBAN_HCM_TIME_HEADWAY_S * (2.0 / 1.5)</code></td>
+<td>exposed as <code>actors.vehicles.drivers.truck.time_headway_s</code> (new)</td>
+</tr>
+<tr>
+<td><code>CLUTCH_ENGAGE_SPEED_MPS</code></td>
+<td>mobility/carfollowing/eidm.rs:91</td>
+<td><code>0.5</code></td>
+<td>kept: EIDM card default; overridable via <code>actors.vehicles.driving.car_following.params</code></td>
+</tr>
+<tr>
+<td><code>WEEKEND_VOLUME_RATIO</code></td>
+<td>mobility/demand/daily.rs:51</td>
+<td><code>0.819</code></td>
+<td>kept: FHWA TMG weekend factor in the daily profile; the profile is chosen in <code>actors.vehicles.demand.params</code></td>
+</tr>
+<tr>
+<td><code>TR36885_PEDESTRIAN_SPEED_MPS</code></td>
+<td>mobility/demand/tr36885.rs:56</td>
+<td><code>3.0 / 3.6</code></td>
+<td>kept: 3GPP TR 36.885 fixed evaluation value</td>
+</tr>
+<tr>
+<td><code>LEGACY_GRAVITY_SCALE</code></td>
+<td>mobility/demand/od.rs:44</td>
+<td><code>2.0</code></td>
+<td>kept: legacy OD preset</td>
+</tr>
+<tr>
+<td><code>MIN_ORIGIN_LANE_M</code></td>
+<td>mobility/demand/od.rs:72</td>
+<td><code>13.0</code></td>
+<td>kept: trip-endpoint geometry</td>
+</tr>
+<tr>
+<td><code>LEGACY_ARRIVAL_RATE_PER_S</code></td>
+<td>mobility/demand/mod.rs:91</td>
+<td><code>2.0</code></td>
+<td>kept: legacy default; the rate is exposed (<code>actors.vehicles.demand.rate_veh_per_h</code>)</td>
+</tr>
+<tr>
+<td><code>LEGACY_MAX_HEADING_DEV_DEG</code></td>
+<td>mobility/lanechange/mobil.rs:81</td>
+<td><code>12.0</code></td>
+<td>kept because it applies only in the legacy-parity mode</td>
+</tr>
+<tr>
+<td><code>SPS_TIME_TRANSFER_P95_NS</code></td>
+<td>mobility/clock/tcxo_ocxo.rs:66</td>
+<td><code>30.0</code></td>
+<td>kept: GPS SPS standard figure (clock model)</td>
+</tr>
+<tr>
+<td><code>DAY_S</code></td>
+<td>demand/purpose.rs:59</td>
+<td><code>86_400.0</code></td>
+<td>kept because it is a unit (seconds per day)</td>
+</tr>
+<tr>
+<td><code>GRID_S</code></td>
+<td>demand/purpose.rs:177</td>
+<td><code>60.0</code></td>
+<td>kept because it is the time grid of the purpose model, a numerical choice</td>
+</tr>
+<tr>
+<td><code>MIN_ENDPOINT_LANE_M</code></td>
+<td>demand/od/zones.rs:32</td>
+<td><code>20.0</code></td>
+<td>kept because it is trip-endpoint geometry</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-circle-arrow-up" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4M12 16V8"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../configuration-reference/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Settings by research question">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Settings by research question
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../config-inventory-network/" class="md-footer__link md-footer__link--next" aria-label="Next: Radio and network inventory">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Radio and network inventory
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      © 2026 Ahmed Zaidan · code <a href="https://github.com/ak3zaidan/V2X-World/blob/main/LICENSE">Apache-2.0</a> · dataset <a href="https://huggingface.co/datasets/akzaidan/V2X-World">CC BY 4.0</a>
+    </div>
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/ak3zaidan/V2X-World" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5v52c0 15 12.5 23.5 27.5 17.5C441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5v-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog" role="status" aria-atomic="true">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      
+<div class="md-progress" data-md-component="progress" role="progressbar" aria-label="Loading"></div>
+    
+    
+    
+      
+      
+      
+      
+        
+        
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["navigation.tabs","navigation.tabs.sticky","navigation.sections","navigation.instant","navigation.instant.progress","navigation.tracking","navigation.indexes","navigation.top","navigation.footer","navigation.path","toc.follow","search.highlight","search.share","search.suggest","content.code.copy","content.code.annotate","content.tabs.link","content.action.edit","content.action.view"],"redirect":null,"search":"../../assets/javascripts/workers/search.719e0d91.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","clipboard.error":"Could not copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d31f0ffa.min.js"></script>
+      
+        <script src="../../javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
