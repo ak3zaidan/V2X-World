@@ -84,7 +84,10 @@ const VIEWER_SOURCE = /^(actors|interp|overlays|cameras|scene|world-render|pick|
 /**
  * Run `frames` frames under V8's sampling heap profiler and report the bytes allocated per frame:
  * the total, the share attributed to the viewer's own sources, and the single largest site.
- * Only allocations under `Viewer.renderFrame` count.
+ * Every sampled allocation in the window counts, wherever the profiler attributes it: `step` runs
+ * nothing but the frame, and once V8 optimises the frame `renderFrame` is inlined into its caller
+ * and its own node is gone from the profile (counting only under it then read 0 B/frame even with
+ * a fresh typed array allocated every frame).
  *
  * Objects already collected by a minor or major GC are included. By default the profiler reports
  * only the sampled objects still alive when sampling stops, which is not an allocation rate at all:
@@ -94,7 +97,7 @@ const VIEWER_SOURCE = /^(actors|interp|overlays|cameras|scene|world-render|pick|
 async function sampleAllocation(
   frames: number,
   step: () => void,
-): Promise<{ total: number; viewer: number; top: string }> {
+): Promise<{ total: number; viewer: number; top: string; arrayBuffers: number; external: number }> {
   const session = new inspector.Session();
   session.connect();
   const post = (method: string, params?: object): Promise<Record<string, unknown>> =>
@@ -109,7 +112,14 @@ async function sampleAllocation(
     includeObjectsCollectedByMinorGC: true,
     includeObjectsCollectedByMajorGC: true,
   });
+  // Outside the heap: a typed array's data is a backing store the heap profiler never sees (a
+  // fresh 4 KB `Float32Array` a frame read about 150 B/frame through it), so the growth of
+  // `arrayBuffers` and `external` across the window is counted too. The caller forces a GC first,
+  // and a window's few MB stays under V8's external-memory GC trigger, so the growth is what the
+  // window allocated there.
+  const before = process.memoryUsage();
   for (let i = 0; i < frames; i++) step();
+  const after = process.memoryUsage();
   const result = await post("HeapProfiler.stopSampling");
   session.disconnect();
 
@@ -123,9 +133,8 @@ async function sampleAllocation(
   let viewer = 0;
   let top = "none";
   let topSize = 0;
-  const walk = (node: Node, inFrame: boolean): void => {
-    const here = inFrame || node.callFrame.functionName === "renderFrame";
-    if (here && node.selfSize > 0) {
+  const walk = (node: Node): void => {
+    if (node.selfSize > 0) {
       total += node.selfSize;
       const file = node.callFrame.url.split("/").slice(-1)[0];
       if (VIEWER_SOURCE.test(file)) viewer += node.selfSize;
@@ -134,13 +143,15 @@ async function sampleAllocation(
         top = `${node.callFrame.functionName || "(anonymous)"} ${file}:${node.callFrame.lineNumber + 1}`;
       }
     }
-    for (const child of node.children ?? []) walk(child, here);
+    for (const child of node.children ?? []) walk(child);
   };
-  walk(head, false);
+  walk(head);
   return {
     total: total / frames,
     viewer: viewer / frames,
     top: `${top}, ${(topSize / frames).toFixed(0)} B/frame`,
+    arrayBuffers: (after.arrayBuffers - before.arrayBuffers) / frames,
+    external: (after.external - before.external) / frames,
   };
 }
 
@@ -297,7 +308,16 @@ describe("the render loop allocates nothing per frame", () => {
 
   it("holds its per-frame allocation near zero", async () => {
     const { viewer, step } = makeScene(2000);
-    for (let i = 0; i < 300; i++) step(true); // warm-up: bucket growth, then JIT tiering
+    // Warm-up: bucket growth, then JIT tiering. The bound is on the optimised frame, and V8 gets
+    // there late: on Node 22 the frame ran in a lower tier for about 3,000 frames, where every
+    // float it carries is a heap number and `Math.hypot` boxes its arguments, so it measured
+    // 40-95 KB/frame there and about 1.9 KB once optimised. Frames are cheap; the warm-up is long.
+    for (let i = 0; i < 6000; i++) step(true);
+    // Then the path the windows below measure: they capture nothing, so the stream stalls and every
+    // vehicle is extrapolated, code the warm-up above never ran. Without this the first two windows
+    // measured that path still tiering up (8.8-11 KB/frame against 1.7 KB after); with it only the
+    // first window can still read about 8 KB on Node 22, which the median of five absorbs.
+    for (let i = 0; i < 2400; i++) step();
 
     // Measured with V8's sampling heap profiler, not with a `heapUsed` delta: `heapUsed` between
     // collections moves by thousands of bytes a frame from V8's own bookkeeping (code objects as
@@ -313,13 +333,44 @@ describe("the render loop allocates nothing per frame", () => {
     // aerial marks, a lean clamp assigning a module constant, keyed `Vector3[axis]` writes in the
     // camera springs), a fresh `SampleInfo` object and the camera's key-axis tuple, closure and Set
     // iterators every frame. Measured by this test: 25,098 B/frame in total and 23,135 in viewer
-    // sources before, 9,451-9,667 and 8,043-8,267 after removing them (three runs). The bounds sit
-    // about a quarter above that remainder and far below the frame before the fix.
+    // sources before, 9,451-9,667 and 8,043-8,267 after removing them (three runs).
+    //
+    // Then a stalled stream (these windows capture nothing, so every vehicle is extrapolated) sent
+    // every vehicle through `#evaluate` with its sim time as a float argument, boxed once per
+    // vehicle because `#evaluate` is too large to inline: 32 KB/frame on Node 24 every run, and on
+    // Node 22 whenever `sample` was caught in a lower tier. With the time passed in a field, the
+    // frame measured 1.7-1.9 KB in total and 1.6-1.8 KB in viewer sources on Node 22 (the CI
+    // version), 3.2-3.4 KB and 2.4 KB on Node 24. The heap bounds sit between that and the proof
+    // fault below; the bounds outside the heap sit far below one 4 KB backing store a frame.
+    //
+    // Both halves were proven by an injected fault in `#frame`, each red on Node 22: an array of 64
+    // small objects built per frame (about 5.1 KB in total, 5.0 KB in viewer sources) and a fresh
+    // `Float32Array(1024)` per frame (4,096 B/frame of array buffers, invisible to the heap
+    // profiler).
     //
     // The deterministic guards are still the two tests above: the `addUpdateRange` call count and
     // the range-object identity check.
-    const FRAMES = 3000;
-    const perFrame = await sampleAllocation(FRAMES, () => step());
+    //
+    // The figure is the median of five windows, each after a forced GC, so one window caught while
+    // V8 recompiles or deoptimises the frame on a busy runner does not decide the result, while an
+    // allocation the frame makes every time is in every window and still moves the median.
+    const WINDOWS = 5;
+    const FRAMES = 600;
+    const windows: Awaited<ReturnType<typeof sampleAllocation>>[] = [];
+    for (let w = 0; w < WINDOWS; w++) {
+      gc?.();
+      windows.push(await sampleAllocation(FRAMES, () => step()));
+    }
+    const median = (xs: number[]): number => xs.slice().sort((a, b) => a - b)[xs.length >> 1];
+    const perFrame = {
+      total: median(windows.map((w) => w.total)),
+      viewer: median(windows.map((w) => w.viewer)),
+      top: windows.find((w) => w.total === median(windows.map((x) => x.total)))?.top ?? "none",
+      spread: windows.map((w) => w.total.toFixed(0)).join(", "),
+      arrayBuffers: median(windows.map((w) => w.arrayBuffers)),
+      external: median(windows.map((w) => w.external)),
+      offSpread: windows.map((w) => w.arrayBuffers.toFixed(0)).join(", "),
+    };
 
     // And a retained-heap check either side of a forced GC, which is a leak rather than churn.
     gc?.();
@@ -330,16 +381,21 @@ describe("the render loop allocates nothing per frame", () => {
 
     // eslint-disable-next-line no-console
     console.log(
-      `renderFrame at 2,000 actors: ${perFrame.total.toFixed(1)} B/frame allocated, `
+      `renderFrame at 2,000 actors: ${perFrame.total.toFixed(1)} B/frame allocated `
+      + `(median of ${WINDOWS} windows of ${FRAMES} frames: ${perFrame.spread}), `
       + `${perFrame.viewer.toFixed(1)} B/frame of it in the viewer's own sources `
       + `(largest single site: ${perFrame.top}), ${retained.toFixed(0)} B/frame retained across `
       + `2,000 frames${gc ? " (forced GC)" : " (no --expose-gc: retention is noise)"} `
-      + "(25,098 B/frame before the per-vehicle boxes were removed)",
+      + "(25,098 B/frame before the per-vehicle boxes were removed); outside the heap "
+      + `${perFrame.arrayBuffers.toFixed(1)} B/frame of array buffers (${perFrame.offSpread}), `
+      + `${perFrame.external.toFixed(1)} B/frame external`,
     );
 
     // Two absolute bounds, no ranking: "top site" is whichever site the profiler happened to catch.
-    expect(perFrame.total).toBeLessThan(12_000);
-    expect(perFrame.viewer).toBeLessThan(10_500);
+    expect(perFrame.total).toBeLessThan(4_500);
+    expect(perFrame.viewer).toBeLessThan(3_500);
+    expect(perFrame.arrayBuffers).toBeLessThan(512);
+    expect(perFrame.external).toBeLessThan(512);
     if (gc) expect(retained).toBeLessThan(120);
     viewer.dispose();
   });

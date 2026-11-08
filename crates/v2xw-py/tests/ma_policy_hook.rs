@@ -182,6 +182,7 @@ fn counters(r: &v2xw_engine::RunReport) -> [u64; 4] {
 
 /// Test 7.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_python_pseudonym_k_decides_as_the_rust_preset() {
     pyo3::prepare_freethreaded_python();
     // The Rust preset.
@@ -488,6 +489,7 @@ fn provider_index(engine: &Engine, name: &str) -> u32 {
 /// second run starts with the first run's revocations remembered and decides nothing
 /// again, its digest differs, and the test goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_python_rule_reproduces_its_run_with_a_fresh_rule_per_run() {
     pyo3::prepare_freethreaded_python();
     Python::with_gil(|py| {
@@ -545,6 +547,7 @@ fn a_python_rule_reproduces_its_run_with_a_fresh_rule_per_run() {
 /// (on this busy fleet the decisions themselves survive the lost rows: each pseudonym
 /// has more than two reporters).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_python_pseudonym_k_at_two_decides_as_the_rust_preset() {
     pyo3::prepare_freethreaded_python();
     let mut d = busier();
@@ -598,6 +601,7 @@ fn a_python_pseudonym_k_at_two_decides_as_the_rust_preset() {
 /// with the Rust preset in the hook's place. Fault: `ma_hook::attach` hands the hook
 /// provider-b's MA as well -> the hook is called for provider-b, and the test goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_hook_decides_only_for_the_mas_without_their_own_policy() {
     pyo3::prepare_freethreaded_python();
     let with = |hook_in_place: bool| {
@@ -650,6 +654,7 @@ fn a_hook_decides_only_for_the_mas_without_their_own_policy() {
 /// them. Fault: drop the `ma_accepts` filter before the hook call in
 /// `Phase2::ingest_arrivals` -> the hook sees the set-aside reports and the test goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn set_aside_reports_never_reach_the_hook() {
     pyo3::prepare_freethreaded_python();
     let mut d = shipped();

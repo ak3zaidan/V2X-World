@@ -52,6 +52,7 @@ fn turnover_with_scms() -> Scenario {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_scms_run_keeps_a_departed_vehicles_crypto_entries() {
     let run = |sweep: bool| {
         let s = turnover_with_scms();

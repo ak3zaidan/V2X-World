@@ -124,6 +124,7 @@ fn attacked() -> &'static Out {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_attack_free_run_loses_no_attack_evidence() {
     let o = run(doc(false, true, json!({})));
     let (stored, gone, _) = attack_evidence(&o);
@@ -139,6 +140,7 @@ fn an_attack_free_run_loses_no_attack_evidence() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_zero_quota_run_loses_all_attack_evidence() {
     let o = run(doc(true, true, json!({"report_store_quota_bytes": 0})));
     let (stored, gone, delivered) = attack_evidence(&o);
@@ -157,6 +159,7 @@ fn a_zero_quota_run_loses_all_attack_evidence() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_default_store_keeps_and_delivers_attack_evidence() {
     let o = attacked();
     let (stored, gone, delivered) = attack_evidence(o);
@@ -182,6 +185,7 @@ fn the_default_store_keeps_and_delivers_attack_evidence() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_report_records_are_off_by_default() {
     let o = run(doc(true, false, json!({})));
     for c in ["pki.report_fate", "ma.received", "gt.device_exposure"] {

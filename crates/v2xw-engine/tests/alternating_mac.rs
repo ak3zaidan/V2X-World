@@ -72,6 +72,7 @@ fn inside(t: SimTime, air_us: u64, want: Interval) -> bool {
 /// counter agrees. Fault: removing the end-of-interval check (b) from the gate makes
 /// frames straddle the interval end.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn dense_run_has_no_straddling_frame() {
     let mut s = Scenario::load(scenarios().join("sensitivity/dsrc-grid.yaml")).expect("loads");
     s.time.duration_s = 120.0;
@@ -114,6 +115,7 @@ fn dense_run_has_no_straddling_frame() {
 /// four phases make it, and the test weighs it by the receptions it predicts. Fault:
 /// `tuned_at` ignoring the time makes the ratio about 1.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn single_radio_hears_spat_only_in_sch() {
     let base = || {
         let mut s =
@@ -187,6 +189,7 @@ fn single_radio_hears_spat_only_in_sch() {
 /// collision rate all move as the rows' sources say. Fault: the engine building the MAC
 /// without the gate leaves `report.mac_guard_deferrals` at zero.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_channel_access_rows_hold_on_the_dsrc_family() {
     use v2xw_engine::sensitivity::{self as sens, Row, sweep};
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expectations");

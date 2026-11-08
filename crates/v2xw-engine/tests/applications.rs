@@ -49,6 +49,7 @@ fn json(recorder: &MemoryRecorder, channel: &str) -> Vec<serde_json::Value> {
 /// flag, FCW as they close), the warnings are labelled true against the two vehicles'
 /// true states, and every warning is from a vehicle that heard the braking one.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_hard_brake_warns_the_vehicles_behind_and_the_warnings_are_true() {
     // Dense enough that, a quarter-minute in, some moving car has another close behind
     // it: at 6,000 veh/h this grid had none between 14 and 24 s (at most 16 vehicles on
@@ -228,6 +229,7 @@ fn glosa_followed(compliance: f64) -> (usize, usize, usize, Vec<String>) {
 /// stands; with none following, the same measure shows the advice is given and ignored, so the
 /// measure can fail.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
     let (followed, standing, slowed, why) = glosa_followed(1.0);
     eprintln!(
@@ -254,6 +256,7 @@ fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
 /// CPM at most ten times a second, carrying objects (so bigger than the management and
 /// station containers alone).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn vehicles_share_what_their_sensors_perceive_in_cpms() {
     let mut s = connected(20.0);
     s.net.layer = "gn-btp".to_string();
@@ -292,6 +295,7 @@ fn vehicles_share_what_their_sensors_perceive_in_cpms() {
 /// green or ends a conflicting one early, logs it on `signal.priority`, and walks the
 /// plan back afterwards.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_emergency_vehicles_request_changes_the_signal_plan() {
     let mut s = connected(40.0);
     for class in s.actors.vehicles.classes.values_mut() {

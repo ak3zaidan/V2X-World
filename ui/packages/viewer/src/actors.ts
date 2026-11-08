@@ -926,7 +926,9 @@ export class ActorRenderer {
       // Animation state, for every live actor, so one entering the view is already rolling.
       const mx = x - this.#px[s];
       const my = y - this.#py[s];
-      const moved = Math.hypot(mx, my);
+      // Not `Math.hypot`: until the optimising tier inlines it (thousands of frames on Node 22),
+      // the builtin boxes its arguments, about 32 B per vehicle per frame.
+      const moved = Math.sqrt(mx * mx + my * my);
       if (moved < 8) {
         // Signed along the heading, so a vehicle that reverses rolls its wheels backwards.
         const along = mx * Math.cos(h) + my * Math.sin(h);
@@ -1196,7 +1198,7 @@ export class ActorRenderer {
     const m = this.#viewProjection.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse).elements;
     const p = this.#planes;
     const set = (k: number, a: number, b: number, c: number, d: number): void => {
-      const inv = 1 / (Math.hypot(a, b, c) || 1);
+      const inv = 1 / (Math.sqrt(a * a + b * b + c * c) || 1);
       p[k * 4] = a * inv;
       p[k * 4 + 1] = b * inv;
       p[k * 4 + 2] = c * inv;

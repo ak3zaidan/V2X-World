@@ -34,6 +34,7 @@ jobs:
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -62,8 +63,38 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The `ci` profile optimises the workspace crates too (see Cargo.toml): the suite is
+      # whole simulation runs, which at opt-level 0 took most of a six-hour job. The
+      # whole-run tests marked `#[ignore = "slow: ..."]` are counted as ignored here and run
+      # in the `rust-slow` job below.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --profile ci --workspace
+
+  # The tests marked `#[ignore = "slow: ..."]`, found from the source by the script (which
+  # fails if a mark runs nothing), in four shards balanced by measured run time. Linux only:
+  # the same code runs on every platform in the job above, and the cross-platform
+  # determinism of a run is the `determinism` jobs' check.
+  rust-slow:
+    name: rust slow tests (ubuntu-latest, shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned toolchain
+        shell: bash
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: slow-${{ matrix.shard }}
+
+      - name: Slow tests
+        run: tools/ci/slow-tests.sh ${{ matrix.shard }} 4
 
   python:
     name: python package
@@ -101,8 +132,10 @@ jobs:
           .venv-py/bin/python python/examples/run_and_read_metric.py
           .venv-py/bin/python python/examples/simple_ma_policy.py
 
+      # Every test of the file, the whole-run ones marked slow included: this job has the
+      # interpreter they embed, so the slow-test job leaves them to it.
       - name: The MA-policy hook from Rust
-        run: cargo test -p v2xw-py --test ma_policy_hook
+        run: cargo test --profile ci -p v2xw-py --test ma_policy_hook -- --include-ignored
 
   dataset:
     name: dataset exporter and release tools

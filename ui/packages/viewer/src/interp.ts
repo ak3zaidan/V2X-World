@@ -463,6 +463,14 @@ export class PoseInterpolator {
   #snapAll = false;
   /** Scratch for one slot's raw pose. */
   #raw = new Float64Array(4);
+  /**
+   * The sim time {@link #evaluate} evaluates at. A field, not an argument: `#evaluate` is too large
+   * to inline into `sample`, and a float passed to a call that is not inlined is boxed, one heap
+   * number per vehicle per frame whenever every vehicle takes that path (a stalled or paused stream:
+   * 32 KB a frame at 2,000 vehicles on Node 24, measured by render-perf.test.ts). Stored as a
+   * double from the start so the field never changes representation.
+   */
+  #evalT = Number.NaN;
   /** 1 for each class index that is a person or a rider; see {@link setVruClasses}. */
   #vruClasses = new Uint8Array(0);
   /** Per slot: the sim time the shown actor first existed (its first snapshot), for the fade-in. */
@@ -1006,7 +1014,8 @@ export class PoseInterpolator {
           if (after < fadeSim) {
             if (after <= 0) {
               const bk2 = this.#bracket(renderSim);
-              if (this.#evaluate(i, id, renderSim, bk2, raw) >= 0) {
+              this.#evalT = renderSim;
+              if (this.#evaluate(i, id, bk2, raw) >= 0) {
                 oPos[p] = raw[0];
                 oPos[p + 1] = raw[1];
                 oPos[p + 2] = raw[2];
@@ -1079,7 +1088,8 @@ export class PoseInterpolator {
           raw[3] = co[c + 10] + u * (co[c + 11] + u * (co[c + 12] + u * co[c + 13]));
           got = 0;
         } else {
-          got = this.#evaluate(i, id, rebaseAt, rebaseBk, raw);
+          this.#evalT = rebaseAt;
+          got = this.#evaluate(i, id, rebaseBk, raw);
         }
         if (got >= 0) {
           const dx = shownX - raw[0];
@@ -1115,7 +1125,8 @@ export class PoseInterpolator {
         raw[3] = coef[c + 10] + u * (coef[c + 11] + u * (coef[c + 12] + u * coef[c + 13]));
         kind = 0;
       } else {
-        kind = this.#evaluate(i, id, renderSim, bk, raw);
+        this.#evalT = renderSim;
+        kind = this.#evaluate(i, id, bk, raw);
       }
       if (snapAll) kind = 1;
       if (kind === 1) snapped++;
@@ -1191,11 +1202,12 @@ export class PoseInterpolator {
   }
 
   /**
-   * The raw pose of slot `i` (actor `id`) at sim time `t` from the history, written into `out` as
-   * `[x, y, z, heading]`. Returns 0 when interpolated or extrapolated, 1 when snapped (no continuous
-   * pair holds this actor, or it teleported), −1 when no snapshot holds it at all.
+   * The raw pose of slot `i` (actor `id`) at sim time {@link #evalT} from the history, written
+   * into `out` as `[x, y, z, heading]`. Returns 0 when interpolated or extrapolated, 1 when snapped
+   * (no continuous pair holds this actor, or it teleported), −1 when no snapshot holds it at all.
    */
-  #evaluate(i: number, id: number, t: number, bracket: number, out: Float64Array): number {
+  #evaluate(i: number, id: number, bracket: number, out: Float64Array): number {
+    const t = this.#evalT;
     const size = this.#size;
     let bk = bracket;
     let b = this.#at(bk);

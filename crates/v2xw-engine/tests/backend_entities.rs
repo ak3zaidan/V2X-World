@@ -107,6 +107,7 @@ fn edge(view: &Value, from: &str, to: &str) -> bool {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_backend_state_names_every_scms_entity_once_a_second() {
     let mut s = grid(30.0, 400.0);
     lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, compressed());
@@ -214,6 +215,7 @@ fn the_backend_state_names_every_scms_entity_once_a_second() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_expiring_enrolment_is_renewed_and_an_expired_one_cannot_top_up() {
     // Enrolment certificates that last 40 s, so most of a fleet's run out inside a minute.
     let base = |lead: f64| {
@@ -278,6 +280,7 @@ fn an_expiring_enrolment_is_renewed_and_an_expired_one_cannot_top_up() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_etsi_butterfly_authorization_tops_up_and_the_aa_sees_counts_only() {
     let base = |butterfly: bool| {
         let mut s = grid(45.0, 400.0);
@@ -385,6 +388,7 @@ fn relayed(compromised: Option<&str>) -> Scenario {
 /// run passed the "authority ingested" check on one report a poisoner happened to leave
 /// alone; with every relayed report delivered, every one is forged.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_compromised_unit_drops_or_poisons_the_reports_it_forwards() {
     let (honest, _) = run(relayed(None));
     let (suppressing, _) = run(relayed(Some("SuppressForwardedReports")));
@@ -445,6 +449,7 @@ fn a_compromised_unit_drops_or_poisons_the_reports_it_forwards() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_compromised_unit_cannot_forge_the_crl() {
     let base = |compromised: bool| {
         let mut s = grid(90.0, 900.0);
@@ -535,6 +540,7 @@ fn a_compromised_unit_cannot_forge_the_crl() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_hybrid_signature_costs_its_post_quantum_time() {
     let base = |signature: &str| {
         let mut s = grid(20.0, 1_800.0);
@@ -645,6 +651,7 @@ fn a_hybrid_signature_costs_its_post_quantum_time() {
 /// the PCA signs each one twice, and the device generates a post-quantum key per
 /// certificate because there is no post-quantum butterfly (`v2xw_proto::hybrid`).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
     let base = |signature: &str| {
         let mut s = grid(30.0, 400.0);
@@ -717,6 +724,7 @@ fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
 /// top-ups through the LOP, enrolment renewals at the ECA, and misbehaviour reports
 /// reaching the MA.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_credential_lifecycle_scenario_shows_every_stage() {
     let mut s = Scenario::load(scenarios().join("credential-lifecycle.yaml"))
         .expect("the shipped scenario loads");
@@ -765,6 +773,7 @@ fn the_credential_lifecycle_scenario_shows_every_stage() {
 /// GeoNetworking, butterfly tickets, the Distribution Centre's trust lists and TS 103 759
 /// reports, in its first three minutes.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_ccms_lifecycle_scenario_shows_every_stage() {
     let mut s = Scenario::load(scenarios().join("ccms-lifecycle.yaml"))
         .expect("the shipped scenario loads");
@@ -817,6 +826,7 @@ fn the_ccms_lifecycle_scenario_shows_every_stage() {
 /// fast-forward. Fault that turns it red: the off-receiver return at the top of
 /// `Engine::on_app_message` removed.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_switched_off_vehicle_installs_no_list_a_unit_broadcasts() {
     use v2xw_engine::scenario::schema::{TimelineItem, TimelineKind};
     const END: f64 = 90.0;
@@ -931,6 +941,7 @@ fn a_switched_off_vehicle_installs_no_list_a_unit_broadcasts() {
 /// refused, still in flight, or left the area with its vehicle. Fault that turns it red:
 /// the `topups_left_area` count in `Phase2::retire` removed.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving() {
     const END: f64 = 150.0;
     let mut s = grid(END, 1800.0);
@@ -1028,6 +1039,7 @@ fn ra_windows(engine: &Engine) -> Vec<Vec<(u64, u64)>> {
 /// Fault: the models are not applied (`crypto_config::apply_service_models` re-hosts
 /// nothing). No window is drawn, `backend_outages` is empty, and the test goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn random_ra_outages_are_offline_windows_and_every_top_up_completes_after_its_retry() {
     use v2xw_engine::NullRecorder;
     let duration_s = 120.0;
@@ -1115,6 +1127,7 @@ fn random_ra_outages_are_offline_windows_and_every_top_up_completes_after_its_re
 /// Fault: `crypto_config::service_time_for` always `Deterministic`. The RA's queue keeps
 /// fixed times and the test goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_service_time_and_availability_keys_reach_every_hosted_server() {
     use v2xw_proto::{AvailabilityModel, ServiceTimeModel};
     let with = |backend: Value, calendar_compressed: bool| {

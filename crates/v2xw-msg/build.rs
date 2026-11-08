@@ -543,6 +543,9 @@ fn parse_patch(path: &Path, text: &str) -> Result<Patch, String> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let bad = |what: &str| format!("{}: malformed patch file: {what}", path.display());
+    // A CRLF checkout (Git on Windows with autocrlf) must parse the same as LF: the
+    // markers and the FIND text are matched against `\n`-terminated generated code.
+    let text = text.replace("\r\n", "\n");
 
     let (head, rest) = text
         .split_once("@@FIND@@\n")

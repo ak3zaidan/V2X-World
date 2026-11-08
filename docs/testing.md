@@ -22,6 +22,13 @@ arithmetic and many full engine runs and is long; scope with `-p` and `--test` w
 iterating. Some engine and validation tests import `worlds/cache/manhattan.osm.xml`
 (fetch with `worlds/fetch.sh manhattan`).
 
+The longest whole-run tests are marked `#[ignore = "slow: ..."]`: a plain `cargo test`
+lists them as ignored, and `tools/ci/slow-tests.sh` runs every one of them by exact name
+(`--list` shows them; `tools/ci/slow-tests.sh 2 4` runs shard 2 of 4, as CI does). The
+script fails if a mark names no test that runs. Mark a new test slow when it takes minutes
+in a debug build; CI's `ci` profile (`cargo test --profile ci`, the workspace optimised at
+opt-level 1 with overflow checks and debug assertions on) is what both CI jobs use.
+
 ## Selected integration suites
 
 | Crate | Tests | What they establish |
@@ -87,7 +94,9 @@ What each suite and the Python cross-check tools prove, and how to run them:
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs, on Ubuntu, macOS and Windows: `cargo fmt --all -- --check`,
-`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`. A
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --profile ci --workspace`.
+A `rust-slow` job runs the slow-marked tests on Ubuntu in four shards
+(`tools/ci/slow-tests.sh <shard> 4`). A
 determinism job imports `tests/fixtures/midtown-6block.osm.xml` on each platform and
 publishes the world and VWP payload digests; a final job fails unless all three platforms
 agree (`just world-hash` prints this machine's value).

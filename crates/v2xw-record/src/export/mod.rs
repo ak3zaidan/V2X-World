@@ -30,7 +30,7 @@ use crate::channels;
 use crate::error::{RecordError, Result};
 use crate::reader::RecordedRecord;
 
-pub use schema::{ColumnKind, ColumnSpec, TableSchema};
+pub use schema::{ColumnKind, ColumnSpec, SchemaBuilder, TableSchema};
 
 /// Which artefact format a file is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +213,140 @@ impl Exporter {
                 continue;
             }
             out.extend(self.export_channel(name, records, format)?);
+        }
+        Ok(out)
+    }
+
+    /// [`Exporter::export_all`] over a recording on disk, without holding its records.
+    ///
+    /// The files are the bytes `export_all` writes from `reader.records(None)`, but
+    /// memory no longer scales with the run: a five-minute Manhattan run records about
+    /// 6 GB of reception JSON, and the list of every record plus each channel's copy of
+    /// its rows took a server on an 8 GB machine to an 18 GB footprint. A first pass over
+    /// the recording infers each channel's schema record by record ([`SchemaBuilder`]);
+    /// JSONL then streams every row to its channel's file in a second pass, and the
+    /// columnar formats, which build a whole table, hold one channel's rows at a time.
+    ///
+    /// # Errors
+    /// As [`Exporter::export_all`], and whatever reading the recording returns.
+    pub fn export_recording<S: crate::index::Source>(
+        &self,
+        reader: &mut crate::Reader<S>,
+        format: ExportFormat,
+    ) -> Result<Vec<ExportedFile>> {
+        if format == ExportFormat::Json {
+            return Err(RecordError::malformed(
+                "export",
+                "plain JSON is for sidecars, not for a record table",
+            ));
+        }
+        let forbidden = |name: &str| {
+            self.profile == ExportProfile::NodeOnly
+                && channels::by_name(name).is_some_and(|s| s.is_ground_truth_channel())
+        };
+        // Pass 1: the channels present, in name order, and each one's schema.
+        let mut builders: std::collections::BTreeMap<String, schema::SchemaBuilder> =
+            std::collections::BTreeMap::new();
+        reader.for_each_message(
+            |_| Ok(()),
+            |r| {
+                if forbidden(&r.channel) {
+                    return Ok(());
+                }
+                match builders.get_mut(&r.channel) {
+                    Some(b) => b.observe(&r.json),
+                    None => {
+                        let mut b = schema::SchemaBuilder::new(&r.channel)?;
+                        b.observe(&r.json)?;
+                        builders.insert(r.channel, b);
+                        Ok(())
+                    }
+                }
+            },
+        )?;
+        let mut tables: Vec<(String, TableSchema)> = builders
+            .into_iter()
+            .map(|(name, b)| {
+                let inferred = b.finish();
+                let schema = if self.profile == ExportProfile::NodeOnly {
+                    inferred.without_ground_truth()
+                } else {
+                    inferred
+                };
+                (name, schema)
+            })
+            .collect();
+        let data_path = |channel: &str| {
+            let stem = channel.replace('.', "_");
+            self.dir.join(format!("{stem}.{}", format.extension()))
+        };
+        // Pass 2: the rows.
+        let mut written: Vec<(usize, u64)> = Vec::with_capacity(tables.len());
+        if format == ExportFormat::Jsonl {
+            let mut writers = std::collections::BTreeMap::new();
+            for (name, schema) in &tables {
+                writers.insert(
+                    name.clone(),
+                    jsonl::JsonlWriter::create(data_path(name), schema.clone())?,
+                );
+            }
+            reader.for_each_message(
+                |_| Ok(()),
+                |r| match writers.get_mut(&r.channel) {
+                    Some(w) => w.write_row(r.sim_time, &r.json),
+                    None => Ok(()),
+                },
+            )?;
+            for (_, w) in writers {
+                let rows = w.rows();
+                written.push((rows, w.finish()?));
+            }
+        } else {
+            for (name, schema) in &tables {
+                let mut rows: Vec<(u64, Vec<u8>)> = Vec::new();
+                reader.for_each_message(
+                    |_| Ok(()),
+                    |r| {
+                        if r.channel == *name {
+                            rows.push((r.sim_time, r.json));
+                        }
+                        Ok(())
+                    },
+                )?;
+                let batch = table::build_batch(schema, &rows)?;
+                let count = rows.len();
+                drop(rows);
+                let path = data_path(name);
+                let bytes = match format {
+                    ExportFormat::Parquet => parquet::write(&path, &batch)?,
+                    _ => arrow_ipc::write(&path, &[batch])?,
+                };
+                written.push((count, bytes));
+            }
+        }
+        let mut out = Vec::with_capacity(2 * tables.len());
+        for ((name, schema), (rows, bytes)) in tables.drain(..).zip(written) {
+            let stem = name.replace('.', "_");
+            let schema_path = self.dir.join(format!("{stem}.schema.json"));
+            let schema_bytes = schema.to_json()?;
+            std::fs::write(&schema_path, &schema_bytes)
+                .map_err(|e| RecordError::io(&schema_path, e))?;
+            out.push(ExportedFile {
+                path: data_path(&name),
+                format,
+                channel: Some(name.clone()),
+                rows,
+                bytes,
+                schema: Some(schema),
+            });
+            out.push(ExportedFile {
+                path: schema_path,
+                format: ExportFormat::Json,
+                channel: Some(name),
+                rows: 0,
+                bytes: schema_bytes.len() as u64,
+                schema: None,
+            });
         }
         Ok(out)
     }

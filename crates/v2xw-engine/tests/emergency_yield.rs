@@ -26,6 +26,7 @@ fn root() -> PathBuf {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_emergency_yield_row_holds() {
     let path = root().join("scenarios/sensitivity/catalogue.yaml");
     let fam = sweep::Families::load(&path).expect("families file loads");
@@ -50,6 +51,7 @@ fn the_emergency_yield_row_holds() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn naming_the_block_off_changes_nothing_but_the_report_leaf() {
     let mut s =
         Scenario::load(root().join("scenarios/connected-intersections.yaml")).expect("loads");
@@ -209,6 +211,7 @@ fn a_forged_srm_from_a_normal_vehicle_is_refused() {
 /// roadside path's hash CRLs). No unit installs the list, the vehicles keep being served,
 /// and the test goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_revoked_identification_certificate_stops_the_grants() {
     let at_s = 15.0;
     let cutoff_s = 35.0;

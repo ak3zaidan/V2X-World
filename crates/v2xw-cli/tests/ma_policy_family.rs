@@ -126,6 +126,7 @@ fn first_decisions_agree(presets: &[&str]) -> (usize, Vec<String>) {
 /// Test 2, the first four presets (today's MA family and the legacy gate), so the eight
 /// runs take two test threads.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn online_and_offline_agree_until_the_first_decision_corroborating() {
     let (decided, seen) = first_decisions_agree(&v2xw_engine::ma_policy::PRESET_IDS[..4]);
     assert!(decided >= 2, "too few presets decided anything: {seen:#?}");
@@ -133,6 +134,7 @@ fn online_and_offline_agree_until_the_first_decision_corroborating() {
 
 /// Test 2, the other four (the replay family and `custom`).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn online_and_offline_agree_until_the_first_decision_replay_family() {
     let (decided, seen) = first_decisions_agree(&v2xw_engine::ma_policy::PRESET_IDS[4..]);
     assert!(decided >= 2, "too few presets decided anything: {seen:#?}");
@@ -149,6 +151,7 @@ fn out_dir(name: &str) -> PathBuf {
 
 /// Test 5.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_sweep_reports_each_policy_and_seed() {
     let dir = out_dir("sweep");
     let mut d = base(120.0);

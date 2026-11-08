@@ -123,6 +123,7 @@ fn with(mut s: Scenario, grade: bool, power_limit: bool) -> Scenario {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn flat_grade_only_is_byte_identical() {
     let base = grid_scenario(0.2);
     let (off, _, _) = run(&with(base.clone(), false, false));
@@ -131,6 +132,7 @@ fn flat_grade_only_is_byte_identical() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_power_limit_slows_tractor_trailers_on_a_freeway() {
     // Power = force × speed: the 120 kg/kW design truck's tractive force falls below
     // what the IDM asks of it on the way up to its 23.6 m/s above about 15 m/s, so on a
@@ -147,6 +149,7 @@ fn the_power_limit_slows_tractor_trailers_on_a_freeway() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_vehicle_dynamics_rows_hold() {
     let path = root().join("scenarios/sensitivity/catalogue.yaml");
     let fam = sweep::Families::load(&path).expect("families file loads");
@@ -180,6 +183,7 @@ fn the_vehicle_dynamics_rows_hold() {
 /// freeway's 1.5 km blocks climbs or falls 5 % end to end, and with the same DEM undraped
 /// every lane point stays on z = 0 (the DEM is then only the radio's ground).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_draped_ramp_tilts_the_lanes_and_undraped_nothing_moves() {
     let dem = root().join("scenarios/sensitivity/grade-5pct.asc");
     let world_with = |drape: bool| {

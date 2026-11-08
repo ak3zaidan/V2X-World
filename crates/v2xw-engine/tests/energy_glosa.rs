@@ -286,6 +286,7 @@ fn compare(rate: f64, make: fn(f64, f64) -> Scenario) -> Comparison {
 /// It can fail: with the same compliance in both runs the two results are bit-identical
 /// (the engine is deterministic), so a 5 % stop reduction is impossible.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn glosa_reduces_stops_on_an_arterial_without_costing_fuel() {
     let c = compare(2_400.0, corridor);
     assert!(c.advised >= 20, "only {} advised vehicles", c.advised);

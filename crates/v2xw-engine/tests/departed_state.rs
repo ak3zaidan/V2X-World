@@ -33,6 +33,7 @@ fn turnover() -> Scenario {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_departed_vehicles_crypto_entries_and_per_rings_are_forgotten_and_no_value_moves() {
     let run = |sweep: bool| {
         let mut engine = Engine::build(turnover(), "").expect("builds");

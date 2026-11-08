@@ -96,6 +96,7 @@ fn pdus(flow: &[Value]) -> impl Iterator<Item = (&Value, &Value)> {
 // OF-1 is fixed (`ScmsRun::age_enrolment`): the device's one ECA exchange issues the aged,
 // back-dated certificate, so this runs by default.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn one_enrolment_certificate_is_issued_registered_and_signs_every_download_request() {
     let r = run();
     assert!(
@@ -143,6 +144,7 @@ fn one_enrolment_certificate_is_issued_registered_and_signs_every_download_reque
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn every_cellular_report_upload_carries_its_spdus() {
     let r = run();
     let (mut with, mut without) = (0u64, 0u64);

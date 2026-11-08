@@ -36,6 +36,7 @@ fn run(poll: &str) -> RunReport {
 /// fault: the composite fetched on every status poll, current or not
 /// (`info_status_exchange` ignoring `changed`) -> red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_info_status_poll_fetches_the_composite_only_after_a_change() {
     let cond = run("conditional");
     let info = run("info-status");

@@ -491,11 +491,71 @@ pub fn content_hash_hex(world: &World) -> String {
     v2xw_core::hash::hex_encode(&world.content_hash)
 }
 
+/// SHA-256 (lower-case hex) and length of a text source with its line endings
+/// normalised to LF, the digest an importer records as the source's identity.
+///
+/// `\r\n` and a lone `\r` each count as one `\n`, the end-of-line handling XML 1.0
+/// (section 2.11) requires of every parser, so a file checked out with CRLF line
+/// endings (Git on Windows) and the same file with LF are the same source and give the
+/// same provenance and the same payload bytes. An LF file hashes exactly as its raw
+/// bytes do. Only for text formats: a binary source is hashed raw.
+pub fn text_source_digest(bytes: &[u8]) -> (String, u64) {
+    let mut hasher = Sha256::new();
+    let mut len = 0u64;
+    let mut chunk = Vec::with_capacity(64 * 1024);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\r' {
+            chunk.push(b'\n');
+            if bytes.get(i + 1) == Some(&b'\n') {
+                i += 1;
+            }
+        } else {
+            chunk.push(b);
+        }
+        i += 1;
+        if chunk.len() == chunk.capacity() {
+            hasher.update(&chunk);
+            len += chunk.len() as u64;
+            chunk.clear();
+        }
+    }
+    hasher.update(&chunk);
+    len += chunk.len() as u64;
+    (v2xw_core::hash::hex_encode(&hasher.finalize()), len)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{GeoOrigin, SymbolTable};
     use crate::procedural::{GridParams, grid};
+
+    #[test]
+    fn text_source_digest_ignores_line_endings_only() {
+        let lf = b"<osm>\n  <node id=\"1\"/>\n</osm>\n";
+        let crlf = b"<osm>\r\n  <node id=\"1\"/>\r\n</osm>\r\n";
+        let cr = b"<osm>\r  <node id=\"1\"/>\r</osm>\r";
+        let raw = v2xw_core::hash::sha256_hex(lf);
+        assert_eq!(text_source_digest(lf), (raw, lf.len() as u64));
+        assert_eq!(text_source_digest(crlf), text_source_digest(lf));
+        assert_eq!(text_source_digest(cr), text_source_digest(lf));
+        assert_ne!(
+            text_source_digest(b"<osm>\n\n</osm>\n"),
+            text_source_digest(lf)
+        );
+        // Longer than one chunk, with a CRLF straddling the chunk boundary.
+        let mut big_lf = vec![b'a'; 64 * 1024 - 1];
+        let mut big_crlf = big_lf.clone();
+        big_lf.extend_from_slice(b"\nz\n");
+        big_crlf.extend_from_slice(b"\r\nz\r\n");
+        assert_eq!(text_source_digest(&big_crlf), text_source_digest(&big_lf));
+        assert_eq!(
+            text_source_digest(&big_lf).0,
+            v2xw_core::hash::sha256_hex(&big_lf)
+        );
+    }
 
     fn world() -> World {
         grid(

@@ -91,6 +91,7 @@ fn legacy() -> Out {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_ma_reads_the_evidence_secmark_phase_and_a_mimic_reads_free() {
     let plain = legacy();
     let a = about_attackers(&plain);

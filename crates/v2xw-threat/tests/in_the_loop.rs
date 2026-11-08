@@ -25,6 +25,7 @@ use v2xw_threat::records::{DetObservation, GtAttackAction};
 
 /// The attack reaches the channel, and the ground-truth channel says what it changed.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_attacker_changes_what_goes_on_the_air_and_the_ground_truth_channel_records_it() {
     let opts = SimOptions::new(1, 14_400.0, 0.25).with_attack(AttackKind::ConstPosOffset);
     let out = sim::run(&opts);
@@ -92,6 +93,7 @@ fn an_attacker_changes_what_goes_on_the_air_and_the_ground_truth_channel_records
 
 /// Every falsification family reaches the air with the fields its rendering claims.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn every_attack_family_reaches_the_air() {
     let families = [
         (AttackKind::ConstPos, "position"),
@@ -160,6 +162,7 @@ fn every_attack_family_reaches_the_air() {
 /// The detectors run on received messages and produce the records the metrics crate
 /// scores, and the rates come out of that provider rather than out of a second counter.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_detectors_run_on_receptions_and_produce_real_rates() {
     for (label, opts) in [
         (
@@ -217,6 +220,7 @@ fn the_detectors_run_on_receptions_and_produce_real_rates() {
 /// than the GNSS model or the channel. `legacy_engine_compare.rs` is where these are put
 /// beside the frozen engine's.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn detection_rates_per_attack_type() {
     let mut detected = 0usize;
     let mut table: Vec<String> = Vec::new();
@@ -261,6 +265,7 @@ fn detection_rates_per_attack_type() {
 /// This is the check the detection tests cannot make. A detector that fired on everything
 /// would pass every assertion above and fail here, which is the point.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_honest_fleet_is_not_accused_wholesale() {
     let mut opts = SimOptions::new(5, 14_400.0, 0.0).ideal();
     opts.attacks.clear();
@@ -293,6 +298,7 @@ fn an_honest_fleet_is_not_accused_wholesale() {
 /// that reach. If the diagnosis is right the false accusations disappear and no true
 /// positive is lost; if it is wrong, they do not.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_acceptance_range_check_accuses_honest_senders_when_its_range_is_below_the_radio_reach() {
     let opts = SimOptions::new(6, 14_400.0, 0.25).with_attack(AttackKind::ConstPosOffset);
     let before = sim::run(&opts);
@@ -343,6 +349,7 @@ fn the_acceptance_range_check_accuses_honest_senders_when_its_range_is_below_the
 
 /// Two runs of one configuration produce the same record stream, byte for byte.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_loop_is_reproducible() {
     let mut opts = SimOptions::new(7, 14_400.0, 0.25).with_attack(AttackKind::RandomPos);
     opts.duration_s = 30.0;
@@ -361,6 +368,7 @@ fn the_loop_is_reproducible() {
 
 /// The attacker fraction is what it says, and an honest fleet has no attack actions.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_attacker_fraction_is_what_it_says() {
     let mut counts: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
     for f in [0.0, 0.1, 0.25, 0.5, 1.0] {

@@ -137,6 +137,7 @@ fn n(v: &Value, key: &str) -> u64 {
 /// sampled every 5 s, and not from the pruning's bookkeeping, so a pruning that stopped
 /// working cannot also move the bound it is held to.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_projector_keeps_what_is_alive_not_what_has_been() {
     // A 2 × 2 grid: short trips, so the fleet turns over within the run while it stays small
     // enough for a debug build (the 3 × 3 grid needed 300 s and six minutes of wall clock).

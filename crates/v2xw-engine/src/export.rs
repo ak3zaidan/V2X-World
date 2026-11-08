@@ -626,11 +626,6 @@ pub fn run_exporters_in(
                 )));
             }
         };
-        if records.is_none() {
-            let mut reader =
-                v2xw_record::Reader::open(recording).map_err(record_error(recording))?;
-            records = Some(reader.records(None).map_err(record_error(recording))?);
-        }
         let dir = out_dir.join(&spec.id);
         std::fs::create_dir_all(&dir).map_err(|e| EngineError::Io {
             path: dir.display().to_string(),
@@ -638,9 +633,19 @@ pub fn run_exporters_in(
         })?;
         let exporter =
             v2xw_record::Exporter::new(&dir, profile_of(spec, i)?).map_err(record_error(&dir))?;
-        let files = exporter
-            .export_all(records.as_deref().unwrap_or(&[]), format)
-            .map_err(record_error(&dir))?;
+        // A table export streams the recording rather than reading every record into
+        // memory first: on a five-minute Manhattan run that list alone was gigabytes, and
+        // the server ran it after the run, beside the run's own state. The records are
+        // reused only when an exporter above already had to read them.
+        let files = match records.as_deref() {
+            Some(records) => exporter.export_all(records, format),
+            None => {
+                let mut reader =
+                    v2xw_record::Reader::open(recording).map_err(record_error(recording))?;
+                exporter.export_recording(&mut reader, format)
+            }
+        }
+        .map_err(record_error(&dir))?;
         out.push(Exported {
             exporter: spec.id.clone(),
             files: files

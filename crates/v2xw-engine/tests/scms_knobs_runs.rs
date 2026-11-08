@@ -232,6 +232,7 @@ fn knob(name: &str, b: &Out, v: &Out) {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn certs_per_period_scales_every_batch() {
     // CAMP-EE §2.1.5.3.2: a batch is one i-period's j = 0..certs_per_period-1. Doubling it
     // doubles the certificates each top-up installs; the top-ups themselves and their
@@ -253,6 +254,7 @@ fn certs_per_period_scales_every_batch() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn no_topups_starve_the_fleet_after_its_preload() {
     // topup_below_periods 0: a vehicle never asks for more, so after its two preloaded
     // 60 s periods it holds nothing valid and cannot sign (CAMP-EE §2.1.5.3.2).
@@ -275,6 +277,7 @@ fn no_topups_starve_the_fleet_after_its_preload() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_request_shuffle_does_not_touch_in_run_topups() {
     // CAMP 1.2.2 Table 67: a certificate request leaves the RA's shuffle at the threshold
     // or the window. Expected first: a threshold of 1 releases each request at once, so
@@ -363,6 +366,7 @@ fn slow_h2_base() -> &'static Out {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_slow_aca_does_not_delay_a_week_the_ra_already_holds() {
     // A real RA generates every week within ra-maxPreloadTime when it accepts the request
     // and adds one a week ([PRIMER] p.6; [CAMP122] 5.2.7.6.4), so a top-off of such a week
@@ -400,6 +404,7 @@ fn a_slow_aca_does_not_delay_a_week_the_ra_already_holds() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_longer_download_wait_lengthens_a_late_topup() {
     // download-minWait (SCMS Manager EE profile Table 3): a batch that is not ready at
     // nextDlTime is asked for again after this long. With the ACA 4 s late, a 2 s wait
@@ -477,6 +482,7 @@ fn a_longer_download_wait_lengthens_a_late_topup() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn one_download_poll_gives_up_on_a_late_batch() {
     // download-maxReqs 1: with the ACA 4 s late the one poll at nextDlTime finds nothing
     // and the device makes no other. First run (ACA on time): no change, as the poll at
@@ -502,6 +508,7 @@ fn one_download_poll_gives_up_on_a_late_batch() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_short_enrolment_is_renewed_in_the_run() {
     // CAMP 1.2.2 Table 3 / SM-REENR: the device re-enrols reenrol_lead_s (120 s) before
     // its enrolment certificate ends. First expectation (none in the base) was wrong: the
@@ -525,6 +532,7 @@ fn revocation_s(o: &Out) -> f64 {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_ma_review_delays_every_revocation() {
     // The pilots' manual MA (CAMP 1.2.2 §4.2-4.3): the operator's review comes between the
     // decision and the CRL entry, so the first revocation is later by the review, give or
@@ -552,6 +560,7 @@ fn ma_decisions_s(o: &Out) -> Vec<f64> {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn ma_decision_is_the_operators_decision_after_the_review() {
     // `ma.decision` was stamped when the MA pipeline recommended, 8 h before
     // the operator's decision under ManualReview, so `time_to_decision` and the
@@ -584,6 +593,7 @@ fn ma_decision_is_the_operators_decision_after_the_review() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn publishing_on_decision_is_faster_than_a_cadence() {
     // crl_cadence_s 0: the CRL Generator publishes as soon as an entry is issued instead
     // of at the next 30 s slot.
@@ -600,6 +610,7 @@ fn publishing_on_decision_is_faster_than_a_cadence() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_slower_crl_fetch_downloads_less_and_enforces_later() {
     // A cellular vehicle polls for a newer CRL every crl_fetch_interval_s: four times
     // slower is about a quarter of the downloads, and the first enforcement waits for a
@@ -622,6 +633,7 @@ fn a_slower_crl_fetch_downloads_less_and_enforces_later() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_shorter_report_shuffle_decides_sooner() {
     // CAMP-EE SCMS-765: reports wait in the RA's shuffle up to its window before the MA
     // sees them; 5 s instead of 30 s brings the first decision forward. First instrument
@@ -651,6 +663,7 @@ fn busy_ma(lifecycle: Value) -> Out {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_ma_with_one_open_case_revokes_fewer_in_the_run() {
     // ma_max_open_cases 1: a case beyond the first waits for it to close. First run (5 %
     // attackers, automatic MA): no change, as no two cases were ever open together. With
@@ -677,6 +690,7 @@ fn an_ma_with_one_open_case_revokes_fewer_in_the_run() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_camp_reference_preset_is_one_scms_with_a_lop() {
     // camp-reference is the CAMP design (one SCMS with LOP, no
     // providers); the default is the US deployment's two providers on one CTL.
@@ -724,6 +738,7 @@ fn the_camp_reference_preset_is_one_scms_with_a_lop() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_architecture_is_the_deployments() {
     // Who talks to whom: a device talks only to the RA (and the ECA
     // through the DCM at enrolment); the RA to the ACA and the LAs; the MA to the PCA
@@ -815,6 +830,7 @@ fn packet_doc(tls: Option<&str>) -> Value {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn tls_1_2_costs_more_handshake_and_a_slower_topup() {
     // SCMS Manager EE profile §2.1.18: session-scmsAuth is TLS 1.2 or 1.3. A full 1.2
     // handshake is two round trips before the first request, 1.3's one (RFC 8446 §2).
@@ -846,6 +862,7 @@ fn tls_1_2_costs_more_handshake_and_a_slower_topup() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_shorter_pseudonym_period_changes_more_often() {
     // SAE J2945/1 §6.1.2: 300 s by default. In this run a vehicle also changes at every
     // 60 s i-period, when its certificate expires, so the base's changes are those; 30 s
@@ -859,6 +876,7 @@ fn a_shorter_pseudonym_period_changes_more_often() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn every_enforcement_count_is_out_of_the_devices_it_could_have_reached() {
     // The bug this audit fixed: the conformance run's case board read "enforced by 88 of
     // 74" because N was the devices present at the view. N is every device present at
@@ -901,6 +919,7 @@ fn every_enforcement_count_is_out_of_the_devices_it_could_have_reached() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_small_validated_certificate_cache_revalidates_and_costs_more_crypto() {
     // nodes.validated_cert_cache 4,096 -> 16 (v2xw-node rxval EE_CACHE; no device
     // publishes one). Expected before the run: (a) a vehicle hears far more than 16
@@ -962,6 +981,7 @@ fn a_small_validated_certificate_cache_revalidates_and_costs_more_crypto() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_overdue_crl_tolerance_cannot_act_inside_a_week() {
     // security.scms.crl_overdue_tolerance_s 2 weeks -> 0 (CAMP 1.2.2 Table 67). Expected
     // before the run: nothing changes. A CRL's nextCrl is a week after its issue (CAMP

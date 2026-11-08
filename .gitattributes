@@ -1,0 +1,27 @@
+# Text files are checked out with LF on every platform. The build, the tests and the
+# determinism checks read many of them byte for byte (ASN.1 sources and their patches,
+# OSM and SUMO fixtures, scenarios, golden digests), so a CRLF checkout on Windows would
+# change what is parsed or hashed.
+* text=auto eol=lf
+
+# Binary data: never converted.
+*.oer   binary
+*.bin   binary
+*.hgt   binary
+*.mcap  binary
+*.vwb   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.gz    binary
+*.zst   binary
+*.wasm  binary
+*.parquet binary
+
+# EPA drive-cycle tables, kept byte for byte as published (CRLF).
+crates/v2xw-energy/tests/data/epa_*.txt -text
+
+# Vendored upstream sources, pinned by SHA-256 in their PROVENANCE.md files: kept byte
+# for byte as published, whatever their line endings.
+third_party/** -text
+tools/oracle/asn1/** -text

@@ -137,6 +137,22 @@ opt-level = 1
 [profile.test.package.v2xw-record]
 opt-level = 1
 
+# CI's test profile (`cargo test --profile ci`): every workspace crate optimised, the engine
+# included, because the suite's whole-run tests spend their time in the engine's event loop and
+# the model crates, and at opt-level 0 the suite took most of a six-hour job. Overflow checks
+# and debug assertions stay on, so it checks what `cargo test` checks; line tables only keep
+# backtraces readable while linking a hundred-odd test binaries in a fraction of the memory.
+[profile.ci]
+inherits = "test"
+opt-level = 1
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true
+incremental = false
+[profile.ci.package."*"]
+opt-level = 2
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

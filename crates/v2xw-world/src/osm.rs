@@ -370,7 +370,8 @@ pub const ANOMALY_SAMPLES: usize = 4;
 pub struct ImportReport {
     /// What was imported: the file path, or the caller's label for a byte slice.
     pub source_id: String,
-    /// SHA-256 of the source bytes, lower-case hex — the provenance's `source_id`.
+    /// SHA-256 of the source with LF line endings, lower-case hex — the provenance's
+    /// `source_id`. See [`crate::hash::text_source_digest`].
     pub source_sha256: String,
     /// Size of the source, bytes.
     pub source_bytes: u64,
@@ -9624,16 +9625,13 @@ pub fn import_osm_bytes(
 ) -> Result<(World, ImportReport)> {
     options.validate()?;
     let mut file = parse_osm(xml)?;
-    let digest = {
-        use sha2::Digest as _;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(xml);
-        hasher.finalize()
-    };
+    // Line endings normalised, as an XML parser sees the document: a CRLF checkout of
+    // the same extract is the same source and gives the same provenance.
+    let (source_sha256, source_bytes) = crate::hash::text_source_digest(xml);
     let mut report = ImportReport {
         source_id: source_id.to_string(),
-        source_sha256: digest.iter().map(|b| format!("{b:02x}")).collect(),
-        source_bytes: xml.len() as u64,
+        source_sha256,
+        source_bytes,
         ..ImportReport::default()
     };
     if options.crossings_from_nodes && options.layers.pedestrian {

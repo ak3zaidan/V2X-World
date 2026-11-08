@@ -194,7 +194,7 @@ impl core::fmt::Display for DemAnomaly {
 pub struct DemReport {
     /// What was read: a path, or the caller's label for a byte slice.
     pub source_id: String,
-    /// SHA-256 of the source bytes, lower-case hex.
+    /// SHA-256 of the source, lower-case hex; an ASCII grid with LF line endings.
     pub source_sha256: String,
     /// Size of the source, bytes.
     pub source_bytes: u64,
@@ -1309,16 +1309,16 @@ pub fn read_dem_bytes(
     format: DemFormat,
     options: &DemOptions,
 ) -> Result<(DemRaster, DemReport)> {
-    let digest = {
-        use sha2::Digest as _;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(bytes);
-        hasher.finalize()
+    // The ASCII grid is text: its line endings are normalised so a CRLF checkout is the
+    // same source. The SRTM tile is binary and hashed raw.
+    let (source_sha256, source_bytes) = match format {
+        DemFormat::EsriAsciiGrid => crate::hash::text_source_digest(bytes),
+        DemFormat::SrtmHgt => (v2xw_core::hash::sha256_hex(bytes), bytes.len() as u64),
     };
     let mut report = DemReport {
         source_id: source_id.to_string(),
-        source_sha256: digest.iter().map(|b| format!("{b:02x}")).collect(),
-        source_bytes: bytes.len() as u64,
+        source_sha256,
+        source_bytes,
         format: Some(format),
         source: Some(options.source),
         ..DemReport::default()

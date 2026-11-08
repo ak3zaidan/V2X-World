@@ -412,6 +412,7 @@ fn net(report: &RunReport, rec: &Probe) -> Net {
 /// Demand up: density, travel-time rate and stops up, speed down (Greenshields 1935;
 /// HCM 6th ed. ch. 16 and 19: delay grows with the volume-to-capacity ratio).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn demand_up_raises_density_travel_time_and_stops_and_lowers_speed() {
     let (_, lo) = run(grid(90.0, 400.0));
     let (_, hi) = run(grid(90.0, 2400.0));
@@ -436,6 +437,7 @@ fn demand_up_raises_density_travel_time_and_stops_and_lowers_speed() {
 /// collisions and hidden terminals lose more frames (PDR down), and the MAC waits longer
 /// for the medium (latency up) — Bilstrup et al. 2008; SAE J2945/1 §6.3.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn demand_up_raises_cbr_and_latency_and_lowers_pdr() {
     let fleet = |n: u32| {
         let mut s = connected(12.0, 0.0);
@@ -470,6 +472,7 @@ fn demand_up_raises_cbr_and_latency_and_lowers_pdr() {
 /// on the congested branch of the fundamental diagram (a fixed fleet of 250 on the grid)
 /// carries fewer vehicle-km (Treiber, Hennecke & Helbing 2000).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_longer_time_headway_lowers_the_flow() {
     let with = |t: f64| {
         let mut s = saturated(90.0);
@@ -489,6 +492,7 @@ fn a_longer_time_headway_lowers_the_flow() {
 /// start-up lost time of the HCM's saturation-headway model (HCM 6th ed. ch. 19; Greenshields
 /// 1947).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_lower_max_acceleration_lengthens_the_start_up() {
     let with = |a: f64| {
         let mut s = grid(90.0, 1500.0);
@@ -512,6 +516,7 @@ fn a_lower_max_acceleration_lengthens_the_start_up() {
 /// (49 -> 59), so the row asserts that the parameter reaches every decision and records
 /// the direction rather than asserting one.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn politeness_reaches_the_lane_change_decisions() {
     let with = |p: f64| {
         // Slow trucks among cars of widely spread desired speeds on long unsignalised
@@ -560,6 +565,7 @@ fn politeness_reaches_the_lane_change_decisions() {
 /// More trucks: slower acceleration and longer bodies lower the mean speed and the
 /// carried flow (HCM 6th ed. ch. 19 heavy-vehicle adjustment f_HV = 1/(1 + P_T(E_T - 1))).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn more_trucks_lower_speed_and_capacity() {
     let mix = |truck: f64| {
         let mut s = saturated(90.0);
@@ -606,6 +612,7 @@ fn more_trucks_lower_speed_and_capacity() {
 /// (1 - min(1, X) g/C) grows with C, and so does the red-phase queue (HCM 6th ed. ch. 19,
 /// eq. 19-19; Webster 1958).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_longer_cycle_raises_delay_and_queue() {
     let with = |c: f64| {
         let mut s = grid(120.0, 1200.0);
@@ -634,6 +641,7 @@ fn a_longer_cycle_raises_delay_and_queue() {
 /// 1958), so the delay saved on the favoured street is less than the delay added on the
 /// starved one.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_skewed_green_split_raises_delay_and_queue() {
     let with = |share: f64| {
         let mut s = grid(120.0, 1200.0);
@@ -669,6 +677,7 @@ fn a_skewed_green_split_raises_delay_and_queue() {
 /// approach and serves the waiting one, so delay falls (FHWA Traffic Signal Timing
 /// Manual 2008 ch. 5; HCM 6th ed. ch. 19 actuated-control adjustment).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn actuated_signals_lower_delay_at_low_demand() {
     let with = |control: SignalControlKind| {
         let mut s = grid(120.0, 300.0);
@@ -699,6 +708,7 @@ fn actuated_signals_lower_delay_at_low_demand() {
 /// steady-state density rise q = k v predicts at equal demand is not reached and is not
 /// asserted.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_lower_speed_limit_lowers_speed_and_flow() {
     let with = |limit: f64| {
         let mut s = grid(90.0, 600.0);
@@ -733,6 +743,7 @@ fn a_lower_speed_limit_lowers_speed_and_flow() {
 /// Equipped fraction down: fewer transmitters, so each node hears fewer neighbours and
 /// knows fewer of the vehicles around it (ETSI TR 103 562 awareness; Lyamin 2018).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_lower_equipped_fraction_lowers_awareness_and_neighbours() {
     let with = |f: f64| {
         let mut s = connected(45.0, 1500.0);
@@ -759,6 +770,7 @@ fn a_lower_equipped_fraction_lowers_awareness_and_neighbours() {
 /// more crossers, so vehicle delay grows (HCM 6th ed. ch. 19 pedestrian adjustment
 /// f_Lpb/f_Rpb).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn more_pedestrians_mean_more_vru_messages_and_more_crossing_delay() {
     let with = |peds: u32| {
         let mut s = connected(60.0, 900.0);
@@ -786,6 +798,7 @@ fn more_pedestrians_mean_more_vru_messages_and_more_crossing_delay() {
 /// Weather-Responsive Traffic Management). ITU-R P.838 rain attenuation at 5.9 GHz is
 /// under 1 dB/km even at 25 mm/h, so the radio loss is recorded, not asserted.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn rain_lowers_speed() {
     let with = |rain: bool| {
         let mut s = connected(60.0, 900.0);
@@ -812,6 +825,7 @@ fn rain_lowers_speed() {
 /// is asserted for error the sender does not state (outliers); RTK -> standard is not,
 /// because the suite widens its gates with the stated accuracy (see the validation doc).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn more_gnss_error_raises_position_error_and_false_reports() {
     let with = |grade: u8| {
         let mut s = connected(45.0, 1200.0);

@@ -78,6 +78,7 @@ fn assert_identity(mut d: Value) {
 
 /// Test 1 on `credential-lifecycle` (compressed calendar, 5 % ConstPos liars), 200 s.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn default_preset_is_todays_ma_on_credential_lifecycle() {
     let mut d = shipped("credential-lifecycle.yaml");
     d["time"]["duration_s"] = json!(200.0);
@@ -127,6 +128,7 @@ impl RunRecorder for Out {
 /// Test 3: per deciding MA (provider index), the fewest distinct reporters any decided
 /// subject had when it was decided.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 #[allow(
     clippy::type_complexity,
     reason = "a one-off tuple read where it is built; an alias would hide its fields"

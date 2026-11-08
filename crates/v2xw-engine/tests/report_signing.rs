@@ -41,6 +41,7 @@ fn run_first_window() -> RunReport {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn no_vehicle_report_goes_out_unsigned_across_the_week_rollover() {
     let r = first_window();
     let p = &r.phase2;
@@ -85,6 +86,7 @@ fn no_vehicle_report_goes_out_unsigned_across_the_week_rollover() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn every_due_crl_poll_asks_and_a_current_copy_is_answered_412() {
     let p = &first_window().phase2;
     println!(
@@ -295,6 +297,7 @@ fn linked_run(forget_map: bool) -> (RunReport, usize, usize) {
 /// drop the `decided_chains` check in `run/revoke.rs` -> the second case revokes again
 /// (two entries, no linked case) and the test goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_second_pseudonym_of_a_decided_device_links_without_a_second_revocation() {
     let (r, entries, linked) = linked_run(false);
     let p = &r.phase2;
@@ -403,6 +406,7 @@ fn real_calendar_run(t0: &str, duration_s: f64) -> (RunReport, usize, usize, usi
 /// Fault: build `covered` from `crlg.entries` -> decisions are counted covered before
 /// publication and the test goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_ma_counts_a_decision_covered_only_after_publication() {
     let show = |name: &str, r: &RunReport, entries, published, linked| {
         let p = &r.phase2;

@@ -36,6 +36,7 @@ fn turnover() -> Scenario {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_despawned_nodes_link_state_is_swept_and_the_record_does_not_change() {
     let run = |sweep: bool| {
         let mut engine = Engine::build(turnover(), "").expect("builds");
@@ -77,6 +78,7 @@ fn a_despawned_nodes_link_state_is_swept_and_the_record_does_not_change() {
 /// the tripwire shows none of them was drawn again, the one way forgetting could move a value:
 /// a run's stream cache follows the fleet on the map, not the fleet it has ever carried.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_finished_trips_streams_are_forgotten_and_no_value_moves() {
     let run = |sweep: bool| {
         let mut engine = Engine::build(turnover(), "").expect("builds");
@@ -128,6 +130,7 @@ fn a_finished_trips_streams_are_forgotten_and_no_value_moves() {
 /// MAC afterwards; that must not bring the retired node's MAC window back (135 windows
 /// at 21 live radios on the churn soak), since only a node on the map reports one.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_retired_nodes_mac_window_does_not_come_back() {
     let mut engine = Engine::build(turnover(), "").expect("builds");
     let mut digest = DigestRecorder::new();
@@ -160,6 +163,7 @@ fn a_retired_nodes_mac_window_does_not_come_back() {
 /// a frame left behind, and the record does not change (the sweep test above). The sidelink's
 /// per-UE sensing history goes the same way.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_retired_nodes_mac_state_is_dropped_and_the_record_does_not_change() {
     let run = |scenario: Scenario, sweep: bool| {
         let mut engine = Engine::build(scenario, "").expect("builds");
@@ -206,6 +210,7 @@ fn a_retired_nodes_mac_state_is_dropped_and_the_record_does_not_change() {
 /// +29 kB, the on-air sets +104 kB; the footprint ended 1.141 times its 1.5 h value against a
 /// 1.1 bound.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_retired_nodes_radio_and_gnss_state_is_dropped_and_the_record_does_not_change() {
     let run = |sweep: bool| {
         let mut engine = Engine::build(turnover(), "").expect("builds");

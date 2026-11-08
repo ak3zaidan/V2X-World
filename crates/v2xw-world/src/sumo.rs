@@ -426,7 +426,8 @@ pub struct SumoCounts {
 pub struct SumoImportReport {
     /// What was imported: the file path, or the caller's label for a byte slice.
     pub source_id: String,
-    /// SHA-256 of the source bytes, lower-case hex.
+    /// SHA-256 of the source with LF line endings, lower-case hex. See
+    /// [`crate::hash::text_source_digest`].
     pub source_sha256: String,
     /// Size of the source, bytes.
     pub source_bytes: u64,
@@ -2024,16 +2025,12 @@ pub fn import_sumo_net_bytes(
 ) -> Result<(crate::model::World, SumoImportReport)> {
     options.validate()?;
     let net = parse_sumo_net(xml)?;
-    let digest = {
-        use sha2::Digest as _;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(xml);
-        hasher.finalize()
-    };
+    // Line endings normalised, as an XML parser sees the document.
+    let (source_sha256, source_bytes) = crate::hash::text_source_digest(xml);
     let mut report = SumoImportReport {
         source_id: source_id.to_string(),
-        source_sha256: digest.iter().map(|b| format!("{b:02x}")).collect(),
-        source_bytes: xml.len() as u64,
+        source_sha256,
+        source_bytes,
         ..SumoImportReport::default()
     };
     let world = import_parsed(&net, options, &mut report)?;

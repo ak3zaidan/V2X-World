@@ -60,6 +60,7 @@ fn run(modelled: bool) -> (RunReport, MemoryRecorder) {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_report_the_device_cannot_build_is_never_uploaded() {
     let (r, rec) = run(false);
     let p = &r.phase2;
@@ -102,6 +103,7 @@ fn a_report_the_device_cannot_build_is_never_uploaded() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_research_setting_keeps_the_modelled_path_and_files_nothing_away() {
     let (r, rec) = run(true);
     let p = &r.phase2;
@@ -132,6 +134,7 @@ fn the_research_setting_keeps_the_modelled_path_and_files_nothing_away() {
 /// `reports_not_filed` was 0 (255 in the classical base). 100 s is too short: the base
 /// binary sent one report by then.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_post_quantum_kem_keeps_the_us_filing_rules() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let s = Scenario::load(root.join("scenarios/tests/scms-kem.yaml")).expect("loads");

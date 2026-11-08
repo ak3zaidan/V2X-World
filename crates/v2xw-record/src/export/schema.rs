@@ -241,38 +241,98 @@ impl TableSchema {
     /// [`RecordError::Json`] if a record is not a JSON object, and
     /// [`RecordError::UnknownChannel`] if the channel is not in the catalogue.
     pub fn infer(channel: &str, rows: &[(u64, Vec<u8>)]) -> Result<Self> {
+        let mut builder = SchemaBuilder::new(channel)?;
+        for (_, json) in rows {
+            builder.observe(json)?;
+        }
+        Ok(builder.finish())
+    }
+
+    /// The same schema with the ground-truth columns removed — the `NODE-only` export
+    /// profile, and conformance V6's "GT and NODE never share a file".
+    pub fn without_ground_truth(&self) -> Self {
+        TableSchema {
+            schema: self.schema.clone(),
+            channel: self.channel.clone(),
+            visibility: format!("{}-node-only", self.visibility),
+            columns: self
+                .columns
+                .iter()
+                .filter(|c| !c.ground_truth)
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
+/// [`TableSchema::infer`] one record at a time, so a channel's schema can be inferred while
+/// its records stream past rather than from a list of all of them held at once.
+#[derive(Debug, Clone)]
+pub struct SchemaBuilder {
+    channel: String,
+    visibility: String,
+    kinds: BTreeMap<String, ColumnKind>,
+}
+
+impl SchemaBuilder {
+    /// A builder for `channel`.
+    ///
+    /// # Errors
+    /// [`RecordError::UnknownChannel`] if the channel is not in the catalogue.
+    pub fn new(channel: &str) -> Result<Self> {
         let spec = crate::channels::by_name(channel)
             .ok_or_else(|| RecordError::UnknownChannel(channel.to_string()))?;
-        let gt_fields: BTreeSet<&str> = ground_truth_fields(channel).iter().copied().collect();
-        let mut kinds: BTreeMap<String, ColumnKind> = BTreeMap::new();
-        for (_, json) in rows {
-            let value: serde_json::Value = serde_json::from_slice(json)?;
-            let obj = value.as_object().ok_or_else(|| {
-                RecordError::malformed(
-                    "record",
-                    format!("a record on {channel} is not a JSON object"),
-                )
-            })?;
-            for (k, v) in obj {
-                let kind = match v {
-                    serde_json::Value::Bool(_) => ColumnKind::Bool,
-                    serde_json::Value::Number(n) => {
-                        if n.is_f64() && !n.is_i64() && !n.is_u64() {
-                            ColumnKind::Float
-                        } else {
-                            ColumnKind::Int
-                        }
+        Ok(SchemaBuilder {
+            channel: channel.to_string(),
+            visibility: spec.visibility.to_string(),
+            kinds: BTreeMap::new(),
+        })
+    }
+
+    /// Widens the columns by one record's JSON encoding.
+    ///
+    /// # Errors
+    /// [`RecordError::Json`] if the record is not a JSON object.
+    pub fn observe(&mut self, json: &[u8]) -> Result<()> {
+        let value: serde_json::Value = serde_json::from_slice(json)?;
+        let obj = value.as_object().ok_or_else(|| {
+            RecordError::malformed(
+                "record",
+                format!("a record on {} is not a JSON object", self.channel),
+            )
+        })?;
+        for (k, v) in obj {
+            let kind = match v {
+                serde_json::Value::Bool(_) => ColumnKind::Bool,
+                serde_json::Value::Number(n) => {
+                    if n.is_f64() && !n.is_i64() && !n.is_u64() {
+                        ColumnKind::Float
+                    } else {
+                        ColumnKind::Int
                     }
-                    serde_json::Value::String(_) => ColumnKind::Text,
-                    serde_json::Value::Null => continue,
-                    _ => ColumnKind::Text,
-                };
-                kinds
-                    .entry(k.clone())
-                    .and_modify(|existing| *existing = widen(*existing, kind))
-                    .or_insert(kind);
+                }
+                serde_json::Value::String(_) => ColumnKind::Text,
+                serde_json::Value::Null => continue,
+                _ => ColumnKind::Text,
+            };
+            match self.kinds.get_mut(k) {
+                Some(existing) => *existing = widen(*existing, kind),
+                None => {
+                    self.kinds.insert(k.clone(), kind);
+                }
             }
         }
+        Ok(())
+    }
+
+    /// The schema of every record observed.
+    pub fn finish(self) -> TableSchema {
+        let SchemaBuilder {
+            channel,
+            visibility,
+            mut kinds,
+        } = self;
+        let gt_fields: BTreeSet<&str> = ground_truth_fields(&channel).iter().copied().collect();
         // A column whose name declares a continuous quantity is a float column whatever
         // this window's values happened to be (see `declares_float`).
         for (name, kind) in kinds.iter_mut() {
@@ -298,30 +358,16 @@ impl TableSchema {
                 quantum,
             });
         }
-        Ok(TableSchema {
-            schema: format!("v2xw/{channel}/1"),
-            channel: channel.to_string(),
-            visibility: spec.visibility.to_string(),
-            columns,
-        })
-    }
-
-    /// The same schema with the ground-truth columns removed — the `NODE-only` export
-    /// profile, and conformance V6's "GT and NODE never share a file".
-    pub fn without_ground_truth(&self) -> Self {
         TableSchema {
-            schema: self.schema.clone(),
-            channel: self.channel.clone(),
-            visibility: format!("{}-node-only", self.visibility),
-            columns: self
-                .columns
-                .iter()
-                .filter(|c| !c.ground_truth)
-                .cloned()
-                .collect(),
+            schema: format!("v2xw/{channel}/1"),
+            channel,
+            visibility,
+            columns,
         }
     }
+}
 
+impl TableSchema {
     /// The column with this name.
     pub fn column(&self, name: &str) -> Option<&ColumnSpec> {
         self.columns.iter().find(|c| c.name == name)

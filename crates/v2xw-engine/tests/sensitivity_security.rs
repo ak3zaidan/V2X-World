@@ -245,6 +245,7 @@ fn row(name: &str, m: &Measured) {
 /// security bytes, the fragments over the MTU, the security share of the air, the
 /// channel busy ratio and the end-to-end latency rise, and delivery does not improve.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_signature_scheme_moves_bytes_airtime_and_latency() {
     let base = || {
         let mut s = fleet(30, 3.0);
@@ -278,6 +279,7 @@ fn the_signature_scheme_moves_bytes_airtime_and_latency() {
 /// (J2945/1 §6.1.2.2's default) and once every 5 s: the share of messages carrying a
 /// certificate and the security bytes follow the cadence.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_certificate_attach_cadence_moves_overhead() {
     let mut out = Vec::new();
     for every in [0u64, 1000, 5000] {
@@ -318,6 +320,7 @@ fn the_certificate_attach_cadence_moves_overhead() {
 /// on, so the verification rate and the queue fall and more messages reach applications
 /// unverified.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_verification_policy_moves_the_verify_load() {
     let mut all = fleet(30, 3.0);
     all.nodes.default_obu = "obu/unex-obu-301-craton2-software".to_string();
@@ -355,6 +358,7 @@ fn the_verification_policy_moves_the_verify_load() {
 /// unit verifying in software and a SoC without an HSM take longer, so the verify cost and
 /// the end-to-end latency rise.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_crypto_hardware_moves_the_verify_latency() {
     let mut out = Vec::new();
     for obu in [
@@ -387,6 +391,7 @@ fn the_crypto_hardware_moves_the_verify_latency() {
 /// A one-slot verification queue against the default 64, under a dense fleet verifying
 /// in software: the short queue overflows and drops.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_verification_queue_depth_moves_drops_under_load() {
     let mut deep = fleet(60, 3.0);
     deep.nodes.default_obu = "obu/unex-obu-301-craton2-software".to_string();
@@ -405,6 +410,7 @@ fn the_verification_queue_depth_moves_drops_under_load() {
 /// new certificate is first heard by digest, so more messages arrive from an unknown signer
 /// (the P2PCD case).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_pseudonym_period_moves_changes_and_unknown_signers() {
     let mut slow = backend(20, 20.0);
     slow.security.signer_id_policy.full_cert_every_ms = Some(5000);
@@ -433,6 +439,7 @@ fn the_pseudonym_period_moves_changes_and_unknown_signers() {
 /// raises the peer-to-peer certificate requests against the 300 s baseline: every change
 /// is a certificate the neighbours have not cached until its next attachment.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_pseudonym_strategy_moves_linkability_and_p2pcd() {
     // 20 s, so the 300 s baseline changes nothing before the first i-period ends, and the
     // 450 ms certificate cadence (J2945/1 BSMSIGN-003) is well inside the 5 s period:
@@ -592,6 +599,7 @@ fn first_frames_after_changes(m: &Measured) -> (usize, usize) {
 /// 8 to 9 bytes of UPER, so the payload and the bytes on the air rise with the cap, and
 /// the security envelope's share of the payload falls.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_path_history_length_moves_part_ii_bytes() {
     let mut out = Vec::new();
     for points in [0u32, 1, 15] {
@@ -636,6 +644,7 @@ fn the_path_history_length_moves_part_ii_bytes() {
 /// 5 Hz against 10 Hz against 20 Hz BSMs: frames, bytes and the channel busy ratio rise
 /// with the rate and the age of information falls.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_message_rate_moves_bytes_cbr_and_aoi() {
     let mut out = Vec::new();
     for hz in [5.0, 10.0, 20.0] {
@@ -676,6 +685,7 @@ fn the_message_rate_moves_bytes_cbr_and_aoi() {
 /// differs is that a DENM must be signed with a full certificate (§7.1.2), so a run with
 /// warnings carries more security bytes under the ETSI profile.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_envelope_moves_the_security_bytes() {
     let mut us = fleet(30, 40.0);
     // DENMs repeat once a second (EN 302 637-3), so at the default 1 s cadence every one
@@ -715,6 +725,7 @@ fn the_envelope_moves_the_security_bytes() {
 /// certificate top-up takes; half the fleet without a modem leaves fewer vehicles able to
 /// reach the backend.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_cellular_link_moves_topup_latency_and_availability() {
     let preset = |p: &str, penetration: f64| {
         let mut s = backend(20, 45.0);
@@ -776,6 +787,7 @@ fn attacked(s: &mut Scenario, fraction: f64) {
 /// than its own. With attackers revoked inside the run, polling every 5 s against every
 /// 30 s downloads sooner, so revocation reaches the fleet faster.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_crl_fetch_interval_moves_downloads_and_revocation_latency() {
     let with = |cadence: u64, fetch: u64| {
         let mut s = backend(30, 60.0);
@@ -846,6 +858,7 @@ fn the_crl_fetch_interval_moves_downloads_and_revocation_latency() {
 /// revokes more vehicles, so the published list holds more entries and bytes, and every
 /// download costs more.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_revocations_move_the_crl_size() {
     let with = |fraction: f64| {
         let mut s = backend(30, 60.0);
@@ -915,6 +928,7 @@ fn the_revocations_move_the_crl_size() {
 /// detectors file against honest vehicles (the confusion matrix, cumulative, read at the
 /// last window).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_attacker_share_moves_detections() {
     let with = |fraction: f64| {
         let mut s = backend(30, 30.0);
@@ -990,6 +1004,7 @@ fn the_attacker_share_moves_detections() {
 /// files make each exchange long enough that a 64 kbit/s line needs one extra poll and no
 /// longer meets the same-polls precondition.)
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_backhaul_latency_and_bandwidth_move_relay_topups() {
     // The line on its own: the air hop between vehicle and unit is a fixed latency and rate
     // (`net.rsu_ip.air: constant`), so every exchange crosses the line the same few times
@@ -1107,6 +1122,7 @@ fn the_backhaul_latency_and_bandwidth_move_relay_topups() {
 /// receiver cannot yet verify. The loader refuses the setting where every message already
 /// carries the certificate.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_new_neighbour_attach_moves_overhead_and_unknown_signers() {
     let mut base = backend(20, 20.0);
     base.security.signer_id_policy.full_cert_every_ms = Some(5000);
@@ -1138,6 +1154,7 @@ fn the_new_neighbour_attach_moves_overhead_and_unknown_signers() {
 /// fewer reach the applications unverified. Before the claim-based relevance existed no
 /// message carried a score and the threshold moved nothing. Refused under verify-all.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_on_demand_threshold_moves_the_verify_load() {
     let mut high = fleet(30, 12.0);
     high.nodes.default_obu = "obu/unex-obu-301-craton2-software".to_string();
@@ -1166,6 +1183,7 @@ fn the_on_demand_threshold_moves_the_verify_load() {
 /// need P2PCD requests, and are unverifiable until the next certificate. Before the fix
 /// an evicted certificate stayed in the store and still verified.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_peer_cert_cache_moves_p2pcd_and_unknown_signers() {
     let big = backend(20, 10.0);
     let mut small = big.clone();
@@ -1210,6 +1228,7 @@ fn served(m: &Measured) -> Vec<(u64, f64)> {
 /// the two waits were the same. Narrowing the horizon from 300 m to 10 m leaves almost no
 /// sender near, so the share served ahead collapses. Refused under verify-all.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_prioritized_horizon_moves_the_service_order() {
     let mut wide = fleet(60, 3.0);
     wide.nodes.default_obu = "obu/unex-obu-301-craton2-software".to_string();

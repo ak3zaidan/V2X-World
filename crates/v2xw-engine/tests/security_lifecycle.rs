@@ -84,6 +84,7 @@ fn records(r: &MemoryRecorder, channel: &str) -> Vec<serde_json::Value> {
 /// 21), so at 100 ms the fifth interval is the first at or past 450 ms. The old one-second
 /// default gave every tenth (0.10).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_lone_obu_attaches_its_certificate_to_every_fifth_bsm() {
     let mut s =
         Scenario::load(scenarios().join("phase1-grid.yaml")).expect("the shipped grid loads");
@@ -143,6 +144,7 @@ fn compressed() -> serde_json::Value {
 /// Certificates expire, a vehicle with a backend link tops its pool up before it runs
 /// dry, and a vehicle with none runs out and stops signing — which is counted.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_pool_is_topped_up_over_the_link_and_runs_dry_without_one() {
     let mut connected = grid(70.0, 400.0);
     lifecycle(&mut connected, compressed());
@@ -210,6 +212,7 @@ fn a_pool_is_topped_up_over_the_link_and_runs_dry_without_one() {
 /// Every identifier a passive observer reads changes together: the certificate, the BSM
 /// temporary ID the node really encodes, and the link-layer address.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn every_identifier_changes_together_at_a_pseudonym_change() {
     let mut s = grid(45.0, 300.0);
     s.security.pseudonym_change.period_s = Some(10.0);
@@ -271,6 +274,7 @@ fn identifier_leaks(pairs: &[(String, String)]) -> Vec<String> {
 /// The pseudonym-privacy study's cells differ: the change period reaches the run, and the
 /// linkability metric has changes to measure.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_change_period_reaches_the_run_and_the_observer_measures_it() {
     let mut per = BTreeMap::new();
     for period in [10.0, 30.0] {
@@ -310,6 +314,7 @@ fn the_change_period_reaches_the_run_and_the_observer_measures_it() {
 /// * A vehicle's first pseudonym ages from its first fix, not from the run's start (its
 ///   first change under the time rule could otherwise come before its first frame). Fault: `rotate_in_use` replaced by `rotate` in the runtime.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn link_claims_and_pseudonym_changes_follow_the_frames_on_the_air() {
     let mut s = grid(45.0, 300.0);
     s.security.pseudonym_change.period_s = Some(10.0);
@@ -373,6 +378,7 @@ fn link_claims_and_pseudonym_changes_follow_the_frames_on_the_air() {
 /// honest fleet's false positives (at the legacy detector operating point, which files
 /// them in a fleet this small) do revoke a device.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn honest_traffic_is_not_revoked_and_the_gate_is_why() {
     let base = || {
         let mut s = grid(90.0, 900.0);
@@ -452,6 +458,7 @@ fn honest_traffic_is_not_revoked_and_the_gate_is_why() {
 /// invalid and report it. Before the host rendered the envelope, the InvalidSignature
 /// attacker was counted as lying while every frame it sent verified.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_forged_signature_is_on_the_air_and_reported() {
     let mut s = grid(40.0, 900.0);
     s.security.verification_policy = "verify-all".to_string();
@@ -489,6 +496,7 @@ fn a_forged_signature_is_on_the_air_and_reported() {
 /// Fault injected: `Phase2::ingest_arrivals` without the unverifiable-evidence check —
 /// `reports_evidence_unverifiable` stays 0 and this test fails.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_ma_sets_aside_a_report_whose_only_evidence_is_a_bad_signature() {
     let mut s = grid(40.0, 900.0);
     s.security.verification_policy = "verify-all".to_string();
@@ -530,6 +538,7 @@ fn the_ma_sets_aside_a_report_whose_only_evidence_is_a_bad_signature() {
 /// verify them and the co-location detector sees several certificates at one point. Before
 /// the host rendered them the kind was refused by name.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn sybil_ghosts_are_on_the_air_and_detected() {
     let sybil = |on: bool| {
         let mut s = grid(40.0, 900.0);
@@ -605,6 +614,7 @@ fn an_attack_the_engine_cannot_render_is_refused() {
 /// A report is backend traffic: with a modem it goes over the cellular uplink and never
 /// on the sidelink; the counts and the byte buckets say so.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_report_goes_over_the_cellular_uplink_not_the_sidelink() {
     let mut s = grid(60.0, 900.0);
     s.security.verification_policy = "verify-all".to_string();
@@ -646,6 +656,7 @@ fn a_report_goes_over_the_cellular_uplink_not_the_sidelink() {
 /// the enrolment credential, the vehicle keeps signing with the tickets it holds, no
 /// reception is refused, and its pool runs dry because the AA stops issuing.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_etsi_pki_revokes_passively_and_the_scms_actively() {
     let base = |protocol: &str| {
         let mut s = grid(90.0, 900.0);
@@ -748,6 +759,7 @@ fn the_etsi_pki_revokes_passively_and_the_scms_actively() {
 /// (TS 23.246) to the cellular fleet, with no uplink poll, and the vehicles install it.
 /// The same run under unicast broadcasts nothing.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn an_mbms_broadcast_delivers_the_crl() {
     let base = |delivery: &str| {
         let mut s = grid(90.0, 900.0);
@@ -819,6 +831,7 @@ fn an_mbms_broadcast_delivers_the_crl() {
 /// in `ObuRuntime::receive` removed — the reports are verified and delivered to the
 /// neighbours, and this test fails.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_relayed_report_is_not_checked_as_a_beacon() {
     let mut s = grid(40.0, 900.0);
     s.security.verification_policy = "verify-all".to_string();
@@ -885,6 +898,7 @@ fn a_relayed_report_is_not_checked_as_a_beacon() {
 /// the air to the unit, crosses its backhaul, and the bytes land in the backhaul bucket and
 /// not in a cellular one. The same fleet with the unit's backhaul cut reaches nothing.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_vehicle_without_a_modem_relays_through_a_roadside_unit() {
     let base = |backhaul: Option<&str>| {
         let mut s = grid(60.0, 900.0);
@@ -1004,6 +1018,7 @@ fn a_vehicle_without_a_modem_relays_through_a_roadside_unit() {
 /// publishes no verification rate, a unit could price no verification and dropped every
 /// frame as a verification-queue overflow — the control shows exactly that.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_roadside_unit_verifies_and_checks_what_it_hears() {
     let build = |profile: Option<&str>| {
         let mut s = grid(30.0, 900.0);
@@ -1066,6 +1081,7 @@ fn a_roadside_unit_verifies_and_checks_what_it_hears() {
 /// Before the fix this run had 115 invalid verifications around the 40 s and 60 s
 /// boundaries.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_late_vehicle_signs_in_the_current_period_and_honest_traffic_verifies() {
     let mut s = grid(70.0, 400.0);
     let mut params = compressed();
@@ -1125,6 +1141,7 @@ fn a_late_vehicle_signs_in_the_current_period_and_honest_traffic_verifies() {
 /// current over the cellular link, and a car "offline for weeks" came back as if it had
 /// never left.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
     use v2xw_engine::scenario::schema::{TimelineItem, TimelineKind};
     let item = |t: f64, until: f64, kind: TimelineKind, target: u64| TimelineItem {
@@ -1217,6 +1234,7 @@ fn a_switched_off_device_reaches_no_scms_until_it_is_back_on() {
 /// every claim in `privacy_links_claimed` again (`Phase2::observe_frame`), and the
 /// no-change run claims links across changes that never happened.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn linkability_counts_only_links_across_a_pseudonym_change() {
     let run_with = |period: f64| {
         // A busy grid with a sniffer at every signal, each hearing 120 m: cars keep coming
@@ -1288,6 +1306,7 @@ fn linkability_counts_only_links_across_a_pseudonym_change() {
 /// the store there; `Phase2::relay_may_send` always true (a report on the air every
 /// 100 ms).
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_relayed_report_is_uploaded_only_once_a_unit_takes_it() {
     let base = |backhaul: Option<&str>| {
         let mut s = grid(60.0, 900.0);
@@ -1483,6 +1502,7 @@ fn a_crl_refused_bsm_is_not_judged_by_default() {
 /// Fault injected (and reverted): restoring `signature_valid = e.signature_valid &&
 /// !window_forged` in `run.rs` makes the first two assertions fail.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_certificate_used_outside_its_validity_is_reported_as_cert_validity() {
     let mut s = Scenario::load(scenarios().join("tests/attack-catalogue-2.yaml"))
         .expect("the scenario loads");
@@ -1543,6 +1563,7 @@ fn a_certificate_used_outside_its_validity_is_reported_as_cert_validity() {
 /// `None`); U7, a constant 0 for `topups_refused_blocklisted`, or every vehicle on the
 /// home provider. Each turns an assert red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_case_carries_its_rule_threshold_and_each_provider_its_ee_counters() {
     let mut s = grid(90.0, 900.0);
     s.security.verification_policy = "verify-all".to_string();
@@ -1693,6 +1714,7 @@ fn a_case_carries_its_rule_threshold_and_each_provider_its_ee_counters() {
 /// Fault: charge the poll the size model's request (`crl_request_size`) again. The byte
 /// assert goes red.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_crl_poll_is_charged_its_framed_get() {
     let mut s = grid(30.0, 600.0);
     lifecycle(&mut s, compressed());
@@ -1727,6 +1749,7 @@ fn a_crl_poll_is_charged_its_framed_get() {
 /// elector goes longer than 365 days between signatures (genesis, votes, ballots).
 /// Fault: the scheduler not called from `Phase2::governance_due`; zero ballots.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_long_run_holds_a_test_ballot_each_year() {
     const DAY_S: f64 = 86_400.0;
     let mut s = grid(400.0 * DAY_S, 30.0);
@@ -1799,6 +1822,7 @@ fn a_long_run_holds_a_test_ballot_each_year() {
 /// acknowledgement delays, which a fleet topping up over the link fills. Fault: the
 /// leaves not filled in `Phase2::report`; the count is 0.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_report_carries_the_ra_acknowledgement_delays() {
     let mut s = grid(70.0, 400.0);
     lifecycle(&mut s, compressed());
@@ -1843,6 +1867,7 @@ fn the_report_carries_the_ra_acknowledgement_delays() {
 /// to the deciding report (`decisions.push(.., run, t)` in `Phase2::ingest_arrivals`) —
 /// `detect` lands seconds after the first detection and this test fails.
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn the_revocation_decomposition_starts_at_the_first_detection() {
     let mut s = grid(90.0, 900.0);
     s.security.verification_policy = "verify-all".to_string();

@@ -1406,6 +1406,34 @@ fn an_imported_world_round_trips_through_both_writers() {
     );
 }
 
+/// The same extract checked out with CRLF line endings (Git on Windows) is the same
+/// source: the same provenance and byte-identical payload, so a world's payload address
+/// does not depend on the platform that imported it.
+#[test]
+fn a_crlf_copy_of_an_extract_gives_the_same_payload() {
+    let lf = mixed_fixture();
+    assert!(!lf.contains('\r'));
+    let crlf = lf.replace('\n', "\r\n");
+    let (world_lf, report_lf) = import(&lf);
+    let (world_crlf, report_crlf) = import(&crlf);
+    assert_eq!(report_crlf.source_sha256, report_lf.source_sha256);
+    assert_eq!(report_crlf.source_bytes, lf.len() as u64);
+    assert_eq!(
+        report_lf.source_sha256,
+        v2xw_core::hash::sha256_hex(lf.as_bytes()),
+        "an LF source hashes as its raw bytes"
+    );
+    assert_eq!(world_crlf.provenance, world_lf.provenance);
+    let payload_lf = serde_vwp::write(&world_lf).expect("the payload encodes");
+    let payload_crlf = serde_vwp::write(&world_crlf).expect("the payload encodes");
+    assert!(
+        payload_crlf.bytes == payload_lf.bytes,
+        "a CRLF checkout changed the payload: {} vs {}",
+        payload_crlf.url_path(),
+        payload_lf.url_path()
+    );
+}
+
 /// The provenance records the ODbL, its attribution, and every transformation that ran —
 /// including the simplifications that did not (invariant I-W3).
 #[test]

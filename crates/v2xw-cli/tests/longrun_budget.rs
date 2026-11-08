@@ -49,6 +49,7 @@ const WARM_S: f64 = DURATION_S - 120.0;
 const FLEET_SLACK: f64 = 1.25;
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn a_long_run_holds_its_memory_and_its_cost_flat() {
     let out = std::env::temp_dir().join("v2xw-cli-longrun-budget");
     let _ = std::fs::remove_dir_all(&out);

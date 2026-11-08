@@ -127,6 +127,7 @@ fn tally(r: &RunReport, app: &str) -> v2xw_engine::app_truth::AppTally {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn rlvw_fires_on_drivers_who_run_the_red_unscripted() {
     let off = run(grid(true, 120.0), None);
     let on = run(
@@ -167,6 +168,7 @@ fn rlvw_fires_on_drivers_who_run_the_red_unscripted() {
 }
 
 #[test]
+#[ignore = "slow: whole runs; CI runs it in the slow-test job (tools/ci/slow-tests.sh)"]
 fn ima_fires_on_drivers_who_fail_to_yield_unscripted() {
     let off = run(grid(false, 120.0), None);
     let on = run(
