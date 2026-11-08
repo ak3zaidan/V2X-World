@@ -1,0 +1,13 @@
+# Mini release run 6 (train): no attacker; honest devices of the per-device BSM timing
+# model, 15 % of them out of specification (data/calibration/dataset-faulty-devices.yaml:
+# a stale-fix timestamp lag and a GNSS random walk), labelled `faulty` in truth.
+schema: v2xw/scenario/1
+# Its own seed: no two runs share traffic, so a split by run is a split by traffic.
+seed: "0xD5_0006"
+meta: {base: base.yaml, name: dataset r6 benign-faulty}
+actors:
+  vehicles:
+    bsm_timing: {enabled: true, calibration: data/calibration/dataset-faulty-devices.yaml}
+exporters:
+  - id: dataset
+    opts: {run_id: r06, split: train, tier: mini, instrumented_receivers: 10, heldout_attacks: [ReversedHeading, HeadingOffset]}

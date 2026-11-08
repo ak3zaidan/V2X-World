@@ -1,0 +1,140 @@
+{
+ "fit": {
+  "free": {
+   "ci95": [
+    186.22,
+    189.135
+   ],
+   "ids": 2472,
+   "pairs": 1236014,
+   "rate_per_id_min": 187.691,
+   "triggers": 513095
+  },
+  "locked": {
+   "ci95": [
+    0.0,
+    0.436629
+   ],
+   "ids": 40,
+   "pairs": 4062,
+   "rate_per_id_min": 0.118777,
+   "triggers": 1
+  },
+  "mixed": {
+   "ci95": [
+    196.937,
+    196.937
+   ],
+   "ids": 1,
+   "pairs": 4,
+   "rate_per_id_min": 196.937,
+   "triggers": 3
+  }
+ },
+ "fit_by_dataset": {
+  "Orem": {
+   "free": {
+    "ci95": [
+     187.436,
+     190.159
+    ],
+    "ids": 2351,
+    "pairs": 1228310,
+    "rate_per_id_min": 188.786,
+    "triggers": 512733
+   },
+   "locked": {
+    "ci95": [
+     0.0,
+     0.0
+    ],
+    "ids": 3,
+    "pairs": 1279,
+    "rate_per_id_min": 0.0,
+    "triggers": 0
+   },
+   "mixed": {
+    "ci95": [
+     196.937,
+     196.937
+    ],
+    "ids": 1,
+    "pairs": 4,
+    "rate_per_id_min": 196.937,
+    "triggers": 3
+   }
+  },
+  "Tampa": {
+   "free": {
+    "ci95": [
+     18.2124,
+     22.3704
+    ],
+    "ids": 121,
+    "pairs": 7704,
+    "rate_per_id_min": 20.3604,
+    "triggers": 362
+   },
+   "locked": {
+    "ci95": [
+     0.0,
+     0.568368
+    ],
+    "ids": 37,
+    "pairs": 2783,
+    "rate_per_id_min": 0.164542,
+    "triggers": 1
+   },
+   "mixed": {
+    "ci95": [
+     null,
+     null
+    ],
+    "ids": 0,
+    "pairs": 0,
+    "rate_per_id_min": null,
+    "triggers": 0
+   }
+  }
+ },
+ "fit_files_sha256": {
+  "orem_2025-02-02": "15c259e2e4918e3858e0ef1af42756bb27e9889f861da0699ae224814c93b3d1",
+  "orem_2025-02-03": "316a07c5cc50f891af606613a2809917509213323e3a57f227bc84174f08a5f3",
+  "orem_2025-02-04": "7d8a792625f0ca83a45058e6473d5aedc76603c504375d7e07ee24ee620924bc",
+  "orem_2025-02-05": "941a49013f72e0c8c394690509623ed7ef0ea44c4a50c3b019085f33aa160e89",
+  "orem_2025-02-06": "c5c69bebf8800cd5e520b8602df170afce8132b29e81430f27d0809d54fec38b",
+  "orem_2025-02-07": "c5a3ecb6d301c7e45fdabb7362cec24fb544ec97a337f4ce1df4efcf5bcd9c21",
+  "orem_2025-02-08": "b582ccfd9b5e7d650055df1d5ce8e6b59e36d5bc4c4397058b30eb98c13df8ea",
+  "tampa": "9900a1d2b43f28131a0c2aee64a2a06432ada4b493f4a1260195ef1412c4cda2"
+ },
+ "fitted_on": [
+  "Orem",
+  "Tampa"
+ ],
+ "headline_cell": {
+  "check": "RandomPosition v1.0",
+  "gap_limit_s": 0.5,
+  "gps_drift_m": 1.0,
+  "speed": ">= 10 m/s",
+  "time_base": "secmark",
+  "unit": "triggers per ID-minute"
+ },
+ "params": {
+  "epoch_ms": 50,
+  "free_lt": 0.3,
+  "locked_gt": 0.8,
+  "min_bsms": 10,
+  "tol_ms": 1
+ },
+ "predictions": {
+  "free": {
+   "rate_at_least": 18.2124
+  },
+  "locked": {
+   "rate_at_most": 0.568368
+  }
+ },
+ "rule": "Out of sample, a class passes when its point rate at the headline cell lies on the predicted side of the bound frozen here (locked: at most the highest locked upper 95% bound of any fit set; free: at least the lowest free lower 95% bound of any fit set). Where both classes are present the free rate must exceed the locked rate.",
+ "schema": "v2xw.realdata_classifier.v1",
+ "tool": "tools/realdata 1.0.0"
+}

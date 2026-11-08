@@ -1,0 +1,22 @@
+# Mini release run 9 (test): the other six F2MD / VeReMi NextGen behaviours, again one of
+# each family, with run 11, so test holds behaviours never seen in train from families
+# that were.
+schema: v2xw/scenario/1
+# Its own seed: no two runs share traffic, so a split by run is a split by traffic.
+seed: "0xD5_0009"
+meta: {base: base.yaml, name: dataset r9 f2md-test}
+time: {duration_s: 60.0}
+threats:
+  attackers:
+    - {id: threat/attacker/f2md/AccelerationMultiplication, actor_ids: [45], schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/AccelerationMultiplication, actor_ids: [18], schedule: {from_s: 12.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/UniformRandomPos, actor_ids: [11], schedule: {from_s: 16.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/UniformRandomPos, actor_ids: [59], schedule: {from_s: 32.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/ZeroSpeedReport, actor_ids: [28], schedule: {from_s: 16.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/RandomSpeedOffset, actor_ids: [4], schedule: {from_s: 32.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/DoSRandomSybil, actor_ids: [37], schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/DoSDisruptiveSybil, actor_ids: [20], schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/DoSDisruptiveSybil, actor_ids: [48], schedule: {from_s: 12.0, to_s: 60.0}}
+exporters:
+  - id: dataset
+    opts: {run_id: r09, split: test, tier: mini, instrumented_receivers: 10, heldout_attacks: [ReversedHeading, HeadingOffset]}

@@ -1,0 +1,1105 @@
+/**
+ * The Studio's React-visible state.
+ *
+ * Everything here is a *projection*: the hot structures (pose buffer, interpolator, instance
+ * matrices, telemetry rings) live in `engine.ts` and in `@vwp/viewer`, and are copied in at 5 Hz.
+ * Nothing in this file is on a 60 fps path.
+ *
+ * The 5 Hz beat is unconditional, though, so a setter that always stores a fresh object re-renders
+ * every subscriber 5x a second whether or not the numbers moved. The setters the flush drives —
+ * `setStats`, `setFrameCounts`, `setRun`, `setTelemetry`, `setMetricProjection`,
+ * `addTimelineMarks` — therefore return the previous state unchanged when the content matches;
+ * Zustand skips the notification entirely in that case. `bumpSeries` is the deliberate exception:
+ * it *is* the 5 Hz beat the sparklines and plots redraw on.
+ */
+
+import { create } from "zustand";
+import type {
+  InspectMessages,
+  InspectNeighbor,
+  NodeFeedNotification,
+  InspectNodeResult,
+  NodeTelemetry,
+  OverlayName,
+  ValidationError,
+  VwpConnectionState,
+  RunState,
+} from "@vwp/protocol";
+import type { CameraMode, LightingMode } from "@vwp/viewer";
+import {
+  EMPTY_FEED,
+  applyPush,
+  followFeed,
+  openMessage,
+  readMessage,
+  setHovering,
+  setPaused,
+  type FeedDir,
+  type FeedView,
+} from "../lib/feed.js";
+import type { ClientProvenance } from "../lib/provenance.js";
+import type { EngineFlavour, EngineProbe } from "../lib/target.js";
+import type { ThemeName } from "../lib/theme.js";
+import { sameSecurity, type NodeSecurityRow } from "../lib/security.js";
+import { changedPointers, getPointer, setPointer } from "../lib/schema.js";
+
+/** §3.1.3 — one row of the `Hello` node table. */
+export interface NodeInfo {
+  readonly nodeId: number;
+  readonly actorId: number | null;
+  readonly label: string;
+  readonly profileId: string;
+  readonly kind: number;
+  readonly flags: number;
+  readonly classIdx: number | null;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/** §3.8 — one resolved provenance entry. */
+export interface ProvEntry {
+  readonly provId: number;
+  readonly modelId: string;
+  readonly modelVersion: string;
+  readonly paramSetId: string;
+  readonly cardUrl: string;
+  readonly family: number;
+  readonly subjectKind: number;
+}
+
+/** What the connection `Hello` (§3.1) told us. */
+export interface HelloSummary {
+  readonly runId: string;
+  readonly engineVersion: string;
+  readonly scenarioName: string;
+  readonly runLabel: string;
+  readonly worldHash: string;
+  readonly scenarioHash: string;
+  readonly flags: number;
+  readonly simDurationNs: number;
+  readonly mobilityStepNs: number;
+  readonly keyframePeriodNs: number;
+  readonly telemetryPeriodNs: number;
+  readonly actorCapacity: number;
+  readonly nodeCount: number;
+  readonly classNames: readonly string[];
+  readonly channels: readonly { name: string; id: number; visibility: number; enabled: boolean }[];
+  readonly origin: { lat: number; lon: number; alt: number };
+  readonly bbox: { minX: number; minY: number; maxX: number; maxY: number };
+  /** Unix seconds of the run's `time.t0` (`Hello.t0_wall_ns`); 0 when the run has none. */
+  readonly t0UnixS?: number;
+  /** The metric period, ns (`Hello.metric_period_ns`). */
+  readonly metricPeriodNs?: number;
+  readonly versionMajor: number;
+  readonly versionMinor: number;
+}
+
+/** §4 — what the decoded world contains. */
+export interface WorldSummary {
+  readonly lanes: number;
+  readonly buildings: number;
+  readonly junctions: number;
+  readonly signals: number;
+  readonly sites: number;
+  readonly crossings: number;
+  readonly landuse: number;
+  readonly bytes: number;
+  readonly buildMs: number;
+  readonly buildingBackend: string;
+  readonly drawables: number;
+}
+
+/** §6.6 `run.status`, plus what the notifications update. */
+export interface RunInfo {
+  readonly state: RunState;
+  readonly tNs: number;
+  readonly tEndNs: number;
+  readonly speed: number;
+  readonly actors: number;
+  readonly nodes: number;
+  readonly runId: string;
+  readonly profile: "full" | "node";
+  readonly live: boolean;
+  /** How many runs the engine process has started; every `run.start` moves it. */
+  readonly generation: number;
+  /** The scenario held for the next run by an Apply, or `null` when there is none. */
+  readonly stagedHash: string | null;
+  /** The finished run's output digest: equal for two runs of one scenario and seed. */
+  readonly outputDigest: string | null;
+  /** Kernel threads alive in the engine process; one while a run is in flight, never more. */
+  readonly kernelThreads: number | null;
+  /** Why the engine is in `error`, in its words (`run.status` → `engine.failure`), else null. */
+  readonly failure: string | null;
+}
+
+/**
+ * One scenario timeline item as the engine fired it (`run.status` → `engine.timeline`, from the
+ * `scenario.event` record): what it was and what it did.
+ */
+export interface FiredEvent {
+  readonly t: number;
+  readonly index: number;
+  readonly kind: string;
+  readonly phase: "start" | "end" | "waiting" | "expired";
+  readonly effect: string;
+  readonly lanes?: readonly number[];
+  readonly multiplier?: number;
+  readonly path?: string;
+  readonly value?: string;
+  readonly populations?: readonly number[];
+}
+
+/** A one-shot "pick a point on the map" request from a panel; the viewport answers it. */
+export interface MapPickRequest {
+  readonly purpose: string;
+  readonly resolve: (point: { readonly x: number; readonly y: number }) => void;
+}
+
+/** One row of the engine's published settings surface (`scenario.get {with_schema}` `fields`). */
+export interface PublishedField {
+  readonly "x-pointer"?: string;
+  readonly "x-path"?: string;
+  readonly "x-group"?: string;
+  readonly "x-status"?: string;
+  readonly "x-status-note"?: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly unit?: string;
+  readonly kind?: string;
+  readonly enum?: readonly unknown[];
+  readonly minimum?: number;
+  readonly maximum?: number;
+  readonly default?: unknown;
+  readonly [key: string]: unknown;
+}
+
+/** What `scenario.set` is holding for the next run. */
+export interface StagedScenario {
+  readonly hash: string;
+  readonly changed: readonly string[];
+  readonly valid: boolean;
+}
+
+/** The parts of `scenario.get` beyond the document. */
+export interface ScenarioExtras {
+  readonly runningHash: string;
+  readonly staged: StagedScenario | null;
+  readonly fields: readonly PublishedField[];
+  readonly statuses: readonly { id: string; label: string; note: string }[];
+  /** The engine's setting groups, in its order, each with a sentence and the sections under it. */
+  readonly groups: readonly { name: string; description: string; sections: readonly string[] }[];
+  /** The quick settings the engine publishes (`scenario.get` `quick`), in its order. */
+  readonly quick: readonly QuickSetting[];
+  /** The "what would you like to study?" starting points (`scenario.get` `studies`). */
+  readonly studies: readonly Study[];
+}
+
+/** One write of an engine-published patch. */
+export interface PatchWrite {
+  readonly path: string;
+  readonly pointer: string;
+  readonly value: unknown;
+}
+
+/** One choice of a quick setting: its words and the writes it makes. */
+export interface QuickChoice {
+  readonly label: string;
+  readonly description?: string;
+  readonly group?: string;
+  readonly patch: readonly PatchWrite[];
+}
+
+/** A quick setting as the engine publishes it (`crates/v2xw-engine/src/scenario/guide.rs`). */
+export interface QuickSetting {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: "scenario" | "city" | "field" | "choice" | "class" | "share";
+  readonly explain?: string;
+  /** The heading the quick panel shows it under ("Traffic", "Radio", …). */
+  readonly group?: string;
+  /** For a `share`: the key set on every element of the list at `pointer`, and its choices. */
+  readonly key?: string;
+  readonly values?: readonly number[];
+  readonly path?: string;
+  readonly pointer?: string;
+  readonly options?: readonly QuickChoice[];
+  /** For a `class` toggle: the class, its share when on, and the class that gives it up. */
+  readonly class?: string;
+  readonly share?: number;
+  readonly absorb?: string;
+  readonly shows_files?: boolean;
+}
+
+/** A study starting point. */
+export interface Study {
+  readonly id: string;
+  readonly label: string;
+  readonly question: string;
+  readonly look_at?: string;
+  readonly patch: readonly PatchWrite[];
+}
+
+/** The pseudonym the followed node is currently using (§3.6.7 `sec.cert`, §3.6.4 `node.tx`). */
+export interface PseudonymInfo {
+  readonly digest: string;
+  readonly i: number | null;
+  readonly j: number | null;
+  readonly source: "sec.cert" | "node.tx";
+}
+
+/** A marker on the scrub bar (the "scrub bar with event markers"). */
+export interface TimelineMark {
+  readonly tNs: number;
+  readonly channel: string;
+  readonly nodeId: number;
+  readonly label: string;
+  readonly provId?: number;
+}
+
+/** One line in the inspector's log tab. */
+export interface LogLine {
+  readonly level: "info" | "warn" | "error";
+  readonly target: string;
+  readonly message: string;
+  readonly at: number;
+}
+
+/** What the HUD's performance strip shows, copied out of `FrameStats.snapshot()`. */
+export interface StatsView {
+  readonly fps: number;
+  readonly fpsAverage: number;
+  readonly frameMs: number;
+  readonly p95Ms: number;
+  readonly cpuMs: number;
+  readonly drawCalls: number;
+  readonly triangles: number;
+  readonly actorInstances: number;
+  readonly actorCulled: number;
+  readonly actorLive: number;
+  readonly buildingsVisible: number;
+}
+
+/** Frames received, by type (§2.4). */
+export interface FrameCounts {
+  readonly keyframe: number;
+  readonly delta: number;
+  readonly telemetry: number;
+  readonly event: number;
+  readonly metric: number;
+}
+
+/** An entry of `scenario.list` (§6.10). */
+export interface ScenarioListItem {
+  readonly id: string;
+  readonly kind: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly tags?: string[];
+  readonly hash?: string;
+  /** The heading the engine's ready-made catalogue lists it under (`scenarios/ready-made.txt`). */
+  readonly group?: string | null;
+}
+
+/** One catalogue row of `overlay.set {list:true}` (§6.7). */
+export interface ServerOverlay {
+  readonly name: string;
+  readonly visibility: string;
+  readonly available: boolean;
+  readonly description?: string;
+  readonly needs_channels?: string[];
+}
+
+/** The validation outcome of `scenario.validate` (§6.10) or the `validation` notification. */
+export interface ValidationView {
+  readonly valid: boolean;
+  readonly errors: readonly ValidationError[];
+  readonly warnings: readonly ValidationError[];
+  /** Whether the checked settings are the deployed US SCMS, and if not why
+   * (`scenario.validate` `us_system`); absent off an SCMS run. */
+  readonly usSystem?: { readonly isUs: boolean; readonly reasons: readonly string[] };
+}
+
+/** The vehicle overlay's sections. */
+export type InspectorTab = "overview" | "sent" | "received" | "queues";
+
+/** What the source note is explaining right now. */
+export interface WhySubject {
+  readonly kind: "metric" | "node_field" | "actor_field" | "event" | "link" | "entity" | "channel" | "world" | "overlay";
+  readonly id: string;
+  readonly label: string;
+  readonly node?: number;
+  readonly actor?: number;
+  readonly provId?: number;
+  readonly value?: string;
+  readonly unit?: string;
+  /**
+   * Set when the value was computed in the browser rather than by the engine (frame rate, overlay
+   * geometry, a side-by-side difference). `SourceNote` renders this instead of pretending a model card
+   * exists, and does not offer `explain` — the engine has never seen the number.
+   */
+  readonly client?: ClientProvenance;
+}
+
+/** Which engine the Studio resolved, and how (`lib/target.ts`). */
+export interface EngineTargetView {
+  /** `""` is the page's own origin, which the Vite proxy and the deployed build both serve. */
+  readonly baseUrl: string;
+  readonly flavour: EngineFlavour;
+  /** The `/healthz` banner, or the reason the probe failed. */
+  readonly engine: string;
+  readonly reachable: boolean;
+  /** True when the user named this target explicitly (`?engine=`), which skips the preference. */
+  readonly pinned: boolean;
+  /** Every candidate that was probed, in order. */
+  readonly tried: readonly EngineProbe[];
+  /** True when the world payload cannot be fetched cross-origin (§1.1 sets CORP `same-origin`). */
+  readonly worldBlocked: boolean;
+}
+
+/**
+ * A recording open in this page with no engine behind it.
+ *
+ * Separate from {@link RunInfo} because it is not a run: there is nothing to resume, nothing to
+ * step and no `run_id` — only a span and a seek. The time controls read this to decide whether a
+ * scrub is a `run.seek` (§6.6) or a WebAssembly seek (§7.3).
+ */
+export interface ReplayView {
+  readonly label: string;
+  readonly startNs: number;
+  readonly endNs: number;
+  /** Simulated time the pose buffer is resolved to. */
+  readonly tNs: number;
+  /** Container chunks the last seek read, and range requests so far — §7.4's seek budget. */
+  readonly chunksRead: number;
+  readonly requests: number;
+  /** True when the geometry on screen came from a `.vwb` file rather than from a verified `Hello`. */
+  readonly worldUnverified: boolean;
+}
+
+/**
+ * One recording this page has opened, kept so it can be opened again without the file picker.
+ *
+ * §6.15 has no method that lists recordings — there is no `runs.list` — so the Runs tab could only
+ * ever show the one live run and whichever file was open at that instant. Someone who had produced
+ * four recordings and wanted to look from one to the next had to find each file again, every time,
+ * and nothing on the page remembered that the others existed.
+ *
+ * The `File` handle is held, which is what makes reopening free: a `File` from an `<input>` stays
+ * readable for the life of the document, so switching between recordings is a seek and not an
+ * upload. It does not survive a reload — the browser will not let a page keep a file handle across
+ * one — so this list is honestly scoped to the session, and the panel says so rather than looking
+ * like a library that lost its contents.
+ */
+export interface RecordingEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly bytes: number;
+  readonly startNs: number;
+  readonly endNs: number;
+  /** `Date.now()` when it was opened, for the ordering. */
+  readonly openedAt: number;
+  readonly file: File;
+}
+
+/** What comparison side B is, and where it is. */
+export interface CompareSideView {
+  /** `"engine"` — a second VWP connection; `"replay"` — a local recording read by WebAssembly. */
+  readonly source: "engine" | "replay";
+  readonly label: string;
+  readonly state: "idle" | "opening" | "ready" | "failed";
+  readonly detail: string;
+  /** Simulated time side B is resolved to. */
+  readonly tNs: number;
+  /** The span side B can be scrubbed over. */
+  readonly startNs: number;
+  readonly endNs: number;
+  /** Actors resolved at `tNs`. */
+  readonly actors: number;
+  /** Whether B has metric samples to difference against A. */
+  readonly hasMetrics: boolean;
+}
+
+/** One row of the metric difference view. */
+export interface MetricDiff {
+  readonly metric: string;
+  readonly a: number | null;
+  readonly b: number | null;
+  /** `b − a`, or `null` when either side has no value at this time. */
+  readonly delta: number | null;
+  /** `delta / |a|`, or `null` when `a` is zero or missing. */
+  readonly relative: number | null;
+  readonly unit: string;
+  /** True when only one side reports the metric at all — a shape difference, not a value one. */
+  readonly oneSided: boolean;
+}
+
+/** How the two sides are tied together. */
+export interface CompareSync {
+  /** Scrub both sides on one simulated clock. */
+  readonly time: boolean;
+  /** Mirror side A's camera onto side B. */
+  readonly camera: boolean;
+  /**
+   * B's simulated time minus A's, in nanoseconds.
+   *
+   * Two runs of the same scenario share `t0` and the offset is 0. Two runs that do not — a
+   * recording of a different campaign — are aligned by hand, and the offset is what makes "the
+   * same simulated time" mean something.
+   */
+  readonly offsetNs: number;
+}
+
+/** The followed vehicle's pose in the stream: world-local metres, m/s, ENU heading in radians. */
+export interface FollowedPose {
+  readonly tNs: number;
+  readonly x: number;
+  readonly y: number;
+  readonly speed: number;
+  readonly headingRad: number;
+}
+
+const EMPTY_RUN: RunInfo = {
+  state: "idle", tNs: 0, tEndNs: 0, speed: 1, actors: 0, nodes: 0, runId: "", profile: "full", live: true,
+  generation: 0, stagedHash: null, outputDigest: null, kernelThreads: null, failure: null,
+};
+
+const EMPTY_EXTRAS: ScenarioExtras = { runningHash: "", staged: null, fields: [], statuses: [], groups: [], quick: [], studies: [] };
+
+/** Before the first probe: the page's own origin, unresolved. */
+const UNRESOLVED_TARGET: EngineTargetView = {
+  baseUrl: "", flavour: "unknown", engine: "not probed yet", reachable: false, pinned: false, tried: [],
+  worldBlocked: false,
+};
+
+const DEFAULT_SYNC: CompareSync = { time: true, camera: true, offsetNs: 0 };
+
+/**
+ * The panels the shell can open over the main view (`shell/panels.tsx`).
+ *
+ * Full-screen ones cover everything under the header; sheets slide over the viewport's left edge.
+ * One is open at a time, and it is mirrored in the URL hash so a reload keeps it and Back closes it.
+ * A new panel is one id here and one entry in `PANELS` (`shell/panels.tsx`), whose type makes the
+ * two agree.
+ */
+export const PANEL_IDS = ["settings", "metrics", "backend", "agent", "runs", "compare", "commands", "details"] as const;
+export type PanelId = (typeof PANEL_IDS)[number];
+
+/** A sentence from the settings window's last action, and how to colour it. */
+export interface SettingsMessage {
+  readonly text: string;
+  readonly tone: "info" | "err" | "warn";
+}
+
+interface StudioState {
+  connection: VwpConnectionState;
+  hello: HelloSummary | null;
+  world: WorldSummary | null;
+  run: RunInfo;
+  selectedActor: number | null;
+  selectedNode: number | null;
+  telemetry: NodeTelemetry | null;
+  telemetryNode: number | null;
+  simTimeNs: number;
+  pseudonym: PseudonymInfo | null;
+  inspect: InspectNodeResult | null;
+  /**
+   * The followed node's message log (`inspect.node` `messages`), refreshed once a second on its
+   * own. Kept apart from `inspect` so the refresh re-renders the log and nothing else: the OBU HUD
+   * reads `inspect`, and a HUD whose height changed every second moved the chase camera's framing
+   * (its height is the view's bottom inset) every second.
+   */
+  inspectMessages: InspectMessages | null;
+  /**
+   * The followed node's `node.feed` (vwp-v1 §6.7, §6.14): what it sent and heard, message by
+   * message, and its queues — pushed by the engine only while the node is followed (`lib/feed.ts`).
+   */
+  feed: FeedView;
+  /**
+   * The followed vehicle's pose in the stream at the last projection flush: world-local metres, m/s
+   * and an ENU heading. The HUD prints it beside what the vehicle's BSMs say.
+   */
+  followedPose: FollowedPose | null;
+  /**
+   * Radios in the stream now: the client's node table, which `Hello` seeds and every spawn and
+   * despawn in a `Delta` keeps current (§3.1.3, §3.4.5). `run.status.nodes` is a polled engine
+   * figure that counts only vehicles; this is the one the stream on screen carries.
+   */
+  radios: number;
+  /** The followed node's neighbour table, refreshed on its own every two seconds. */
+  neighbors: readonly InspectNeighbor[] | null;
+  /**
+   * The followed node's credential state (`node.security`, via `inspect.node` `certs` and `crl`),
+   * refreshed with the neighbour table. `null` in a run with no credential system.
+   */
+  security: NodeSecurityRow | null;
+  /**
+   * Metrics another view asked the metrics panel to show, with what they are about ("the RA"), or
+   * `null`. The Backend view sets it when a researcher asks for an entity's metrics; the metrics
+   * panel takes it as its selection and clears it.
+   */
+  metricsFocus: { readonly title: string; readonly metrics: readonly string[] } | null;
+  /** Whether the viewport's legend is open; a preference that survives a reload. */
+  legendOpen: boolean;
+  overlays: Partial<Record<OverlayName, boolean>>;
+  serverOverlays: readonly ServerOverlay[];
+  groundTruthLocked: boolean;
+  cameraMode: CameraMode;
+  theme: ThemeName;
+  stats: StatsView | null;
+  frames: FrameCounts;
+  rpcMethods: readonly { name: string; summary: string }[];
+  rpcTitle: string;
+  rpcCalls: readonly { method: string; at: number }[];
+  scenario: unknown;
+  scenarioHash: string;
+  scenarioSchema: Record<string, unknown> | null;
+  scenarioExtras: ScenarioExtras;
+  scenarioList: readonly ScenarioListItem[];
+  /** Reconnect attempts since the engine was last reached; 0 while connected. */
+  reconnectAttempts: number;
+  validation: ValidationView | null;
+  timeline: readonly TimelineMark[];
+  /**
+   * A seek that is running the live kernel forward to its target, as the engine reports it
+   * (§6.14 `job.progress`); `null` when none is.
+   */
+  seekProgress: { readonly progress: number; readonly message: string } | null;
+  /** The scenario timeline's items the running run has fired, as of the stream position. */
+  firedEvents: readonly FiredEvent[];
+  /** A panel waiting for a click on the map, or `null`. */
+  mapPick: MapPickRequest | null;
+  logs: readonly LogLine[];
+  provenanceCount: number;
+  metricProvenance: Readonly<Record<string, number>>;
+  metricDims: Readonly<Record<string, string>>;
+  why: WhySubject | null;
+  /** Which section of the vehicle overlay is showing (`components/Inspector.tsx`). */
+  inspectorTab: InspectorTab;
+  /**
+   * Whether the interface shows protocol internals: wire field names, method names, frame counts
+   * and the specification sections behind each model.
+   *
+   * Off by default. The audience is a researcher studying vehicle communication, and for them a
+   * sentence about a document section is noise standing where an explanation should be. For the
+   * person debugging the engine it is the most useful text on the page, so it is one checkbox away
+   * and nothing is deleted — every value keeps its explanation either way.
+   */
+  devDetails: boolean;
+  /**
+   * How the 3D scene is lit: always day (the default), always night, or following the run's clock.
+   * The top-down map view is drawn in daylight whatever this says, so the streets stay readable.
+   */
+  lighting: LightingMode;
+  seriesTick: number;
+  target: EngineTargetView;
+  replay: ReplayView | null;
+  /** Every recording opened in this page, newest first. */
+  recordings: readonly RecordingEntry[];
+  /** Which of them is driving the viewport, or `null` when the live run is. */
+  currentRecording: string | null;
+  compare: CompareSideView | null;
+  compareSync: CompareSync;
+  compareDiffs: readonly MetricDiff[];
+  /** Metrics the difference view shows; empty means "every metric both sides report". */
+  compareMetrics: readonly string[];
+  /** Which shell panel is open over the main view, or `null` for none. */
+  panel: PanelId | null;
+  /**
+   * Whether the vehicle overlay (the dialog over the viewport with the selected radio's overview,
+   * its sent and received messages and its queues) is showing. Selecting a vehicle does not open
+   * it — the overlay would cover the vehicle the camera follows; the chase HUD's Details button,
+   * the header's inspector button and the I key do. Its x and Escape close it.
+   */
+  inspectorOpen: boolean;
+  /**
+   * The scenario as the settings window has edited it, not yet applied. `null` until the engine's
+   * document first arrives. Kept here rather than in the window so closing the window, or
+   * switching between the form and the JSON view, keeps the edits.
+   */
+  draft: Record<string, unknown> | null;
+  /** The settings window's last action result, and which action is in flight. */
+  settingsMessage: SettingsMessage | null;
+  settingsBusy: string | null;
+
+  setConnection: (s: VwpConnectionState) => void;
+  /**
+   * Adopt a `Hello`. A new run (or a non-resumed reconnect) empties the timeline; a resumed one
+   * (§1.4 case 1) continues the stream the timeline already describes, so it keeps it.
+   */
+  setHello: (h: HelloSummary, options?: { readonly resumed?: boolean }) => void;
+  setWorldSummary: (w: WorldSummary) => void;
+  setRun: (r: Partial<RunInfo>) => void;
+  setSelection: (actorId: number | null, nodeId: number | null) => void;
+  setTelemetry: (t: NodeTelemetry | null, node: number | null, simTimeNs: number) => void;
+  notePseudonym: (p: PseudonymInfo) => void;
+  setInspect: (r: InspectNodeResult | null) => void;
+  setInspectMessages: (m: InspectMessages | null) => void;
+  /** Apply one `node.feed` push (ignored when it is for another node). */
+  applyFeed: (push: NodeFeedNotification) => void;
+  /** The engine answered that it has no feed, and why. */
+  setFeedUnavailable: (reason: string | null) => void;
+  setFeedPaused: (paused: boolean) => void;
+  openFeedMessage: (dir: FeedDir, key: string | null) => void;
+  /** Open a message to read it, pausing the feed meanwhile; `null` closes it and resumes that pause. */
+  readFeedMessage: (dir: FeedDir, key: string | null) => void;
+  setFeedFilter: (f: { types?: readonly string[]; outcome?: FeedView["outcome"] }) => void;
+  setFollowedPose: (p: FollowedPose | null) => void;
+  setRadios: (n: number) => void;
+  setNeighbors: (n: readonly InspectNeighbor[] | null) => void;
+  setSecurity: (r: NodeSecurityRow | null) => void;
+  setMetricsFocus: (f: { readonly title: string; readonly metrics: readonly string[] } | null) => void;
+  setLegendOpen: (v: boolean) => void;
+  /** Hold the feed's rows still while the pointer is over them (`lib/feed.ts`). */
+  setFeedHover: (hovering: boolean) => void;
+  setOverlays: (o: Partial<Record<OverlayName, boolean>>) => void;
+  setServerOverlays: (o: readonly ServerOverlay[]) => void;
+  setGroundTruthLocked: (v: boolean) => void;
+  setCameraMode: (m: CameraMode) => void;
+  setTheme: (t: ThemeName) => void;
+  /** 5 Hz from `engine.flushProjection()`; keeps the previous object when the numbers match. */
+  setStats: (s: StatsView) => void;
+  /** 5 Hz from `engine.flushProjection()`; keeps the previous object when the counters match. */
+  setFrameCounts: (f: FrameCounts) => void;
+  setRpcMethods: (m: readonly { name: string; summary: string }[], title: string) => void;
+  noteRpcCall: (method: string) => void;
+  setScenario: (
+    doc: unknown,
+    hash: string,
+    schema: Record<string, unknown> | null,
+    extras?: Partial<ScenarioExtras>,
+  ) => void;
+  setReconnectAttempts: (n: number) => void;
+  setScenarioList: (items: readonly ScenarioListItem[]) => void;
+  setValidation: (v: ValidationView | null) => void;
+  addTimelineMarks: (marks: readonly TimelineMark[]) => void;
+  setSeekProgress: (p: { readonly progress: number; readonly message: string } | null) => void;
+  /** Keeps the previous array when the content is the same, like the other 5 Hz setters. */
+  setFiredEvents: (events: readonly FiredEvent[]) => void;
+  setMapPick: (request: MapPickRequest | null) => void;
+  addLog: (line: LogLine) => void;
+  setProvenanceCount: (n: number) => void;
+  /**
+   * Publish the metric → `prov_id` and metric → `dim_key` maps the engine accumulated (§3.7/§3.8).
+   *
+   * The engine hands over a fresh object only when its own map changed, so passing the same object
+   * twice is a no-op and the slice keeps its identity.
+   */
+  setMetricProjection: (provenance: Readonly<Record<string, number>>, dims: Readonly<Record<string, string>>) => void;
+  setWhy: (w: WhySubject | null) => void;
+  setInspectorTab: (t: InspectorTab) => void;
+  setDevDetails: (v: boolean) => void;
+  setLighting: (v: LightingMode) => void;
+  bumpSeries: () => void;
+  setTarget: (t: EngineTargetView) => void;
+  /** Publish (or clear) the local recording's state; `null` means no recording is open. */
+  setReplay: (r: ReplayView | null) => void;
+  /**
+   * Remember a recording, or refresh what is known about one already remembered.
+   *
+   * Keyed on name and size rather than on an incrementing id, so opening the same file twice from
+   * the picker updates one row instead of growing the list.
+   */
+  noteRecording: (r: RecordingEntry) => void;
+  forgetRecording: (id: string) => void;
+  setCurrentRecording: (id: string | null) => void;
+  /**
+   * Publish side B's summary. Driven by the compare controller's own tick, so it keeps the previous
+   * object when nothing moved — the same rule the 5 Hz setters follow.
+   */
+  setCompare: (c: CompareSideView | null) => void;
+  setCompareSync: (patch: Partial<CompareSync>) => void;
+  setCompareDiffs: (d: readonly MetricDiff[]) => void;
+  setCompareMetrics: (names: readonly string[]) => void;
+  setPanel: (p: PanelId | null) => void;
+  setInspectorOpen: (v: boolean) => void;
+  /** Replace the draft, or derive the next one from the current. */
+  setDraft: (
+    next: Record<string, unknown> | null | ((d: Record<string, unknown> | null) => Record<string, unknown> | null),
+  ) => void;
+  setSettingsMessage: (m: SettingsMessage | null) => void;
+  setSettingsBusy: (b: string | null) => void;
+}
+
+const DEV_DETAILS_KEY = "vwp.studio.devDetails";
+
+/** The developer-details preference, which survives a reload. Storage can throw; that is not fatal. */
+function readDevDetails(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(DEV_DETAILS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeDevDetails(v: boolean): void {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(DEV_DETAILS_KEY, v ? "1" : "0");
+  } catch {
+    /* a browser with storage denied still gets the toggle, just not the memory of it */
+  }
+}
+
+const LEGEND_KEY = "vwp.studio.legendOpen";
+
+const LIGHTING_KEY = "vwp.studio.lighting";
+
+/** The remembered lighting choice; day when there is none, or storage refuses. */
+function readLighting(): LightingMode {
+  try {
+    const v = typeof localStorage !== "undefined" ? localStorage.getItem(LIGHTING_KEY) : null;
+    return v === "night" || v === "clock" ? v : "day";
+  } catch {
+    return "day";
+  }
+}
+
+/** A remembered on/off preference. Storage can throw (a private window); the default is used then. */
+function readFlag(key: string, fallback: boolean): boolean {
+  try {
+    if (typeof localStorage === "undefined") return fallback;
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeFlag(key: string, v: boolean): void {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(key, v ? "1" : "0");
+  } catch {
+    /* the toggle still works, it is just not remembered */
+  }
+}
+
+const THEME_KEY = "vwp.studio.theme";
+
+/** The theme this viewer chose last time. Storage can throw or be empty; dark is the default. */
+export function readTheme(): ThemeName {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function writeTheme(v: ThemeName): void {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(THEME_KEY, v);
+  } catch {
+    /* the choice holds for this page; it is just not remembered */
+  }
+}
+
+/**
+ * The draft after the engine's document changed under it.
+ *
+ * A fresh copy of the engine's scenario replaces the form only when the form holds no edits. It is
+ * re-fetched on every connect, every new run and every reconnect, and it used to replace the draft
+ * unconditionally — so an edit made while a fetch was in flight vanished, and Apply went grey under
+ * the user's cursor. Edits are rebased onto the new document instead.
+ */
+export function rebaseDraft(
+  before: unknown,
+  next: unknown,
+  current: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const doc = (next ?? null) as Record<string, unknown> | null;
+  if (current === null || doc === null) return doc;
+  const mine = changedPointers(before ?? {}, current);
+  if (mine.length === 0) return doc;
+  let rebased: Record<string, unknown> = doc;
+  for (const pointer of mine) rebased = setPointer(rebased, pointer, getPointer(current, pointer));
+  return rebased;
+}
+
+const MAX_LOGS = 300;
+export const MAX_MARKS = 600;
+/** How many recordings the Runs tab remembers. Each row holds a `File`, so the list is bounded. */
+const MAX_RECORDINGS = 24;
+
+/**
+ * Whether two `StatsView`s carry the same numbers.
+ *
+ * `engine.flushProjection()` runs at STORE_HZ whether or not anything moved, so returning a fresh
+ * object every time made every `useStudio((s) => s.stats)` consumer — the topbar readout, the
+ * viewport chip — re-render 5x a second forever. Field-by-field is cheaper than the reconciliation
+ * it prevents.
+ */
+function sameStats(a: StatsView | null, b: StatsView): boolean {
+  return (
+    a !== null &&
+    a.fps === b.fps && a.fpsAverage === b.fpsAverage && a.frameMs === b.frameMs && a.p95Ms === b.p95Ms &&
+    a.cpuMs === b.cpuMs && a.drawCalls === b.drawCalls && a.triangles === b.triangles &&
+    a.actorInstances === b.actorInstances && a.actorCulled === b.actorCulled &&
+    a.actorLive === b.actorLive && a.buildingsVisible === b.buildingsVisible
+  );
+}
+
+function sameFrames(a: FrameCounts, b: FrameCounts): boolean {
+  return a.keyframe === b.keyframe && a.delta === b.delta && a.telemetry === b.telemetry &&
+    a.event === b.event && a.metric === b.metric;
+}
+
+/**
+ * Whether two comparison summaries carry the same content.
+ *
+ * `CompareController` republishes on its own tick whether or not side B moved, for the same reason
+ * `flushProjection` does, so the same "return the previous state" rule applies: a paused
+ * side-by-side must not re-render both viewport chips five times a second.
+ */
+function sameCompare(a: CompareSideView | null, b: CompareSideView | null): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.source === b.source && a.label === b.label && a.state === b.state && a.detail === b.detail &&
+    a.tNs === b.tNs && a.startNs === b.startNs && a.endNs === b.endNs && a.actors === b.actors &&
+    a.hasMetrics === b.hasMetrics
+  );
+}
+
+/** Whether two difference tables carry the same rows, in the same order. */
+function sameDiffs(a: readonly MetricDiff[], b: readonly MetricDiff[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.metric !== y.metric || x.a !== y.a || x.b !== y.b || x.delta !== y.delta ||
+      x.relative !== y.relative || x.unit !== y.unit || x.oneSided !== y.oneSided
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Whether `run` would be unchanged by `patch` — `run.status` is polled every 2 s (§6.6). */
+function sameRun(a: RunInfo, patch: Partial<RunInfo>): boolean {
+  for (const key of Object.keys(patch) as (keyof RunInfo)[]) {
+    if (patch[key] !== undefined && patch[key] !== a[key]) return false;
+  }
+  return true;
+}
+
+export const useStudio = create<StudioState>((set) => ({
+  connection: "idle",
+  hello: null,
+  world: null,
+  run: EMPTY_RUN,
+  selectedActor: null,
+  selectedNode: null,
+  telemetry: null,
+  telemetryNode: null,
+  simTimeNs: 0,
+  pseudonym: null,
+  inspect: null,
+  inspectMessages: null,
+  feed: EMPTY_FEED,
+  followedPose: null,
+  radios: 0,
+  neighbors: null,
+  security: null,
+  metricsFocus: null,
+  legendOpen: readFlag(LEGEND_KEY, false),
+  overlays: {},
+  serverOverlays: [],
+  groundTruthLocked: false,
+  cameraMode: "map",
+  theme: readTheme(),
+  stats: null,
+  frames: { keyframe: 0, delta: 0, telemetry: 0, event: 0, metric: 0 },
+  rpcMethods: [],
+  rpcTitle: "",
+  rpcCalls: [],
+  scenario: null,
+  scenarioHash: "",
+  scenarioSchema: null,
+  scenarioExtras: EMPTY_EXTRAS,
+  scenarioList: [],
+  reconnectAttempts: 0,
+  validation: null,
+  timeline: [],
+  seekProgress: null,
+  firedEvents: [],
+  mapPick: null,
+  logs: [],
+  provenanceCount: 0,
+  metricProvenance: {},
+  metricDims: {},
+  why: null,
+  inspectorTab: "overview",
+  devDetails: readDevDetails(),
+  lighting: readLighting(),
+  seriesTick: 0,
+  target: UNRESOLVED_TARGET,
+  replay: null,
+  recordings: [],
+  currentRecording: null,
+  compare: null,
+  compareSync: DEFAULT_SYNC,
+  compareDiffs: [],
+  compareMetrics: [],
+  panel: null,
+  inspectorOpen: false,
+  draft: null,
+  settingsMessage: null,
+  settingsBusy: null,
+
+  setConnection: (s) => set({ connection: s }),
+  setHello: (h, options) => set(options?.resumed === true ? { hello: h } : { hello: h, timeline: [] }),
+  setWorldSummary: (w) => set({ world: w }),
+  setRun: (r) => set((state) => (sameRun(state.run, r) ? state : { run: { ...state.run, ...r } })),
+  setSelection: (actorId, nodeId) =>
+    set((state) => ({
+      // Selecting no longer opens the overlay: it is large and sits over the viewport, so it opens
+      // only when asked for (the HUD's Details button). The HUD itself appears on selection.
+      selectedActor: actorId,
+      selectedNode: nodeId,
+      pseudonym: null,
+      inspect: null,
+      inspectMessages: null,
+      neighbors: null,
+      security: state.selectedNode === nodeId ? state.security : null,
+      // The feed belongs to the node: a new node starts an empty one, the same node keeps its own
+      // (the page selects twice per click, before and after `view.follow` names the node).
+      feed: state.feed.node === nodeId ? state.feed : followFeed(state.feed, nodeId),
+      followedPose: actorId === state.selectedActor ? state.followedPose : null,
+    })),
+  setTelemetry: (t, node, simTimeNs) =>
+    set((state) =>
+      state.telemetry === t && state.telemetryNode === node && state.simTimeNs === simTimeNs
+        ? state
+        : { telemetry: t, telemetryNode: node, simTimeNs },
+    ),
+  notePseudonym: (p) =>
+    set((state) => {
+      // A `sec.cert` change carries the i/j indices; a `node.tx` digest only refreshes the digest.
+      if (p.source === "node.tx" && state.pseudonym && state.pseudonym.digest === p.digest) return state;
+      if (p.source === "node.tx" && state.pseudonym?.source === "sec.cert" && state.pseudonym.digest === p.digest) return state;
+      return { pseudonym: p };
+    }),
+  setInspect: (r) => set({ inspect: r, ...(r?.messages ? { inspectMessages: r.messages } : {}) }),
+  setInspectMessages: (m) => set({ inspectMessages: m }),
+  applyFeed: (push) =>
+    set((state) => {
+      const next = applyPush(state.feed, push);
+      return next === state.feed ? state : { feed: next };
+    }),
+  setFeedUnavailable: (reason) => set((state) => ({ feed: { ...state.feed, unavailable: reason } })),
+  setFeedPaused: (paused) => set((state) => ({ feed: setPaused(state.feed, paused) })),
+  openFeedMessage: (dir, key) => set((state) => ({ feed: openMessage(state.feed, dir, key) })),
+  readFeedMessage: (dir, key) => set((state) => ({ feed: readMessage(state.feed, dir, key) })),
+  setFeedFilter: (f) =>
+    set((state) => ({
+      feed: { ...state.feed, ...(f.types ? { types: f.types } : {}), ...(f.outcome ? { outcome: f.outcome } : {}) },
+    })),
+  setFollowedPose: (p) =>
+    set((state) =>
+      p !== null &&
+      state.followedPose !== null &&
+      p.x === state.followedPose.x &&
+      p.y === state.followedPose.y &&
+      p.speed === state.followedPose.speed &&
+      p.headingRad === state.followedPose.headingRad
+        ? state
+        : { followedPose: p },
+    ),
+  setRadios: (n) => set((state) => (state.radios === n ? state : { radios: n })),
+  setNeighbors: (n) => set({ neighbors: n }),
+  setSecurity: (r) => set((state) => (sameSecurity(state.security, r) ? state : { security: r })),
+  setMetricsFocus: (f) => set({ metricsFocus: f }),
+  setLegendOpen: (v) => {
+    writeFlag(LEGEND_KEY, v);
+    set({ legendOpen: v });
+  },
+  setFeedHover: (hovering) => set((state) => ({ feed: setHovering(state.feed, hovering) })),
+  setOverlays: (o) => set((state) => ({ overlays: { ...state.overlays, ...o } })),
+  setServerOverlays: (o) => set({ serverOverlays: o }),
+  setGroundTruthLocked: (v) => set({ groundTruthLocked: v }),
+  setCameraMode: (m) => set({ cameraMode: m }),
+  setTheme: (t) => {
+    writeTheme(t);
+    set({ theme: t });
+  },
+  setStats: (s) => set((state) => (sameStats(state.stats, s) ? state : { stats: s })),
+  setFrameCounts: (f) => set((state) => (sameFrames(state.frames, f) ? state : { frames: f })),
+  setRpcMethods: (m, title) => set({ rpcMethods: m, rpcTitle: title }),
+  noteRpcCall: (method) =>
+    set((state) => ({ rpcCalls: [{ method, at: Date.now() }, ...state.rpcCalls].slice(0, 40) })),
+  setScenario: (doc, hash, schema, extras) =>
+    set((state) => ({
+      draft: rebaseDraft(state.scenario, doc, state.draft),
+      scenario: doc,
+      scenarioHash: hash,
+      scenarioSchema: schema,
+      // A caller that has only a document (a preset opened from a file) keeps the surface the
+      // engine published; the field index is a property of the build, not of the document.
+      scenarioExtras: {
+        runningHash: extras?.runningHash ?? state.scenarioExtras.runningHash,
+        staged: extras?.staged !== undefined ? extras.staged : state.scenarioExtras.staged,
+        fields: extras?.fields && extras.fields.length > 0 ? extras.fields : state.scenarioExtras.fields,
+        statuses: extras?.statuses && extras.statuses.length > 0 ? extras.statuses : state.scenarioExtras.statuses,
+        groups: extras?.groups && extras.groups.length > 0 ? extras.groups : state.scenarioExtras.groups,
+        quick: extras?.quick && extras.quick.length > 0 ? extras.quick : state.scenarioExtras.quick,
+        studies: extras?.studies && extras.studies.length > 0 ? extras.studies : state.scenarioExtras.studies,
+      },
+    })),
+  setReconnectAttempts: (n) => set((state) => (state.reconnectAttempts === n ? state : { reconnectAttempts: n })),
+  setScenarioList: (items) => set({ scenarioList: items }),
+  setValidation: (v) => set({ validation: v }),
+  setSeekProgress: (p) => set({ seekProgress: p }),
+  setFiredEvents: (events) =>
+    set((state) =>
+      JSON.stringify(state.firedEvents) === JSON.stringify(events) ? state : { firedEvents: events },
+    ),
+  setMapPick: (request) => set({ mapPick: request }),
+  addTimelineMarks: (marks) =>
+    set((state) => (marks.length === 0 ? state : { timeline: [...state.timeline, ...marks].slice(-MAX_MARKS) })),
+  addLog: (line) => set((state) => ({ logs: [line, ...state.logs].slice(0, MAX_LOGS) })),
+  setProvenanceCount: (n) => set({ provenanceCount: n }),
+  setMetricProjection: (provenance, dims) =>
+    set((state) =>
+      state.metricProvenance === provenance && state.metricDims === dims
+        ? state
+        : { metricProvenance: provenance, metricDims: dims },
+    ),
+  // Asking where a value comes from opens a small source note (`components/SourceNote.tsx`); it
+  // no longer takes over the vehicle overlay, whose Why tab the owner found meaningless (2026-10-06).
+  setWhy: (w) => set({ why: w }),
+  setInspectorTab: (t) => set({ inspectorTab: t }),
+  setDevDetails: (v) => {
+    writeDevDetails(v);
+    set({ devDetails: v });
+  },
+  setLighting: (v) => {
+    try {
+      if (typeof localStorage !== "undefined") localStorage.setItem(LIGHTING_KEY, v);
+    } catch {
+      /* still applied, just not remembered */
+    }
+    set({ lighting: v });
+  },
+  bumpSeries: () => set((state) => ({ seriesTick: state.seriesTick + 1 })),
+  setTarget: (t) => set({ target: t }),
+  setReplay: (r) => set({ replay: r }),
+  noteRecording: (r) =>
+    set((state) => ({
+      recordings: [r, ...state.recordings.filter((x) => x.id !== r.id)].slice(0, MAX_RECORDINGS),
+    })),
+  forgetRecording: (id) =>
+    set((state) => ({
+      recordings: state.recordings.filter((r) => r.id !== id),
+      currentRecording: state.currentRecording === id ? null : state.currentRecording,
+    })),
+  setCurrentRecording: (id) => set({ currentRecording: id }),
+  setCompare: (c) => set((state) => (sameCompare(state.compare, c) ? state : { compare: c })),
+  setCompareSync: (patch) => set((state) => ({ compareSync: { ...state.compareSync, ...patch } })),
+  setCompareDiffs: (d) => set((state) => (sameDiffs(state.compareDiffs, d) ? state : { compareDiffs: d })),
+  setCompareMetrics: (names) => set({ compareMetrics: names }),
+  setPanel: (p) => set((state) => (state.panel === p ? state : { panel: p })),
+  setInspectorOpen: (v) => set((state) => (state.inspectorOpen === v ? state : { inspectorOpen: v })),
+  setDraft: (next) => set((state) => ({ draft: typeof next === "function" ? next(state.draft) : next })),
+  setSettingsMessage: (m) => set({ settingsMessage: m }),
+  setSettingsBusy: (b) => set({ settingsBusy: b }),
+}));

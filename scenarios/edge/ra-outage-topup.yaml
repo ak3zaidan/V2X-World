@@ -1,0 +1,22 @@
+# Edge case 3: the RA is down for five minutes across the 614 -> 615 i-period boundary,
+# exactly when every vehicle of the conformance run asks for its next week (600 s).
+#
+# [CAMP122] §5.2.8.3: the EE retries a request with no answer in 10 s (SCMS-522), at most
+# 10 times in 60 minutes (SCMS-523). Expected: the ten retries at 610..700 s meet the
+# outage, the eleventh is held until 3,610 s after the first request, and every top-up
+# completes once the RA is back. Without the retry the requests are lost and the top-ups
+# never complete (the engine before the edge-case package).
+schema: v2xw/scenario/1
+meta:
+  name: edge-ra-outage-topup
+  description: >-
+    The conformance run with the home provider's RA offline from 590 s to 900 s, across
+    the week rollover's top-ups: the EE retry (SCMS-522/523) must recover every top-up.
+  authors: [v2xw]
+  tags: [scms, edge-case, outage, retry]
+  created: "2026-10-18"
+  base: ../scms-conformance.yaml
+actors:
+  backend:
+    failures:
+      - {node: ra, mode: offline, from_s: 590.0, to_s: 900.0}

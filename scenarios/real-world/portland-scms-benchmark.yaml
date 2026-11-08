@@ -1,0 +1,76 @@
+# The realistic SCMS benchmark on a second city: downtown Portland, Oregon, at the Monday
+# evening rush, with the same US deployment as midtown-scms-benchmark.yaml (two providers on
+# the real weekly calendar, manual MA review, DSRC under J2945/1, honest traffic, a passive
+# observer at 10 % of the signals).
+#
+# What changes with the city:
+#
+#  * The clock. 17:00 Pacific daylight time is 00:00 UTC on Tuesday 20 October 2026. The
+#    weekly grid is the same instant everywhere (09:00 UTC), so the rollover falls nine
+#    hours into the run (32,400 s), at 02:00 local time.
+#  * The map. Downtown between the Willamette and I-405 (OSM, 2026-09-30), 61 m blocks of
+#    one-way streets with Portland's slow signal progression (12 mph, PBOT), Oregon's
+#    20 mph business-district limit (ORS 811.111).
+#  * The traffic. Downtown has 68 km of drive lanes to the Midtown box's 119; 3,000 veh/h
+#    is offered (ASSUMPTION: PBOT publishes no network-wide downtown count; the importer's
+#    short lanes, not the rate, cap the fleet here, portland-downtown.yaml), with the
+#    Midtown mix less the delivery mopeds, and 600 pedestrians and 100 cyclists (a sample,
+#    ASSUMPTION).
+#  * Roadside units. 12 at the busiest signals (ASSUMPTION: Portland runs no CV pilot; this
+#    is the Midtown density on a smaller grid).
+#  * The provider split and regions are the deployment's; the city-to-region leg is longer
+#    from the west coast, which is what the backend latency numbers show.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-scms-benchmark.yaml
+  name: Portland SCMS benchmark (DSRC)
+  description: >-
+    Downtown Portland, Oregon, at the Monday evening rush with the US SCMS as deployed in
+    2025 on the real weekly calendar, DSRC under J2945/1, 12 roadside units, pedestrians
+    and cyclists, honest traffic only.
+  tags: [benchmark, real-world, portland, rush-hour, scms, dsrc, j2945, calendar, privacy]
+
+time:
+  t0: "2026-10-20T00:00:00Z"
+  fast_forward:
+    - {from_s: 900.0, to_s: 32280.0}
+    - {from_s: 32580.0, to_s: 172200.0}
+
+world:
+  source:
+    kind: osm-xml
+    path: worlds/cache/portland.osm.xml
+    bbox:
+      min_lat_deg: 45.5120
+      min_lon_deg: -122.6860
+      max_lat_deg: 45.5250
+      max_lon_deg: -122.6700
+  imported_at: "2026-09-30T00:00:00Z"
+  highway_preset: urban-us-portland
+  signals:
+    coordinate: true
+    progression_speed_mps: 5.36
+
+actors:
+  rsu_placement:
+    count: 12
+  vru:
+    pedestrians: 600
+    cyclists: 100
+  vehicles:
+    demand:
+      rate_veh_per_h: 3000.0
+    classes:
+      passenger:
+        fraction: 0.84
+      delivery:
+        fraction: 0.08
+      truck:
+        fraction: 0.03
+      bus:
+        fraction: 0.03
+      motorcycle:
+        fraction: 0.02
+      moped:
+        fraction: 0.0

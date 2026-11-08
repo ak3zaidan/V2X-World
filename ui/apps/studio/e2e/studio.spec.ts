@@ -1,0 +1,295 @@
+/**
+ * The end-to-end check: the real Studio, the real `@vwp/mock-server`, chromium with software WebGL.
+ *
+ * It asserts the chain the whole app hangs off — canvas mounts → `Hello` arrives → world decodes →
+ * actors appear → clicking one flies the camera down and populates the OBU HUD with non-zero
+ * telemetry → overlays toggle → the time controls issue the §6.6 methods — and captures the two
+ * screenshots the task asks for.
+ */
+
+import { expect, test, type Page } from "@playwright/test";
+
+const SHOTS = "screenshots";
+
+interface StudioProbe {
+  connection: string;
+  hello: boolean;
+  actors: number;
+  fps: number;
+  selectedActor: number | null;
+  selectedNode: number | null;
+  cameraMode: string;
+  worldLanes: number;
+  provenance: number;
+}
+
+declare global {
+  interface Window {
+    __vwpStudio?: {
+      engine: {
+        client: { poses: { count: number; occupied: Uint8Array; actorId: Uint32Array }; hello: unknown } | null;
+        viewer: { stats: { snapshot(): { fps: number; actorInstances: number } }; cameras: { state(): { mode: string } } } | null;
+        provenance: Map<number, unknown>;
+        selectActor(id: number | null, mode?: string): Promise<void>;
+      };
+      selectFirstActor: () => number | null;
+      fps: () => number;
+      actorCount: () => number;
+      logs: () => readonly { level: string; target: string; message: string }[];
+    };
+  }
+}
+
+async function probe(page: Page): Promise<StudioProbe> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __vwpStudio?: {
+        engine: {
+          client: { poses: { count: number }; hello: unknown } | null;
+          viewer: { stats: { snapshot(): { fps: number } }; cameras: { state(): { mode: string } } } | null;
+          provenance: Map<number, unknown>;
+          world: { lanes: { count: number } } | null;
+        };
+      };
+    };
+    const api = w.__vwpStudio;
+    const text = (sel: string): string => document.querySelector(`[data-testid="${sel}"]`)?.textContent ?? "";
+    return {
+      connection: text("connection-state"),
+      hello: api?.engine.client?.hello != null,
+      actors: api?.engine.client?.poses.count ?? 0,
+      fps: api?.engine.viewer?.stats.snapshot().fps ?? 0,
+      selectedActor: null,
+      selectedNode: null,
+      cameraMode: api?.engine.viewer?.cameras.state().mode ?? "",
+      worldLanes: api?.engine.world?.lanes.count ?? 0,
+      provenance: api?.engine.provenance.size ?? 0,
+    } satisfies StudioProbe;
+  });
+}
+
+test("the Studio streams VWP v1, renders actors, flies down on a click and fills the OBU HUD", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error") consoleErrors.push(m.text());
+  });
+  page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message}`));
+
+  await page.goto("/");
+
+  // 1. The canvas mounts and the connection reaches `streaming` (§1.3).
+  //     The chip's *text* is now a sentence-case phrase for the reader ("Running", "Run finished");
+  //     the protocol token it used to print lives in `data-state`, which is what a test wants.
+  await expect(page.getByTestId("viewer-canvas")).toBeVisible();
+  await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "streaming", { timeout: 30_000 });
+
+  // 2. `Hello` arrived with an engine version (§3.1.1 str_engine_version). The build string is no
+  //    longer in the header — eleven facts on one line was the defect — so it is read where it now
+  //    lives, in Run details in the header's menu.
+  await page.getByTestId("app-menu-button").click();
+  await page.getByTestId("run-details-button").click();
+  await expect(page.getByTestId("engine-version")).toContainText("vwp-mock-server");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("run-details")).toHaveCount(0);
+
+  // 3. The world decoded and actors are in the pose buffer (§3.3/§3.4).
+  await expect.poll(async () => (await probe(page)).worldLanes, { timeout: 30_000 }).toBeGreaterThan(0);
+  await expect.poll(async () => (await probe(page)).actors, { timeout: 30_000 }).toBeGreaterThan(10);
+
+  // 4. The viewer is actually drawing them.
+  await expect
+    .poll(async () => page.evaluate(() => window.__vwpStudio?.engine.viewer?.stats.snapshot().actorInstances ?? 0), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+
+  // 5. A `Provenance` frame arrived (§3.8 requires one right after the first keyframe).
+  await expect.poll(async () => (await probe(page)).provenance, { timeout: 30_000 }).toBeGreaterThan(0);
+
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: `${SHOTS}/01-map-view.png`, fullPage: false });
+
+  // 6. Clicking an actor: pick → flyTo → view.follow → Telemetry → HUD.
+  //    The click goes through the real picker: find a drawn actor's screen position first.
+  const clicked = await page.evaluate(() => {
+    const api = window.__vwpStudio;
+    if (!api) return null;
+    return api.selectFirstActor();
+  });
+  expect(clicked).not.toBeNull();
+
+  // The chip appears only while the camera follows someone.
+  await expect(page.getByTestId("follow-chip")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(async () => (await probe(page)).cameraMode, { timeout: 20_000 }).toBe("chase");
+
+  // 7. The HUD populates with non-zero telemetry from the §3.5 frames, and keeps to what a
+  //    person following a vehicle needs: who, moving, radio, security and health.
+  await expect(page.getByTestId("obu-hud")).toBeVisible();
+  await expect(page.getByTestId("hud-identity")).toContainText(/Vehicle|Roadside unit|Pedestrian device/, { timeout: 30_000 });
+  await expect(page.getByTestId("hud-msgs_in_per_s")).toBeVisible({ timeout: 30_000 });
+
+  const hudNumbers = await page.evaluate(() => {
+    const read = (key: string): string => document.querySelector(`[data-testid="hud-${key}"]`)?.textContent ?? "";
+    return { rx: read("msgs_in_per_s"), neighbours: read("nbr_total"), cpu: read("cpu_util_pm") };
+  });
+  // Non-zero, non-"n/a" telemetry: rx rate and neighbour count are the two the HUD leads with.
+  expect(hudNumbers.rx).toMatch(/[1-9]/);
+  expect(hudNumbers.neighbours).toMatch(/\d/);
+  // Compute is detail, not HUD material: it is in the overlay.
+  expect(hudNumbers.cpu).toBe("");
+  await expect(page.getByTestId("hud-health")).toBeVisible();
+
+  // 8. The rest of the record is in the vehicle overlay the HUD's Details button opens.
+  await page.getByTestId("hud-details").click();
+  await expect(page.getByTestId("inspector-panel")).toBeVisible();
+  await expect(page.getByTestId("insp-radio")).toContainText(/TX power/);
+  await expect(page.getByTestId("insp-security")).toContainText(/certificates/i);
+  await expect(page.getByTestId("insp-more")).toContainText(/fix/i);
+  await expect(page.getByTestId("hud-sparklines")).toBeVisible();
+  await expect
+    .poll(async () => page.locator('[data-testid="hud-sparklines"] canvas').count(), { timeout: 20_000 })
+    .toBeGreaterThanOrEqual(5);
+
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: `${SHOTS}/02-chase-view-hud.png`, fullPage: false });
+
+  // 9. Its sent and received messages, one row each; then it closes and the viewport is whole again.
+  await page.getByTestId("tab-sent").click();
+  await expect(page.locator('[data-testid="feed-row-sent"]').first()).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId("tab-received").click();
+  await expect(page.locator('[data-testid="feed-row-received"]').first()).toBeVisible({ timeout: 20_000 });
+  await page.screenshot({ path: `${SHOTS}/03-vehicle-overlay.png` });
+  await page.getByTestId("inspector-close").click();
+  await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
+
+  // 10. Overlay toggles round-trip through the viewer and `overlay.set` (§6.7).
+  await page.getByTestId("overlays-button").click();
+  await expect(page.getByTestId("overlays-menu")).toBeVisible();
+  const linksBefore = await page.evaluate(() =>
+    (window as unknown as { __vwpStudio?: { engine: { viewer: { overlays: { isEnabled(n: string): boolean } } | null } } }).__vwpStudio?.engine.viewer?.overlays.isEnabled("links"),
+  );
+  await page.locator('[data-testid="overlay-links"] input').click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __vwpStudio?: { engine: { viewer: { overlays: { isEnabled(n: string): boolean } } | null } } }).__vwpStudio?.engine.viewer?.overlays.isEnabled("links"),
+      ),
+    )
+    .toBe(!linksBefore);
+  await page.keyboard.press("Escape");
+  await page.mouse.click(1200, 600);
+
+  // 11. Time controls issue the right §6.6 calls.
+  const calls = async (): Promise<string[]> =>
+    page.evaluate(() =>
+      Array.from(document.querySelectorAll('[data-testid="copilot-panel"] .m .name')).map((e) => e.textContent ?? ""),
+    );
+  // The panel is named "Commands" rather than "Copilot": it says in its own first line that no
+  // assistant is connected in this build, so naming it after one was the interface promising
+  // something the build does not have. It is in the header's menu.
+  const commands = async (): Promise<void> => {
+    await page.getByTestId("app-menu-button").click();
+    // The command catalogue is listed only in developer mode.
+    const toggle = page.getByTestId("dev-details-toggle");
+    if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();
+    await page.getByTestId("menu-commands").click();
+    await expect(page.getByTestId("panel-commands")).toBeVisible();
+  };
+  await commands();
+  await expect(page.getByTestId("rpc-methods")).toBeVisible();
+  const methodCount = await page.locator('[data-testid="rpc-methods"] .m').count();
+  expect(methodCount).toBeGreaterThanOrEqual(32);
+  void calls;
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("panel-commands")).toHaveCount(0);
+
+  await page.getByTestId("pause").click();
+  await expect(page.getByTestId("play")).toBeVisible({ timeout: 20_000 });
+  const tAfterPause = await page.getByTestId("sim-clock").textContent();
+
+  await page.getByTestId("step").click();
+  await expect.poll(async () => page.getByTestId("sim-clock").textContent()).not.toBe(tAfterPause);
+
+  await page.getByTestId("speed").selectOption("5");
+  await page.getByTestId("play").click();
+  await expect(page.getByTestId("pause")).toBeVisible({ timeout: 20_000 });
+
+  // A seek back to the start must move the clock backwards (§6.6 run.seek). The bar has no
+  // start button any more: Home on the timeline goes there.
+  await page.getByTestId("scrub-range").focus();
+  await page.keyboard.press("Home");
+  await expect.poll(async () => {
+    const text = (await page.getByTestId("sim-clock").textContent()) ?? "";
+    return text.startsWith("00:00:0");
+  }, { timeout: 20_000 }).toBe(true);
+
+  // 12. The calls actually went out over JSON-RPC.
+  await commands();
+  const made = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid="copilot-panel"] .method-list')).pop()?.textContent ?? "",
+  );
+  expect(made).toContain("run.seek");
+  expect(made).toContain("run.speed");
+  expect(made).toContain("run.step");
+  expect(made).toContain("run.pause");
+  expect(made).toContain("view.follow");
+  await page.keyboard.press("Escape");
+
+  // 13. The settings window rendered a form with units and help; the metrics dashboard its cards.
+  await page.getByTestId("settings-button").click();
+  await expect(page.getByTestId("settings-window")).toBeVisible();
+  await expect(page.getByTestId("schema-source")).toBeVisible();
+  await page.getByTestId("validate").click();
+  await expect(page.getByTestId("validation-state")).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId("validation-state").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: `${SHOTS}/04-settings.png` });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-window")).toHaveCount(0);
+  // The seek to the start leaves the run paused at 0 s with no measurements; play on so
+  // the dashboard has cards to show.
+  if (await page.getByTestId("play").isVisible()) await page.getByTestId("play").click();
+  await page.getByTestId("metrics-button").click();
+  await expect(page.getByTestId("metrics-search")).toBeVisible();
+  await expect(page.getByTestId("metric-card-pdr")).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/04b-metrics.png` });
+  await page.keyboard.press("Escape");
+
+  // 14. The page's log carries no protocol, world or RPC errors (the Log tab is gone; the lines
+  //     are still collected, and the test handle reads them).
+  const logLines = await page.evaluate(() => window.__vwpStudio?.logs() ?? []);
+  expect(logLines.length).toBeGreaterThan(0);
+  expect(logLines.filter((l) => l.level === "error")).toEqual([]);
+
+  // 15. No uncaught errors along the way.
+  const ignorable = (t: string): boolean => t.includes("WebGL") && t.includes("deprecat");
+  expect(consoleErrors.filter((t) => !ignorable(t))).toEqual([]);
+});
+
+test("light theme renders and the actor-state legend keeps shape redundancy", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "streaming", { timeout: 30_000 });
+  // The previous test leaves the run paused at t = 0; resume so this one sees moving traffic.
+  const playing = await page.getByTestId("play").count();
+  if (playing > 0) await page.getByTestId("play").click();
+  await expect
+    .poll(async () => page.evaluate(() => (window as unknown as { __vwpStudio?: { actorCount(): number } }).__vwpStudio?.actorCount() ?? 0), { timeout: 30_000 })
+    .toBeGreaterThan(10);
+  await page.waitForTimeout(2500);
+  // The theme is set once, so it lives in the header's menu rather than on the header itself.
+  await page.getByTestId("app-menu-button").click();
+  await page.getByTestId("theme-toggle").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("app-menu")).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  // The key is folded to one chip until it is asked for.
+  await expect(page.getByTestId("state-legend")).toHaveCount(0);
+  await page.getByTestId("legend-toggle").click();
+  await expect(page.getByTestId("state-legend")).toBeVisible();
+  // Five state glyphs, each its own shape; the road-user key the vru track added (a vehicle dot
+  // and a smaller pedestrian/cyclist dot) is a size key, not a state, and is counted apart.
+  const legend = page.getByTestId("state-legend");
+  const roadUsers = await legend.locator('[data-testid="legend-vehicle"] svg, [data-testid="legend-vru"] svg').count();
+  expect(roadUsers).toBe(2);
+  const shapes = await legend.locator("svg").count();
+  expect(shapes - roadUsers).toBe(5);
+  await page.waitForTimeout(1200);
+  await page.screenshot({ path: `${SHOTS}/05-light-theme.png` });
+});

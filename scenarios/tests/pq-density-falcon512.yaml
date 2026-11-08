@@ -1,0 +1,11 @@
+# pq-density-base.yaml with hybrid Falcon-512 + ECDSA P-256 signatures.
+schema: v2xw/scenario/1
+meta:
+  name: pq-density-falcon512
+  description: >-
+    The post-quantum density base with hybrid Falcon-512 + ECDSA P-256 signatures.
+  authors: [v2xw]
+  tags: [post-quantum, fragmentation]
+  base: pq-density-base.yaml
+security:
+  signature: hybrid-falcon512-ecdsa-p256

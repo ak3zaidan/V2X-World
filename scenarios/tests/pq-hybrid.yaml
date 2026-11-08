@@ -1,0 +1,11 @@
+# Hybrid Falcon-512 + ECDSA P-256 certificates and signatures, fragmented at the WSMP MTU, on the software-crypto SoC (no OBU HSM publishes Falcon); compare with no-hsm.
+# A one-change variant of ../real-world/midtown-scms-realism.yaml; same seed.
+schema: v2xw/scenario/1
+meta: {base: ../real-world/midtown-scms-realism.yaml, name: Midtown SCMS pq-hybrid}
+nodes:
+  default_obu: obu/generic-automotive-soc-no-hsm
+security:
+  signature: hybrid-falcon512-ecdsa-p256
+net:
+  fragmenter:
+    id: fragmenter/generic-sdu

@@ -1,0 +1,24 @@
+# Mini release run 7 (test): faulty honest devices (as run 6) beside the held-out Heading
+# family and six Position and Speed attacks, so test holds both faulty and malicious
+# senders.
+schema: v2xw/scenario/1
+# Its own seed: no two runs share traffic, so a split by run is a split by traffic.
+seed: "0xD5_0007"
+meta: {base: base.yaml, name: dataset r7 faulty-heading-test}
+actors:
+  vehicles:
+    bsm_timing: {enabled: true, calibration: data/calibration/dataset-faulty-devices.yaml}
+threats:
+  attackers:
+    - {id: threat/attacker/legacy/ReversedHeading, actor_ids: [12], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/HeadingOffset, actor_ids: [8], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/HeadingOffset, actor_ids: [21], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomPos, actor_ids: [43], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/Teleport, actor_ids: [20], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SineWavePos, actor_ids: [39], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SlowDrift, actor_ids: [0], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/AlongRoadOffset, actor_ids: [10], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ConstSpeedOffset, actor_ids: [41], schedule: {from_s: 25.0, to_s: 75.0}}
+exporters:
+  - id: dataset
+    opts: {run_id: r07, split: test, tier: mini, instrumented_receivers: 10, heldout_attacks: [ReversedHeading, HeadingOffset]}

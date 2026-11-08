@@ -1,0 +1,28 @@
+# Edge case 2: half the vehicles carry a clock 5,000 s ahead of the truth (a GNSS time
+# error held while the receiver keeps its fix, or a spoofed time source).
+#
+# IEEE 1609.2 §6.3.9: a sender stamps generationTime on its own clock; §5.2: a receiver
+# checks the signer's validity against its own current time. The run starts 10 minutes
+# before the 614 -> 615 boundary (600 s); 614 is valid until 4,200 s (the 1-hour overlap).
+#
+# Expected, radio window 0-660 s: a skewed vehicle believes it is 5,000-5,660 s, past
+# 614's end, so it changes to 615 at once (reason "expired") and stamps that time. An
+# accurate receiver refuses every one of its BSMs as chain-expired (615 not yet valid)
+# until 600 s, then accepts them. A skewed receiver refuses every BSM still under 614
+# (expired on its clock). No edge falls in the later windows, so they match the base.
+schema: v2xw/scenario/1
+meta:
+  name: edge-clock-skew-ahead
+  description: >-
+    The conformance run with half the vehicles' clocks 5,000 s ahead across the week
+    rollover: validity is judged, and generationTime stamped, on each node's own clock.
+  authors: [v2xw]
+  tags: [scms, edge-case, clock, validity]
+  created: "2026-10-19"
+  base: ../scms-conformance.yaml
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      clock_skew_s: 5000
+      clock_skew_share: 0.5

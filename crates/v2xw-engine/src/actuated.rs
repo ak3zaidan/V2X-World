@@ -1,0 +1,1086 @@
+//! Vehicle-actuated signal control and green-wave coordination (`traffic.signals`).
+//!
+//! # How an actuated controller runs on a fixed-time plan
+//!
+//! A plan in the world is a clock: the phase showing at `t` is the phase at
+//! `(t − offset) mod cycle` ([`SignalPlan::phase_at`]). Every consumer — the drivers, the
+//! pedestrians, the SPaT encoder, the page's lamps — reads that clock, so a controller
+//! that changes *when* a phase ends must do it by moving the clock, as the priority
+//! service does (`crate::priority`). Then nothing can show a different signal from the
+//! one the drivers obey: the SPaT is the signal by construction.
+//!
+//! The controller is the NEMA TS 2 single-ring basic actuated logic, phase by phase
+//! (FHWA Traffic Signal Timing Manual, FHWA-HOP-08-024, 2008, chapter 5):
+//!
+//! * a green phase runs at least `min_green_s` (and never less than its own stated length
+//!   when it carries a pedestrian walk, so the walk and its clearance are always served);
+//! * **gap-out**: once past the minimum, if no vehicle has been on a detector of the
+//!   movements this phase ends for `passage_s`, and an approach that is red now has a
+//!   vehicle waiting, the phase ends at once — the clock jumps to its end, so the amber
+//!   and all-red after it run in full;
+//! * **extension**: at the phase's stated end, while detections keep coming within the
+//!   passage time, the clock is held, up to `max_green_s` of green;
+//! * **max-out**: at `max_green_s` the phase ends whatever the detectors see;
+//! * **rest in green**: with no vehicle waiting on any red approach the phase holds, as
+//!   a controller without recall does.
+//!
+//! A detector is the last `detector_m` of each approach lane (a stop-line presence loop):
+//! a vehicle whose front is on it is a call. With `detector_placement: sumo` the green is
+//! extended instead by SUMO's per-lane induction loop (MSActuatedTrafficLightLogic,
+//! `detector-gap` 2 s: the loop sits the lane's speed limit times 2 s before the stop
+//! line), occupied while a vehicle's body covers it; the stop-line zone still places the
+//! call of a vehicle waiting on red. Amber and all-red phases are never moved.
+//!
+//! # Green wave
+//!
+//! `green_wave_speed_mps` sets every plan's offset to the time a vehicle at that speed
+//! takes to reach the junction along `green_wave_heading_deg`, modulo the cycle: the
+//! classic one-way progression (Roess, Prassas & McShane, *Traffic Engineering*, 4th ed.,
+//! ch. 20, the time-space diagram). It is applied once, when the run is built.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Serialize;
+use v2xw_core::ctx::{Record, Visibility};
+use v2xw_core::ids::LaneId;
+use v2xw_core::time::SimTime;
+use v2xw_world::model::LaneKind;
+use v2xw_world::{SignalPlan, SignalState, World};
+
+use crate::scenario::schema::{DetectorPlacement, SignalControl, SignalControlKind};
+
+/// SUMO's default `detector-gap` for actuated signals: the loop is this many seconds of
+/// travel at the lane's speed limit upstream of the stop line (SUMO documentation,
+/// "Traffic Lights", actuated parameters; MSActuatedTrafficLightLogic).
+pub const SUMO_DETECTOR_GAP_S: f64 = 2.0;
+
+/// The vehicle length a loop is taken to be covered for, metres: a passenger car (SUMO's
+/// default vType length, 5 m).
+const LOOP_COVER_M: f64 = 5.0;
+
+/// What one movement of a plan is, for the controller.
+#[derive(Debug, Clone, Default)]
+struct PlanInfo {
+    /// The approach lane of each controlled movement (`None` for a crossing).
+    approach: Vec<Option<LaneId>>,
+    /// Which movements are pedestrian crossings.
+    crossing: Vec<bool>,
+    /// The phase the controller last saw, and how long it has held it.
+    phase: usize,
+    held_s: f64,
+    /// When a vehicle was last on a detector of the movements the current phase ends.
+    last_call_s: f64,
+    /// Whether this phase's max-out was counted.
+    maxed: bool,
+    /// Which movements had a call at the last step: what a green may not rest against.
+    called: Vec<bool>,
+    /// The last step's length: a green held in steps can end two steps past its maximum, one
+    /// to see it reached and one to run out what it had left.
+    step_s: f64,
+    /// The bounds an imported actuated programme gives this plan, or `None` for
+    /// `traffic.signals`' own.
+    bounds: Option<ProgrammeBounds>,
+}
+
+/// An imported actuated programme's timing: each phase's `(min, max)` green,
+/// `None` for a phase that runs its stated duration (SUMO: `minDur` and `maxDur` default
+/// to `duration`, and a phase whose two are equal is not actuated), and the passage time.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct ProgrammeBounds {
+    phases: Vec<Option<(f64, f64)>>,
+    passage_s: f64,
+}
+
+/// SUMO's default `max-gap` for actuated programmes, seconds: a phase is extended while
+/// the gap between detections stays under it (SUMO documentation, "Traffic Lights",
+/// actuated parameters [verify: the default as recalled, 3.0 s]).
+pub const SUMO_MAX_GAP_S: f64 = 3.0;
+
+impl ProgrammeBounds {
+    fn of(plan: &SignalPlan, prog: &v2xw_world::SignalProgramme) -> Self {
+        let phases = plan
+            .phases
+            .iter()
+            .zip(&prog.phases)
+            .map(|(ph, b)| {
+                let lo = b.min_s.unwrap_or(ph.duration_s);
+                let hi = b.max_s.unwrap_or(ph.duration_s).max(lo);
+                ((hi - lo).abs() > 1e-9).then_some((lo, hi))
+            })
+            .collect();
+        let passage_s = prog
+            .params
+            .get("max-gap")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(SUMO_MAX_GAP_S);
+        ProgrammeBounds { phases, passage_s }
+    }
+}
+
+/// What the actuated controllers did over the run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct ActuatedCounters {
+    /// Greens ended early because the detectors went quiet.
+    pub gap_outs: u64,
+    /// Greens ended at their maximum with vehicles still arriving.
+    pub max_outs: u64,
+    /// Seconds of green added beyond the plans' stated lengths.
+    pub extended_s: f64,
+    /// Seconds of green cut from the plans' stated lengths.
+    pub cut_s: f64,
+}
+
+/// How far a controller may still move the end of one phase of a plan, for the SPaT
+/// (`crate::infra`): up to `cut_s` sooner and `extend_s` later, `None` when the phase has no
+/// latest end (a green resting with nobody waiting ends only when somebody calls).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PhaseBound {
+    /// Seconds sooner, at most.
+    pub cut_s: f64,
+    /// Seconds later, at most; `None`: unbounded.
+    pub extend_s: Option<f64>,
+}
+
+impl PhaseBound {
+    /// A phase nothing moves.
+    pub const FIXED: Self = Self {
+        cut_s: 0.0,
+        extend_s: Some(0.0),
+    };
+
+    /// Both controllers of one phase together: a cut stops at the same minimum green, and
+    /// extensions add up.
+    #[must_use]
+    pub fn with(self, other: Self) -> Self {
+        Self {
+            cut_s: self.cut_s.max(other.cut_s),
+            extend_s: self.extend_s.zip(other.extend_s).map(|(a, b)| a + b),
+        }
+    }
+}
+
+/// What an actuated controller may still do to the plan's clock, for the SPaT
+/// (`crate::infra`): the running phase may end up to `cut_s` sooner (a gap-out once the
+/// minimum green has run) or `extend_s` later (extension to the maximum green), and a later
+/// phase by its own entry of `phases`. A group's change moves with every phase that ends at or
+/// before it, so a red group sums the greens it waits through.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActuatedOutlook {
+    /// Seconds sooner, at most.
+    pub cut_s: f64,
+    /// Seconds later, at most.
+    pub extend_s: f64,
+    /// Under the NEMA dual ring: the soonest any of the junction's indications can change,
+    /// seconds from now, which is every group's `minEndTime` (`crate::nema::control`);
+    /// `None` for the single ring, whose window is `cut_s`.
+    pub earliest_s: Option<f64>,
+    /// Under the single ring: each phase's bound, the running one counted from now. Empty
+    /// under the dual ring.
+    pub phases: Vec<PhaseBound>,
+}
+
+/// `traffic.control` — the traffic control's own log: actuated signal decisions and
+/// gridlock resolution, cumulative (PUBLIC: what a traffic management centre logs).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TrafficControlRecord {
+    /// When.
+    pub t: SimTime,
+    /// Greens ended early by a gap.
+    pub gap_outs: u64,
+    /// Greens ended at their maximum.
+    pub max_outs: u64,
+    /// Seconds of green added.
+    pub extended_s: f64,
+    /// Seconds of green cut.
+    pub cut_s: f64,
+    /// Vehicles found standing for the whole gridlock timeout.
+    pub jammed: u64,
+    /// Of those, moved on along their route.
+    pub teleported: u64,
+    /// Of those, removed for want of room anywhere on the rest of their route.
+    pub removed: u64,
+}
+
+impl Record for TrafficControlRecord {
+    const CHANNEL: &'static str = "traffic.control";
+    const VISIBILITY: Visibility = Visibility::Public;
+}
+
+/// Every junction's actuated controller.
+#[derive(Debug, Clone, Default)]
+pub struct ActuatedControllers {
+    params: Option<SignalControl>,
+    plans: BTreeMap<usize, PlanInfo>,
+    counters: ActuatedCounters,
+    /// Under `control: nema`, the junctions the dual ring runs (`crate::nema`); `plans`
+    /// then holds only the ones that fell back to the single ring.
+    nema: Option<crate::nema::control::NemaControllers>,
+}
+
+impl ActuatedControllers {
+    /// Controllers for `control`, or inert ones for fixed-time control. Under
+    /// `control: nema`, every plan that maps to the dual ring runs it and the rest keep
+    /// this single-ring controller (counted in [`Self::nema_fallbacks`]).
+    ///
+    /// A plan whose source file gave it a programme (`World::signal_programmes`)
+    /// runs that programme whatever `control.control` says: an actuated one on this
+    /// controller between its phases' `minDur` and `maxDur`, a NEMA one on the dual ring.
+    pub fn new(control: &SignalControl, world: &World) -> Self {
+        use v2xw_world::SignalProgrammeKind as Kind;
+        let global = matches!(
+            control.control,
+            SignalControlKind::Actuated | SignalControlKind::Nema
+        );
+        let programme = |i: usize| {
+            world
+                .signal_programmes
+                .iter()
+                .find(|p| p.plan.as_usize() == i)
+        };
+        if !global && world.signal_programmes.is_empty() {
+            return Self::default();
+        }
+        let nema = (control.control == SignalControlKind::Nema
+            || world.signal_programmes.iter().any(|p| p.kind == Kind::Nema))
+        .then(|| crate::nema::control::NemaControllers::new(control, world));
+        let mut approach_of: BTreeMap<LaneId, LaneId> = BTreeMap::new();
+        for c in world.roads.connections() {
+            if let Some(via) = c.via {
+                approach_of.entry(via).or_insert(c.from_lane);
+            }
+        }
+        let mut plans = BTreeMap::new();
+        for (i, plan) in world.signals.iter().enumerate() {
+            if nema.as_ref().is_some_and(|n| n.controls(i)) {
+                continue;
+            }
+            let prog = programme(i);
+            if !(global || prog.is_some_and(|p| p.kind != Kind::Static)) {
+                continue;
+            }
+            let bounds = prog
+                .filter(|p| p.kind != Kind::Static)
+                .map(|p| ProgrammeBounds::of(plan, p));
+            let crossing: Vec<bool> = plan
+                .controlled
+                .iter()
+                .map(|l| {
+                    world
+                        .roads
+                        .try_lane(*l)
+                        .is_some_and(|x| x.kind == LaneKind::Crossing)
+                })
+                .collect();
+            let approach = plan
+                .controlled
+                .iter()
+                .zip(&crossing)
+                .map(|(l, c)| {
+                    if *c {
+                        None
+                    } else {
+                        approach_of.get(l).copied()
+                    }
+                })
+                .collect();
+            plans.insert(
+                i,
+                PlanInfo {
+                    approach,
+                    crossing,
+                    bounds,
+                    ..PlanInfo::default()
+                },
+            );
+        }
+        Self {
+            params: Some(control.clone()),
+            plans,
+            counters: ActuatedCounters::default(),
+            nema,
+        }
+    }
+
+    /// Whether any plan runs under the NEMA dual ring.
+    pub fn has_nema(&self) -> bool {
+        self.nema.is_some()
+    }
+
+    /// The plans under the NEMA dual ring.
+    pub fn nema_plans(&self) -> impl Iterator<Item = usize> + '_ {
+        self.nema.iter().flat_map(|n| n.plan_indices())
+    }
+
+    /// Hands NEMA plan `idx` its standing priority requests, `(signal group, arrival)`
+    /// (`crate::priority::PriorityControllers::requests`), served through its rings.
+    pub fn set_nema_priority(
+        &mut self,
+        idx: usize,
+        requests: &[(u16, f64)],
+        params: &crate::priority::PriorityParams,
+    ) {
+        if let Some(n) = &mut self.nema {
+            n.set_priority(idx, requests, params);
+        }
+    }
+
+    /// Whether plan `idx` runs under the NEMA dual ring.
+    pub fn is_nema(&self, idx: usize) -> bool {
+        self.nema.as_ref().is_some_and(|n| n.controls(idx))
+    }
+
+    /// Under `control: nema`, the plans left to the single ring, by reason.
+    pub fn nema_fallbacks(&self) -> BTreeMap<&'static str, u64> {
+        self.nema
+            .as_ref()
+            .map(|n| n.fallback_counts().clone())
+            .unwrap_or_default()
+    }
+
+    /// The window the SPaT of plan `idx` states at `now_s` ([`ActuatedOutlook`]), `None`
+    /// under fixed-time control. Outside a vehicle green (an amber, an all-red) nothing
+    /// moves the clock, so the window is zero both ways until the next green starts.
+    pub fn outlook(&self, world: &World, idx: usize, now_s: f64) -> Option<ActuatedOutlook> {
+        if let Some(n) = self.nema.as_ref().filter(|n| n.controls(idx)) {
+            return n.outlook(idx, now_s);
+        }
+        let p = self.params.as_ref()?;
+        let st = self.plans.get(&idx)?;
+        let plan = world.signals.get(idx)?;
+        let (i, into) = plan.phase_at(now_s)?;
+        let held = if st.phase == i { st.held_s } else { 0.0 };
+        let phases: Vec<PhaseBound> = (0..plan.phases.len())
+            .map(|k| st.phase_bound(p, plan, k, (k == i).then_some((into, held))))
+            .collect();
+        // The running phase's own window: what `extend_s` says of a rest is the maximum
+        // timer, which starts counting when a call comes.
+        let now = phases[i];
+        let extend_s = now.extend_s.unwrap_or_else(|| {
+            st.limits(p, i).map_or(0.0, |(_, max_green, _)| {
+                (max_green - into - held - (plan.phases[i].duration_s - into).max(0.0)).max(0.0)
+            })
+        });
+        Some(ActuatedOutlook {
+            cut_s: now.cut_s,
+            extend_s,
+            earliest_s: None,
+            phases,
+        })
+    }
+
+    /// Whether any controller is actuated.
+    pub fn is_active(&self) -> bool {
+        self.params.is_some()
+    }
+
+    /// What the controllers have done so far.
+    pub fn counters(&self) -> ActuatedCounters {
+        let mut c = self.counters;
+        if let Some(n) = &self.nema {
+            let k = n.counters();
+            c.gap_outs += k.gap_outs;
+            // A coordinated force-off ends a green at a time limit, as a max-out does.
+            c.max_outs += k.max_outs + k.force_offs;
+        }
+        c
+    }
+
+    /// The detector calls: every approach lane with a vehicle front in its last
+    /// `detector_m`, from `(lane, s)` positions.
+    pub fn calls(
+        &self,
+        world: &World,
+        positions: impl Iterator<Item = (LaneId, f64)>,
+    ) -> BTreeSet<LaneId> {
+        let Some(p) = &self.params else {
+            return BTreeSet::new();
+        };
+        positions
+            .filter(|(l, s)| {
+                world
+                    .roads
+                    .try_lane(*l)
+                    .is_some_and(|lane| lane.length_m - s <= p.detector_m)
+            })
+            .map(|(l, _)| l)
+            .collect()
+    }
+
+    /// The calls that extend a green: [`Self::calls`] under stop-line placement, and the
+    /// lanes whose SUMO upstream loop a vehicle covers under `sumo` placement.
+    pub fn extension_calls(
+        &self,
+        world: &World,
+        positions: impl Iterator<Item = (LaneId, f64)>,
+    ) -> BTreeSet<LaneId> {
+        let Some(p) = &self.params else {
+            return BTreeSet::new();
+        };
+        if p.detector_placement == DetectorPlacement::StopLine {
+            return self.calls(world, positions);
+        }
+        positions
+            .filter(|(l, s)| {
+                world.roads.try_lane(*l).is_some_and(|lane| {
+                    let at = (lane.speed_limit_mps * SUMO_DETECTOR_GAP_S)
+                        .clamp(1.0, lane.length_m.max(1.0));
+                    let to_end = lane.length_m - s;
+                    to_end <= at && to_end > at - LOOP_COVER_M
+                })
+            })
+            .map(|(l, _)| l)
+            .collect()
+    }
+
+    /// Advances every controller to `now_s` by `dt_s`, moving the plans' offsets in
+    /// `world`. `calls` is [`Self::calls`] at the start of the step.
+    pub fn step(&mut self, world: &mut World, calls: &BTreeSet<LaneId>, now_s: f64, dt_s: f64) {
+        self.step_with(world, calls, calls, now_s, dt_s);
+    }
+
+    /// [`Self::step`] with the extension detectors apart from the presence calls on red
+    /// ([`Self::extension_calls`]).
+    pub fn step_with(
+        &mut self,
+        world: &mut World,
+        extend: &BTreeSet<LaneId>,
+        calls: &BTreeSet<LaneId>,
+        now_s: f64,
+        dt_s: f64,
+    ) {
+        self.step_with_pedestrians(
+            world,
+            extend,
+            calls,
+            &crate::nema::control::PedestrianIndex::default(),
+            now_s,
+            dt_s,
+        );
+    }
+
+    /// [`Self::step_with`] with the pedestrians standing at crosswalks, whose push-button
+    /// calls the NEMA controller serves (`crate::nema::control::PedestrianIndex`). The
+    /// single-ring controller does not read them.
+    pub fn step_with_pedestrians(
+        &mut self,
+        world: &mut World,
+        extend: &BTreeSet<LaneId>,
+        calls: &BTreeSet<LaneId>,
+        peds: &crate::nema::control::PedestrianIndex,
+        now_s: f64,
+        dt_s: f64,
+    ) {
+        let Some(p) = self.params.clone() else {
+            return;
+        };
+        if let Some(n) = &mut self.nema {
+            n.step(world, extend, calls, peds, now_s, dt_s);
+        }
+        for (&idx, st) in &mut self.plans {
+            let Some(plan) = world.signals.get(idx) else {
+                continue;
+            };
+            let Some((i, into)) = plan.phase_at(now_s) else {
+                continue;
+            };
+            if i != st.phase {
+                st.phase = i;
+                st.held_s = 0.0;
+                st.last_call_s = now_s;
+                st.maxed = false;
+            }
+            st.step_s = dt_s;
+            st.called.clear();
+            st.called.extend(
+                st.approach
+                    .iter()
+                    .map(|a| a.is_some_and(|l| calls.contains(&l))),
+            );
+            if !vehicle_green(plan, i, &st.crossing) {
+                continue;
+            }
+            let n = plan.phases.len();
+            let next = (i + 1) % n;
+            let green = |k: usize, m: usize| {
+                matches!(
+                    plan.phases[k].states.get(m),
+                    Some(SignalState::Green | SignalState::GreenYield)
+                )
+            };
+            // The movements this phase ends: green now, not green next.
+            let ending: Vec<usize> = (0..plan.controlled.len())
+                .filter(|m| !st.crossing[*m] && green(i, *m) && !green(next, *m))
+                .collect();
+            if ending.is_empty() {
+                continue; // an overlap: the green continues into the next phase
+            }
+            let called = |m: &usize| st.approach[*m].is_some_and(|l| calls.contains(&l));
+            let extends = |m: &usize| st.approach[*m].is_some_and(|l| extend.contains(&l));
+            if ending.iter().any(extends) {
+                st.last_call_s = now_s;
+            }
+            let waiting = (0..plan.controlled.len())
+                .filter(|m| !st.crossing[*m] && !green(i, *m))
+                .any(|m| called(&m));
+            let duration = plan.phases[i].duration_s;
+            let elapsed = into + st.held_s;
+            let walks = (0..plan.controlled.len()).any(|m| st.crossing[m] && green(i, m));
+            let Some((min_green, max_green, passage)) = st.limits(&p, i) else {
+                continue; // a fixed phase of an imported programme
+            };
+            let min = if walks {
+                min_green.max(duration)
+            } else {
+                min_green
+            };
+            let gapped = now_s - st.last_call_s >= passage;
+            let left = duration - into;
+            let cycle = plan.cycle_s;
+            let mut shift = 0.0;
+            if elapsed >= min && gapped && waiting && left > dt_s {
+                // Gap-out: end the green now.
+                shift = -left;
+                self.counters.gap_outs += 1;
+                self.counters.cut_s += left;
+            } else if left <= dt_s + 1e-9 {
+                if !waiting {
+                    shift = dt_s; // rest in green
+                } else if !gapped && elapsed < max_green {
+                    shift = dt_s; // extension
+                    self.counters.extended_s += dt_s;
+                } else if !gapped && !st.maxed {
+                    st.maxed = true;
+                    self.counters.max_outs += 1;
+                }
+            }
+            if shift != 0.0 {
+                if shift > 0.0 {
+                    st.held_s += shift;
+                }
+                let plan = &mut world.signals[idx];
+                plan.offset_s = (plan.offset_s + shift).rem_euclid(cycle);
+            }
+        }
+    }
+}
+
+impl PlanInfo {
+    /// How far phase `k`'s end may still move, with `running` = `(seconds into it, seconds
+    /// held in it)` when it is the phase running now. The rules of
+    /// [`ActuatedControllers::step_with_pedestrians`]: nothing moves outside a vehicle green
+    /// or in a green that continues into the next phase; a green gaps out once its minimum
+    /// has run (a walking phase runs its whole stated time), is extended to its maximum
+    /// while a call is waiting, and otherwise may rest with no latest end. A standing call
+    /// is taken to last until served, as a locking detector holds it.
+    fn phase_bound(
+        &self,
+        p: &SignalControl,
+        plan: &SignalPlan,
+        k: usize,
+        running: Option<(f64, f64)>,
+    ) -> PhaseBound {
+        if !vehicle_green(plan, k, &self.crossing) {
+            return PhaseBound::FIXED;
+        }
+        let next = (k + 1) % plan.phases.len();
+        let green = |k: usize, m: usize| {
+            matches!(
+                plan.phases[k].states.get(m),
+                Some(SignalState::Green | SignalState::GreenYield)
+            )
+        };
+        let vehicle = |m: &usize| !self.crossing[*m];
+        let n = plan.controlled.len();
+        if !(0..n)
+            .filter(vehicle)
+            .any(|m| green(k, m) && !green(next, m))
+        {
+            return PhaseBound::FIXED; // an overlap: the green continues into the next phase
+        }
+        let Some((min_green, max_green, _)) = self.limits(p, k) else {
+            return PhaseBound::FIXED; // a fixed phase of an imported programme
+        };
+        let duration = plan.phases[k].duration_s;
+        let (into, held) = running.unwrap_or((0.0, 0.0));
+        let walks = (0..n).any(|m| self.crossing[m] && green(k, m));
+        let min = if walks {
+            min_green.max(duration)
+        } else {
+            min_green
+        };
+        let elapsed = into + held;
+        let left = (duration - into).max(0.0);
+        let waiting = (0..n)
+            .filter(vehicle)
+            .any(|m| !green(k, m) && self.called.get(m).copied().unwrap_or(false));
+        PhaseBound {
+            cut_s: (left - (min - elapsed).max(0.0)).clamp(0.0, left),
+            extend_s: waiting.then(|| (max_green - elapsed - left).max(0.0) + 2.0 * self.step_s),
+        }
+    }
+
+    /// Phase `i`'s `(min green, max green, passage)`: the imported programme's, or
+    /// `traffic.signals`'; `None` for a fixed phase of an imported programme.
+    fn limits(&self, p: &SignalControl, i: usize) -> Option<(f64, f64, f64)> {
+        match &self.bounds {
+            None => Some((p.min_green_s, p.max_green_s, p.passage_s)),
+            Some(b) => b
+                .phases
+                .get(i)
+                .copied()
+                .flatten()
+                .map(|(lo, hi)| (lo, hi, b.passage_s)),
+        }
+    }
+}
+
+/// Whether phase `i` gives some vehicle movement a green.
+fn vehicle_green(plan: &SignalPlan, i: usize, crossing: &[bool]) -> bool {
+    plan.phases[i].states.iter().enumerate().any(|(m, s)| {
+        !crossing.get(m).copied().unwrap_or(false)
+            && matches!(s, SignalState::Green | SignalState::GreenYield)
+    })
+}
+
+/// Sets every plan's offset for a green wave at `speed_mps` along `heading_deg`
+/// (clockwise from north), measured from the junction furthest upstream. A no-op without
+/// a speed.
+pub fn coordinate(control: &SignalControl, world: &mut World) {
+    let Some(v) = control.green_wave_speed_mps.filter(|v| *v > 0.0) else {
+        return;
+    };
+    let h = control.green_wave_heading_deg.to_radians();
+    // World frame: x east, y north; a compass heading h points along (sin h, cos h).
+    let (ux, uy) = (v2xw_core::math::sin(h), v2xw_core::math::cos(h));
+    let along: Vec<f64> = world
+        .signals
+        .iter()
+        .map(|p| {
+            let c = world.roads.junction(p.junction).position;
+            c.x * ux + c.y * uy
+        })
+        .collect();
+    let start = along.iter().copied().fold(f64::INFINITY, f64::min);
+    for (plan, d) in world.signals.iter_mut().zip(along) {
+        if plan.cycle_s > 0.0 {
+            plan.offset_s = ((d - start) / v).rem_euclid(plan.cycle_s);
+        }
+    }
+}
+
+/// How far the downstream green for a short link leads the upstream green that fills it,
+/// seconds: the HCM's default start-up lost time (2 s), so the queue stored on the link is
+/// moving before the first arrival reaches it.
+pub const SHORT_LINK_LEAD_S: f64 = 2.0;
+
+/// When the green begins, seconds into the cycle, for any of the movements `ms` of `plan`:
+/// the first phase showing one of them green after a phase that does not, or `None`.
+fn green_start(plan: &SignalPlan, ms: &[usize]) -> Option<f64> {
+    let n = plan.phases.len();
+    let green = |i: usize| {
+        ms.iter().any(|m| {
+            matches!(
+                plan.phases[i].states.get(*m),
+                Some(SignalState::Green | SignalState::GreenYield)
+            )
+        })
+    };
+    let mut at = 0.0;
+    for i in 0..n {
+        if green(i) && !green((i + n - 1) % n) {
+            return Some(at);
+        }
+        at += plan.phases[i].duration_s;
+    }
+    None
+}
+
+/// Short-link clearance (`traffic.signals.short_link_clearance_m`): for every driving
+/// lane shorter than the threshold between two signalised junctions on the same cycle,
+/// the downstream plan's offset is set so the green that empties the lane starts
+/// [`SHORT_LINK_LEAD_S`] before the upstream green that fills it. The FHWA Signal Timing
+/// Manual 2e (FHWA-HOP-08-024, ch. 6) gives closely spaced intersections simultaneous or
+/// slightly leading downstream offsets so the short link never stores a queue the
+/// upstream green cannot discharge into; SUMO's keep-clear rule (MSLink::opened) then
+/// only holds an entering car for the rare full link. Each downstream plan takes the
+/// first such link in lane-id order and is moved once. A no-op when unset.
+pub fn clear_short_links(control: &SignalControl, world: &mut World) {
+    let Some(limit) = control.short_link_clearance_m.filter(|v| *v > 0.0) else {
+        return;
+    };
+    let plan_of: BTreeMap<usize, usize> = world
+        .signals
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.junction.as_usize(), i))
+        .collect();
+    let mut moved: BTreeSet<usize> = BTreeSet::new();
+    let mut shifts: Vec<(usize, f64)> = Vec::new();
+    for lane in world.roads.lanes() {
+        if lane.kind != LaneKind::Driving || lane.length_m >= limit {
+            continue;
+        }
+        let edge = world.roads.edge(lane.edge);
+        let (Some(&u), Some(&d)) = (
+            plan_of.get(&edge.from.as_usize()),
+            plan_of.get(&edge.to.as_usize()),
+        ) else {
+            continue;
+        };
+        if u == d || moved.contains(&d) {
+            continue;
+        }
+        let (pu, pd) = (&world.signals[u], &world.signals[d]);
+        if (pu.cycle_s - pd.cycle_s).abs() > 1e-9 || pd.cycle_s <= 0.0 {
+            continue;
+        }
+        let index = |plan: &SignalPlan, via: LaneId| plan.controlled.iter().position(|l| *l == via);
+        let mut feed = Vec::new();
+        let mut drain = Vec::new();
+        for c in world.roads.connections() {
+            let Some(via) = c.via else { continue };
+            if c.to_lane == lane.id
+                && let Some(m) = index(pu, via)
+            {
+                feed.push(m);
+            }
+            if c.from_lane == lane.id
+                && let Some(m) = index(pd, via)
+            {
+                drain.push(m);
+            }
+        }
+        let (Some(su), Some(sd)) = (green_start(pu, &feed), green_start(pd, &drain)) else {
+            continue;
+        };
+        let offset = (pu.offset_s + su - SHORT_LINK_LEAD_S - sd).rem_euclid(pd.cycle_s);
+        moved.insert(d);
+        shifts.push((d, offset));
+    }
+    for (d, offset) in shifts {
+        world.signals[d].offset_s = offset;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use v2xw_world::{ImportOptions, procedural::GridParams};
+
+    fn grid() -> World {
+        v2xw_world::procedural::grid(
+            &GridParams::legacy().with_size(3, 3).with_signals(true),
+            &ImportOptions::default(),
+        )
+        .expect("grid")
+    }
+
+    /// The approach lanes of the movements green in `plan`'s phase 0 and of those red in it.
+    fn approaches(world: &World, ctl: &ActuatedControllers) -> (Vec<LaneId>, Vec<LaneId>) {
+        let plan = &world.signals[0];
+        let st = &ctl.plans[&0];
+        let mut green = Vec::new();
+        let mut red = Vec::new();
+        for (m, s) in plan.phases[0].states.iter().enumerate() {
+            if let Some(l) = st.approach[m] {
+                if matches!(s, SignalState::Green | SignalState::GreenYield) {
+                    green.push(l);
+                } else {
+                    red.push(l);
+                }
+            }
+        }
+        (green, red)
+    }
+
+    fn actuated() -> SignalControl {
+        SignalControl {
+            control: SignalControlKind::Actuated,
+            ..SignalControl::default()
+        }
+    }
+
+    #[test]
+    fn a_quiet_green_gaps_out_when_a_red_approach_waits() {
+        let mut world = grid();
+        let mut ctl = ActuatedControllers::new(&actuated(), &world);
+        let (_, red) = approaches(&world, &ctl);
+        let waiting: BTreeSet<LaneId> = red.into_iter().take(1).collect();
+        let stated = world.signals[0].phases[0].duration_s;
+        let mut t = world.signals[0].offset_s;
+        let mut green_s = 0.0;
+        while world.signals[0].phase_at(t).map(|(i, _)| i) == Some(0) && green_s < 200.0 {
+            ctl.step(&mut world, &waiting, t, 0.1);
+            t += 0.1;
+            green_s += 0.1;
+        }
+        assert!(ctl.counters().gap_outs >= 1, "{:?}", ctl.counters());
+        let min = actuated().min_green_s;
+        assert!(
+            green_s < stated - 1.0 && green_s >= min - 0.2,
+            "a quiet green ran {green_s} s of its {stated} s (minimum {min} s)"
+        );
+    }
+
+    #[test]
+    fn a_busy_green_is_extended_up_to_its_maximum() {
+        let mut world = grid();
+        let control = actuated();
+        let mut ctl = ActuatedControllers::new(&control, &world);
+        let (green, red) = approaches(&world, &ctl);
+        let calls: BTreeSet<LaneId> = green.into_iter().chain(red).collect();
+        let stated = world.signals[0].phases[0].duration_s;
+        let start = world.signals[0].offset_s;
+        let mut t = start;
+        let mut green_s = 0.0;
+        while world.signals[0].phase_at(t).map(|(i, _)| i) == Some(0) && green_s < 200.0 {
+            ctl.step(&mut world, &calls, t, 0.1);
+            t += 0.1;
+            green_s += 0.1;
+        }
+        assert!(
+            green_s > stated + 1.0,
+            "a called green of {stated} s was not extended ({green_s} s)"
+        );
+        assert!(
+            green_s <= control.max_green_s + 0.5,
+            "the green ran {green_s} s, past its {} s maximum",
+            control.max_green_s
+        );
+        assert_eq!(ctl.counters().max_outs, 1);
+    }
+
+    #[test]
+    fn the_spat_window_spans_the_gap_out_and_the_maximum() {
+        let world = grid();
+        let control = actuated();
+        let ctl = ActuatedControllers::new(&control, &world);
+        let plan = &world.signals[0];
+        let stated = plan.phases[0].duration_s;
+        let at = plan.offset_s + 1.0;
+        let o = ctl.outlook(&world, 0, at).expect("actuated");
+        let left = stated - 1.0;
+        assert!(
+            (o.cut_s - (left - (control.min_green_s - 1.0))).abs() < 1e-9,
+            "{o:?}"
+        );
+        assert!(
+            (o.extend_s - (control.max_green_s - stated)).abs() < 1e-9,
+            "{o:?}"
+        );
+        let fixed = ActuatedControllers::new(&SignalControl::default(), &world);
+        assert!(fixed.outlook(&world, 0, at).is_none());
+    }
+
+    #[test]
+    fn fixed_time_control_moves_nothing() {
+        let mut world = grid();
+        let before: Vec<f64> = world.signals.iter().map(|p| p.offset_s).collect();
+        let mut ctl = ActuatedControllers::new(&SignalControl::default(), &world);
+        let calls: BTreeSet<LaneId> = world.roads.lanes().iter().map(|l| l.id).collect();
+        for k in 0..600 {
+            ctl.step(&mut world, &calls, f64::from(k) * 0.1, 0.1);
+        }
+        let after: Vec<f64> = world.signals.iter().map(|p| p.offset_s).collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_green_wave_offsets_by_travel_time() {
+        let mut world = grid();
+        let control = SignalControl {
+            green_wave_speed_mps: Some(10.0),
+            green_wave_heading_deg: 90.0,
+            ..SignalControl::default()
+        };
+        coordinate(&control, &mut world);
+        // Two signals on one east-west row: their offset difference is the travel time
+        // between them, modulo the cycle.
+        let pos = |i: usize| world.roads.junction(world.signals[i].junction).position;
+        let (a, b) = (0usize, 1usize);
+        let dx = pos(b).x - pos(a).x;
+        let cycle = world.signals[a].cycle_s;
+        let want = (dx / 10.0).rem_euclid(cycle);
+        let got = (world.signals[b].offset_s - world.signals[a].offset_s).rem_euclid(cycle);
+        assert!(
+            (want - got).abs() < 1e-6 || (cycle - (want - got).abs()).abs() < 1e-6,
+            "offset difference {got} s, travel time {want} s"
+        );
+    }
+
+    /// `world` with plan 0 given an imported programme of `kind`: each vehicle-green phase
+    /// bounded `(min_s, max_s)`, the others fixed, and `params`.
+    fn with_programme(
+        mut world: World,
+        kind: v2xw_world::SignalProgrammeKind,
+        min_s: f64,
+        max_s: f64,
+        params: &[(&str, &str)],
+    ) -> World {
+        let plan = &world.signals[0];
+        let phases = plan
+            .phases
+            .iter()
+            .map(|ph| {
+                let green = ph
+                    .states
+                    .iter()
+                    .any(|s| matches!(s, SignalState::Green | SignalState::GreenYield));
+                v2xw_world::ProgrammePhase {
+                    min_s: green.then_some(min_s),
+                    max_s: green.then_some(max_s),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        world.signal_programmes = vec![v2xw_world::SignalProgramme {
+            plan: plan.id,
+            kind,
+            phases,
+            params: params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }];
+        world
+    }
+
+    /// Acceptance: an imported actuated programme runs on its own bounds under the
+    /// default fixed-time `traffic.signals`: a quiet green gaps out at its `minDur`, a
+    /// busy one is extended to its `maxDur` (neither is `traffic.signals`' 7 s and
+    /// 45 s), and the plans without a programme keep their clocks.
+    #[test]
+    fn imported_programme_gaps_out() {
+        use v2xw_world::SignalProgrammeKind::Actuated;
+        let fixed = SignalControl::default();
+        let run = |world: &mut World, calls: &BTreeSet<LaneId>, ctl: &mut ActuatedControllers| {
+            let mut t = world.signals[0].offset_s;
+            let mut green_s = 0.0;
+            while world.signals[0].phase_at(t).map(|(i, _)| i) == Some(0) && green_s < 200.0 {
+                ctl.step(world, calls, t, 0.1);
+                t += 0.1;
+                green_s += 0.1;
+            }
+            green_s
+        };
+        // Quiet: one red approach waits.
+        let mut world = with_programme(grid(), Actuated, 3.0, 60.0, &[("max-gap", "2.0")]);
+        let others: Vec<f64> = world.signals[1..].iter().map(|p| p.offset_s).collect();
+        let mut ctl = ActuatedControllers::new(&fixed, &world);
+        assert!(ctl.is_active());
+        let (_, red) = approaches(&world, &ctl);
+        let waiting: BTreeSet<LaneId> = red.into_iter().take(1).collect();
+        let quiet = run(&mut world, &waiting, &mut ctl);
+        assert!(ctl.counters().gap_outs >= 1, "{:?}", ctl.counters());
+        assert!(
+            (3.0 - 0.2..fixed.min_green_s - 1.0).contains(&quiet),
+            "a quiet green ran {quiet} s; its minDur is 3 s"
+        );
+        let after: Vec<f64> = world.signals[1..].iter().map(|p| p.offset_s).collect();
+        assert_eq!(others, after, "plans without a programme stay fixed-time");
+        // Busy: every approach calls, so the green runs to its 60 s maxDur.
+        let mut world = with_programme(grid(), Actuated, 3.0, 60.0, &[("max-gap", "2.0")]);
+        let mut ctl = ActuatedControllers::new(&fixed, &world);
+        let all: BTreeSet<LaneId> = world.roads.lanes().iter().map(|l| l.id).collect();
+        let busy = run(&mut world, &all, &mut ctl);
+        assert!(
+            busy > fixed.max_green_s + 5.0 && busy <= 60.0 + 0.5,
+            "a busy green ran {busy} s; its maxDur is 60 s"
+        );
+        assert_eq!(ctl.counters().max_outs, 1);
+    }
+
+    /// Acceptance: an imported NEMA programme runs the dual ring under the default
+    /// fixed-time `traffic.signals`, numbered and timed by its file: plan 0's phases are
+    /// rewritten as SUMO NEMA phases 2 and 4, each with a 12 s `minDur`.
+    #[test]
+    fn imported_nema_programme_runs_the_rings() {
+        use v2xw_world::SignalProgrammeKind::Nema;
+        let mut world = grid();
+        {
+            let plan = &mut world.signals[0];
+            let go = |s: &SignalState| matches!(s, SignalState::Green | SignalState::GreenYield);
+            let first: Vec<SignalState> = plan.phases[0].states.clone();
+            let second: Vec<SignalState> = first
+                .iter()
+                .map(|s| {
+                    if go(s) {
+                        SignalState::Red
+                    } else {
+                        SignalState::Green
+                    }
+                })
+                .collect();
+            plan.phases = vec![
+                v2xw_world::SignalPhase {
+                    duration_s: 30.0,
+                    states: first,
+                    name: None,
+                },
+                v2xw_world::SignalPhase {
+                    duration_s: 30.0,
+                    states: second,
+                    name: None,
+                },
+            ];
+            plan.cycle_s = 60.0;
+            plan.offset_s = 0.0;
+        }
+        let mut world = with_programme(
+            world,
+            Nema,
+            12.0,
+            30.0,
+            &[("ring1", "0,2,0,4"), ("ring2", "0,6,0,8")],
+        );
+        for (ph, name) in world.signal_programmes[0].phases.iter_mut().zip(["2", "4"]) {
+            ph.name = Some(name.into());
+        }
+        let fixed = SignalControl::default();
+        let mut ctl = ActuatedControllers::new(&fixed, &world);
+        assert!(ctl.is_nema(0), "{:?}", ctl.nema_fallbacks());
+        assert!(!ctl.is_nema(1));
+        // Only the second street calls, so the first green ends at its own minimum.
+        let mut from: BTreeMap<LaneId, LaneId> = BTreeMap::new();
+        for c in world.roads.connections() {
+            if let Some(v) = c.via {
+                from.entry(v).or_insert(c.from_lane);
+            }
+        }
+        let plan0 = world.signals[0].clone();
+        let all: BTreeSet<LaneId> = plan0
+            .controlled
+            .iter()
+            .zip(&plan0.phases[1].states)
+            .filter(|(_, s)| **s == SignalState::Green)
+            .filter_map(|(l, _)| from.get(l).copied())
+            .collect();
+        assert!(!all.is_empty());
+        let first_green = |w: &World, t: f64| {
+            w.signals[0]
+                .states_at(t)
+                .map(|s| s.iter().position(|x| *x == SignalState::Green))
+        };
+        // Both groups get a green, and the first green holds its 12 s minimum even with
+        // the other street calling.
+        let start = first_green(&world, 0.0);
+        let mut changed_at = None;
+        let mut seen: BTreeSet<Option<usize>> = BTreeSet::new();
+        for k in 0..1200 {
+            let t = f64::from(k) * 0.1;
+            ctl.step(&mut world, &all, t, 0.1);
+            let now = first_green(&world, t);
+            seen.insert(now.flatten());
+            if changed_at.is_none() && now != start {
+                changed_at = Some(t);
+            }
+        }
+        let changed = changed_at.expect("the rings change");
+        assert!(
+            (12.0 - 0.2..12.0 + 3.0).contains(&changed),
+            "the first green ended at {changed} s; its minDur is 12 s"
+        );
+        assert!(seen.len() >= 3, "{seen:?}");
+    }
+}

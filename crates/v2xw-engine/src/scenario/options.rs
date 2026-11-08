@@ -1,0 +1,4265 @@
+//! The words a settings form puts on a closed set, and the presets it offers beside a
+//! number.
+//!
+//! The owner's review of 2026-10-06: "a lot of fields the user needs to manually fill out
+//! … the user doesn't really know what is supposed to go there". The published schema
+//! already said *which* values a field admits (`enum`, from `validate::CHOICES`, the
+//! reflected unit enums and the registry's slots); what it did not say is what each value
+//! *means* to someone who has not read the standard. This module is that half:
+//!
+//! * [`option_row`] — one selectable value with a label a person reads and one sentence
+//!   saying what choosing it does. The labels live here, next to the engine that defines
+//!   the values, so the page never hard-codes a model id.
+//! * [`slot_values`] — the ids a model slot may hold, taken from the registry (or from the
+//!   loader's own table where the loader is narrower than the registry), so a model added
+//!   to a crate appears in the form without an edit here.
+//! * [`extra_values`] — closed sets that are neither a `CHOICES` row nor a reflected enum:
+//!   the applications, the roadside-unit roles, the region's channels.
+//! * [`presets`] — named values for a number ("rush hour", "the J2945/1 five minutes"),
+//!   each with its source; the form keeps a custom number beside them.
+//! * [`title`] — a plain-language title for the fields whose Rust name reads badly as one.
+//!
+//! Nothing here changes what the loader accepts. A value missing a label falls back to a
+//! humanised id and the model card's purpose, so a missing row costs polish, never a
+//! choice.
+
+use serde_json::{Value, json};
+use v2xw_core::card::Family;
+use v2xw_core::registry::Registry;
+
+use crate::scenario::validate;
+
+/// A label and a one-sentence description for `value` at `path`, and whether this build
+/// accepts it (`false` for a value the schema names and the loader refuses).
+fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> {
+    let tier = path.starts_with("radio.tiers.") || path.ends_with("_tier");
+    if tier {
+        return match value {
+            // The 802.11p PHY distinguishes only high from the rest, and the sidelink maps
+            // abstract to medium (`run::sidelink`): the settings audit found choosing it
+            // changed nothing, so the words say what it does.
+            // A focus runs above its surroundings, and nothing is below abstract: the loader
+            // refuses this value on every scenario.
+            "abstract" if path == "radio.tiers.focus.tier" => Some((
+                "Fast (abstract) — not possible here",
+                "A focus region exists to run higher than the world around it, and no tier is \
+                 below abstract; choose Standard or Detailed.",
+                false,
+            )),
+            "abstract" if path == "radio.tiers.phy" => Some((
+                "Fast (abstract) — runs as Standard",
+                "This build has no separate abstract PHY: the Standard (medium) reception \
+                 model runs. Only propagation and channel access have an abstract tier.",
+                true,
+            )),
+            // The run-cost audit found `mac: high` beside
+            // a medium PHY identical to `medium` frame for frame: no MAC model reads the
+            // high tier; it only unlocks the frame-level PHY, which requires it.
+            "high" if path == "radio.tiers.mac" => Some((
+                "Detailed (high) — runs as Standard",
+                "Channel access has no separate high tier in this build: the Standard EDCA \
+                 model runs. Choosing it is what allows the Detailed physical layer.",
+                true,
+            )),
+            // The run-cost audit measured all
+            // three radio tiers at abstract only 11 % cheaper than medium on Manhattan:
+            // each link is cheaper to price, but free space with no buildings lets 49 %
+            // more links reach a receiver, and receptions (records, metrics, a node wake
+            // and a verification each), not the radio model, are most of the cost. The
+            // words for the two radio paths say so instead of promising a cheap run.
+            "abstract" if path == "radio.tiers.propagation" => Some((
+                "Simplified (abstract) — free space, no buildings",
+                "Free-space loss with no buildings, shadowing or fading: each link is cheaper \
+                 to price, but with nothing in the way more links reach each receiver, so a \
+                 city run costs about as much as Standard; cap radio.range.max_m to make a \
+                 large fleet cheap.",
+                true,
+            )),
+            "abstract" if path == "radio.tiers.mac" => Some((
+                "Simplified (abstract) — no channel access",
+                "Every frame goes on air when it is queued, with no carrier sense, backoff \
+                 or channel busy ratio (so no congestion control); it saves little run \
+                 time, because receptions, not channel access, are most of the cost.",
+                true,
+            )),
+            "abstract" => Some((
+                "Fast (abstract)",
+                "Closed-form stand-ins: cheapest, for very large fleets; least faithful.",
+                true,
+            )),
+            "medium" => Some((
+                "Standard (medium)",
+                "The models the literature agrees on, without frame-level detail. The usual choice.",
+                true,
+            )),
+            "high" => Some((
+                "Detailed (high)",
+                "Frame-level or geometry-traced detail: the most faithful and the slowest.",
+                true,
+            )),
+            _ => None,
+        };
+    }
+    let w = |l, d| Some((l, d, true));
+    match (path, value) {
+        // --- radio ----------------------------------------------------------------
+        ("radio.rat" | "radio.adjacent_channel[].rat", "dsrc-80211p") => w(
+            "DSRC / ITS-G5 (IEEE 802.11p)",
+            "Wi-Fi-based V2X: listen-before-talk on a 10 MHz channel. The US pilots' radio and Europe's ITS-G5.",
+        ),
+        ("radio.rat" | "radio.adjacent_channel[].rat", "lte-v2x-pc5") => w(
+            "C-V2X, LTE sidelink (PC5 Mode 4)",
+            "3GPP Release 14 cellular V2X without a network: sensing-based semi-persistent scheduling on the SAE J3161/1 profile.",
+        ),
+        ("radio.rat" | "radio.adjacent_channel[].rat", "nr-v2x-pc5") => w(
+            "C-V2X, 5G NR sidelink (PC5 Mode 2)",
+            "3GPP Release 16 sidelink at 30 kHz on the ETSI EN 303 798 pool. No US deployment profile exists yet.",
+        ),
+        ("radio.rat" | "radio.adjacent_channel[].rat", "hybrid") => Some((
+            "Hybrid (not available)",
+            "Refused by this build: the hybrid selector arbitrates a direct radio against cellular, which is not wired.",
+            false,
+        )),
+        // --- traffic signals ------------------------------------------------------
+        ("traffic.signals.control", "fixed-time") => w(
+            "Fixed time",
+            "Every signal runs its plan's clock: each phase lasts its stated time, whatever the traffic.",
+        ),
+        ("traffic.signals.control", "actuated") => w(
+            "Actuated (single ring)",
+            "Detectors hold a green while cars keep arriving and end it early when the approach goes quiet, one phase at a time.",
+        ),
+        ("traffic.signals.control", "nema") => w(
+            "NEMA dual ring (eight phases)",
+            "Two rings of four phases time concurrently and meet at barriers, as US controllers do (FHWA Signal Timing Manual 2nd ed.), with protected, permissive or protected-then-permissive lefts. Junctions that do not map keep the single ring.",
+        ),
+        ("traffic.signals.nema.lefts", "lead-lead") => w(
+            "Lead-lead",
+            "Both left turns go before their opposing throughs: the most common US sequence (FHWA STM 2nd ed. §5.1.3.6).",
+        ),
+        ("traffic.signals.nema.lefts", "lag-lag") => w(
+            "Lag-lag",
+            "Both left turns go after their opposing throughs.",
+        ),
+        ("traffic.signals.nema.lefts", "lead-lag") => w(
+            "Lead-lag",
+            "One left leads and the opposing left lags, which suits a green wave in both directions.",
+        ),
+        ("traffic.signals.nema.left_turn_mode", "protected-permissive") => w(
+            "Protected, then permissive",
+            "A green arrow first, then lefts may turn through gaps in the oncoming traffic.",
+        ),
+        ("traffic.signals.nema.left_turn_mode", "protected") => w(
+            "Protected only",
+            "Lefts turn only on their own green arrow (even from a lane shared with the through, which they then block).",
+        ),
+        ("traffic.signals.nema.left_turn_mode", "permissive") => w(
+            "Permissive only",
+            "No left-turn phase: lefts turn through gaps in the oncoming traffic.",
+        ),
+        ("world.sumo.signal_programmes", "as-file") => w(
+            "As the file says",
+            "An actuated, delay-based or NEMA programme in the SUMO network runs as a live controller, with its phases' minimum and maximum durations.",
+        ),
+        ("world.sumo.signal_programmes", "static") => w(
+            "Fixed time",
+            "Every programme runs its phase list as written, ignoring its type (how SUMO programmes were imported before typed programmes).",
+        ),
+        ("traffic.signals.nema.permissive_display", "fya") => w(
+            "Flashing yellow arrow",
+            "The permissive left shows a flashing yellow arrow (MUTCD 2009 §4D.20).",
+        ),
+        ("traffic.signals.nema.permissive_display", "green-ball") => w(
+            "Circular green",
+            "The permissive left shows the circular green of the through (MUTCD 2009 §4D.18).",
+        ),
+        ("traffic.signals.nema.force_off", "floating") => w(
+            "Floating force-offs",
+            "Each side-street phase ends by its own split, so time it leaves goes to the coordinated main street.",
+        ),
+        ("traffic.signals.nema.force_off", "fixed") => w(
+            "Fixed force-offs",
+            "Force-off points are fixed in the cycle, so a later phase may use time an earlier one left.",
+        ),
+        ("traffic.signals.nema.controller_type", "ts2") => w(
+            "NEMA TS 2",
+            "The coordination offset is measured to the start of the coordinated green.",
+        ),
+        ("traffic.signals.nema.controller_type", "type170") => w(
+            "Type 170",
+            "The coordination offset is measured to the start of the coordinated yellow.",
+        ),
+        ("radio.region", "us") => w(
+            "United States, 2024 rules (FCC 24-123)",
+            "C-V2X only on 5.905-5.925 GHz; DSRC is refused because its licences end in December 2026.",
+        ),
+        ("radio.region", "us-2016") => w(
+            "United States, DSRC band plan (2016)",
+            "802.11p on channel 172, the plan SAE J2945/1 was written for (47 CFR 90.377).",
+        ),
+        ("radio.region", "eu") => w(
+            "Europe (ETSI EN 302 571)",
+            "10 MHz channels at up to 33 dBm EIRP; ITS-G5, LTE-V2X and NR-V2X side by side.",
+        ),
+        ("radio.devices.obu.antenna_pattern", "tr37885") => w(
+            "By vehicle type (3GPP TR 37.885)",
+            "A roof antenna on cars and vans, front and rear panels on trucks and buses. The default.",
+        ),
+        ("radio.devices.obu.antenna_pattern", "rooftop") => w(
+            "Roof antenna on every vehicle",
+            "The same all-round roof antenna on every vehicle, trucks included.",
+        ),
+        ("radio.devices.obu.antenna_pattern", "isotropic") => w(
+            "No pattern (isotropic)",
+            "The same gain in every direction: the textbook simplification.",
+        ),
+        // network audit
+        ("radio.dcc.reactive_table", "a1") => w(
+            "Table A.1 (frames up to 1 ms)",
+            "10 Hz relaxed down to 1 Hz restrictive (TS 102 687 V1.2.1 Table A.1). The default.",
+        ),
+        ("radio.dcc.reactive_table", "a2") => w(
+            "Table A.2 (frames up to 500 µs)",
+            "20 Hz relaxed down to 1 Hz restrictive, for short frames (Table A.2).",
+        ),
+        ("radio.dcc.channel_quality", "sae-j2945-1") => w(
+            "SAE J2945/1 Eq. 4 (capped mean PER)",
+            "The mean loss rate of the neighbours within 100 m over 5 s, capped at 0.3, recomputed every second. The default.",
+        ),
+        ("radio.dcc.channel_quality", "fmvss150-nprm") => w(
+            "FMVSS 150 NPRM (0.9 smoothing)",
+            "The same mean, smoothed with weight 0.9 on the previous value as the withdrawn 2017 NPRM transcribed it: reacts about ten times slower.",
+        ),
+        ("radio.mac.periodic_access_category" | "radio.mac.event_access_category", "vo") => w(
+            "Voice (AC_VO, highest)",
+            "The shortest wait (AIFSN 2, CWmin 3): where SAE J2945/1 puts a BSM with a critical event flag (user priority 7) and EN 302 663 the DENM.",
+        ),
+        ("radio.mac.periodic_access_category", "vi") => w(
+            "Video (AC_VI) (SAE J2945/1 UP 5)",
+            "Where SAE J2945/1 puts a BSM without a critical event flag (user priority 5, UPEDCA-001) and EN 302 663 Annex C the CAM: AIFSN 4, CWmin 15 under J2945/1 Table 18; AIFSN 3, CWmin 7 under EN 302 663.",
+        ),
+        ("radio.mac.event_access_category", "vi") => w(
+            "Video (AC_VI)",
+            "AIFSN 4, CWmin 15 under SAE J2945/1 Table 18; AIFSN 3, CWmin 7 under EN 302 663.",
+        ),
+        // The EDCA table.
+        ("radio.mac.edca_profile", "by-region") => w(
+            "By region",
+            "SAE J2945/1 Table 18 for 802.11p under a US region, ETSI EN 302 663 everywhere else.",
+        ),
+        ("radio.mac.edca_profile", "sae-j2945-1") => w(
+            "SAE J2945/1 Table 18 (BSM at AC_VI, critical BSM at AC_VO)",
+            "AC_VI CWmin 15, CWmax 1023, AIFSN 4 (UPEDCA-003); a BSM without a critical event flag waits at user priority 5, one with a flag at 7.",
+        ),
+        ("radio.mac.edca_profile", "en-302-663") => w(
+            "ETSI EN 302 663 (OCB defaults)",
+            "The 802.11 OCB defaults: AC_VI CWmin 7, CWmax 15, AIFSN 3.",
+        ),
+        ("radio.mac.periodic_access_category" | "radio.mac.event_access_category", "be") => w(
+            "Best effort (AC_BE)",
+            "AIFSN 6, CWmin 15: ordinary data, yields to every safety message.",
+        ),
+        ("radio.mac.periodic_access_category" | "radio.mac.event_access_category", "bk") => w(
+            "Background (AC_BK, lowest)",
+            "AIFSN 9, CWmin 15: the longest wait.",
+        ),
+        ("radio.channel_model.fading_coherence", "independent") => w(
+            "Independent per message",
+            "Every message on a link gets its own fade, whatever the speeds.",
+        ),
+        ("radio.channel_model.fading_coherence", "doppler") => w(
+            "Doppler (speed-dependent)",
+            "A fade lasts one coherence time: long for vehicles standing still, a fraction of a millisecond at highway speed.",
+        ),
+        ("radio.channel_model.fading", "none") => w(
+            "None",
+            "No small-scale fading: the received power is the path loss and shadowing only.",
+        ),
+        ("radio.channel_model.fading", "rayleigh") => w(
+            "Rayleigh",
+            "No direct path, only scattered copies: the harshest common fading (Nakagami m = 1).",
+        ),
+        ("radio.channel_model.fading", "rice") => w(
+            "Rice",
+            "A direct path plus scatter; its strength over the scatter is the Rice factor K.",
+        ),
+        ("radio.channel_model.fading", "nakagami") => w(
+            "Nakagami-m",
+            "The V2V literature's usual fit; its shape m runs from 1 (Rayleigh) up to milder channels.",
+        ),
+        // --- network and messages -------------------------------------------------
+        ("net.layer", "wsmp") => w(
+            "WSMP (IEEE 1609.3, US)",
+            "The US short message protocol: a 5-octet header on a BSM.",
+        ),
+        ("net.layer", "gn-btp") => w(
+            "GeoNetworking + BTP (ETSI, Europe)",
+            "The European network and transport layers: 44 octets of headers on a CAM.",
+        ),
+        ("events[].when.kind" | "events[].when.of[].kind", "ttc_below") => w(
+            "Time to collision below",
+            "A vehicle would reach the one ahead on its lane in under this many seconds at the present speeds.",
+        ),
+        ("events[].when.kind" | "events[].when.of[].kind", "in_polygon") => w(
+            "Vehicle inside an area",
+            "A vehicle is inside a polygon drawn in metres of the map's local frame.",
+        ),
+        ("events[].when.kind" | "events[].when.of[].kind", "speed_diff_above") => w(
+            "Closing speed above",
+            "A vehicle closes on the one ahead (within 100 m) faster than this.",
+        ),
+        ("events[].when.kind" | "events[].when.of[].kind", "probability") => w(
+            "Chance per step",
+            "A seeded draw at every traffic step: the same seed fires at the same steps.",
+        ),
+        ("events[].when.kind", "all") => {
+            w("All of", "Every listed clause holds for the same vehicle.")
+        }
+        ("events[].when.kind", "any") => w("Any of", "At least one listed clause holds."),
+        ("net.rsu_ip.air", "constant") => w(
+            "Constant air link",
+            "The hop to a relaying roadside unit is a fixed delay and rate, and any unit in range serves.",
+        ),
+        ("net.rsu_ip.air", "sch") => w(
+            "Advertised service (IEEE 1609.3)",
+            "Each relaying unit sends a signed WSA for the SCMS service; a vehicle uses a unit only after it verified that unit's WSA.",
+        ),
+        ("net.channel_access", "continuous") => w(
+            "Continuous (one channel)",
+            "The deployed US profile: safety messages go out on one channel as soon as they are made.",
+        ),
+        ("net.channel_access", "alternating") => w(
+            "Alternating (IEEE 1609.4)",
+            "One radio switches channel every 50 ms; a message made on the wrong half waits up to 54 ms, and one that would run into the 4 ms switch guard waits too.",
+        ),
+        ("net.geonet.forwarding", "on-air") => w(
+            "On the air (recommended)",
+            "Each forwarded copy is a real frame: it queues, contends, can collide and loads the channel.",
+        ),
+        ("net.geonet.forwarding", "overlay") => w(
+            "Protocol only (no MAC)",
+            "Forwarding runs over a fixed radio range with no contention or collisions: optimistic reach.",
+        ),
+        ("net.dcc_cbr", "local") => w(
+            "Own measurement",
+            "Each radio throttles for the channel load it hears itself.",
+        ),
+        ("net.dcc_cbr", "global") => w(
+            "Two-hop maximum (ETSI GeoNetworking)",
+            "Radios share their load in every header and throttle for congestion up to two hops away.",
+        ),
+        ("net.access_categories", "single") => w(
+            "One queue (AC_VO)",
+            "Every message waits in the same top-priority queue, as deployed US radios do.",
+        ),
+        ("net.access_categories", "etsi-profiles") => w(
+            "ETSI DCC profiles",
+            "Hazard warnings jump the queue; CAMs and forwarded copies wait longer when the channel is busy.",
+        ),
+        ("net.geonet.area_forwarding", "cbf") => w(
+            "Contention-based (CBF)",
+            "The farthest receiver rebroadcasts first and the nearer ones stand down: few transmissions, the standard's choice.",
+        ),
+        ("net.geonet.area_forwarding", "simple") => w(
+            "Flooding (simple)",
+            "Every vehicle rebroadcasts the warning once: fast and robust, many transmissions.",
+        ),
+        ("net.geonet.non_area_forwarding", "greedy") => w(
+            "Greedy",
+            "Hand the warning to the neighbour nearest the area (the standard's default).",
+        ),
+        ("net.geonet.non_area_forwarding", "cbf") => w(
+            "Contention-based",
+            "Broadcast towards the area; the receiver that gets closest rebroadcasts first.",
+        ),
+        ("net.geonet.cbf_variant", "etsi") => w(
+            "As evaluated in Artery (no duplicate check)",
+            "A copy heard after forwarding is taken as new: very many transmissions (Amador et al. 2022).",
+        ),
+        ("net.geonet.cbf_variant", "dpd") => w(
+            "With duplicate detection",
+            "Each vehicle forwards a warning at most once; any copy makes a contender stand down, which can stall the spread.",
+        ),
+        ("net.geonet.cbf_variant", "gpc") => w(
+            "Geographic cancellation (recommended)",
+            "Stand down only when the copy came from farther along: near-full reach at low overhead (Amador et al. 2022).",
+        ),
+        ("messages.sets[]", "bsm") => w(
+            "BSM: Basic Safety Message",
+            "Every equipped vehicle's position, speed and heading, ten times a second (SAE J2735/J2945/1).",
+        ),
+        ("messages.sets[]", "cam") => w(
+            "CAM: Cooperative Awareness Message",
+            "The European counterpart of the BSM, sent on change of position, speed or heading (ETSI EN 302 637-2).",
+        ),
+        ("messages.sets[]", "denm") => w(
+            "DENM: hazard warning",
+            "An event message raised by a hazard such as hard braking or a breakdown (ETSI EN 302 637-3).",
+        ),
+        ("messages.sets[]", "spat") => w(
+            "SPaT: signal phase and timing",
+            "Roadside units broadcast each signal's state and time to change (needs units with the spat role).",
+        ),
+        ("messages.sets[]", "map") => w(
+            "MAP: intersection geometry",
+            "Roadside units broadcast the lanes and stop lines of their junction (needs the map role).",
+        ),
+        ("messages.sets[]", "srm") => w(
+            "SRM: signal request (emergency priority)",
+            "Emergency vehicles ask the junction for a green; needs SPaT and MAP and the size-model codec.",
+        ),
+        ("messages.sets[]", "ssm") => w(
+            "SSM: signal status",
+            "The junction's answer to a signal request.",
+        ),
+        // Not offered as choices (they would be refused every time): the devices send them,
+        // by actors.vru.device_fraction, not a set.
+        ("messages.sets[]", "psm") => Some((
+            "PSM: Personal Safety Message",
+            "Pedestrians' and cyclists' devices send it (SAE J2735) when \
+             actors.vru.device_fraction is above 0; it is not a set to list here.",
+            false,
+        )),
+        ("messages.sets[]", "vam") => Some((
+            "VAM: vulnerable road user awareness",
+            "The European PSM (ETSI TS 103 300-3): VRU devices send it on the ETSI stack when \
+             actors.vru.device_fraction is above 0; it is not a set to list here.",
+            false,
+        )),
+        ("messages.sets[]", "cpm") => w(
+            "CPM: collective perception",
+            "Vehicles share what their sensors detect (ETSI TS 103 324).",
+        ),
+        ("messages.codec_tier", "uper") => w(
+            "Real encoding (UPER)",
+            "Every message is encoded to its real bytes; a set with no encoder is refused.",
+        ),
+        ("messages.codec_tier", "size-model") => w(
+            "Modelled sizes",
+            "Messages without an encoder travel as payloads of their validated length; the rest are still encoded.",
+        ),
+        // --- security -------------------------------------------------------------
+        // CRL polling.
+        ("security.scms.crl_poll", "conditional") => w(
+            "Revocation list, if changed (one exchange)",
+            "The vehicle asks the RA for its composite revocation list with If-Modified-Since: the list when it changed, a short 412 when not.",
+        ),
+        ("security.scms.crl_poll", "info-status") => w(
+            "Status file first, then what changed",
+            "The vehicle first fetches the RA's signed status of its lists (IEEE 1609.2.1 6.3.5.14), then downloads the revocation list only if it holds an older one.",
+        ),
+        // Availability and service-time variation (ASSUMPTION parameters).
+        (
+            "actors.backend.availability.model" | "actors.backend.entities.*.availability.model",
+            "always-up",
+        ) => w(
+            "Always up",
+            "The server never fails at random; only actors.backend.failures windows take it down.",
+        ),
+        (
+            "actors.backend.availability.model" | "actors.backend.entities.*.availability.model",
+            "two-state",
+        ) => w(
+            "Random outages (two-state)",
+            "The server fails after an exponential up time (mean MTBF) and is repaired after an exponential down time (mean MTTR); while down it is offline, as a failure window.",
+        ),
+        (
+            "actors.backend.service_time.model" | "actors.backend.entities.*.service_time.model",
+            "deterministic",
+        ) => w(
+            "Fixed (cost table)",
+            "Every request takes its cryptographic cost plus the fixed overhead, the same each time.",
+        ),
+        (
+            "actors.backend.service_time.model" | "actors.backend.entities.*.service_time.model",
+            "log-normal",
+        ) => w(
+            "Variable (log-normal)",
+            "Each request's time is the fixed one times a log-normal draw with median 1 and the coefficient of variation below.",
+        ),
+        // The component a provider revokes ([SMP] Table 1: series 2 for an
+        // ICA-issued component, 256 for a root-issued one).
+        ("security.scms.lifecycle.component_revoked", "none") => w(
+            "No component revoked",
+            "No SCMS component certificate is revoked during the run.",
+        ),
+        ("security.scms.lifecycle.component_revoked", "ica") => w(
+            "Intermediate CA",
+            "The ICA's certificate goes on the root-signed list; every certificate under it stops verifying. Not available on an S2X provider (no certificate signs its list).",
+        ),
+        ("security.scms.lifecycle.component_revoked", "pca") => w(
+            "Pseudonym CA (ACA)",
+            "The pseudonym CA's certificate goes on the component list; receivers that install it refuse every pseudonym it issued (issuer-revoked).",
+        ),
+        ("security.scms.lifecycle.component_revoked", "ra") => w(
+            "Registration Authority",
+            "The RA's certificate goes on the component list; devices refuse its signed responses.",
+        ),
+        ("security.scms.lifecycle.component_revoked", "eca") => w(
+            "Enrolment CA",
+            "The enrolment CA's certificate goes on the component list; the enrolment certificates it issued stop verifying.",
+        ),
+        ("security.scms.lifecycle.component_revoked", "la1") => w(
+            "Linkage Authority 1",
+            "The first linkage authority's certificate goes on the component list.",
+        ),
+        ("security.scms.lifecycle.component_revoked", "la2") => w(
+            "Linkage Authority 2",
+            "The second linkage authority's certificate goes on the component list.",
+        ),
+        ("security.scms.lifecycle.component_revoked", "ma") => w(
+            "Misbehaviour Authority",
+            "The MA's certificate goes on the root-signed list; devices stop encrypting their reports to it.",
+        ),
+        ("security.scms.lifecycle.component_revoked", "crlg") => w(
+            "CRL Generator",
+            "The CRL signer's certificate goes on the root-signed list; the lists it signed after the install stop verifying.",
+        ),
+        // Gov C-10: the genesis CTL's sequence (the production series: 0 on 2019-12-12,
+        // 1 effective 2025-07-16).
+        ("security.scms.lifecycle.ctl_genesis_sequence", "auto") => w(
+            "By date, as the production series",
+            "Sequence 1 when the run starts on or after 2025-07-16 (the live production trust list), 0 before.",
+        ),
+        ("security.scms.lifecycle.ctl_genesis_sequence", "0") => w(
+            "0",
+            "The first production trust list's number (2019-12-12), whatever the run's date.",
+        ),
+        ("security.scms.lifecycle.ctl_genesis_sequence", "1") => w(
+            "1",
+            "The live production trust list's number (effective 2025-07-16), whatever the run's date.",
+        ),
+        // Gov G-2: the Board's review before an EAC vote (Elector Policy v1.0 §2.4.2,
+        // §2.4.4-2.4.5).
+        ("security.scms.lifecycle.eac_review", "none") => w(
+            "The times given are the votes",
+            "The rollover and removal times are when the electors vote.",
+        ),
+        ("security.scms.lifecycle.eac_review", "elector-policy") => w(
+            "The times given are requests; the board reviews per Elector Policy",
+            "Each time is a request; the vote follows 10 business days later for an addition and 24 hours later for a removal.",
+        ),
+        // Gov G-11: an elector replacement for post-quantum migration (Elector Technical
+        // Specification v1.1 §2.5).
+        ("security.scms.lifecycle.elector_replacement_pq", "off") => w(
+            "Classical keys",
+            "A replaced elector's transition trust list is signed by the remaining P-384 electors only.",
+        ),
+        ("security.scms.lifecycle.elector_replacement_pq", "dual") => w(
+            "Dual signatures (classical + ML-DSA-65)",
+            "The outgoing elector's P-384 key and the incoming elector's ML-DSA-65 key both sign the transition trust list.",
+        ),
+        ("security.envelope", "ieee1609.2") => w(
+            "IEEE 1609.2 (US)",
+            "The secured-message format of the US SCMS.",
+        ),
+        ("security.envelope", "etsi103097") => w(
+            "ETSI TS 103 097 (Europe)",
+            "The European profile of the same structure; required by the ETSI credential system.",
+        ),
+        ("security.signature", "ecdsa-p256") => w(
+            "ECDSA P-256",
+            "The signature every deployed V2X system uses today: 64-octet signatures.",
+        ),
+        ("security.signature", "ecdsa-brainpoolp256r1") => w(
+            "ECDSA brainpool P-256r1",
+            "The European alternative curve; same size, charged the P-256 time.",
+        ),
+        ("security.signature", "ecdsa-p384") => w(
+            "ECDSA P-384",
+            "A longer curve: 32 more octets per signature; costs the device's P-384 figure, or its P-256 one times the published P-384 / P-256 ratio.",
+        ),
+        ("security.signature", "hybrid-falcon512-ecdsa-p256") => w(
+            "Post-quantum hybrid: Falcon-512 + P-256",
+            "Adds 666 octets per signature and 1,563 per certificate; needs a fragmenter and a profile with a Falcon figure.",
+        ),
+        ("security.signature", "hybrid-mldsa44-ecdsa-p256") => w(
+            "Post-quantum hybrid: ML-DSA-44 + P-256",
+            "FIPS 204 Dilithium beside P-256: the largest messages; needs a fragmenter and a profile with an ML-DSA figure.",
+        ),
+        ("messages.bsm.path_history_on_change", "keep") => w(
+            "Keep (SAE J2945/1 6.3.6.16)",
+            "The path history carries on under the new pseudonym: J2945/1 has no clearing rule and asks for 200 m of history (DATAACC-039).",
+        ),
+        ("messages.bsm.path_history_on_change", "clear") => w(
+            "Clear at each pseudonym change (privacy research)",
+            "The history starts again at each change, so the new pseudonym's first messages do not show the old one's track; not a J2945/1 rule.",
+        ),
+        // The measured receiver stays the default.
+        ("actors.vehicles.gnss.quality", "reid-2019") => w(
+            "Production receiver, measured (3.07 m at 68 %)",
+            "Reid et al. 2019's fit of a production GNSS receiver, 3.07 m horizontal and 4.59 m vertical at 68 %; the default, because city runs are not open sky.",
+        ),
+        ("actors.vehicles.gnss.quality", "j2945-1") => w(
+            "SAE J2945/1 open sky (1.5 m / 3 m at 68 %)",
+            "A receiver that meets J2945/1's open-sky accuracies: 1.5 m horizontal and 3 m vertical at 68 %, speed 0.28 m/s, heading 2-3°, the heading held below 1.10 m/s.",
+        ),
+        ("actors.vehicles.gnss.quality", "rtk") => w(
+            "RTK (0.26 m)",
+            "An RTK-corrected receiver, 0.26 m at 68 % (Reid 2019's OxTS RT3000 rows).",
+        ),
+        ("security.crypto_mode", "modeled") => w(
+            "Costed (fast)",
+            "Signing and verification take the hardware's measured time; the outcome is modelled.",
+        ),
+        ("security.crypto_mode", "real") => w(
+            "Computed (exact, slow)",
+            "Real ECDSA over real bytes. Only P-256 is available in this mode.",
+        ),
+        ("security.verification_policy", "verify-all") => w(
+            "Verify every message",
+            "Every received message is verified, whatever it costs the security module.",
+        ),
+        ("security.verification_policy", "on-demand") => w(
+            "Verify on demand",
+            "Only messages an application is about to act on are verified. Misbehaviour detection runs only on verified messages, so detection goes nearly blind (897 reports fell to 79 in testing).",
+        ),
+        ("security.verification_policy", "prioritized") => w(
+            "Verify nearest first",
+            "When the module cannot keep up, the closest and most relevant senders are verified first.",
+        ),
+        ("security.pseudonym_change.strategy", "by-region") => w(
+            "By region (US: SAE J2945/1)",
+            "The region's own rule: SAE J2945/1 CERTCHG under the US IEEE 1609.2 envelope, every 5 minutes under ETSI. A scenario that sets period_s gets the time rule.",
+        ),
+        ("security.pseudonym_change.strategy", "time") => w(
+            "Every few minutes (time only)",
+            "Change certificate after period_s of use (300 s unless set), however close the vehicle is to the last change point.",
+        ),
+        ("security.pseudonym_change.strategy", "distance") => w(
+            "Every few kilometres (NYC pilot)",
+            "Change once the vehicle is distance_m in a straight line from the last change point; the NYC Connected Vehicle Pilot used 2 km.",
+        ),
+        ("security.pseudonym_change.strategy", "j2945-1") => w(
+            "SAE J2945/1 (5 min unless within 2,100 m of the last change; not during a critical event)",
+            "Change once 5 minutes have passed and the vehicle is at least 2,100 m in a straight line from the last change point (vCertChangeDistance), and never while its BSM carries a critical event flag (CERTCHG-001, -002); an expiring certificate still changes.",
+        ),
+        ("security.pseudonym_change.strategy", "nyc-pilot") => w(
+            "NYC CV pilot (2 km or 5 min)",
+            "Change at 2 km in a straight line from the last change point or after 5 minutes, whichever comes first.",
+        ),
+        ("security.pseudonym_change.strategy", "c2c-cc") => w(
+            "European car makers' rule (C2C-CC)",
+            "After 0.8-1.5 km, then 0.8 km plus 2-6 minutes, then every 10-35 km.",
+        ),
+        ("security.pseudonym_change.strategy", "mix-zone") => w(
+            "In mix zones at junctions",
+            "Change inside a zone around each signalised junction, where many vehicles mingle.",
+        ),
+        ("security.pseudonym_change.strategy", "silent") => w(
+            "Never (keep one identity)",
+            "No change: the baseline a tracker finds easiest.",
+        ),
+        // --- time -----------------------------------------------------------------
+        ("time.des_resolution", "1ns") => w(
+            "1 nanosecond",
+            "The finest promise; models that time frames in microseconds are content.",
+        ),
+        ("time.des_resolution", "1us") => w(
+            "1 microsecond",
+            "What the radio models time frames in. The usual choice.",
+        ),
+        ("time.des_resolution", "1ms") => w(
+            "1 millisecond",
+            "Only for runs without a frame-level radio; refused with a medium or high PHY or MAC.",
+        ),
+        // --- traffic --------------------------------------------------------------
+        ("actors.vehicles.demand.kind", "mobility/demand/poisson") => w(
+            "Steady arrivals (Poisson)",
+            "Vehicles enter at random at the rate below, each with its own trip across the map.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/tr36885-drop") => w(
+            "3GPP drop (TR 36.885)",
+            "Every vehicle placed at once at the 3GPP evaluation spacing; for radio benchmarks.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/none") => w(
+            "No vehicles",
+            "No vehicle demand: pedestrians, roadside units and the backend only.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/sumo-rou") => w(
+            "SUMO route file (.rou.xml)",
+            "Every vehicle, flow and vehicle type of a SUMO route file, each driven by its own type.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/routes") => w(
+            "Saved routes (v2xw/routes/1)",
+            "The trips and chosen routes a traffic assignment saved, run again as they are.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/trips") => w(
+            "Trip list",
+            "A list of trips, each with its own departure, origin and destination.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/od-matrix") => w(
+            "Origin-destination matrix",
+            "Trips drawn from a zone-to-zone matrix, as SUMO's od2trips draws them.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/counts") => w(
+            "Traffic counts",
+            "Routes and trips sampled to reproduce observed counts, as SUMO's routeSampler does.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/gtfs") => w(
+            "Transit timetable (GTFS)",
+            "Buses and trams on their scheduled routes, from a GTFS feed.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/purposes") => w(
+            "Trips by purpose",
+            "A day of home-based tours and other trips, each departing on its purpose's profile.",
+        ),
+        ("actors.vehicles.demand.kind", "mobility/demand/composite") => w(
+            "Several demand models together",
+            "The trips of several demand models at once, for example commuters plus transit.",
+        ),
+        ("actors.vehicles.drivers.realism", "calibrated") => w(
+            "Calibrated city drivers",
+            "Each driver their own free speed, reaction at a green and following style; tuned to HCM saturation flow.",
+        ),
+        ("actors.vehicles.drivers.realism", "identical") => w(
+            "Identical (textbook model)",
+            "Every driver the same ideal model: the limit exactly, instant reactions. For model studies.",
+        ),
+        ("actors.vehicles.drivers.realism", "heterogeneous") => w(
+            "Heterogeneous",
+            "Calibrated, and each driver keeps their own gap and accelerates and brakes their own way.",
+        ),
+        ("actors.vehicles.drivers.realism", "human") => w(
+            "Human (reaction time and misjudgement)",
+            "Heterogeneous, with a 0.8 s reaction and misjudged gaps: dense traffic forms stop-and-go waves.",
+        ),
+        ("actors.vru.behaviour", "observed") => w(
+            "As observed in Midtown",
+            "Walking speeds by age, crossing against the signal and mid-block as field studies measured.",
+        ),
+        ("actors.vru.behaviour", "document") => w(
+            "Textbook (everyone obeys)",
+            "One walking speed, everyone waits for WALK, nobody crosses mid-block.",
+        ),
+        ("actors.rsus[].roles[]", "report-forward") => w(
+            "Relay misbehaviour reports",
+            "Forwards vehicles' reports to the backend when they have no cellular link.",
+        ),
+        ("actors.rsus[].roles[]", "crl") => w(
+            "Broadcast the revocation list",
+            "Repeats the certificate revocation list on the air.",
+        ),
+        ("actors.rsus[].roles[]", "provisioning-proxy") => w(
+            "Deliver certificate top-ups",
+            "Carries pseudonym-certificate downloads for vehicles without cellular.",
+        ),
+        ("actors.rsus[].roles[]", "spat") => w(
+            "Signal timing (SPaT) and priority",
+            "Broadcasts the junction's signal state and answers emergency-vehicle requests.",
+        ),
+        ("actors.rsus[].roles[]", "map") => w(
+            "Intersection map (MAP)",
+            "Broadcasts the junction's lane geometry.",
+        ),
+        ("actors.rsus[].roles[]", "spat-map") => w("Signal timing and map", "Both of the above."),
+        ("actors.rsus[].roles[]", "cpm") => w(
+            "Infrastructure collective perception (CPM)",
+            "Its own cameras or radars watch the junction and it broadcasts what they see.",
+        ),
+        // --- world ----------------------------------------------------------------
+        ("world.highway_preset", "urban-us-nyc") => w(
+            "New York City",
+            "25 mph default on every street; no right turn on red.",
+        ),
+        ("world.highway_preset", "urban-us-portland") => w(
+            "Portland, Oregon",
+            "20 mph in the business district; right on red after a stop.",
+        ),
+        ("world.highway_preset", "urban-de") => w(
+            "German city",
+            "50 km/h in built-up areas (StVO); no right on red.",
+        ),
+        ("world.highway_preset", "sumo-german") => w(
+            "SUMO defaults (German design speeds)",
+            "netconvert's type map, for comparison with SUMO; not an urban legal limit.",
+        ),
+        ("weather.initial", "clear") => w("Clear", "No precipitation, unlimited visibility."),
+        ("weather.initial", "rain") => w(
+            "Rain",
+            "Attenuates 5.9 GHz slightly and changes how people drive.",
+        ),
+        ("weather.initial", "snow") => w("Snow", "Lower visibility and a slippery surface."),
+        ("weather.initial", "sleet") => w("Sleet", "Freezing rain: the worst surface."),
+        ("weather.initial", "fog") => {
+            w("Fog", "Visibility collapses; the radio is barely affected.")
+        }
+        ("weather.initial", "wind") => w("Wind", "Strong wind with no precipitation."),
+        // --- applications ---------------------------------------------------------
+        ("apps.enabled[]", "fcw") => w(
+            "Forward collision warning",
+            "Warns when the car ahead is closing at a time to collision of 2.4 s or less.",
+        ),
+        ("apps.enabled[]", "eebl") => w(
+            "Emergency electronic brake light",
+            "Warns when a vehicle ahead brakes harder than 0.4 g.",
+        ),
+        ("apps.enabled[]", "ima") => w(
+            "Intersection movement assist",
+            "Warns of a crossing vehicle about to reach the same conflict point.",
+        ),
+        ("apps.enabled[]", "lta") => w(
+            "Left turn assist",
+            "Warns a left turner when the oncoming gap is too short.",
+        ),
+        ("apps.enabled[]", "bsw") => w(
+            "Blind spot warning",
+            "Warns of a vehicle in the blind spot before a lane change.",
+        ),
+        ("apps.enabled[]", "pcw") => w(
+            "Pedestrian collision warning",
+            "Warns when a pedestrian or cyclist will be in the path within 3 s.",
+        ),
+        ("apps.enabled[]", "rlvw") => w(
+            "Red light violation warning",
+            "Warns when the driver can no longer stop comfortably for a red.",
+        ),
+        ("apps.enabled[]", "glosa") => w(
+            "Green light speed advisory",
+            "Advises the speed that arrives on green; drivers follow it at the compliance share.",
+        ),
+        // --- detection and threats: the ids whose card purpose reads poorly --------
+        (_, "detect/legacy-12") => w(
+            "Standard 12-check suite",
+            "Plausibility and consistency checks on every message (the VeReMi detector set).",
+        ),
+        (_, "detect/us-sm-mbr") => w(
+            "Strict US profile (SM-MBR)",
+            "Only the SCMS Manager BSM report subtypes at their published thresholds (1 m drift, 90 m/s, 10 m/s²), every BSM checked, no streak gate (the default under a US deployment).",
+        ),
+        (_, "detect/ts103759") => w(
+            "ETSI TS 103 759 observations",
+            "The European observation classes 1-5 with F2MD's checks, a Kalman track, the reachable-distance envelope and vehicle-box overlap, every message checked; its thresholds, units and sources are on the threat/detector/ts103759-observations card.",
+        ),
+        (_, "threat/ma/corroborated") => w(
+            "Corroborating authority",
+            "Revokes only on independent, corroborated evidence sustained over time.",
+        ),
+        (_, "threat/ma/legacy-window") => w(
+            "Legacy window authority",
+            "Revokes once three trusted reporters agree within a window: the legacy engine's rule, kept for parity.",
+        ),
+        (_, "threat/observer/passive-privacy") => w(
+            "Roadside eavesdropper",
+            "Passive sniffers at a share of the signalised junctions try to link each car's pseudonyms.",
+        ),
+        (_, "threat/attacker/compromised-rsu") => w(
+            "Compromised roadside unit",
+            "A trusted unit under an attacker's control poisons or drops what it relays.",
+        ),
+        (_, "backhaul/fixed") => w(
+            "Fixed line",
+            "A wired link with a set latency and capacity.",
+        ),
+        (_, "backhaul/cellular") => w(
+            "Cellular",
+            "The unit reaches the backend over the mobile network.",
+        ),
+        (_, "backhaul/fibre") => w(
+            "Fibre",
+            "Metro fibre to the backend: 1 Gbit/s and well under a millisecond.",
+        ),
+        (_, "backhaul/dsl") => w(
+            "DSL (copper)",
+            "A VDSL2 phone line: 20 Mbit/s up, 80 down, about 9 ms each way.",
+        ),
+        (_, "backhaul/microwave") => w(
+            "Microwave",
+            "A point-to-point radio hop: 400 Mbit/s, about 0.2 ms, rare outages.",
+        ),
+        (_, "backhaul/none") => w("None (offline)", "The unit has no backend link."),
+        (_, "backend-net/fixed") => w(
+            "Fixed links",
+            "Links between backend authorities with a set latency and capacity.",
+        ),
+        (_, "cellular/uu/cell-capacity-mm1") => w(
+            "Cellular with cell capacity",
+            "Each cell's capacity shared by its users (an M/M/1 queue per device).",
+        ),
+        (_, "cellular/uu/fixed-latency") => w(
+            "Cellular, measured latency",
+            "A fixed one-way latency measured on a real network.",
+        ),
+        (_, "cellular/uu/handover-outage") => w(
+            "Cellular with handovers",
+            "Adds the interruption and loss of handovers between cells.",
+        ),
+        (_, "cellular/uu/packet-pf") => w(
+            "Cellular, packet level",
+            "Real base stations, a shared scheduler, retransmissions and TCP/TLS for backend traffic; slower to run.",
+        ),
+        (_, "fragmenter/none") => w(
+            "No fragmentation",
+            "A signed message larger than the network's limit is refused.",
+        ),
+        (_, "fragmenter/generic-sdu") => w(
+            "Split into pieces",
+            "A large message is sent in pieces and reassembled; it arrives only if every piece does.",
+        ),
+        (_, "fragmenter/facilities-segmentation") => w(
+            "Independent segments (ETSI)",
+            "Each segment is a message of its own (GeoNetworking only).",
+        ),
+        (_, "fragmenter/cert-cycle-partial-hybrid") => w(
+            "Post-quantum certificate spread over a cycle",
+            "The hybrid certificate rides in the first messages of each five-message cycle.",
+        ),
+        (_, "generator/bsm-j2945-1") => w(
+            "BSM timing (SAE J2945/1)",
+            "Tunes when Basic Safety Messages are sent.",
+        ),
+        (_, "generator/cam-en302637-2") => w(
+            "CAM triggering (ETSI EN 302 637-2)",
+            "Tunes the CAM triggering intervals and thresholds.",
+        ),
+        (_, "protocol/scms/camp") => w(
+            "US SCMS (CAMP)",
+            "The US credential system: butterfly keys, two linkage authorities, linkage-value CRL.",
+        ),
+        (_, "protocol/etsi/ts102941") => w(
+            "European CCMS (ETSI TS 102 941)",
+            "Authorization tickets, an enrolment authority and passive revocation.",
+        ),
+        // --- SCMS -------------------------------------
+        ("security.scms.deployment.preset", "us-production-2025") => w(
+            "US system (2025)",
+            "Two providers on one trust list, neutral labels a and b: the deployed US SCMS.",
+        ),
+        ("security.scms.deployment.preset", "us-test-ctl-2025") => w(
+            "US test trust list (17 Jul 2025)",
+            "Six roots, five approved; provider-f's root ships but is not trusted.",
+        ),
+        ("security.scms.deployment.preset", "camp-reference") => w(
+            "CAMP reference design",
+            "One SCMS with LOP, CRL Store, RSU broadcast and a central MA at flat latency: the pre-2025 topology, not the US system.",
+        ),
+        ("security.scms.deployment.preset", "custom") => w(
+            "Custom providers",
+            "You list the providers below; each starts as a copy of a US provider.",
+        ),
+        ("security.scms.deployment.options.butterfly", "original") => w(
+            "Original butterfly key expansion",
+            "The device sends signing and encryption caterpillar keys, the RA expands them into cocoon keys and the ACA encrypts each certificate to the device: the US profile.",
+        ),
+        ("security.scms.deployment.options.butterfly", "unified") => Some((
+            "Unified butterfly",
+            "Not deployed in the US: the US profile uses the original expansion only and the unified response key is unconfirmed, so this build refuses it.",
+            false,
+        )),
+        ("security.scms.deployment.options.butterfly", "cubk") => Some((
+            "Compact unified butterfly",
+            "Not deployed in the US: the US profile uses the original expansion only and the compact unified response key is unconfirmed, so this build refuses it.",
+            false,
+        )),
+        ("security.scms.chain_file", "all-providers") => w(
+            "Every provider's CA certificates",
+            "Each device holds the global chain file with every trusted provider's CAs, so it verifies any provider's vehicles at once.",
+        ),
+        ("security.scms.chain_file", "home-provider") => w(
+            "Only my provider's",
+            "A device learns other providers' ICA and ACA over the air by P2PCD before it can verify their vehicles (an assumption).",
+        ),
+        ("security.scms.deployment.latency", "region") => w(
+            "Distance-based",
+            "Great-circle distance between server sites at fibre speed, plus a fixed overhead per link (an assumption).",
+        ),
+        ("security.scms.deployment.latency", "flat") => w(
+            "Fixed latency",
+            "Every backend link takes the backend network's fixed latency, wherever the servers are.",
+        ),
+        ("security.scms.deployment.providers[].ma_mode", "manual-review") => w(
+            "An operator reviews each case",
+            "The CV-pilot \"minimum viable\" MA: a person reviews the evidence before a revocation (CAMP 1.2.2 §4.2-4.3).",
+        ),
+        ("security.scms.deployment.providers[].ma_mode", "automatic") => w(
+            "Acted on at once",
+            "The MA revokes as soon as its rule decides, with no human review.",
+        ),
+        ("security.scms.deployment.providers[].crl_publication", "sla-1-business-day") => w(
+            "Within one business day",
+            "The provider publishes a revocation within one business day of the decision (SCMS Manager service-level agreement).",
+        ),
+        ("security.scms.deployment.providers[].crl_publication", "cadence") => w(
+            "On a fixed cadence",
+            "The CRL is published on the fixed cadence set under Revocation, as in the CAMP reference design.",
+        ),
+        ("security.scms.deployment.providers[].crl_publication", "on-decision") => w(
+            "As soon as decided",
+            "The CRL is re-signed and published the moment the MA decides.",
+        ),
+        ("security.scms.tls", "1.3") => w(
+            "TLS 1.3",
+            "One round trip to set up the session before the first request (the default; the SCMS Manager EE profile §2.1.18 allows 1.2 or 1.3).",
+        ),
+        ("security.scms.tls", "1.2") => w(
+            "TLS 1.2",
+            "One more round trip than TLS 1.3 before the first request; also allowed by the EE profile.",
+        ),
+        ("security.scms.crl_overdue_scope", "craca") => w(
+            "Only certificates under the overdue list",
+            "While a CRL is overdue, refuse only messages whose certificates that CRL's issuer covers (the default).",
+        ),
+        ("security.scms.crl_overdue_scope", "all") => w(
+            "Every message",
+            "While any series-1 CRL is overdue, refuse every message; CAMP 1.2.2 Table 67 allows either reading.",
+        ),
+        ("security.threshold.roles[]", "pca") => w(
+            "Pseudonym CA",
+            "A committee of servers signs pseudonym certificates; no single server holds the key.",
+        ),
+        ("security.threshold.roles[]", "crl") => {
+            w("CRL Generator", "A committee signs the revocation list.")
+        }
+        ("security.threshold.roles[]", "linkage") => w(
+            "Linkage authorities",
+            "A t-of-n committee releases linkage seeds, so revoking a vehicle needs a quorum.",
+        ),
+        ("actors.backend.failures[].mode", "offline") => w(
+            "Down",
+            "The server is offline for the window: every message delivered to it is dropped.",
+        ),
+        ("actors.backend.failures[].mode", "slow") => w(
+            "Slow",
+            "Each message takes the extra time below on top of its service time, for the window.",
+        ),
+        ("actors.backend.failures[].mode", "malicious") => w(
+            "Lying",
+            "A committee member sends invalid threshold shares; only a committee member can lie.",
+        ),
+        ("actors.backend.entities.*.service_model", "service/mmc") => w(
+            "c parallel workers",
+            "The server runs the backend's worker count in parallel behind one queue (M/M/c, the default).",
+        ),
+        ("actors.backend.entities.*.service_model", "service/mm1") => w(
+            "One worker",
+            "The server handles one message at a time behind one queue (M/M/1).",
+        ),
+        (
+            "security.scms.deployment.providers[].components"
+            | "security.scms.deployment.providers[].sites"
+            | "security.scms.deployment.providers[].capacity"
+            | "security.scms.deployment.capacity"
+            | "actors.backend.entities"
+            | "actors.backend.links[].from"
+            | "actors.backend.links[].to"
+            | "actors.backend.failures[].node",
+            role,
+        ) => role_words(role).map(|(l, d)| (l, d, true)),
+        _ => None,
+    }
+}
+
+/// A label and a sentence for one SCMS server role: the provider components of
+/// `v2xw_proto::scms::deployment::ROLES` and the backend entities of
+/// `phase2::SCMS_ENTITIES` (`pca` is CAMP's name for the ACA, `dcm` the device's contact).
+fn role_words(role: &str) -> Option<(&'static str, &'static str)> {
+    Some(match role {
+        "root" => (
+            "Root CA",
+            "The provider's offline root of trust; its certificate is on the trust list the electors sign.",
+        ),
+        "ica" => (
+            "Intermediate CA",
+            "Signs the online CAs' certificates under the root.",
+        ),
+        "eca" => (
+            "Enrolment CA",
+            "Issues each device's enrolment certificate once, when it is built or installed.",
+        ),
+        "ra" => (
+            "Registration Authority",
+            "Takes devices' certificate requests, shuffles them and expands their butterfly keys.",
+        ),
+        "aca" => (
+            "Authorization (pseudonym) CA",
+            "Signs the pseudonym certificates vehicles broadcast with (CAMP calls it the PCA).",
+        ),
+        "pca" => (
+            "Pseudonym CA (ACA)",
+            "Signs the pseudonym certificates vehicles broadcast with (IEEE 1609.2.1 calls it the ACA).",
+        ),
+        "la1" => (
+            "Linkage Authority 1",
+            "Issues half of each certificate's linkage value, so no single authority can link a vehicle's pseudonyms.",
+        ),
+        "la2" => (
+            "Linkage Authority 2",
+            "Issues the other half of each certificate's linkage value.",
+        ),
+        "ma" => (
+            "Misbehaviour Authority",
+            "Receives misbehaviour reports, investigates and orders revocations.",
+        ),
+        "crlg" => (
+            "CRL Generator",
+            "Signs and publishes the certificate revocation list.",
+        ),
+        "pg" => (
+            "Policy Generator",
+            "Signs the policy file and the global chain file that devices download.",
+        ),
+        "lop" => (
+            "Location Obscurer Proxy",
+            "Hides a device's network address from the RA with one extra hop; CAMP design only, not US.",
+        ),
+        "crl_store" => (
+            "CRL Store",
+            "Serves the CRL to devices that fetch it; CAMP design only, not US.",
+        ),
+        "crl_broadcast" => (
+            "CRL broadcast",
+            "Pushes the CRL to roadside units that repeat it on the air; CAMP design only, not US.",
+        ),
+        "dcm" => (
+            "Device Configuration Manager",
+            "The device's point of contact for enrolment and certificate downloads.",
+        ),
+        _ => return None,
+    })
+}
+
+/// A label and a description for one legacy attack type (`v2xw_threat::AttackKind`),
+/// written from the type's own documentation in that crate.
+fn attack_words(kind: &str) -> Option<(&'static str, &'static str)> {
+    Some(match kind {
+        "ConstPos" => (
+            "Fake position: frozen",
+            "Keeps claiming the first position it sent while it drives on.",
+        ),
+        "ConstPosOffset" => (
+            "Fake position: shifted",
+            "Claims a position a constant distance from where it is.",
+        ),
+        "RandomPos" => (
+            "Fake position: random",
+            "Claims a random position near itself, redrawn every message.",
+        ),
+        "Teleport" => (
+            "Fake position: teleporting",
+            "Jumps its claimed position every fourth second.",
+        ),
+        "SineWavePos" => (
+            "Fake position: weaving",
+            "Swings its claimed position from side to side across its lane.",
+        ),
+        "ConstSpeedOffset" => (
+            "Fake speed: shifted",
+            "Adds a constant offset to the speed it claims.",
+        ),
+        "RandomSpeed" => ("Fake speed: random", "Claims a random speed."),
+        "StopAndGo" => (
+            "Fake speed: stop-and-go",
+            "Alternates its claimed speed between stopped and fast.",
+        ),
+        "ReversedHeading" => (
+            "Fake heading: reversed",
+            "Claims to be driving the opposite way.",
+        ),
+        "HeadingOffset" => (
+            "Fake heading: shifted",
+            "Adds a constant offset to the heading it claims.",
+        ),
+        "DataReplay" => (
+            "Replay attack",
+            "Re-sends its own earlier messages with their old timestamps.",
+        ),
+        "SlowDrift" => (
+            "Fake position: slow drift",
+            "A position error that grows slowly from nothing, hard to notice.",
+        ),
+        "AlongRoadOffset" => (
+            "Fake position: along the road",
+            "Shifts its claimed position along the road, so it stays on the map.",
+        ),
+        "Sybil" => (
+            "Ghost vehicles (Sybil)",
+            "Sends extra signed messages for ghost vehicles that do not exist, each under its own valid pseudonym.",
+        ),
+        "DoS" => (
+            "Message flood (DoS)",
+            "Not runnable yet: a flood needs extra transmissions per interval.",
+        ),
+        "DelayedMessages" => (
+            "Delayed messages",
+            "Stamps its messages with a stale generation time.",
+        ),
+        "InvalidSignature" => (
+            "Invalid signature",
+            "Signs with a key that does not match its certificate.",
+        ),
+        "ExpiredCert" => (
+            "Expired certificate",
+            "Presents a certificate past its validity.",
+        ),
+        "NotYetValid" => (
+            "Certificate not yet valid",
+            "Presents a certificate whose validity has not begun.",
+        ),
+        "OutOfOrder" => (
+            "Out-of-order timestamps",
+            "Stamps messages with times that go backwards.",
+        ),
+        "DoSRandom" => (
+            "Random flood (DoS)",
+            "Not runnable yet: a flood needs extra transmissions per interval.",
+        ),
+        "Disruptive" => (
+            "Everything inconsistent",
+            "Falsifies position, speed and heading at once, inconsistently.",
+        ),
+        "PosSpeedInconsistent" => (
+            "Moving while claiming to stop",
+            "Its position advances while it claims to be almost stopped.",
+        ),
+        "PosHeadingInconsistent" => (
+            "Sideways while claiming straight",
+            "Its position swings sideways while it claims a straight heading.",
+        ),
+        "EventualStop" => (
+            "Fake stop",
+            "Drives honestly, then freezes its claimed position while claiming to creep.",
+        ),
+        "VruImpersonation" => (
+            "Posing as a pedestrian",
+            "Not runnable yet: a BSM does not carry a station type.",
+        ),
+        "VruPositionSpoof" => (
+            "Fake pedestrian",
+            "Not runnable yet: a BSM does not carry a station type.",
+        ),
+        "FakeHazard" => (
+            "Fake hazard warning",
+            "Not runnable yet: the host does not send an attacker's event messages.",
+        ),
+        "SelectiveDrop" => (
+            "Drops relayed messages",
+            "Not runnable yet: vehicles here relay nothing.",
+        ),
+        _ => return None,
+    })
+}
+
+/// A label and a description for one F2MD / VeReMi NextGen behaviour
+/// (`v2xw_threat::F2mdKind`), written from the kind's own documentation in that crate.
+fn f2md_words(kind: v2xw_threat::F2mdKind) -> (&'static str, &'static str) {
+    use v2xw_threat::F2mdKind as K;
+    match kind {
+        K::FeignedBraking => (
+            "F2MD: feigned braking",
+            "Claims hard braking: its true acceleration negated and multiplied.",
+        ),
+        K::AccelerationMultiplication => (
+            "F2MD: acceleration multiplied",
+            "Claims its true acceleration multiplied.",
+        ),
+        K::PositionMirroring => (
+            "F2MD: mirrored position",
+            "Claims a position mirrored across the road edge, on the opposite side.",
+        ),
+        K::ZeroSpeedReport => (
+            "F2MD: zero speed",
+            "Claims to be stopped while it drives on.",
+        ),
+        K::UniformRandomPos => (
+            "F2MD: random position",
+            "Claims a position drawn uniformly over the map on every message.",
+        ),
+        K::ConstSpeed => (
+            "F2MD: constant speed",
+            "Draws one speed once and claims it on every message.",
+        ),
+        K::RandomSpeedOffset => (
+            "F2MD: random speed offset",
+            "Adds a fresh bounded offset to its true speed on every message.",
+        ),
+        K::NeighbourReplay => (
+            "F2MD: neighbour replay",
+            "Restates a neighbour's latest claim under its own pseudonym.",
+        ),
+        K::DoSDisruptive => (
+            "F2MD: disruptive flood",
+            "Beacons at a multiplied rate, each message a random neighbour's claim.",
+        ),
+        K::DataReplaySybil => (
+            "F2MD: replay, Sybil",
+            "Restates neighbours' claims, changing pseudonym with the victim.",
+        ),
+        K::DoSRandomSybil => (
+            "F2MD: random flood, Sybil",
+            "Beacons at a multiplied rate, random content under each next pseudonym.",
+        ),
+        K::DoSDisruptiveSybil => (
+            "F2MD: disruptive flood, Sybil",
+            "Beacons at a multiplied rate, neighbours' claims under each next pseudonym.",
+        ),
+    }
+}
+
+/// Every attack type a scenario can name: the legacy family
+/// `threat/attacker/legacy/<Kind>`, with the ones the engine refuses to run
+/// (`phase2::unrendered`) marked unavailable and listed last, then the F2MD family
+/// `threat/attacker/f2md/<Kind>`, the evasion family `threat/attacker/evasion/<Kind>` and
+/// the insider report poisoner (`phase2::INSIDER_POISONER_ID`), all runnable.
+fn attacker_rows() -> Vec<Value> {
+    let row = |value: String, label: &str, description: &str, available: bool| {
+        (
+            available,
+            json!({"value": value, "label": label, "description": description,
+                   "available": available}),
+        )
+    };
+    let mut rows: Vec<(bool, Value)> = v2xw_threat::AttackKind::ALL
+        .iter()
+        .map(|&kind| {
+            let name = kind.as_str();
+            let available = crate::phase2::unrendered(kind).is_none();
+            let (label, description) = attack_words(name).unwrap_or((name, ""));
+            row(
+                format!("threat/attacker/legacy/{name}"),
+                label,
+                description,
+                available,
+            )
+        })
+        .collect();
+    rows.extend(v2xw_threat::F2mdKind::ALL.iter().map(|&kind| {
+        let (label, description) = f2md_words(kind);
+        row(
+            format!("{}{}", v2xw_threat::attack_f2md::ID_PREFIX, kind.as_str()),
+            label,
+            description,
+            true,
+        )
+    }));
+    rows.extend(v2xw_threat::EvasionKind::ALL.iter().map(|&kind| {
+        let (label, description) = match kind {
+            v2xw_threat::EvasionKind::BenignClassMimic => (
+                "Evasion: posing as a benign device",
+                "A legacy attack worn behind a benign device class's markings.",
+            ),
+        };
+        row(
+            format!(
+                "{}{}",
+                v2xw_threat::attack_evasion::ID_PREFIX,
+                kind.as_str()
+            ),
+            label,
+            description,
+            true,
+        )
+    }));
+    rows.push(row(
+        crate::phase2::INSIDER_POISONER_ID.to_string(),
+        "Insider: false misbehaviour reports",
+        "Beacons honestly, but files false misbehaviour reports against honest vehicles.",
+        true,
+    ));
+    rows.sort_by_key(|(available, _)| !*available);
+    rows.into_iter().map(|(_, r)| r).collect()
+}
+
+/// Words for the abbreviations that appear in model ids, so a humanised id reads.
+const ID_WORDS: &[(&str, &str)] = &[
+    ("Pos", "position"),
+    ("Const", "constant"),
+    ("DoS", "denial of service"),
+    ("Sybil", "Sybil"),
+    ("Rand", "random"),
+    ("obu", "OBU"),
+    ("rsu", "RSU"),
+    ("uu", "cellular"),
+    ("mm1", "M/M/1"),
+];
+
+/// A model id in words: its last segment, CamelCase and dashes split, abbreviations
+/// spelled out. `threat/attacker/legacy/ConstPosOffset` → "Constant position offset".
+pub fn humanise_id(id: &str) -> String {
+    let last = id.rsplit('/').next().unwrap_or(id).replace("DoS", "-DoS-");
+    let mut words: Vec<String> = Vec::new();
+    for chunk in last.split(['-', '_']).filter(|c| !c.is_empty()) {
+        if chunk == "DoS" {
+            words.push(chunk.to_string());
+            continue;
+        }
+        // Split CamelCase at a lower-to-upper change: "ConstPosOffset" → Const Pos Offset.
+        let mut cur = String::new();
+        let mut prev_lower = false;
+        for c in chunk.chars() {
+            if c.is_uppercase() && prev_lower && !cur.is_empty() {
+                words.push(std::mem::take(&mut cur));
+            }
+            prev_lower = c.is_lowercase() || c.is_ascii_digit();
+            cur.push(c);
+        }
+        if !cur.is_empty() {
+            words.push(cur);
+        }
+    }
+    let spelled: Vec<String> = words
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let word = ID_WORDS
+                .iter()
+                .find(|(k, _)| k == w)
+                .map_or_else(|| w.clone(), |(_, v)| (*v).to_string());
+            let keep = word.len() > 1 && word.chars().all(|c| !c.is_lowercase());
+            if keep || word == "Sybil" {
+                word
+            } else if i == 0 {
+                let mut c = word.chars();
+                c.next()
+                    .map(|f| f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase())
+                    .unwrap_or_default()
+            } else {
+                word.to_lowercase()
+            }
+        })
+        .collect();
+    spelled.join(" ")
+}
+
+/// The first sentence of a card's purpose, short enough for an option's description.
+fn first_sentence(text: &str) -> String {
+    let t = text.trim();
+    let cut = t
+        .char_indices()
+        .find(|&(i, c)| c == '.' && t[i + 1..].starts_with(' '))
+        .map_or(t.len(), |(i, _)| i + 1);
+    let s = &t[..cut];
+    if s.chars().count() > 200 {
+        let mut short: String = s.chars().take(197).collect();
+        short.push('…');
+        short
+    } else {
+        s.to_string()
+    }
+}
+
+/// One selectable value: `{value, label, description, available}`.
+///
+/// `fallback` is the description to use when this module has no words for the value —
+/// a reflected variant's doc comment or a model card's purpose.
+pub fn option_row(path: &str, value: &str, fallback: &str) -> Value {
+    // A state of the city library: its name, and its default limit and turn rule in words.
+    if path == "world.highway_preset"
+        && let Some(j) =
+            v2xw_world::osm::HighwayPreset::parse(value).and_then(|p| p.us_jurisdiction())
+    {
+        return json!({
+            "value": value,
+            "label": j.name,
+            "description": format!(
+                "{} mph default on untagged streets; right on red after a stop{}.",
+                j.urban_mph,
+                if j.cited { "" } else { " (generic US default, not this state's statute)" }
+            ),
+            "available": true,
+        });
+    }
+    // An on-board unit whose profile publishes no ECDSA signing cost is refused by the
+    // loader for every vehicle (a vehicle signs every message on its own hardware), so the
+    // dropdown says so instead of offering a choice that cannot run.
+    if matches!(path, "nodes.default_obu" | "nodes.per_class.*")
+        && let Some(p) = v2xw_node::profiles::get(value)
+        && p.op_cost(v2xw_node::profile::signature_ops("ecdsa-p256").0)
+            .is_none()
+    {
+        return json!({
+            "value": value,
+            "label": format!("{} (cannot sign)", humanise_id(value)),
+            "description": "Its sources publish no ECDSA signing rate, so a vehicle on it \
+                            could not sign a message; choose a unit that publishes one.",
+            "available": false,
+        });
+    }
+    let mut row = match words(path, value).or_else(|| scheme_words(path, value)) {
+        Some((label, description, available)) => json!({
+            "value": value, "label": label, "description": description,
+            "available": available,
+        }),
+        None => json!({
+            "value": value,
+            "label": if value.contains('/') { humanise_id(value) } else { plain(value) },
+            "description": first_sentence(fallback),
+            "available": true,
+        }),
+    };
+    if let Some(us) = us_of(path, value)
+        && let Value::Object(map) = &mut row
+    {
+        map.insert("us".into(), json!(us));
+    }
+    row
+}
+
+/// The words of a signature, KEM or threshold scheme, from its own registry entry
+/// (`v2xw_sec::scheme`, `v2xw_proto::threshold`), so a scheme registered there gets a
+/// label and its standard in the menu without an edit here.
+fn scheme_words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> {
+    match path {
+        "security.signature" => v2xw_sec::scheme::signature(value)
+            .map(|s| (s.label, scheme_sentence(s.notes, s.standard), true)),
+        "security.kem" => v2xw_sec::scheme::kem(value)
+            .map(|k| (k.label, scheme_sentence(k.notes, k.standard), true)),
+        "security.threshold.protocol" | "security.threshold.umbrella_inner" => {
+            let e = v2xw_proto::threshold::THRESHOLD_PROTOCOLS
+                .iter()
+                .find(|e| e.id == value)?;
+            let standard = (e.build)(&v2xw_proto::threshold::ProtocolParams::default()).standard();
+            if path.ends_with("umbrella_inner") && value == "umbrella" {
+                return Some((
+                    e.label,
+                    "Cannot sign its own umbrellas: choose a signing protocol for the umbrella certificates.",
+                    false,
+                ));
+            }
+            Some((e.label, standard, true))
+        }
+        _ => None,
+    }
+}
+
+/// A scheme's notes when it has them, else its standard: the sentence a menu shows.
+fn scheme_sentence(notes: &'static str, standard: &'static str) -> &'static str {
+    if notes.trim().is_empty() {
+        standard
+    } else {
+        notes
+    }
+}
+
+/// Whether `value` at `path` is what the deployed US system uses (`Some(true)`), a value
+/// it does not use (`Some(false)`, shown as a "not US" badge; a run choosing it is flagged
+/// in its manifest by `Deployment::is_us` where that applies), or neither (`None`).
+///
+/// US values are the defaults; every other value stays
+/// selectable but badged.
+pub fn us_of(path: &str, value: &str) -> Option<bool> {
+    match path {
+        "security.scms.deployment.preset" => match value {
+            "us-production-2025" | "us-test-ctl-2025" => Some(true),
+            "camp-reference" => Some(false),
+            _ => None,
+        },
+        "security.scms.deployment.options.butterfly" => Some(value == "original"),
+        // On (`true`) in every preset; off is a research departure.
+        "security.scms.deployment.options.identification_certs" => Some(value == "true"),
+        "security.scms.chain_file" => Some(value == "all-providers"),
+        // SAE J2945/1 Table 18 is the US 802.11p table, which `by-region` gives there.
+        "radio.mac.edca_profile" => match value {
+            "sae-j2945-1" | "by-region" => Some(true),
+            "en-302-663" => Some(false),
+            _ => None,
+        },
+        // J2945/1 has no clearing rule, so the US device keeps its history.
+        "messages.bsm.path_history_on_change" => Some(value == "keep"),
+        "security.scms.deployment.providers[].ma_mode" => {
+            (value == "manual-review").then_some(true)
+        }
+        "security.scms.deployment.providers[].crl_publication" => match value {
+            "sla-1-business-day" => Some(true),
+            "cadence" => Some(false),
+            _ => None,
+        },
+        "security.scms.deployment.providers[].components"
+        | "security.scms.deployment.providers[].sites"
+        | "security.scms.deployment.providers[].capacity"
+        | "security.scms.deployment.capacity"
+        | "actors.backend.entities"
+        | "actors.backend.links[].from"
+        | "actors.backend.links[].to"
+        | "actors.backend.failures[].node" => match value {
+            "lop" | "crl_store" | "crl_broadcast" => Some(false),
+            _ => None,
+        },
+        "security.envelope" => Some(value == "ieee1609.2"),
+        "security.signature" => Some(value == "ecdsa-p256"),
+        "security.kem" => Some(value == "ecies-p256"),
+        "security.protocol.id" | "actors.backend.protocol" => match value {
+            "protocol/scms/camp" => Some(true),
+            "protocol/etsi/ts102941" => Some(false),
+            _ => None,
+        },
+        // A committee is a research option; the US system has none.
+        "security.threshold.protocol" | "security.threshold.umbrella_inner" => Some(false),
+        _ => None,
+    }
+}
+
+/// A short value in words: `us-2016` → "Us 2016".
+fn plain(value: &str) -> String {
+    let spaced = value.replace(['-', '_'], " ");
+    let mut c = spaced.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => spaced,
+    }
+}
+
+/// The ids a model slot at `path` offers, with whether the set is closed (the loader
+/// refuses anything else) — `None` when `path` is not a slot's id.
+///
+/// The registry is the source; where the loader is narrower than the registry (the
+/// demand models, the hardware profiles) the loader's own table is used, so the form
+/// never offers what Check would refuse.
+pub fn slot_values(path: &str, registry: &Registry) -> Option<(Vec<Value>, bool)> {
+    let slot = super::publish::SLOTS.iter().find(|s| {
+        if s.bare_id {
+            s.path == path
+        } else {
+            path.strip_suffix(".id") == Some(s.path)
+        }
+    })?;
+    let purpose = |id: &str| -> String {
+        registry
+            .resolve(id)
+            .and_then(|r| registry.iter_by_id().find(|(m, _)| *m == r))
+            .map(|(_, m)| m.card.purpose.clone())
+            .unwrap_or_default()
+    };
+    // The loader's own tables, where it enforces one.
+    let closed: Option<Vec<String>> = match slot.path {
+        "actors.vehicles.demand.kind" => Some(
+            [
+                "mobility/demand/poisson",
+                "mobility/demand/tr36885-drop",
+                "mobility/demand/none",
+                // A SUMO `.rou.xml` imported whole and the `v2xw-demand` models.
+                v2xw_interop::routes::MODEL_ID,
+                v2xw_demand::scenario::KINDS[0],
+                v2xw_demand::scenario::KINDS[1],
+                v2xw_demand::scenario::KINDS[2],
+                v2xw_demand::scenario::KINDS[3],
+                v2xw_demand::scenario::KINDS[4],
+                v2xw_demand::scenario::KINDS[5],
+                v2xw_demand::scenario::KINDS[6],
+            ]
+            .iter()
+            .filter(|id| crate::wiring::DEMAND_KINDS.contains(id))
+            .map(|s| (*s).to_string())
+            .collect(),
+        ),
+        "nodes.default_obu" | "nodes.per_class.*" => Some(
+            validate::obu_profile_ids()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        ),
+        // The three jammers `run::jamming::jammer_specs` builds; anything else is refused.
+        "threats.jammers[]" => Some(
+            [
+                v2xw_radio::jamming::ConstantJammer::ID,
+                v2xw_radio::jamming::PulsedJammer::ID,
+                v2xw_radio::jamming::ReactiveJammer::ID,
+            ]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        ),
+        // The ids the security path builds by name (`phase2`, `backend`,
+        // `pseudonym_policy`); the catalogue registers few of these as cards, so the
+        // registry alone offered an empty or wrong list for them.
+        "detection.local[]" => Some(vec![
+            crate::phase2::LEGACY_12.to_string(),
+            crate::phase2::US_SM_MBR.to_string(),
+            crate::phase2::TS_103_759.to_string(),
+        ]),
+        "detection.ma" => Some(vec![
+            crate::phase2::MA_CORROBORATED.to_string(),
+            crate::phase2::MA_LEGACY_WINDOW.to_string(),
+        ]),
+        "net.backhaul" | "actors.rsus[].backhaul" => Some(
+            crate::backend::BACKHAUL_MODELS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        ),
+        "net.backend_net" | "actors.backend.entities.*.net" => Some(
+            crate::backend::BACKEND_NET_MODELS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        ),
+        "threats.eavesdropper" => Some(vec![crate::pseudonym_policy::EAVESDROPPER_ID.to_string()]),
+        "threats.compromised_rsu_attack" => {
+            Some(vec![v2xw_threat::attack_rsu::MODEL_ID.to_string()])
+        }
+        // Each slot offers only the hardware that belongs there: a roadside unit's list
+        // holds the RSU profiles, a backend entity's the server and base-station ones.
+        "actors.rsus[].profile" => Some(
+            validate::all_profile_ids()
+                .into_iter()
+                .filter(|id| id.starts_with("rsu/"))
+                .map(str::to_string)
+                .collect(),
+        ),
+        // `apply_backend_topology` builds these two queues and refuses any other id, so
+        // the menu is closed to them rather than listing the whole service registry.
+        "actors.backend.entities.*.service_model" => Some(
+            crate::phase2::SERVICE_MODEL_IDS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        ),
+        "actors.backend.entities.*.profile" => Some(
+            validate::all_profile_ids()
+                .into_iter()
+                .filter(|id| id.starts_with("backend/") || id.starts_with("bs/"))
+                .map(str::to_string)
+                .collect(),
+        ),
+        _ => None,
+    };
+    // The attacker slot's ids are not registry cards: the legacy family is one card and
+    // its types are named `threat/attacker/legacy/<Kind>` (`phase2`, `validate`).
+    if slot.path == "threats.attackers[].id" {
+        return Some((attacker_rows(), true));
+    }
+    if let Some(ids) = closed {
+        let rows = ids
+            .iter()
+            .map(|id| option_row(path, id, &purpose(id)))
+            .collect();
+        return Some((rows, true));
+    }
+    let mut rows: Vec<(bool, Value)> = registry
+        .iter_by_id()
+        .filter(|(_, m)| m.card.family == slot.family)
+        // `generator` names a procedural world's generator; the world family also holds
+        // the importers and the terrain models, which are not chosen here.
+        .filter(|(_, m)| {
+            slot.path != "world.source.generator"
+                || m.card.id.starts_with("world/source/procedural")
+        })
+        // A jammer is an attacker-family card, chosen in `threats.jammers`, not here.
+        .filter(|(_, m)| {
+            slot.family != Family::Attacker || !m.card.id.starts_with("attacker/jammer/")
+        })
+        .map(|(r, m)| {
+            let implemented = registry.has_implementation(r);
+            let mut row = option_row(path, &m.card.id, &m.card.purpose);
+            if !implemented && let Value::Object(map) = &mut row {
+                map.insert("implemented".into(), json!(false));
+            }
+            (implemented, row)
+        })
+        .collect();
+    // Implemented first, then by id (the registry's order), so the list opens on what runs.
+    rows.sort_by_key(|(implemented, _)| !*implemented);
+    Some((rows.into_iter().map(|(_, r)| r).collect(), false))
+}
+
+/// The RSU roles the engine reads (`phase2`, `wiring::rsu_services`).
+const RSU_ROLES: [&str; 7] = [
+    "report-forward",
+    "crl",
+    "provisioning-proxy",
+    "spat",
+    "map",
+    "spat-map",
+    "cpm",
+];
+
+/// Closed sets that are not a `CHOICES` row, a reflected enum or a slot, with whether the
+/// loader refuses anything outside them.
+pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
+    match path {
+        "apps.enabled[]" => Some((
+            crate::scenario::Apps::ALL
+                .iter()
+                .map(|v| option_row(path, v, ""))
+                .collect(),
+            true,
+        )),
+        "actors.rsus[].roles[]" => Some((
+            RSU_ROLES.iter().map(|v| option_row(path, v, "")).collect(),
+            false,
+        )),
+        "metrics[]" => Some((
+            vec![
+                json!({"value": "all", "label": "Everything this build measures",
+                        "description": "Every registered metric provider.",
+                        "available": true}),
+            ],
+            false,
+        )),
+        "radio.channel" | "radio.adjacent_channel[].channel" | "radio.channels[].channel" => {
+            Some((channel_rows(), true))
+        }
+        "actors.rsu_placement.profile" => Some((
+            validate::all_profile_ids()
+                .into_iter()
+                .filter(|id| id.starts_with("rsu/"))
+                .map(|v| option_row(path, v, ""))
+                .collect(),
+            true,
+        )),
+        "actors.vehicles.classes.*.obu" => Some((
+            validate::obu_profile_ids()
+                .into_iter()
+                .map(|v| option_row(path, v, ""))
+                .collect(),
+            true,
+        )),
+        // --- SCMS: each set is the constant its
+        // parser's "allowed:" message reads, so the form and the loader cannot disagree.
+        "security.scms.deployment.preset" => Some((
+            rows_of(path, &v2xw_proto::scms::deployment::Preset::IDS),
+            true,
+        )),
+        "security.scms.deployment.options.butterfly" => Some((
+            rows_of(
+                path,
+                &crate::phase2::BUTTERFLY_IDS
+                    .iter()
+                    .chain(&crate::phase2::REFUSED_BUTTERFLIES)
+                    .copied()
+                    .collect::<Vec<_>>(),
+            ),
+            true,
+        )),
+        "security.scms.chain_file" => Some((rows_of(path, &crate::phase2::CHAIN_FILE_IDS), true)),
+        "security.scms.deployment.latency" => {
+            Some((rows_of(path, &crate::phase2::LATENCY_IDS), true))
+        }
+        "security.scms.deployment.providers[].ma_mode" => {
+            Some((rows_of(path, &crate::phase2::MA_MODE_IDS), true))
+        }
+        "security.scms.deployment.providers[].crl_publication" => Some((
+            rows_of(path, &v2xw_proto::scms::deployment::CrlPublication::IDS),
+            true,
+        )),
+        "security.scms.deployment.providers[].region" => Some((
+            v2xw_proto::scms::deployment::REGIONS
+                .iter()
+                .map(|r| {
+                    json!({
+                        "value": r.name,
+                        "label": format!("{} ({})", r.name, r.metro),
+                        "description": format!(
+                            "Servers assumed near {}: no provider publishes where it hosts, so this is an assumption.",
+                            r.metro
+                        ),
+                        "available": true,
+                    })
+                })
+                .collect(),
+            true,
+        )),
+        // A free name: the preset providers are offered, and under `custom` any name may
+        // be typed (open).
+        "security.scms.deployment.providers[].name" => Some((provider_name_rows(), false)),
+        // Whose component is revoked: a provider of the deployment, open under
+        // Custom providers as the name itself is.
+        "security.scms.lifecycle.component_revoked_provider" => Some((provider_name_rows(), false)),
+        "security.threshold.protocol" | "security.threshold.umbrella_inner" => Some((
+            rows_of(path, &v2xw_proto::threshold::THRESHOLD_IDS),
+            true,
+        )),
+        "security.threshold.roles[]" => {
+            Some((rows_of(path, &crate::crypto_config::THRESHOLD_ROLES), true))
+        }
+        "actors.backend.failures[].mode" => {
+            Some((rows_of(path, &crate::crypto_config::FAILURE_MODES), true))
+        }
+        // Open: a role may be qualified by its provider (`provider-b/crlg`) or name a
+        // committee member (`pca-member-2`); A4 composes those from the document.
+        "actors.backend.failures[].node" => {
+            Some((rows_of(path, &crate::crypto_config::FAILURE_ROLES), false))
+        }
+        "actors.backend.links[].from" | "actors.backend.links[].to" => {
+            Some((rows_of(path, &crate::phase2::SCMS_ENTITIES), true))
+        }
+        // The hour the report store re-weights, as the 24 hours of the Eastern clock.
+        "security.scms.lifecycle.report_decay_hour_et" => Some((hour_rows(), true)),
+        // The MA policy's daily multiplier hour, the same 24-hour menu.
+        _ if module_key(path) == Some("decay.hour_et") => Some((hour_rows(), true)),
+        // The keys an engine module owns.
+        _ => crate::scenario::module_keys::options(path),
+    }
+}
+
+/// The 24 hours of the Eastern clock, for a daily re-weighting hour (MBR v1.0 §2.2: 05:00).
+fn hour_rows() -> Vec<Value> {
+    (0..24)
+        .map(|h| {
+            json!({
+                "value": h,
+                "label": format!("{h:02}:00 ET"),
+                "description": if h == 5 {
+                    "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time (the US value)."
+                } else {
+                    "Stored evidence is re-weighted every day at this Eastern hour."
+                },
+                "available": true,
+            })
+        })
+        .collect()
+}
+
+/// `option_row` for each of `ids`.
+fn rows_of(path: &str, ids: &[&str]) -> Vec<Value> {
+    ids.iter().map(|v| option_row(path, v, "")).collect()
+}
+
+/// The providers each deployment preset names, home provider first, and where a document
+/// states its preset and, under `custom`, its own list.
+/// A field whose values depend on the deployment carries this, so the form fills the
+/// provider half from the document.
+pub fn provider_sets() -> Value {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    let mut by_preset = serde_json::Map::new();
+    for id in Preset::IDS {
+        if let Some(p) = Preset::parse(id).filter(|p| *p != Preset::Custom) {
+            let names: Vec<String> = Deployment::preset(p)
+                .providers
+                .iter()
+                .map(|q| q.name.clone())
+                .collect();
+            by_preset.insert(id.to_string(), json!(names));
+        }
+    }
+    json!({
+        "preset_path": "security.scms.deployment.preset",
+        // An SCMS run with no deployment block runs the US system (`phase2::deployment_of`).
+        "default_preset": Preset::UsProduction2025.id(),
+        "custom_path": "security.scms.deployment.providers",
+        "by_preset": by_preset,
+    })
+}
+
+/// How a value at `path` is composed of a provider and a choice (`x-options-compose`): a
+/// failure's server is `<provider>/<role>`, or the bare role for the home provider
+/// (`crypto_config::failure_target`).
+pub fn compose_of(path: &str) -> Option<Value> {
+    (path == "actors.backend.failures[].node")
+        .then(|| json!({"qualifier": "provider", "separator": "/", "providers": provider_sets()}))
+}
+
+/// The provider names the presets use, each saying which presets name it.
+fn provider_name_rows() -> Vec<Value> {
+    use v2xw_proto::scms::deployment::{Deployment, Preset};
+    let mut names: Vec<(String, Vec<&'static str>)> = Vec::new();
+    for id in Preset::IDS {
+        let Some(p) = Preset::parse(id).filter(|p| *p != Preset::Custom) else {
+            continue;
+        };
+        let label = words("security.scms.deployment.preset", id).map_or(id, |w| w.0);
+        for q in Deployment::preset(p).providers {
+            match names.iter_mut().find(|(n, _)| *n == q.name) {
+                Some((_, by)) => by.push(label),
+                None => names.push((q.name.clone(), vec![label])),
+            }
+        }
+    }
+    names
+        .into_iter()
+        .map(|(name, by)| {
+            json!({
+                "value": name,
+                "label": name,
+                "description": format!(
+                    "A provider of: {}. Under Custom providers any name may be typed.",
+                    by.join("; ")
+                ),
+                "available": true,
+            })
+        })
+        .collect()
+}
+
+/// The keys a map at `path` offers (`x-key-options`), and whether the set is closed: the
+/// SCMS role maps, whose keys are server roles, and the MA policy family and rules.
+pub fn key_values(path: &str) -> Option<(Vec<Value>, bool)> {
+    match path {
+        "security.scms.deployment.providers[].components"
+        | "security.scms.deployment.providers[].sites"
+        | "security.scms.deployment.providers[].capacity"
+        | "security.scms.deployment.capacity" => {
+            Some((rows_of(path, &v2xw_proto::scms::deployment::ROLES), true))
+        }
+        "actors.backend.entities" => Some((rows_of(path, &crate::phase2::SCMS_ENTITIES), true)),
+        "security.scms.ma_policy.evidence.rules" | "security.scms.ma_policies.*.evidence.rules" => {
+            Some((
+                crate::ma_policy::RULE_KEY_IDS
+                    .iter()
+                    .map(|v| match v.strip_prefix("detect/") {
+                        // An engine check: its own score wins over its subtype's.
+                        Some(check) => json!({
+                            "value": v,
+                            "label": format!("Check: {}", humanise_camel(check)),
+                            "description": match v2xw_threat::ma_policy::sm_mbr_subtype(check) {
+                                Some(sub) => format!(
+                                    "The engine's {check} check (files as SM-MBR {sub}); \
+                                     its score wins over the subtype's."
+                                ),
+                                None => format!(
+                                    "The engine's {check} check (no SM-MBR v1.0 subtype)."
+                                ),
+                            },
+                            "available": true,
+                        }),
+                        None => json!({
+                            "value": v,
+                            "label": humanise_camel(v),
+                            "description": format!(
+                                "The SM-MBR v1.0 {v} report subtype the US device files."
+                            ),
+                            "available": true,
+                        }),
+                    })
+                    .collect(),
+                true,
+            ))
+        }
+        // A free name a provider's `ma_policy` then picks; the presets are offered as
+        // names to start from.
+        "security.scms.ma_policies" => Some((
+            crate::ma_policy::PRESET_IDS
+                .iter()
+                .filter(|v| **v != "custom")
+                .map(|v| {
+                    json!({
+                        "value": v,
+                        "label": format!("Policy named \"{v}\""),
+                        "description": format!(
+                            "A named policy, here called after the {v} preset it can start from; any other name may be typed."
+                        ),
+                        "available": true,
+                    })
+                })
+                .collect(),
+            false,
+        )),
+        _ => None,
+    }
+}
+
+/// `RandomPosition` → "Random position".
+fn humanise_camel(id: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in id.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push(' ');
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Every channel any region's band plan opens, from `v2xw_radio::regulation`, with which
+/// region and technology it serves.
+fn channel_rows() -> Vec<Value> {
+    use std::collections::BTreeMap;
+    use v2xw_radio::regulation::Region;
+    let mut by_number: BTreeMap<u16, (f64, f64, Vec<String>)> = BTreeMap::new();
+    for region in Region::ALL {
+        for rule in region.rules() {
+            let entry = by_number.entry(rule.channel.number).or_insert((
+                rule.channel.lower_mhz,
+                rule.channel.upper_mhz,
+                Vec::new(),
+            ));
+            entry
+                .2
+                .push(format!("{}: {}", region.id(), first_sentence(rule.usage)));
+        }
+    }
+    by_number
+        .into_iter()
+        .map(|(n, (lo, hi, uses))| {
+            json!({
+                "value": n,
+                "label": format!("Channel {n} ({:.3} GHz, {:.0} MHz)", (lo + hi) / 2000.0, hi - lo),
+                "description": uses.join("; "),
+                "available": true,
+            })
+        })
+        .collect()
+}
+
+/// What "Add" puts in a list whose elements are model choices: a complete element the
+/// loader accepts as it stands, which the user then edits.
+pub fn item_template(path: &str) -> Option<Value> {
+    Some(match path {
+        // One of fraction, count and actor_ids is required (validate::threats).
+        "threats.attackers" => json!({"id": "threat/attacker/legacy/ConstPos", "fraction": 0.05}),
+        "detection.local" => json!({"id": "detect/legacy-12"}),
+        // Placed exactly one way (run::jamming::parse_emitter); 23 dBm is TR 36.885's
+        // vehicle power. The position is Fifth Avenue at 42nd Street on the Midtown
+        // extract, a busy junction to start from.
+        "threats.jammers" => json!({"id": v2xw_radio::jamming::ConstantJammer::ID,
+                                    "params": {"position_m": [770.3, 1052.8], "power_dbm": 23}}),
+        "actors.rsus" => json!({"position_m": [770.3, 1052.8, 0.0],
+                                "roles": ["report-forward", "crl", "provisioning-proxy"]}),
+        _ => return None,
+    })
+}
+
+/// One named value for a number.
+#[derive(Debug, Clone, Copy)]
+pub struct Preset {
+    /// The dotted path.
+    pub path: &'static str,
+    /// What to call it.
+    pub label: &'static str,
+    /// The value.
+    pub value: f64,
+    /// Why this number: its source, or that it is this build's choice.
+    pub note: &'static str,
+}
+
+/// Named values offered beside a number, each with its source.
+///
+/// The demand rates are network-wide arrival rates on the Midtown Manhattan extract. Their
+/// *ratios* are cited: the HCM's design-hour factor puts the peak hour at about 9 % of a
+/// day's traffic (HCM 6th ed., K-factor), FHWA's Traffic Monitoring Guide (2016, urban
+/// hourly distribution) puts a weekday midday hour near 6 % and the small hours near 1 %.
+/// Their *level* is scaled: NYC DOT's Midtown counts (avenues 970-1,890 veh/h per
+/// approach) would need about forty times "Normal" on this extract,
+/// thousands of
+/// vehicles at once, which this machine does not run interactively.
+pub static PRESETS: &[Preset] = &[
+    Preset {
+        path: "radio.phy.data_rate_mbps",
+        label: "3 Mbit/s (BPSK 1/2, longest range)",
+        value: 3.0,
+        note: "The lowest 10 MHz rate (IEEE 802.11-2020 Table 17-4); sensitivity -85 dBm by EN 302 663 Table 1.",
+    },
+    Preset {
+        path: "radio.phy.data_rate_mbps",
+        label: "6 Mbit/s (QPSK 1/2, J2945/1 default)",
+        value: 6.0,
+        note: "SAE J2945/1's vDataRate and the rate every published 802.11p PDR curve this engine is validated against.",
+    },
+    Preset {
+        path: "radio.phy.data_rate_mbps",
+        label: "12 Mbit/s (16-QAM 1/2)",
+        value: 12.0,
+        note: "Half the air time of 6 Mbit/s; studied as a congestion remedy (Jiang, Chen, Delgrossi 2008).",
+    },
+    Preset {
+        path: "radio.phy.sensitivity_dbm",
+        label: "Veins default (-89 dBm)",
+        value: -89.0,
+        note: "Veins' Decider80211p minPowerLevel default.",
+    },
+    Preset {
+        path: "radio.phy.sensitivity_dbm",
+        label: "ETSI static minimum at 6 Mbit/s (-88 dBm)",
+        value: -88.0,
+        note: "The EN 302 663 Table 1 figure the PHY's etsi-static table uses at QPSK 1/2.",
+    },
+    Preset {
+        path: "radio.phy.cca_threshold_dbm",
+        label: "ETSI (-85 dBm)",
+        value: -85.0,
+        note: "EN 302 571 §4.2.10.1, the CBR busy threshold.",
+    },
+    Preset {
+        path: "radio.phy.cca_threshold_dbm",
+        label: "ns-3 (-82 dBm)",
+        value: -82.0,
+        note: "ns-3 WifiPhy CcaSensitivity default.",
+    },
+    Preset {
+        path: "radio.phy.cca_threshold_dbm",
+        label: "Veins (-65 dBm)",
+        value: -65.0,
+        note: "Veins' Mac1609_4 ccaThreshold default.",
+    },
+    Preset {
+        path: "radio.phy.noise_figure_db",
+        label: "3GPP UE (9 dB)",
+        value: 9.0,
+        note: "3GPP TR 37.885 Table 6.1.2-1.",
+    },
+    Preset {
+        path: "radio.channel_model.path_loss_exponent",
+        label: "Free space (2.0)",
+        value: 2.0,
+        note: "Friis.",
+    },
+    Preset {
+        path: "radio.channel_model.path_loss_exponent",
+        label: "Urban street (2.75)",
+        value: 2.75,
+        note: "Cheng et al. 2007's suburban fits and the ns-3 LogDistance urban examples sit at 2.7-2.8.",
+    },
+    Preset {
+        path: "radio.channel_model.shadowing_sigma_db",
+        label: "Line of sight (4 dB)",
+        value: 4.0,
+        note: "Abbas et al. 2015, urban LOS sigma 4.15 dB.",
+    },
+    Preset {
+        path: "radio.channel_model.shadowing_sigma_db",
+        label: "Obstructed (6.7 dB)",
+        value: 6.7,
+        note: "Abbas et al. 2015, urban OLOS sigma 6.67 dB.",
+    },
+    Preset {
+        path: "actors.vehicles.demand.rate_veh_per_h",
+        label: "Night",
+        value: 500.0,
+        note: "About a sixth of midday: FHWA TMG urban hourly share near 1 % of daily against 6 % at midday.",
+    },
+    Preset {
+        path: "actors.vehicles.demand.rate_veh_per_h",
+        label: "Light",
+        value: 1500.0,
+        note: "Half of midday; the fleet the default Midtown scenario runs in about two minutes of wall time.",
+    },
+    Preset {
+        path: "actors.vehicles.demand.rate_veh_per_h",
+        label: "Normal (midday)",
+        value: 3000.0,
+        note: "This build's interactive midday level on the Midtown extract (scaled; see the note on rush hour).",
+    },
+    Preset {
+        path: "actors.vehicles.demand.rate_veh_per_h",
+        label: "Rush hour",
+        value: 4500.0,
+        note: "1.5 × midday: the HCM peak-hour factor (about 9 % of daily) over FHWA TMG's midday hour (about 6 %). Real Midtown volumes are about forty times this on the extract.",
+    },
+    Preset {
+        path: "actors.vehicles.demand.rate_veh_per_h",
+        label: "Gridlock (stress test)",
+        value: 9000.0,
+        note: "Twice rush hour: past the point where queues spill back through junctions. Slow to run.",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "1 minute",
+        value: 60.0,
+        note: "A quick look.",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "5 minutes",
+        value: 300.0,
+        note: "One SAE J2945/1 pseudonym period: long enough for certificate changes.",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "15 minutes",
+        value: 900.0,
+        note: "Long enough for revocation to reach every vehicle on a compressed calendar.",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "1 hour",
+        value: 3600.0,
+        note: "A full peak hour; a batch run, not an interactive one.",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "6 hours",
+        value: 21_600.0,
+        note: "A morning or an evening: a batch run (checkpointed).",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "1 day",
+        value: 86_400.0,
+        note: "A whole day: the SCMS revocation list is published daily (CAMP), so one day sees one CRL.",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "1 week",
+        value: 604_800.0,
+        note: "One SCMS certificate period (CAMP i_period, one week): pseudonym top-ups and expiry.",
+    },
+    Preset {
+        path: "actors.rsu_placement.count",
+        label: "None",
+        value: 0.0,
+        note: "Vehicles only: no infrastructure.",
+    },
+    Preset {
+        path: "actors.rsu_placement.count",
+        label: "A few (4)",
+        value: 4.0,
+        note: "This build's choice: a pilot corridor's handful of instrumented junctions.",
+    },
+    Preset {
+        path: "actors.rsu_placement.count",
+        label: "Many (16)",
+        value: 16.0,
+        note: "This build's choice: most signalised junctions of a downtown extract.",
+    },
+    Preset {
+        path: "actors.vehicles.equipped_fraction",
+        label: "Early deployment (5 %)",
+        value: 0.05,
+        note: "A pilot-scale share of the fleet; this build's choice for illustration.",
+    },
+    Preset {
+        path: "actors.vehicles.equipped_fraction",
+        label: "Half the fleet",
+        value: 0.5,
+        note: "NHTSA's proposed FMVSS 150 (2017) phase-in reached 50 % of new vehicles in year one.",
+    },
+    Preset {
+        path: "actors.vehicles.equipped_fraction",
+        label: "Every vehicle",
+        value: 1.0,
+        note: "Full penetration: the case V2X safety benefits are usually quoted for.",
+    },
+    Preset {
+        path: "security.pseudonym_change.period_s",
+        label: "5 minutes (SAE J2945/1)",
+        value: 300.0,
+        note: "SAE J2945/1's CERTCHG interval.",
+    },
+    Preset {
+        path: "security.pseudonym_change.period_s",
+        label: "1 minute",
+        value: 60.0,
+        note: "Aggressive: more privacy, more certificates and more verification of full certificates.",
+    },
+    Preset {
+        path: "security.pseudonym_change.distance_m",
+        label: "2,100 m (SAE J2945/1)",
+        value: 2100.0,
+        note: "SAE J2945/1 Table 21 vCertChangeDistance (tolerance 100 m), straight-line.",
+    },
+    Preset {
+        path: "security.pseudonym_change.distance_m",
+        label: "2 km (NYC pilot)",
+        value: 2000.0,
+        note: "The NYC Connected Vehicle Pilot's rule.",
+    },
+    Preset {
+        path: "radio.devices.obu.tx_power_dbm",
+        label: "20 dBm (J2945/1 cap)",
+        value: 20.0,
+        note: "SAE J2945/1's congestion control radiates at most 20 dBm on 802.11p.",
+    },
+    Preset {
+        path: "radio.devices.obu.tx_power_dbm",
+        label: "23 dBm (3GPP default)",
+        value: 23.0,
+        note: "3GPP TR 36.885's vehicle transmit power.",
+    },
+    Preset {
+        path: "radio.devices.rsu.tx_power_dbm",
+        label: "23 dBm (3GPP default)",
+        value: 23.0,
+        note: "3GPP TR 36.885's roadside-unit transmit power.",
+    },
+    Preset {
+        path: "radio.devices.rsu.tx_power_dbm",
+        label: "33 dBm (regulatory maximum)",
+        value: 33.0,
+        note: "The EIRP ceiling of 47 CFR 90.377 and ETSI EN 302 571 (before antenna gain).",
+    },
+    Preset {
+        path: "actors.vru.pedestrians",
+        label: "None",
+        value: 0.0,
+        note: "Vehicles only.",
+    },
+    Preset {
+        path: "actors.vru.pedestrians",
+        label: "Quiet street",
+        value: 100.0,
+        note: "This build's choice: enough to see crossings without a crowd.",
+    },
+    Preset {
+        path: "actors.vru.pedestrians",
+        label: "Busy Midtown",
+        value: 400.0,
+        note: "This build's choice for a Midtown afternoon at interactive cost; real sidewalks carry far more.",
+    },
+    Preset {
+        path: "weather.intensity",
+        label: "Light",
+        value: 0.3,
+        note: "On each weather model's own 0-1 scale.",
+    },
+    Preset {
+        path: "weather.intensity",
+        label: "Heavy",
+        value: 0.8,
+        note: "On each weather model's own 0-1 scale.",
+    },
+];
+
+/// One SCMS preset, written short.
+const fn sp(path: &'static str, label: &'static str, value: f64, note: &'static str) -> Preset {
+    Preset {
+        path,
+        label,
+        value,
+        note,
+    }
+}
+
+/// The SCMS numbers' named values, each with its source or
+/// "ASSUMPTION" where no figure is published. The US value comes first.
+pub static SCMS_PRESETS: &[Preset] = &[
+    // Gov G-10: off, 90, 180 and 365 days.
+    sp(
+        "security.scms.lifecycle.test_ballot_interval_days",
+        "Off",
+        0.0,
+        "No test ballot is scheduled.",
+    ),
+    sp(
+        "security.scms.lifecycle.test_ballot_interval_days",
+        "90 days",
+        90.0,
+        "A ballot once an elector has gone a quarter without signing.",
+    ),
+    sp(
+        "security.scms.lifecycle.test_ballot_interval_days",
+        "180 days",
+        180.0,
+        "A ballot once an elector has gone half a year without signing.",
+    ),
+    sp(
+        "security.scms.lifecycle.test_ballot_interval_days",
+        "365 days (yearly, per Elector Policy)",
+        365.0,
+        "Elector Policy v1.0 §1.1: a Test Ballot at least yearly.",
+    ),
+    sp(
+        "actors.backend.availability.mtbf_h",
+        "24 h, a day",
+        24.0,
+        "ASSUMPTION: a server that fails daily.",
+    ),
+    sp(
+        "actors.backend.availability.mtbf_h",
+        "168 h, a week",
+        168.0,
+        "ASSUMPTION: a server that fails weekly.",
+    ),
+    sp(
+        "actors.backend.availability.mtbf_h",
+        "720 h, a month (default)",
+        720.0,
+        "ASSUMPTION (scms-constants.md §1.6): no provider publishes its availability.",
+    ),
+    sp(
+        "actors.backend.availability.mtbf_h",
+        "8,760 h, a year",
+        8_760.0,
+        "ASSUMPTION: a highly available server.",
+    ),
+    sp(
+        "actors.backend.availability.mttr_min",
+        "5 min",
+        5.0,
+        "ASSUMPTION: an automatic restart.",
+    ),
+    sp(
+        "actors.backend.availability.mttr_min",
+        "30 min (default)",
+        30.0,
+        "ASSUMPTION (scms-constants.md §1.6): an operator restart.",
+    ),
+    sp(
+        "actors.backend.availability.mttr_min",
+        "1 hour",
+        60.0,
+        "ASSUMPTION: an operator repair.",
+    ),
+    sp(
+        "actors.backend.availability.mttr_min",
+        "4 hours",
+        240.0,
+        "ASSUMPTION: a hardware replacement.",
+    ),
+    sp(
+        "actors.backend.entities.*.availability.mtbf_h",
+        "24 h, a day",
+        24.0,
+        "ASSUMPTION: a server that fails daily.",
+    ),
+    sp(
+        "actors.backend.entities.*.availability.mtbf_h",
+        "168 h, a week",
+        168.0,
+        "ASSUMPTION: a server that fails weekly.",
+    ),
+    sp(
+        "actors.backend.entities.*.availability.mtbf_h",
+        "720 h, a month (default)",
+        720.0,
+        "ASSUMPTION (scms-constants.md §1.6): no provider publishes its availability.",
+    ),
+    sp(
+        "actors.backend.entities.*.availability.mtbf_h",
+        "8,760 h, a year",
+        8_760.0,
+        "ASSUMPTION: a highly available server.",
+    ),
+    sp(
+        "actors.backend.entities.*.availability.mttr_min",
+        "5 min",
+        5.0,
+        "ASSUMPTION: an automatic restart.",
+    ),
+    sp(
+        "actors.backend.entities.*.availability.mttr_min",
+        "30 min (default)",
+        30.0,
+        "ASSUMPTION (scms-constants.md §1.6): an operator restart.",
+    ),
+    sp(
+        "actors.backend.entities.*.availability.mttr_min",
+        "1 hour",
+        60.0,
+        "ASSUMPTION: an operator repair.",
+    ),
+    sp(
+        "actors.backend.entities.*.availability.mttr_min",
+        "4 hours",
+        240.0,
+        "ASSUMPTION: a hardware replacement.",
+    ),
+    sp(
+        "actors.backend.service_time.cv",
+        "0.1, tight",
+        0.1,
+        "ASSUMPTION: a lightly loaded, dedicated server.",
+    ),
+    sp(
+        "actors.backend.service_time.cv",
+        "0.25 (default)",
+        0.25,
+        "ASSUMPTION (scms-constants.md §1.6): no provider publishes its service-time spread.",
+    ),
+    sp(
+        "actors.backend.service_time.cv",
+        "0.5, wide",
+        0.5,
+        "ASSUMPTION: a shared, virtualised server.",
+    ),
+    sp(
+        "actors.backend.service_time.cv",
+        "1.0, as wide as exponential",
+        1.0,
+        "The spread of an exponential service time (M/M/c).",
+    ),
+    sp(
+        "actors.backend.entities.*.service_time.cv",
+        "0.1, tight",
+        0.1,
+        "ASSUMPTION: a lightly loaded, dedicated server.",
+    ),
+    sp(
+        "actors.backend.entities.*.service_time.cv",
+        "0.25 (default)",
+        0.25,
+        "ASSUMPTION (scms-constants.md §1.6): no provider publishes its service-time spread.",
+    ),
+    sp(
+        "actors.backend.entities.*.service_time.cv",
+        "0.5, wide",
+        0.5,
+        "ASSUMPTION: a shared, virtualised server.",
+    ),
+    sp(
+        "actors.backend.entities.*.service_time.cv",
+        "1.0, as wide as exponential",
+        1.0,
+        "The spread of an exponential service time (M/M/c).",
+    ),
+    // --- deployment
+    sp(
+        "security.scms.deployment.electors",
+        "5 electors (US)",
+        5.0,
+        "The US trust list's electors (SCMS Manager CTL policy).",
+    ),
+    sp(
+        "security.scms.deployment.quorum",
+        "Any 3 of the electors (US)",
+        3.0,
+        "The US trust list's signing quorum (SCMS Manager CTL policy).",
+    ),
+    sp(
+        "security.scms.deployment.fibre_fraction",
+        "2/3 c, glass fibre",
+        0.667,
+        "Light in silica fibre travels at about c/1.47.",
+    ),
+    sp(
+        "security.scms.deployment.per_link_ms",
+        "1 ms per link",
+        1.0,
+        "ASSUMPTION: router and server stack overhead; no provider publishes one.",
+    ),
+    sp(
+        "security.scms.deployment.providers[].fleet_share",
+        "Half the fleet",
+        0.5,
+        "ASSUMPTION: no provider publishes its market share; equal shares between two providers.",
+    ),
+    sp(
+        "security.scms.deployment.providers[].ma_review_s",
+        "1 hour",
+        3_600.0,
+        "A fast operator.",
+    ),
+    sp(
+        "security.scms.deployment.providers[].ma_review_s",
+        "8 h, one working shift",
+        28_800.0,
+        "ASSUMPTION: the CV pilots' manual review, one shift.",
+    ),
+    sp(
+        "security.scms.deployment.providers[].ma_review_s",
+        "1 business day",
+        86_400.0,
+        "The SCMS Manager's one-business-day service level.",
+    ),
+    // --- certificate lifecycle
+    sp(
+        "security.scms.lifecycle.i_period_s",
+        "1 week (US)",
+        604_800.0,
+        "CAMP-EE §2.1.5.3.2: the US i-period.",
+    ),
+    sp(
+        "security.scms.lifecycle.i_period_s",
+        "1 day (compressed calendar)",
+        86_400.0,
+        "A study value; needs time.calendar: compressed.",
+    ),
+    sp(
+        "security.scms.lifecycle.i_period_s",
+        "60 s (compressed calendar)",
+        60.0,
+        "A study value for short runs; needs time.calendar: compressed.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_lifetime_s",
+        "i-period + 1 h (US)",
+        608_400.0,
+        "CAMP-EE §2.1.5.3.2: 10,140 minutes, one hour of overlap.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_lifetime_s",
+        "Same as the i-period",
+        604_800.0,
+        "No overlap between consecutive periods.",
+    ),
+    sp(
+        "security.scms.lifecycle.certs_per_period",
+        "20 a week (US)",
+        20.0,
+        "CAMP-EE Table 2.1.2.6.2.",
+    ),
+    sp(
+        "security.scms.lifecycle.certs_per_period",
+        "60 a week (NYC pilot taxis)",
+        60.0,
+        "NYC CV pilot logs: taxis held the 60 maximum.",
+    ),
+    sp(
+        "security.scms.lifecycle.pool_periods",
+        "2 weeks",
+        2.0,
+        "The engine's starting pool.",
+    ),
+    sp(
+        "security.scms.lifecycle.pool_periods",
+        "1 week (NYC pilot)",
+        1.0,
+        "The NYC CV pilot provisioned one week ahead.",
+    ),
+    sp(
+        "security.scms.lifecycle.topup_below_periods",
+        "1 week",
+        1.0,
+        "Top up when the current week is the last one held.",
+    ),
+    sp(
+        "security.scms.lifecycle.topup_below_periods",
+        "Never top up",
+        0.0,
+        "The device keeps only what it started with.",
+    ),
+    sp(
+        "security.scms.lifecycle.max_periods_ahead",
+        "3 years (US)",
+        156.0,
+        "CAMP Primer p.7 (3,120 = 156 × 20); THEA pilot.",
+    ),
+    sp(
+        "security.scms.lifecycle.max_periods_ahead",
+        "1 week (NYC pilot)",
+        1.0,
+        "The NYC CV pilot's one week ahead.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_shuffle_threshold",
+        "1,000 requests",
+        1_000.0,
+        "CAMP 1.2.2 Table 67 shuffle_threshold.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_shuffle_threshold",
+        "10,000 requests",
+        10_000.0,
+        "Brecht et al. 2018, the SCMS design paper.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_shuffle_window_s",
+        "2 days",
+        172_800.0,
+        "CAMP 1.2.2 Table 67 max_cert_request_age.",
+    ),
+    sp(
+        "security.scms.lifecycle.cert_shuffle_window_s",
+        "1 day",
+        86_400.0,
+        "Brecht et al. 2018.",
+    ),
+    sp(
+        "security.scms.lifecycle.first_batch_delay_s",
+        "1 minute",
+        60.0,
+        "ASSUMPTION: the engine's wait before the first poll.",
+    ),
+    sp(
+        "security.scms.lifecycle.download_poll_interval_s",
+        "5 min (download-minWait)",
+        300.0,
+        "SCMS Manager EE profile Table 3.",
+    ),
+    sp(
+        "security.scms.lifecycle.max_download_polls",
+        "100 polls (download-maxReqs)",
+        100.0,
+        "SCMS Manager EE profile Table 3.",
+    ),
+    sp(
+        "security.scms.lifecycle.download_request_tolerance_s",
+        "5 s",
+        5.0,
+        "CAMP 1.2.2 SCMS-1203 ra.client-signature-ttl-sec.",
+    ),
+    sp(
+        "security.scms.lifecycle.enrolment_lifetime_s",
+        "6 years",
+        189_216_000.0,
+        "CAMP 1.2.2 Table 3.",
+    ),
+    sp(
+        "security.scms.lifecycle.enrolment_lifetime_s",
+        "7 years",
+        220_752_000.0,
+        "CAMP SCMS R1.1.",
+    ),
+    sp(
+        "security.scms.lifecycle.enrolment_lifetime_s",
+        "3 years",
+        94_608_000.0,
+        "The 5GAA draft profile.",
+    ),
+    sp(
+        "security.scms.lifecycle.reenrol_lead_s",
+        "548 days",
+        47_347_200.0,
+        "The middle of the SCMS Manager re-enrolment standard's 12 to 24 months.",
+    ),
+    sp(
+        "security.scms.lifecycle.reenrol_lead_s",
+        "12 months",
+        31_536_000.0,
+        "The re-enrolment standard's shortest lead.",
+    ),
+    sp(
+        "security.scms.lifecycle.reenrol_lead_s",
+        "24 months",
+        63_072_000.0,
+        "The re-enrolment standard's longest lead.",
+    ),
+    sp(
+        "security.scms.lifecycle.reenrol_download_delay_s",
+        "5 min",
+        300.0,
+        "The profile's download-minWait.",
+    ),
+    sp(
+        "security.scms.lifecycle.ee_retry_timeout_s",
+        "10 s",
+        10.0,
+        "CAMP SCMS-522.",
+    ),
+    sp(
+        "security.scms.lifecycle.ee_retry_timeout_s",
+        "No retry",
+        0.0,
+        "The device never retries an unanswered request.",
+    ),
+    sp(
+        "security.scms.lifecycle.ee_retry_max_per_hour",
+        "10 an hour",
+        10.0,
+        "CAMP SCMS-523.",
+    ),
+    sp(
+        "security.scms.lifecycle.clock_skew_s",
+        "True clock",
+        0.0,
+        "Every device's clock is right.",
+    ),
+    // --- revocation
+    sp(
+        "security.scms.lifecycle.crl_cadence_s",
+        "Publish on decision",
+        0.0,
+        "The CRL is re-signed when the MA decides.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_cadence_s",
+        "Every hour",
+        3_600.0,
+        "A fixed cadence for studies.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_cadence_s",
+        "Every day",
+        86_400.0,
+        "A fixed cadence for studies.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_cadence_s",
+        "Every week",
+        604_800.0,
+        "A fixed cadence for studies.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_fetch_interval_s",
+        "1 hour",
+        3_600.0,
+        "ASSUMPTION, inside CAMP's weekly bound.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_fetch_interval_s",
+        "1 week (CAMP upper bound)",
+        604_800.0,
+        "CAMP 1.2.2: devices fetch the CRL at least weekly.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_broadcast_interval_s",
+        "5 s",
+        5.0,
+        "USDOT RSU Specification v4.1, Store and Repeat.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_background_entries",
+        "None",
+        0.0,
+        "The list holds only this run's revocations.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_background_entries",
+        "10,000",
+        10_000.0,
+        "A list after a few years of revocations.",
+    ),
+    sp(
+        "security.scms.lifecycle.crl_background_entries",
+        "1,000,000",
+        1_000_000.0,
+        "A stress case: a very long standing list.",
+    ),
+    sp(
+        "security.scms.crl_overdue_tolerance_s",
+        "2 weeks",
+        1_209_600.0,
+        "CAMP 1.2.2 Table 67.",
+    ),
+    sp(
+        "security.scms.crl_overdue_tolerance_s",
+        "Refuse as soon as overdue",
+        0.0,
+        "The strictest receiver.",
+    ),
+    // --- misbehaviour authority
+    sp(
+        "security.scms.lifecycle.ma_review_s",
+        "Automatic",
+        0.0,
+        "The MA acts at once.",
+    ),
+    sp(
+        "security.scms.lifecycle.ma_review_s",
+        "1 hour",
+        3_600.0,
+        "A fast operator.",
+    ),
+    sp(
+        "security.scms.lifecycle.ma_review_s",
+        "8 h, one working shift",
+        28_800.0,
+        "ASSUMPTION: the CV pilots' manual review, one shift.",
+    ),
+    sp(
+        "security.scms.lifecycle.ma_review_s",
+        "1 business day",
+        86_400.0,
+        "The SCMS Manager's one-business-day service level.",
+    ),
+    sp(
+        "security.scms.lifecycle.ma_max_open_cases",
+        "1,000 cases",
+        1_000.0,
+        "ASSUMPTION: no MA capacity is published.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_shuffle_threshold",
+        "10,000 reports",
+        10_000.0,
+        "CAMP-EE SCMS-765.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_shuffle_window_s",
+        "1 day",
+        86_400.0,
+        "CAMP-EE SCMS-765.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_store_quota_bytes",
+        "Keep none",
+        0.0,
+        "The device stores no report.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_store_quota_bytes",
+        "16 KiB",
+        16_384.0,
+        "A small device store.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_store_quota_bytes",
+        "64 KiB",
+        65_536.0,
+        "ASSUMPTION: SCMS Manager MBR v1.0 §2.2 leaves the quota device-specific.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_store_quota_bytes",
+        "1 MiB",
+        1_048_576.0,
+        "A large device store.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_daily_multiplier",
+        "0.9 a day",
+        0.9,
+        "SCMS Manager MBR v1.0 §2.3.1 DailyMultiplier.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_random_position",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.2.2 initialWeight.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_constant_position",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.2.3 initialWeight.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_max_speed",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.3.1 initialWeight.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_max_acceleration",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.3.2 initialWeight.",
+    ),
+    sp(
+        "security.scms.lifecycle.report_weight_brake_acceleration",
+        "1.0",
+        1.0,
+        "MBR v1.0 §2.3.1.3.4 initialWeight.",
+    ),
+    // --- receiver checks
+    sp(
+        "security.scms.rx_beacon_max_age_s",
+        "30 s (US, SAE J2945/1)",
+        30.0,
+        "SAE J2945/1 Table 11, the BSM's validity period; the US profile's value when unset.",
+    ),
+    sp(
+        "security.scms.rx_beacon_max_age_s",
+        "2 s (EU, C2C-CC)",
+        2.0,
+        "C2C-CC Basic System Profile RS_BSP_168; the ETSI profile's value when unset.",
+    ),
+    sp(
+        "security.scms.rx_max_age_s",
+        "10 min",
+        600.0,
+        "C2C-CC Basic System Profile RS_BSP_168; both profiles' value when unset.",
+    ),
+    sp(
+        "security.scms.rx_max_future_s",
+        "30 s (US, SAE J2945/1)",
+        30.0,
+        "SAE J2945/1 Table 11, the acceptable future data period; the US profile's value when unset.",
+    ),
+    sp(
+        "security.scms.rx_max_future_s",
+        "40 ms (EU, C2C-CC)",
+        0.04,
+        "C2C-CC Basic System Profile RS_BSP_168; the ETSI profile's value when unset.",
+    ),
+    sp(
+        "security.on_demand_threshold",
+        "0.5",
+        0.5,
+        "The engine's middle relevance score.",
+    ),
+    sp(
+        "security.prioritized_horizon_m",
+        "300 m",
+        300.0,
+        "The DSRC/C-V2X design range J2945/1 and ETSI CAM receivers care about.",
+    ),
+    // Unset is "per standard", BSM 450 ms and CAM 1 s; each preset below
+    // overrides both message types.
+    sp(
+        "security.signer_id_policy.full_cert_every_ms",
+        "Every 450 ms (SAE J2945/1 6.5.2)",
+        450.0,
+        "SAE J2945/1 vMaxCertDigestInterval (Table 21, BSMSIGN-003): the BSM's cadence when unset, here for every message type.",
+    ),
+    sp(
+        "security.signer_id_policy.full_cert_every_ms",
+        "Once a second (ETSI TS 103 097)",
+        1_000.0,
+        "ETSI TS 103 097 §7.1.1, the CAM rule: the CAM's cadence when unset, here for every message type.",
+    ),
+    sp(
+        "security.signer_id_policy.full_cert_every_ms",
+        "Every message",
+        0.0,
+        "A certificate on every message, the DENM rule of TS 103 097 §7.1.2; set digest_otherwise off with it.",
+    ),
+    sp(
+        "security.pseudonym_change.mix_zone_radius_m",
+        "30 m",
+        30.0,
+        "One junction (Freudiger et al., WiN-ITS 2007).",
+    ),
+    sp(
+        "security.pseudonym_change.mix_zone_min_age_s",
+        "60 s",
+        60.0,
+        "The engine's default youngest pseudonym a zone changes.",
+    ),
+    // --- cryptography (committees: a research option, not US)
+    sp(
+        "security.threshold.members",
+        "5 servers",
+        5.0,
+        "A common t-of-n study size.",
+    ),
+    sp(
+        "security.threshold.quorum",
+        "3 servers",
+        3.0,
+        "A majority of five.",
+    ),
+    sp(
+        "security.threshold.umbrella_leaves",
+        "20 pseudonyms",
+        20.0,
+        "One US week's certificates.",
+    ),
+    sp(
+        "security.threshold.round_timeout_ms",
+        "500 ms",
+        500.0,
+        "The engine's default.",
+    ),
+    sp(
+        "security.threshold.retry_after_s",
+        "30 s",
+        30.0,
+        "The engine's default.",
+    ),
+    sp(
+        "security.threshold.member_latency_ms",
+        "20 ms",
+        20.0,
+        "ASSUMPTION: a WAN between organisations.",
+    ),
+    // --- failures and servers
+    sp(
+        "actors.backend.failures[].extra_ms",
+        "10 ms",
+        10.0,
+        "A loaded server.",
+    ),
+    sp(
+        "actors.backend.failures[].extra_ms",
+        "100 ms",
+        100.0,
+        "A badly overloaded server.",
+    ),
+    sp(
+        "actors.backend.failures[].extra_ms",
+        "1 s",
+        1_000.0,
+        "A server close to stopping.",
+    ),
+    sp(
+        "actors.backend.links[].latency_ms",
+        "10 ms",
+        10.0,
+        "The engine's default backend link.",
+    ),
+    sp(
+        "actors.backend.links[].capacity_mbps",
+        "1 Gbit/s",
+        1_000.0,
+        "The engine's default backend link.",
+    ),
+    sp(
+        "net.rsu_ip.wsa_interval_ms",
+        "100 ms",
+        100.0,
+        "USDOT RSU Specification v4.1, Appendix D.",
+    ),
+];
+
+/// The presets of the server-capacity and MA-policy keys, by the key's path below its root (`module_key`):
+/// server capacity and the MA policy. The same named values serve every root the key
+/// appears under (the deployment's and a provider's capacity; `ma_policy` and each
+/// `ma_policies` entry).
+pub static MODULE_PRESETS: &[Preset] = &[
+    sp(
+        "workers",
+        "1 worker",
+        1.0,
+        "One request at a time: an M/M/1 queue.",
+    ),
+    sp(
+        "workers",
+        "4 workers",
+        4.0,
+        "ASSUMPTION: the engine's default; no provider publishes its server capacity.",
+    ),
+    sp("workers", "16 workers", 16.0, "A larger deployment."),
+    sp(
+        "workers",
+        "64 workers",
+        64.0,
+        "The abstract tier's capacity: in effect no queueing.",
+    ),
+    sp(
+        "queue_limit",
+        "100 requests",
+        100.0,
+        "A small queue: bursts are refused early.",
+    ),
+    sp(
+        "queue_limit",
+        "1,000 requests",
+        1_000.0,
+        "A moderate queue.",
+    ),
+    sp(
+        "queue_limit",
+        "10,000 requests",
+        10_000.0,
+        "A deep queue: bursts wait rather than being refused.",
+    ),
+    sp("overhead_ms", "0 ms", 0.0, "No fixed cost per request."),
+    sp(
+        "overhead_ms",
+        "1 ms",
+        1.0,
+        "ASSUMPTION: the engine's default fixed cost per request.",
+    ),
+    sp("overhead_ms", "5 ms", 5.0, "A slower stack."),
+    sp(
+        "overhead_ms",
+        "20 ms",
+        20.0,
+        "A heavily loaded or remote stack.",
+    ),
+    sp(
+        "evidence.tau_m",
+        "1 m",
+        1.0,
+        "SM-MBR gpsDrift: the position accuracy a report is held to.",
+    ),
+    sp(
+        "evidence.event_window_s",
+        "5 s",
+        5.0,
+        "F2MD DELTA_REPORT_TIME.",
+    ),
+    sp(
+        "evidence.event_min_reporters",
+        "2 reporters",
+        2.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.min_events",
+        "3 events",
+        3.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.min_distinct_reporters",
+        "3 reporters (the legacy k)",
+        3.0,
+        "The legacy engine's report_threshold_k; below 2 a single report can revoke.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 minute",
+        60.0,
+        "Today's corroborating authority.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 hour",
+        3_600.0,
+        "Evidence gathered over an hour.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 day",
+        86_400.0,
+        "Evidence gathered over a day.",
+    ),
+    sp(
+        "threshold.window_s",
+        "1 week",
+        604_800.0,
+        "Evidence gathered over a week.",
+    ),
+    sp(
+        "decay.factor",
+        "0.9 a day",
+        0.9,
+        "SCMS Manager MBR v1.0 §2.3.1 DailyMultiplier.",
+    ),
+    sp(
+        "decay.hour_et",
+        "05:00 ET",
+        5.0,
+        "SCMS Manager MBR v1.0 §2.2: every day at 5 am Eastern time.",
+    ),
+    sp(
+        "decay.half_life_s",
+        "1 hour",
+        3_600.0,
+        "Evidence halves every hour.",
+    ),
+    sp(
+        "decay.half_life_s",
+        "1 day",
+        86_400.0,
+        "Evidence halves every day.",
+    ),
+    sp(
+        "population_guard.c",
+        "10 devices",
+        10.0,
+        "ASSUMPTION: a class with ten accused devices is crowded.",
+    ),
+    sp(
+        "population_guard.m",
+        "2 ×",
+        2.0,
+        "ASSUMPTION: twice the reporters in a crowded class.",
+    ),
+    sp(
+        "defence.reputation_max",
+        "40 accusations",
+        40.0,
+        "The legacy engine's PipelineConfig.reputation_max.",
+    ),
+    sp(
+        "defence.report_budget",
+        "30 reports",
+        30.0,
+        "The legacy engine's PipelineConfig.report_budget.",
+    ),
+    sp("decision.review_s", "1 hour", 3_600.0, "A fast operator."),
+    sp(
+        "decision.review_s",
+        "8 h, one working shift",
+        28_800.0,
+        "ASSUMPTION: the CV pilots' manual review, one shift.",
+    ),
+    sp(
+        "decision.review_s",
+        "1 business day",
+        86_400.0,
+        "The SCMS Manager's one-business-day service level.",
+    ),
+];
+
+/// The roots the server-capacity and MA-policy keys repeat under, as the prefix to strip.
+const MODULE_ROOTS: [&str; 4] = [
+    "security.scms.deployment.capacity.*.",
+    "security.scms.deployment.providers[].capacity.*.",
+    "security.scms.ma_policy.",
+    "security.scms.ma_policies.*.",
+];
+
+/// `path` below its module root (`security.scms.ma_policies.*.decay.factor` →
+/// `decay.factor`), or `None` for a path no module root holds.
+pub fn module_key(path: &str) -> Option<&str> {
+    MODULE_ROOTS.iter().find_map(|r| path.strip_prefix(r))
+}
+
+/// The presets for `path`, as `[{label, value, note}]`, or `None`.
+pub fn presets(path: &str) -> Option<Value> {
+    let key = module_key(path);
+    let rows: Vec<Value> = PRESETS
+        .iter()
+        .chain(SCMS_PRESETS)
+        .filter(|p| p.path == path)
+        .chain(MODULE_PRESETS.iter().filter(|p| Some(p.path) == key))
+        .map(|p| json!({"label": p.label, "value": p.value, "note": p.note}))
+        .collect();
+    (!rows.is_empty()).then_some(Value::Array(rows))
+}
+
+/// A plain-language title for a field whose name reads badly as one, or `None` to keep
+/// the humanised name.
+pub fn title(path: &str) -> Option<&'static str> {
+    Some(match path {
+        "actors.vehicles.demand.rate_veh_per_h" => "Vehicles entering per hour",
+        "actors.vehicles.demand.kind" => "How vehicles arrive",
+        "actors.vehicles.demand.fleet_size" => "Vehicles on the road (fixed fleet)",
+        "traffic.signals.control" => "Signal control",
+        "traffic.reroute_period_s" => "Reroute around congestion every",
+        "traffic.reroute_share" => "Share of drivers who reroute",
+        "traffic.reroute_source" => "Where rerouting drivers learn of trouble",
+        "traffic.depart_at_speed" => "Cars enter the map's edge moving",
+        "traffic.gridlock_timeout_s" => "Gridlock timeout",
+        "traffic.keep_junctions_clear" => "Keep junctions clear",
+        "traffic.signals.passage_s" => "Passage time (gap-out)",
+        "traffic.signals.green_wave_speed_mps" => "Green-wave speed",
+        "traffic.signals.nema" => "NEMA dual-ring controller",
+        "traffic.signals.nema.lefts" => "Left-turn sequence",
+        "traffic.signals.nema.left_turn_mode" => "Left-turn phasing",
+        "traffic.signals.nema.permissive_display" => "Permissive left-turn signal face",
+        "traffic.signals.nema.barrier_phases" => "Phases ending at the side-street barrier",
+        "traffic.signals.nema.barrier2_phases" => "Phases ending at the main-street barrier",
+        "traffic.signals.nema.soft_recall" => "Soft recall (rest in) phases",
+        "traffic.signals.nema.ped_recall" => "Pedestrian recall phases",
+        "actors.vehicles.equipped_fraction" => "Share of vehicles with a V2X radio",
+        "actors.vru.device_fraction" => "Share of pedestrians and cyclists with a device",
+        "actors.vru.crossing_gap_margin_s" => "Pedestrian gap acceptance margin",
+        "actors.vru.walking_speed_mps" => "Pedestrian walking speed",
+        "world.source.params.ew_green_share" => "East-west green share (generated grid)",
+        "actors.vehicles.drivers" => "Drivers",
+        "actors.vehicles.drivers.realism" => "Driver realism",
+        "actors.vehicles.drivers.parameter_spread" => "How much drivers differ",
+        "actors.vehicles.drivers.reaction_time_s" => "Reaction time",
+        "actors.vehicles.drivers.perception_error" => "Misjudgement of gaps",
+        "actors.vehicles.drivers.truck_lane_restriction" => "Trucks out of the left lane",
+        "actors.vehicles.drivers.motorcycle_filtering" => "Motorcycles filter between cars",
+        "actors.vehicles.drivers.distraction" => "Drivers glance away from the road",
+        "radio.rat" => "Radio technology",
+        "radio.region" => "Regulatory region",
+        "radio.channel" => "Channel",
+        "radio.channel_model.nakagami_shape_far" => "Fading severity far away (Nakagami m)",
+        "radio.channel_model.nakagami_breakpoint_m" => "Fading breakpoint distance",
+        "radio.channel_model.building_wall_loss_db" => "Loss per building wall",
+        "radio.channel_model.building_loss_db_per_m" => "Loss per metre inside buildings",
+        "radio.channel_model.vehicle_blockage" => "Vehicles block the signal",
+        "radio.channel_model.foliage" => "Trees weaken the signal",
+        "radio.channel_model.density_sigma" => "Signal variation grows with traffic and buildings",
+        "radio.channel_model.reflection" => "Signals reflect off building walls",
+        "world.vegetation" => "Import trees and woods",
+        "world.sumo.signal_programmes" => "SUMO traffic-light programmes",
+        "world.terrain.drape" => "Lay the roads on the terrain",
+        "radio.sidelink.candidate_percent" => "Candidate resources kept",
+        "radio.sidelink.selection_window_ms" => "Selection window end (T2)",
+        // network audit
+        "radio.sidelink.noise_figure_db" => "Receiver noise figure (C-V2X)",
+        "radio.sidelink.cbr_threshold_dbm" => "Busy threshold for the CBR (C-V2X)",
+        "radio.dcc.reactive_table" => "Reactive state table (ETSI)",
+        "radio.dcc.reactive_hold_ms" => "Reactive state hold time (ETSI)",
+        "radio.dcc.channel_quality" => "Channel-quality indicator (J2945/1)",
+        "net.geonet.cbf_min_time_ms" => "Shortest forwarding wait (CBF)",
+        "net.geonet.cbf_max_time_ms" => "Longest forwarding wait (CBF)",
+        "net.geonet.max_comm_range_m" => "Assumed forwarding range (DIST_MAX)",
+        // C-V2X BSM generation alignment.
+        "radio.sidelink.align_generation" => "Build the BSM just before its reserved slot (C-V2X)",
+        "radio.sidelink.align_margin_ms" => "Aligned BSM lead margin (C-V2X)",
+        "messages.spat_interval_ms" => "Signal phase (SPaT) interval",
+        "messages.map_interval_ms" => "Intersection map (MAP) interval",
+        "messages.cpm_interval_ms" => "Collective perception (CPM) check interval",
+        "messages.cpm_dcc_limited" => "CPM rate follows congestion control",
+        "messages.cpm_quality_threshold" => "CPM object quality threshold",
+        "messages.cpm_max_objects" => "Objects per CPM",
+        "messages.denm_traffic_condition" => "Traffic jam and end-of-queue warnings (DENM)",
+        "messages.denm_traction_loss" => "Slippery-road warnings (DENM)",
+        "nodes.verify_queue_depth" => "Verification queue length",
+        "nodes.peer_cert_cache" => "Peer certificates remembered",
+        "nodes.hsm_sign_lower_us" => "Fastest HSM signing time",
+        "security.on_demand_threshold" => "On-demand relevance threshold",
+        "security.prioritized_horizon_m" => "Prioritized verification range",
+        "messages.path_history_points" => "Path history points per message",
+        "messages.bsm" => "BSM (SAE J2945/1)",
+        "messages.bsm.path_history_on_change" => "Path history at a pseudonym change",
+        "security.signer_id_policy.on_new_neighbour" => "Certificate for new neighbours",
+        "radio.tiers.propagation" => "Signal propagation detail",
+        "radio.tiers.phy" => "Physical layer detail",
+        "radio.tiers.mac" => "Channel access detail",
+        "nodes.default_obu" => "On-board unit hardware",
+        "nodes.compute_tier" => "Compute detail",
+        "nodes.backend_tier" => "Backend detail",
+        "security.envelope" => "Message security format",
+        "security.signature" => "Signature algorithm",
+        "security.crypto_mode" => "Cryptography",
+        "security.verification_policy" => "Which messages are verified",
+        "security.pseudonym_change.strategy" => "When vehicles change pseudonym",
+        "security.protocol.id" => "Credential system",
+        // SCMS settings audit (docs/reference/config-inventory-scms.md)
+        "security.scms.tls" => "Vehicle-to-RA TLS version",
+        "security.scms.crl_overdue_tolerance_s" => "Overdue revocation list tolerance",
+        "security.scms.crl_overdue_scope" => "What an overdue revocation list refuses",
+        "security.scms.crl_poll" => "How vehicles poll for new revocation lists",
+        "security.scms.rx_beacon_max_age_s" => "Oldest safety beacon accepted",
+        "security.scms.rx_max_age_s" => "Oldest other message accepted",
+        "security.scms.rx_max_future_s" => "Future time stamp accepted",
+        "nodes.validated_cert_cache" => "Validated certificates remembered",
+        "security.scms.lifecycle.i_period_s" => "Certificate period (i-period)",
+        "security.scms.lifecycle.cert_lifetime_s" => "Pseudonym certificate lifetime",
+        "security.scms.lifecycle.certs_per_period" => "Pseudonym certificates per week",
+        "security.scms.lifecycle.pool_periods" => "Weeks of certificates held at the start",
+        "security.scms.lifecycle.topup_below_periods" => "Top up when fewer weeks remain than",
+        "security.scms.lifecycle.max_periods_ahead" => "RA provisioning horizon",
+        "security.scms.lifecycle.cert_shuffle_threshold" => "RA request shuffle: batch size",
+        "security.scms.lifecycle.cert_shuffle_window_s" => "RA request shuffle: longest wait",
+        "security.scms.lifecycle.report_shuffle_threshold" => "RA report shuffle: batch size",
+        "security.scms.lifecycle.report_shuffle_window_s" => "RA report shuffle: longest wait",
+        "security.scms.lifecycle.first_batch_delay_s" => "First download after the request",
+        "security.scms.lifecycle.download_poll_interval_s" => "Download retry wait (minWait)",
+        "security.scms.lifecycle.max_download_polls" => {
+            "Download retries before giving up (maxReqs)"
+        }
+        "security.scms.lifecycle.download_request_tolerance_s" => {
+            "Download request clock tolerance"
+        }
+        "security.scms.lifecycle.enrolment_lifetime_s" => "Enrolment certificate lifetime",
+        "security.scms.lifecycle.reenrol_lead_s" => "Re-enrol this long before expiry",
+        "security.scms.lifecycle.reenrol_download_delay_s" => "Re-enrolment download wait",
+        "security.scms.lifecycle.crl_cadence_s" => "Revocation list: fixed publication cadence",
+        "security.scms.lifecycle.crl_fetch_interval_s" => {
+            "Revocation list: cellular fetch interval"
+        }
+        "security.scms.lifecycle.crl_broadcast_interval_s" => {
+            "Revocation list: roadside repeat interval"
+        }
+        "security.scms.lifecycle.ma_review_s" => "Misbehaviour Authority review time",
+        "security.scms.lifecycle.ma_max_open_cases" => "Misbehaviour Authority open-case capacity",
+        "security.scms.lifecycle.report_store_quota_bytes" => "Report store: device quota",
+        "security.scms.lifecycle.report_daily_multiplier" => {
+            "Report store: daily weight multiplier"
+        }
+        "security.scms.lifecycle.report_decay_hour_et" => {
+            "Report store: re-weighting hour (Eastern)"
+        }
+        "security.scms.lifecycle.report_weight_random_position" => {
+            "Report store: RandomPosition weight"
+        }
+        "security.scms.lifecycle.report_weight_constant_position" => {
+            "Report store: ConstantPosition weight"
+        }
+        "security.scms.lifecycle.report_weight_max_speed" => "Report store: MaxSpeed weight",
+        "security.scms.lifecycle.report_weight_max_acceleration" => {
+            "Report store: MaxAcceleration weight"
+        }
+        "security.scms.lifecycle.report_weight_brake_acceleration" => {
+            "Report store: BrakeAcceleration weight"
+        }
+        "actors.backend.protocol" => "Credential system (backend)",
+        "messages.sets" => "Messages sent",
+        "messages.codec_tier" => "Message encoding",
+        "net.layer" => "Network layer",
+        "net.geonet" => "Multi-hop hazard warnings",
+        "net.channel_access" => "Channel switching",
+        "net.rsu_ip" => "SCMS through roadside units",
+        "net.rsu_ip.air" => "Roadside air hop",
+        "net.rsu_ip.wsa_interval_ms" => "WSA period",
+        "events[].when" => "Fires when",
+        "events[].max_fires" => "Fires at most",
+        "events[].cooldown_s" => "Least time between firings",
+        "radio.phy" => "Radio receiver and data rate",
+        "radio.phy.data_rate_mbps" => "Data rate (MCS)",
+        "radio.phy.noise_figure_db" => "Receiver noise figure",
+        "radio.phy.sensitivity_dbm" => "Receiver sensitivity",
+        "radio.phy.cca_threshold_dbm" => "Carrier-sense threshold",
+        "radio.phy.energy_detect_dbm" => "Energy-detect level",
+        "radio.phy.capture_threshold_db" => "Capture threshold",
+        "radio.mac" => "Channel access (EDCA)",
+        "radio.mac.edca_profile" => "Contention table (EDCA)",
+        "radio.mac.periodic_access_category" => "Priority of periodic messages",
+        "radio.mac.event_access_category" => "Priority of hazard warnings",
+        "radio.mac.cw_min_vo" => "Contention window, voice (CWmin)",
+        "radio.mac.aifsn_vo" => "Arbitration spacing, voice (AIFSN)",
+        "radio.mac.cw_min_vi" => "Contention window, video (CWmin)",
+        "radio.mac.aifsn_vi" => "Arbitration spacing, video (AIFSN)",
+        "radio.mac.queue_length" => "Queue length per category",
+        "radio.channel_model" => "Channel model numbers",
+        "actors.vehicles.drivers.max_accel_mps2" => "Comfortable acceleration (a)",
+        "actors.vehicles.drivers.comfort_decel_mps2" => "Comfortable braking (b)",
+        "actors.vehicles.drivers.time_headway_s" => "Time gap to the car ahead (T)",
+        "actors.vehicles.drivers.min_gap_m" => "Gap when stopped (s0)",
+        "actors.vehicles.drivers.politeness" => "Lane-change politeness (MOBIL p)",
+        "actors.vehicles.drivers.lane_change_threshold_mps2" => "Lane-change threshold",
+        "messages.rate_hz" => "Fixed message rate",
+        "radio.sidelink" => "C-V2X scheduling",
+        "radio.sidelink.reservation_interval_ms" => "Resource reservation interval",
+        "radio.sidelink.resource_keep_probability" => "Probability of keeping a resource",
+        "radio.sidelink.rsrp_threshold_dbm" => "Sensing exclusion threshold (RSRP)",
+        "radio.sidelink.sensing" => "Sense before selecting",
+        "radio.dcc" => "Congestion control",
+        "radio.dcc.enabled" => "Congestion control on",
+        "radio.dcc.cbr_target" => "Target channel load (ETSI)",
+        "radio.dcc.adaptive_alpha" => "Load smoothing α (ETSI)",
+        "radio.dcc.adaptive_beta" => "Control gain β (ETSI)",
+        "radio.dcc.max_itt_ms" => "Longest message interval (J2945/1)",
+        "radio.dcc.density_coefficient" => "Density threshold (J2945/1)",
+        "radio.dcc.power_control" => "Power control (J2945/1)",
+        "radio.dcc.min_power_dbm" => "Lowest controlled power (J2945/1)",
+        "time.warmup_s" => "Warm-up before measuring",
+        "radio.channel_model.path_loss_exponent" => "Path-loss exponent",
+        "radio.channel_model.shadowing_sigma_db" => "Shadowing spread (sigma)",
+        "radio.channel_model.shadowing_decorrelation_m" => "Shadowing decorrelation distance",
+        "radio.channel_model.fading_coherence" => "Fading over time (Doppler)",
+        "radio.channel_model.fading" => "Fading law",
+        "radio.channel_model.nakagami_shape" => "Nakagami shape (m)",
+        "radio.channel_model.rice_k_db" => "Rice factor (K)",
+        "net.geonet.area_forwarding" => "Forwarding inside the area",
+        "net.geonet.forwarding" => "How forwarded copies travel",
+        "net.access_categories" => "Message priority queues",
+        "net.dcc_cbr" => "Load the congestion control sees",
+        "net.geonet.non_area_forwarding" => "Forwarding towards the area",
+        "net.geonet.cbf_variant" => "When a contender stands down",
+        "net.geonet.keep_alive_forwarding" => "Keep the warning alive",
+        "world.highway_preset" => "Road rules and speed limits",
+        "weather.initial" => "Weather",
+        "time.duration_s" => "Run length",
+        "time.mobility_step_ms" => "Mobility step",
+        "time.des_resolution" => "Time resolution",
+        "threats.attackers" => "Attackers",
+        "threats.jammers" => "Jammers",
+        "detection.local" => "Detectors on each vehicle",
+        "detection.ma.id" => "Misbehaviour authority",
+        "apps.enabled" => "Safety applications",
+        // The fields of one element of a list, shown in the row-by-row editor.
+        "threats.attackers[].id" => "Attack type",
+        "threats.attackers[].fraction" => "Share of vehicles",
+        "threats.attackers[].count" => "Number of vehicles",
+        "threats.attackers[].schedule.from_s" => "Active from",
+        "threats.attackers[].schedule.to_s" => "Active until",
+        "threats.attackers[].params" => "Parameters (advanced)",
+        "threats.jammers[].id" => "Jammer type",
+        "threats.jammers[].params" => "Where and when (position_m, power_dbm, from_s, to_s)",
+        "detection.local[].id" => "Detector suite",
+        "detection.local[].params" => "Parameters (advanced)",
+        "radio.adjacent_channel" => "Neighbouring-channel transmitters",
+        "radio.adjacent_channel[].rat" => "Technology",
+        "radio.adjacent_channel[].params" => "Where and when (position_m, power_dbm)",
+        "actors.rsus[].profile" => "Hardware",
+        "actors.rsus[].backhaul" => "Backhaul",
+        "actors.rsus[].site" => "Site",
+        "actors.rsu_placement.count" => "Number of roadside units",
+        "actors.rsu_placement.profile" => "Roadside unit hardware",
+        "actors.vehicles.classes" => "Fleet mix",
+        "actors.vru.pedestrians" => "Pedestrians",
+        "actors.vru.cyclists" => "Cyclists",
+        "exporters" => "Files written after the run",
+        "seed" => "Random seed",
+        "meta.name" => "Run name",
+        "city" => "City",
+        // traffic audit
+        "traffic.critical_gap_factor" => "Gap acceptance at unsignalised junctions (factor)",
+        "traffic.permitted_left_gap_s" => "Left turn on green: gap accepted",
+        "traffic.turn_lateral_accel_mps2" => "Cornering acceleration through junctions",
+        "traffic.turn_curve_window_m" => "Corner radius judged over",
+        "traffic.heavy_vehicle_gap_terms" => "Trucks and buses wait for longer gaps (HCM)",
+        "traffic.critical_gap_cv" => "Drivers' gap acceptance: spread",
+        "traffic.time_to_impatience_s" => "Waiting drivers grow impatient (time)",
+        "traffic.impatience_gap_floor" => "Shortest gap an impatient driver takes (share)",
+        "traffic.impatience_foe_braking" => "Impatient drivers count on oncoming cars braking",
+        "traffic.permissive_sneakers" => "Left turners clearing on yellow (sneakers)",
+        "traffic.standing_leader_stop" => "Smooth stop behind a standing vehicle",
+        "traffic.depart_speed_max" => "Enter the road moving (SUMO departSpeed=max)",
+        "traffic.lane_bend_speed" => "Slow for bends in a street's centreline",
+        "traffic.vehicle_dynamics" => "Hills and engine power",
+        "traffic.vehicle_dynamics.grade" => "Hills slow acceleration",
+        "traffic.vehicle_dynamics.power_limit" => "Engine power limits acceleration",
+        "traffic.emergency_yield" => "Yield to emergency vehicles",
+        "traffic.emergency_yield.enabled" => "Drivers pull over for emergency vehicles",
+        "traffic.emergency_yield.reaction_distance_m" => "Siren noticed from (distance behind)",
+        "traffic.emergency_yield.red_pass_speed_mps" => "Emergency vehicle's speed passing a red",
+        "traffic.lc_strategic" => "Lane change for the turn: eagerness (LC2013)",
+        "traffic.lc_cooperative" => "Lane change to let others in (LC2013)",
+        "traffic.lc_speed_gain" => "Lane change for speed: eagerness (LC2013)",
+        "traffic.lc_keep_right" => "Keep right: eagerness (LC2013)",
+        "traffic.kerbside" => "Kerbside stops",
+        "traffic.kerbside.taxi_share" => "Share of cars that are taxis",
+        "traffic.kerbside.delivery_stop_share" => "Share of vans making a delivery stop",
+        "actors.vehicles.drivers.speed_factor" => "Free speed (multiple of the limit)",
+        "actors.vehicles.drivers.speed_spread" => "Spread of free speeds",
+        "actors.vehicles.drivers.red_runner_share" => "Share of drivers who run reds",
+        "actors.vehicles.drivers.violations" => "Rule violations and crashes",
+        "actors.vehicles.drivers.violations.enabled" => "Drivers commit violations",
+        "actors.vehicles.drivers.violations.red_run_share" => "Share of red-light runners",
+        "actors.vehicles.drivers.violations.red_run_tolerance_mean_s" => "Mean lateness into red",
+        "actors.vehicles.drivers.violations.red_run_tolerance_max_s" => "Longest lateness into red",
+        "actors.vehicles.drivers.violations.amber_tail_max_s" => "Longest amber go threshold",
+        "actors.vehicles.drivers.violations.fail_to_yield_share" => "Failure-to-yield probability",
+        "actors.vehicles.drivers.violations.ignore_foe_speed_mps" => "Fastest foe ignored",
+        "actors.vehicles.drivers.violations.crashes" => "Collisions become crashes",
+        "actors.vehicles.drivers.violations.crash_clearance_s" => "Crash clearance time",
+        "actors.vehicles.drivers.start_reaction_s" => "Reaction to a green light",
+        "actors.vehicles.drivers.queue_start_delay_s" => "Queue start-up delay",
+        "actors.vehicles.drivers.truck" => "Truck drivers",
+        "actors.vehicles.drivers.bus" => "Bus drivers",
+        "actors.vehicles.drivers.motorcycle" => "Motorcyclists",
+        "actors.vehicles.drivers.bicycle" => "Cyclist riding",
+        "world.signals.cycle_s" => "Signal cycle length",
+        "world.signals.all_red_s" => "All-red between phases (minimum)",
+        "world.signals.join_m" => "Join traffic lights closer than",
+        "world.signals.pedestrian_walk_s" => "Pedestrian walk interval",
+        "world.signals.pedestrian_speed_mps" => "Pedestrian clearance walking speed",
+        "actors.vehicles.gnss" => "GNSS receivers",
+        "actors.vehicles.gnss.rtk" => "RTK-corrected receivers",
+        "actors.vehicles.gnss.quality" => "Receiver quality",
+        // end traffic audit
+        // --- SCMS menus -------------------------------
+        "security.scms.deployment" => "Deployment",
+        "security.scms.deployment.preset" => "Certificate system layout",
+        "security.scms.deployment.electors" => "Trust-list electors",
+        "security.scms.deployment.quorum" => "Electors needed to sign the trust list",
+        "security.scms.deployment.options" => "Design options",
+        "security.scms.deployment.options.lop" => "Location Obscurer Proxy",
+        "security.scms.deployment.options.butterfly" => "Butterfly key expansion",
+        "security.scms.deployment.options.identification_certs" => {
+            "Emergency-vehicle identification certificates"
+        }
+        "security.scms.chain_file" => "CA certificates each device holds",
+        "security.scms.deployment.latency" => "Backend latency model",
+        "security.scms.deployment.fibre_fraction" => "Signal speed in fibre",
+        "security.scms.deployment.per_link_ms" => "Overhead per backend link",
+        "security.scms.pki_view" => "Publish the PKI view",
+        "security.scms.deployment.ma_report_sharing" => {
+            "Forward reports to the other provider's MA"
+        }
+        "security.scms.report_records" => "Record every report's fate",
+        "security.scms.deployment.providers" => "Providers",
+        "security.scms.deployment.providers[].name" => "Provider",
+        "security.scms.deployment.providers[].components" => "Servers it runs",
+        "security.scms.deployment.providers[].components.*" => "Instances",
+        "security.scms.deployment.providers[].region" => "Server region (assumed)",
+        "security.scms.deployment.providers[].fleet_share" => "Share of vehicles",
+        "security.scms.deployment.providers[].on_ctl" => "Root on the trust list",
+        "security.scms.deployment.providers[].ma_mode" => "How its MA decides",
+        "security.scms.deployment.providers[].ma_review_s" => "Its MA operator's review time",
+        "security.scms.deployment.providers[].crl_publication" => {
+            "When its revocations are published"
+        }
+        "security.scms.lifecycle.ee_retry_timeout_s" => "Retry an unanswered RA request after",
+        "security.scms.lifecycle.ee_retry_max_per_hour" => "RA request retries per hour",
+        "security.scms.lifecycle.crl_background_entries" => {
+            "Revocation list: earlier revocations already on it"
+        }
+        "security.scms.lifecycle.clock_skew_s" => "Device clock skew",
+        "security.scms.lifecycle.clock_skew_share" => "Share of devices with a skewed clock",
+        "security.scms.lifecycle.root_rollover_at_s" => "Home root rolls over at",
+        "security.scms.lifecycle.root_removal_at_s" => "Old home root leaves the trust list at",
+        "security.scms.lifecycle.peer_root_removal_at_s" => {
+            "Peer provider's root leaves the trust list at"
+        }
+        "security.scms.lifecycle.modelled_reports" => "File unbuildable reports as sized-only",
+        "security.scms.lifecycle.component_revoked" => "SCMS component revoked",
+        "security.scms.lifecycle.component_revoked_provider" => "Whose component is revoked",
+        "security.scms.lifecycle.component_revoked_at_s" => "Component revoked at",
+        "security.scms.lifecycle.ctl_genesis_sequence" => "First trust list's sequence number",
+        "security.scms.lifecycle.eac_review" => "Board review before an EAC vote",
+        "security.scms.lifecycle.elector_replacement_pq" => "Elector replacement signatures",
+        "security.scms.lifecycle.root_termination_notice_at_s" => {
+            "Provider gives termination notice at"
+        }
+        "security.scms.lifecycle.elector_replacement_at_s" => "An elector is replaced at",
+        "security.scms.lifecycle.root_addition_at_s" => "A new provider's root is added at",
+        "security.scms.lifecycle.test_ballot_interval_days" => {
+            "Test ballot when an elector has not signed for"
+        }
+        "security.signer_id_policy.full_cert_every_ms" => "Attach the full certificate every",
+        "security.signer_id_policy.digest_otherwise" => {
+            "Send an 8-byte digest between full certificates"
+        }
+        "security.pseudonym_change.period_s" => "Change pseudonym every",
+        "security.pseudonym_change.distance_m" => "Change pseudonym every (distance)",
+        "security.pseudonym_change.silent_period_s" => "Silent period after a change (from, to)",
+        "security.pseudonym_change.mix_zone_radius_m" => "Mix-zone radius",
+        "security.pseudonym_change.mix_zone_min_age_s" => "Youngest pseudonym a mix zone changes",
+        "security.kem" => "Encryption (key encapsulation)",
+        "security.protocol.params" => "Protocol parameters (legacy spelling)",
+        "security.threshold" => "Authority committees (not US)",
+        "security.threshold.protocol" => "Committee protocol",
+        "security.threshold.members" => "Committee size",
+        "security.threshold.quorum" => "Committee quorum",
+        "security.threshold.roles" => "Authorities run by committees",
+        "security.threshold.linkage_members" => "Linkage committee size",
+        "security.threshold.linkage_quorum" => "Linkage committee quorum",
+        "security.threshold.umbrella_leaves" => "Pseudonyms per umbrella certificate",
+        "security.threshold.umbrella_inner" => "Protocol that signs the umbrellas",
+        "security.threshold.preprocessed" => "Do the offline round ahead of time",
+        "security.threshold.round_timeout_ms" => "Committee round timeout",
+        "security.threshold.retry_after_s" => "Retry a failed committee signing after",
+        "security.threshold.ask_all" => "Ask every live member and keep the first quorum",
+        "security.threshold.member_latency_ms" => "Latency between committee members",
+        "actors.backend.failures" => "Server failures",
+        "actors.backend.failures[].node" => "Server",
+        "actors.backend.failures[].mode" => "Failure",
+        "actors.backend.failures[].from_s" => "From",
+        "actors.backend.failures[].to_s" => "Until",
+        "actors.backend.failures[].extra_ms" => "Extra time per message",
+        "actors.backend.availability" => "Random server outages (every server)",
+        "actors.backend.availability.model" => "Server outages",
+        "actors.backend.availability.mtbf_h" => "Mean time between failures",
+        "actors.backend.availability.mttr_min" => "Mean time to repair",
+        "actors.backend.service_time" => "Service-time variation (every server)",
+        "actors.backend.service_time.model" => "How service times vary",
+        "actors.backend.service_time.cv" => "Spread of service times (coefficient of variation)",
+        "actors.backend.entities.*.availability" => "Random outages of this server",
+        "actors.backend.entities.*.availability.model" => "Server outages",
+        "actors.backend.entities.*.availability.mtbf_h" => "Mean time between failures",
+        "actors.backend.entities.*.availability.mttr_min" => "Mean time to repair",
+        "actors.backend.entities.*.service_time" => "Service-time variation of this server",
+        "actors.backend.entities.*.service_time.model" => "How service times vary",
+        "actors.backend.entities.*.service_time.cv" => {
+            "Spread of service times (coefficient of variation)"
+        }
+        "actors.backend.entities" => "Per-server hardware and queue",
+        "actors.backend.entities.*.profile" => "Hardware",
+        "actors.backend.entities.*.service_model" => "Queue",
+        "actors.backend.entities.*.net" => "Network (not read)",
+        "actors.backend.links" => "Backend link overrides",
+        "actors.backend.links[].from" => "From",
+        "actors.backend.links[].to" => "To",
+        "actors.backend.links[].latency_ms" => "Latency",
+        "actors.backend.links[].capacity_mbps" => "Capacity",
+        "detection.ma.params" => "Authority parameters",
+        "detection.ma.params.event_window_s" => "One event lasts at most",
+        "detection.ma.params.event_min_reporters" => "Reporters an event needs",
+        "detection.ma.params.min_events" => "Events needed in the window",
+        "detection.ma.params.window_s" => "Evidence window",
+        "detection.ma.params.min_reporters" => "Distinct reporters needed",
+        "detection.ma.params.defence" => "Only trusted reporters count",
+        "detection.ma.params.reputation_max" => "Distrust a reporter reported this often",
+        "detection.ma.params.report_budget" => "Rate-limit a reporter after",
+        "detection.ma.params.report_threshold_k" => "Trusted reporters needed",
+        "detection.ma.params.revoke_min_seconds" => "Distinct seconds of evidence",
+        "detection.ma.params.revoke_persist_s" => "Evidence must persist for",
+        "detection.ma.params.revoke_window_s" => "Evidence window (legacy)",
+        // The keys an engine module owns.
+        _ => return crate::scenario::module_keys::words(path).map(|k| k.title),
+    })
+}
+
+/// Whether the list at `path` is a `[from, to]` pair (`x-pair`).
+pub fn is_pair(path: &str) -> bool {
+    path == "security.pseudonym_change.silent_period_s"
+}
+
+/// When the field at `path` matters (`x-relevant-when`): the path of the
+/// field it depends on and the values under which it acts; `null` stands for that field left
+/// out. Only conditions on a field at a fixed path are listed; a condition inside a list
+/// element (`failures[].extra_ms` under `slow`) is the loader's to refuse.
+pub fn relevant_when(path: &str) -> Option<(&'static str, Vec<Value>)> {
+    let corroborated = crate::phase2::MA_CORROBORATED;
+    let legacy = crate::phase2::MA_LEGACY_WINDOW;
+    Some(match path {
+        "security.scms.deployment.fibre_fraction" | "security.scms.deployment.per_link_ms" => (
+            "security.scms.deployment.latency",
+            vec![json!("region"), Value::Null],
+        ),
+        "security.pseudonym_change.period_s" => {
+            ("security.pseudonym_change.strategy", vec![json!("time")])
+        }
+        "security.pseudonym_change.distance_m" => (
+            "security.pseudonym_change.strategy",
+            vec![json!("distance")],
+        ),
+        "security.pseudonym_change.mix_zone_radius_m"
+        | "security.pseudonym_change.mix_zone_min_age_s" => (
+            "security.pseudonym_change.strategy",
+            vec![json!("mix-zone")],
+        ),
+        "security.on_demand_threshold" => {
+            ("security.verification_policy", vec![json!("on-demand")])
+        }
+        "security.prioritized_horizon_m" => {
+            ("security.verification_policy", vec![json!("prioritized")])
+        }
+        "security.threshold.umbrella_leaves" | "security.threshold.umbrella_inner" => {
+            ("security.threshold.protocol", vec![json!("umbrella")])
+        }
+        // The numbers matter only under their model; an entity's unset model
+        // is the backend's, which may be either, so it does not grey the field.
+        "actors.backend.availability.mtbf_h" | "actors.backend.availability.mttr_min" => (
+            "actors.backend.availability.model",
+            vec![json!("two-state")],
+        ),
+        "actors.backend.entities.*.availability.mtbf_h"
+        | "actors.backend.entities.*.availability.mttr_min" => (
+            "actors.backend.entities.*.availability.model",
+            vec![json!("two-state"), Value::Null],
+        ),
+        "actors.backend.service_time.cv" => (
+            "actors.backend.service_time.model",
+            vec![json!("log-normal")],
+        ),
+        "actors.backend.entities.*.service_time.cv" => (
+            "actors.backend.entities.*.service_time.model",
+            vec![json!("log-normal"), Value::Null],
+        ),
+        "net.rsu_ip.wsa_interval_ms" => ("net.rsu_ip.air", vec![json!("sch")]),
+        // Whose and when matter only once a component is named.
+        "security.scms.lifecycle.component_revoked_provider"
+        | "security.scms.lifecycle.component_revoked_at_s" => (
+            "security.scms.lifecycle.component_revoked",
+            crate::phase2::COMPONENT_ROLES[1..]
+                .iter()
+                .map(|r| json!(r))
+                .collect(),
+        ),
+        // The MA policy's dependent fields; an absent mode is the preset's, which
+        // may be either, so it does not grey the field.
+        "security.scms.ma_policy.decay.factor" | "security.scms.ma_policy.decay.hour_et" => (
+            "security.scms.ma_policy.decay.mode",
+            vec![json!("daily-multiplier"), Value::Null],
+        ),
+        "security.scms.ma_policy.decay.half_life_s" => (
+            "security.scms.ma_policy.decay.mode",
+            vec![json!("half-life"), Value::Null],
+        ),
+        "security.scms.ma_policy.population_guard.c"
+        | "security.scms.ma_policy.population_guard.m" => (
+            "security.scms.ma_policy.population_guard.mode",
+            vec![json!("cluster"), Value::Null],
+        ),
+        "security.scms.ma_policy.decision.review_s" => (
+            "security.scms.ma_policy.decision.mode",
+            vec![json!("manual-review"), Value::Null],
+        ),
+        "security.scms.ma_policy.evidence.tau_m" => (
+            "security.scms.ma_policy.evidence.accuracy_weighting",
+            vec![json!("catch"), Value::Null],
+        ),
+        "detection.ma.params.event_window_s"
+        | "detection.ma.params.event_min_reporters"
+        | "detection.ma.params.min_events"
+        | "detection.ma.params.window_s"
+        | "detection.ma.params.min_reporters" => ("detection.ma.id", vec![json!(corroborated)]),
+        "detection.ma.params.report_threshold_k"
+        | "detection.ma.params.revoke_min_seconds"
+        | "detection.ma.params.revoke_persist_s"
+        | "detection.ma.params.revoke_window_s" => ("detection.ma.id", vec![json!(legacy)]),
+        "detection.ma.params.defence"
+        | "detection.ma.params.reputation_max"
+        | "detection.ma.params.report_budget" => {
+            ("detection.ma.id", vec![json!(corroborated), json!(legacy)])
+        }
+        _ => return None,
+    })
+}
+
+/// One sub-heading of the SCMS settings.
+#[derive(Debug, Clone, Copy)]
+pub struct Subgroup {
+    /// A stable id.
+    pub id: &'static str,
+    /// The heading.
+    pub label: &'static str,
+    /// Its place in the panel, from 1.
+    pub order: u32,
+    /// The help shown under the heading.
+    pub blurb: &'static str,
+}
+
+/// The eight SCMS sub-headings, in panel order.
+pub const SCMS_SUBGROUPS: [Subgroup; 8] = [
+    Subgroup {
+        id: "deployment",
+        label: "Deployment",
+        order: 1,
+        blurb: "Which certificate system runs and how it is laid out: the providers on the trust list, the electors who sign that list, and the parts of the design the US does not deploy. Leave it on \"US system (2025)\" for the real deployment. Any change the US does not make is marked not US and recorded in the run's manifest.",
+    },
+    Subgroup {
+        id: "providers",
+        label: "Providers",
+        order: 2,
+        blurb: "The companies that run an SCMS. Each runs its own root, intermediate CA, RA, pseudonym CA, linkage authorities and MA. Names are neutral labels. Where each one's servers sit, and its share of vehicles, are assumptions, because no provider publishes them.",
+    },
+    Subgroup {
+        id: "lifecycle",
+        label: "Certificate lifecycle",
+        order: 3,
+        blurb: "How a vehicle gets and uses its certificates. It enrols once, receives 20 pseudonym certificates per week in batches from the RA, tops up before it runs out, and changes pseudonym while driving so it cannot be followed. Defaults are the US deployment's, with the source on each field.",
+    },
+    Subgroup {
+        id: "revocation",
+        label: "Revocation",
+        order: 4,
+        blurb: "What happens after a device is judged misbehaving: how fast its provider publishes the revocation list (CRL), how often vehicles fetch it, and how a receiver treats a list that is overdue.",
+    },
+    Subgroup {
+        id: "ma",
+        label: "Misbehaviour authority",
+        order: 5,
+        blurb: "How reports of bad messages reach the MA and how the MA decides. Covers what a vehicle stores and uploads, how the RA shuffles reports, the MA's decision rule, and whether a person reviews each case. The US pilots used manual review.",
+    },
+    Subgroup {
+        id: "receiver",
+        label: "Receiver checks",
+        order: 6,
+        blurb: "What a receiving vehicle accepts: how old or how far in the future a message may be, and which messages it verifies when it cannot verify all of them.",
+    },
+    Subgroup {
+        id: "crypto",
+        label: "Cryptography",
+        order: 7,
+        blurb: "The signature and encryption schemes, and whether the mathematics is done (real) or only charged for (modelled). Committees, where t-of-n servers share one authority's key, are a research option and not the US system.",
+    },
+    Subgroup {
+        id: "servers",
+        label: "Failures & servers",
+        order: 8,
+        blurb: "Servers that go down, slow down or lie during the run, and each server's hardware, capacity and links.",
+    },
+];
+
+/// Which SCMS sub-heading each path belongs to: the longest entry that is a prefix of the
+/// path wins. An entry is a character prefix, so `lifecycle.crl_` takes every CRL key of
+/// the lifecycle block and `providers[].ma_` the provider's MA keys ("matched on
+/// the longest path prefix and then on the leaf name").
+const SUBGROUP_OF: &[(&str, &str)] = &[
+    ("security.protocol", "deployment"),
+    ("actors.backend.protocol", "deployment"),
+    ("security.scms", "deployment"),
+    ("security.scms.deployment", "deployment"),
+    ("security.scms.deployment.ma_report_sharing", "ma"),
+    ("security.scms.deployment.capacity", "servers"),
+    ("security.scms.deployment.providers", "providers"),
+    ("security.scms.deployment.providers[].ma_", "ma"),
+    (
+        "security.scms.deployment.providers[].crl_publication",
+        "revocation",
+    ),
+    ("security.scms.deployment.providers[].capacity", "servers"),
+    ("security.scms.lifecycle", "lifecycle"),
+    ("security.scms.lifecycle.crl_", "revocation"),
+    ("security.scms.lifecycle.ma_", "ma"),
+    ("security.scms.lifecycle.report_", "ma"),
+    ("security.scms.lifecycle.modelled_reports", "ma"),
+    ("security.scms.lifecycle.component_revoked", "revocation"),
+    ("security.scms.tls", "lifecycle"),
+    ("security.scms.crl_overdue_", "revocation"),
+    ("security.scms.rx_", "receiver"),
+    ("security.scms.report_records", "ma"),
+    ("security.scms.ma_polic", "ma"),
+    ("security.pseudonym_change", "lifecycle"),
+    ("security.signer_id_policy", "lifecycle"),
+    ("security.verification_policy", "receiver"),
+    ("security.on_demand_threshold", "receiver"),
+    ("security.prioritized_horizon_m", "receiver"),
+    ("security.envelope", "crypto"),
+    ("security.signature", "crypto"),
+    ("security.kem", "crypto"),
+    ("security.crypto_mode", "crypto"),
+    ("security.threshold", "crypto"),
+    ("detection.ma", "ma"),
+    ("actors.backend", "servers"),
+];
+
+/// The SCMS sub-heading of `path`, if it is an SCMS setting.
+pub fn subgroup(path: &str) -> Option<&'static Subgroup> {
+    let id = SUBGROUP_OF
+        .iter()
+        .filter(|(p, _)| path.starts_with(p))
+        .max_by_key(|(p, _)| p.len())?
+        .1;
+    SCMS_SUBGROUPS.iter().find(|g| g.id == id)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    /// The published row for `path`.
+    fn row(path: &str) -> Value {
+        crate::scenario::publish::fields()
+            .into_iter()
+            .find(|f| f.get("x-path").and_then(Value::as_str) == Some(path))
+            .unwrap_or_else(|| panic!("{path} is published"))
+    }
+
+    fn options(path: &str) -> Vec<(String, bool)> {
+        row(path)["x-options"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{path} publishes x-options"))
+            .iter()
+            .map(|o| {
+                (
+                    o["value"]
+                        .as_str()
+                        .map_or_else(|| o["value"].to_string(), str::to_string),
+                    o["available"].as_bool().unwrap_or(true),
+                )
+            })
+            .collect()
+    }
+
+    /// The fields the owner had to type are dropdowns, offering what the loader accepts.
+    #[test]
+    fn the_typed_fields_are_choices() {
+        // A model slot with no `enum`: the loader's own demand table.
+        let demand: Vec<String> = options("actors.vehicles.demand.kind")
+            .into_iter()
+            .map(|o| o.0)
+            .collect();
+        assert_eq!(
+            demand,
+            [
+                "mobility/demand/poisson",
+                "mobility/demand/tr36885-drop",
+                "mobility/demand/none",
+                "mobility/demand/sumo-rou",
+                "mobility/demand/routes",
+                "mobility/demand/trips",
+                "mobility/demand/od-matrix",
+                "mobility/demand/counts",
+                "mobility/demand/gtfs",
+                "mobility/demand/purposes",
+                "mobility/demand/composite",
+            ]
+        );
+        assert_eq!(row("actors.vehicles.demand.kind")["kind"], "enum");
+        // Hardware profiles from the shipped table.
+        assert!(
+            options("nodes.default_obu")
+                .iter()
+                .any(|o| o.0 == "obu/unex-obu-301-craton2")
+        );
+        // Attack types: runnable ones offered, refused ones listed and marked unavailable.
+        let attacks = options("threats.attackers[].id");
+        assert!(attacks.contains(&("threat/attacker/legacy/ConstPos".to_string(), true)));
+        assert!(attacks.contains(&("threat/attacker/legacy/Sybil".to_string(), true)));
+        assert!(attacks.contains(&("threat/attacker/legacy/DoS".to_string(), false)));
+        // A reflected enum keeps its values and gains words; 'hybrid' is refused by the loader.
+        assert!(options("radio.rat").contains(&("hybrid".to_string(), false)));
+        // Closed string sets inside a list.
+        assert!(options("messages.sets[]").iter().any(|o| o.0 == "cam"));
+        assert_eq!(
+            options("apps.enabled[]").len(),
+            crate::scenario::Apps::ALL.len()
+        );
+        // Every channel any region opens, as numbers.
+        assert!(options("radio.channel").iter().any(|o| o.0 == "172"));
+        // A number with named values.
+        assert!(
+            row("actors.vehicles.demand.rate_veh_per_h")["x-presets"]
+                .as_array()
+                .is_some_and(|p| p.len() >= 3)
+        );
+    }
+
+    /// Every attacker family the engine runs is on the attack-type menu, runnable and
+    /// worded: the F2MD kinds, the evasion kinds and the insider report poisoner, each
+    /// taken from its family's own list, and every offered id is one the engine parses.
+    #[test]
+    fn the_attack_menu_offers_every_family_the_engine_runs() {
+        let attacks = options("threats.attackers[].id");
+        let mut want: Vec<String> = v2xw_threat::F2mdKind::ALL
+            .iter()
+            .map(|k| format!("{}{}", v2xw_threat::attack_f2md::ID_PREFIX, k.as_str()))
+            .collect();
+        want.extend(
+            v2xw_threat::EvasionKind::ALL
+                .iter()
+                .map(|k| format!("{}{}", v2xw_threat::attack_evasion::ID_PREFIX, k.as_str())),
+        );
+        want.push(crate::phase2::INSIDER_POISONER_ID.to_string());
+        for id in &want {
+            assert!(
+                attacks.contains(&(id.clone(), true)),
+                "{id} is missing from the attack menu or marked unavailable"
+            );
+        }
+        let rows = row("threats.attackers[].id")["x-options"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for r in &rows {
+            let id = r["value"].as_str().unwrap_or_default();
+            assert!(
+                r["label"]
+                    .as_str()
+                    .is_some_and(|l| !l.is_empty() && l != id),
+                "{id} has no words"
+            );
+            let null = serde_json::Value::Null;
+            let parsed = crate::phase2::f2md_params(id, &null, [0.0; 4]).is_ok_and(|p| p.is_some())
+                || crate::phase2::evasion_params(id, &null).is_ok_and(|p| p.is_some())
+                || crate::phase2::poison_params(id, &null).is_ok_and(|p| p.is_some())
+                || id
+                    .strip_prefix("threat/attacker/legacy/")
+                    .and_then(v2xw_threat::AttackKind::parse)
+                    .is_some();
+            assert!(parsed, "{id} is offered but the engine does not parse it");
+        }
+    }
+
+    #[test]
+    fn a_model_id_reads_as_words() {
+        assert_eq!(
+            super::humanise_id("threat/attacker/legacy/ConstPosOffset"),
+            "Constant position offset"
+        );
+        assert_eq!(
+            super::humanise_id("cellular/uu/cell-capacity-mm1"),
+            "Cell capacity M/M/1"
+        );
+    }
+
+    /// The certificate-cadence menu names each value's standard: 450 ms is SAE
+    /// J2945/1's `vMaxCertDigestInterval`, once a second is ETSI TS 103 097's CAM rule (no
+    /// longer "the J2945/1 reading"), and unset publishes no number because it is a rule
+    /// per message type.
+    #[test]
+    fn the_cert_cadence_menu_names_each_standard() {
+        let path = "security.signer_id_policy.full_cert_every_ms";
+        let rows = super::presets(path).expect("the cadence has presets");
+        let at = |v: f64| {
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["value"].as_f64() == Some(v))
+                .unwrap_or_else(|| panic!("a {v} ms preset"))
+                .clone()
+        };
+        let text = |r: &Value| format!("{} {}", r["label"], r["note"]);
+        let sae = text(&at(450.0));
+        assert!(
+            sae.contains("SAE J2945/1") && sae.contains("vMaxCertDigestInterval"),
+            "{sae}"
+        );
+        assert!(!sae.contains("NYC"), "{sae}");
+        let etsi = text(&at(1000.0));
+        assert!(
+            etsi.contains("ETSI TS 103 097") && !etsi.contains("J2945"),
+            "{etsi}"
+        );
+        assert!(text(&at(0.0)).contains("Every message"));
+        let published = row(path);
+        assert!(
+            published.get("default").is_none(),
+            "unset is a rule, not a number"
+        );
+        let doc = published["description"].as_str().unwrap_or_default();
+        assert!(
+            doc.contains("450") && doc.contains("vMaxCertDigestInterval") && !doc.contains("NYC"),
+            "{doc}"
+        );
+    }
+
+    /// `radio.mac.edca_profile` is a menu in the spec's order with its own
+    /// words for each value, publishes `by-region` when unset, badges EN 302 663 as not
+    /// US, and the periodic `vi` entry names J2945/1's user priority 5.
+    ///
+    /// Fault: the old `vi` label "Video (AC_VI)" -> red.
+    #[test]
+    fn the_j2b_edca_profile_is_a_menu_and_vi_names_up_5() {
+        let path = "radio.mac.edca_profile";
+        let r = row(path);
+        assert_eq!(r["kind"], "enum", "{r}");
+        let offered: Vec<String> = options(path).into_iter().map(|o| o.0).collect();
+        assert_eq!(offered, ["by-region", "sae-j2945-1", "en-302-663"]);
+        assert_eq!(r["default"], "by-region");
+        for o in r["x-options"].as_array().unwrap() {
+            let v = o["value"].as_str().unwrap();
+            assert!(super::words(path, v).is_some(), "{v} has no words");
+        }
+        assert_eq!(
+            super::words(path, "sae-j2945-1").unwrap().0,
+            "SAE J2945/1 Table 18 (BSM at AC_VI, critical BSM at AC_VO)"
+        );
+        assert_eq!(
+            super::words(path, "en-302-663").unwrap().0,
+            "ETSI EN 302 663 (OCB defaults)"
+        );
+        assert_eq!(super::us_of(path, "en-302-663"), Some(false));
+        assert_eq!(super::us_of(path, "sae-j2945-1"), Some(true));
+        assert!(super::title(path).is_some());
+        let vi = super::words("radio.mac.periodic_access_category", "vi").unwrap();
+        assert!(vi.0.contains("(SAE J2945/1 UP 5)"), "{}", vi.0);
+        let ev = super::words("radio.mac.event_access_category", "vi").unwrap();
+        assert!(!ev.0.contains("UP 5"), "a DENM is not a BSM: {}", ev.0);
+    }
+
+    /// `messages.bsm.path_history_on_change` and
+    /// `actors.vehicles.gnss.quality` are menus in the spec's order, each value with its
+    /// own words, and an unset key publishes its default (keep; the measured receiver).
+    #[test]
+    fn the_j5_and_j10_keys_are_menus_with_their_defaults() {
+        for (path, values, default, label) in [
+            (
+                "messages.bsm.path_history_on_change",
+                &["keep", "clear"][..],
+                "keep",
+                "Keep (SAE J2945/1 6.3.6.16)",
+            ),
+            (
+                "actors.vehicles.gnss.quality",
+                &["reid-2019", "j2945-1", "rtk"][..],
+                "reid-2019",
+                "Production receiver, measured (3.07 m at 68 %)",
+            ),
+        ] {
+            let r = row(path);
+            assert_eq!(r["kind"], "enum", "{path}");
+            let offered: Vec<String> = options(path).into_iter().map(|o| o.0).collect();
+            assert_eq!(offered, values, "{path}");
+            assert_eq!(r["default"], default, "{path}");
+            for o in r["x-options"].as_array().unwrap() {
+                let v = o["value"].as_str().unwrap();
+                assert!(
+                    super::words(path, v).is_some(),
+                    "{path} = {v} has no label or description of its own"
+                );
+            }
+            assert_eq!(r["x-options"][0]["label"], label, "{path}");
+            assert!(super::title(path).is_some(), "{path} has a title");
+        }
+        let j = super::words("actors.vehicles.gnss.quality", "j2945-1").unwrap();
+        assert!(j.0.contains("1.5 m / 3 m at 68 %"), "{}", j.0);
+    }
+}

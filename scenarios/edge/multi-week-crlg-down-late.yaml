@@ -1,0 +1,26 @@
+# multi-week.yaml with the home CRL Generator down from 300,000 s to 2,600,000 s, after the root
+# changeover. The root rollover decided at 120 s is published as CTL 1 at 259,320 s (Fri 08:52Z,
+# 3 business days), and from then on every home certificate names the new
+# CRACA (4a1086). While the Generator is up, the changeover signs a list under that CRACA at once
+# (nextCrl = day 10.0). Receivers hold it from W1, and it is overdue from nextCrl +
+# 2 weeks (day 24.0, 2,073,600 s; [CAMP122] Table 67 overdue_CRL_tolerance). So W4 refuses the
+# home CRACA's messages, W3 refuses none, and W5 recovers after the return.
+# The outage starts after the changeover on purpose: one that begins before it leaves no list
+# under the new CRACA until the restart, and the overdue list (old CRACA) then governs no
+# sender, so nothing is refused.
+# multi-week-crlg-down.yaml (down from 700 s) shows the other case: senders whose CRACA has no
+# list a receiver holds are never refused, and no published clause says they should be.
+schema: v2xw/scenario/1
+meta:
+  name: edge-multi-week-crlg-down-late
+  description: >-
+    Five weeks with the home CRL Generator down from day 3.5 to day 30, after the root
+    changeover's first list: the overdue-CRL rule takes effect in the run.
+  authors: [v2xw]
+  tags: [scms, edge-case, calendar, multi-week, crl, overdue, stress]
+  created: "2026-10-22"
+  base: multi-week.yaml
+actors:
+  backend:
+    failures:
+      - {node: crlg, mode: offline, from_s: 300000.0, to_s: 2600000.0}

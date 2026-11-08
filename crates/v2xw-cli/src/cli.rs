@@ -1,0 +1,791 @@
+//! The argument grammar.
+//!
+//! `clap` with derive is already a workspace dependency (the Phase 0 asset survey resolved
+//! it), so no second argument parser is introduced here.
+//!
+//! Two conventions are followed throughout, both taken from the scenario schema:
+//! units live in flag names (`--keyframe-ms`, `--duration-s`), and a flag that overrides a
+//! scenario field is spelled `--<field>` and says in its help that it changes the scenario
+//! hash — because it does, and a sweep whose runs all report one hash would be worthless.
+
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+
+/// The `v2xw` command line.
+#[derive(Debug, Parser)]
+#[command(
+    name = "v2xw",
+    version,
+    about = "V2X World Simulator — run scenarios, import worlds, inspect recordings",
+    long_about = None,
+)]
+pub struct Cli {
+    /// What to do.
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+/// The commands.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Run a scenario and write its recording, metrics and manifest.
+    Run(RunArgs),
+    /// Carry on a run from its checkpoint (`v2xw run --checkpoint-every`), verified to be
+    /// the same run, and finish its outputs.
+    Resume(ResumeArgs),
+    /// Check a scenario without running it.
+    Validate(ValidateArgs),
+    /// Import an OpenStreetMap extract into the three world formats.
+    ImportOsm(ImportArgs),
+    /// Print a recording's manifest, channels and verification report.
+    Info(InfoArgs),
+    /// Write a scenario's road network and demand in SUMO formats (plain XML, .net.xml via
+    /// netconvert when SUMO is installed, .rou.xml with this engine's routes).
+    ExportSumo(ExportSumoArgs),
+    /// Score a recording's traffic for emissions, fuel and EV energy, with health bands.
+    Energy(EnergyArgs),
+    /// Expand a scenario's `experiment` block into runs, execute them and aggregate them.
+    Experiment(ExperimentArgs),
+    /// Prompt the agent: it builds a scenario, runs it, analyses it and prints a report.
+    Agent(AgentArgs),
+    /// Serve a run with the agent's endpoints beside the engine's (what the Studio uses).
+    Serve(ServeArgs),
+    /// List the city library: every city a scenario can run on (`--city`), by state.
+    Cities(CitiesArgs),
+    /// Check a finished run's traffic from its recording: vehicles standing on green or at
+    /// a clear junction, overlaps, jumps, braking and jerk out of bounds, red entries,
+    /// pedestrian steps no walker makes; and the stop-line discharge headways.
+    CheckTraffic(CheckTrafficArgs),
+    /// Run one scenario and seed under several signature schemes and compare their
+    /// signing overhead against ECDSA P-256 (comparison.json, .csv and .md).
+    CompareSignatures(CompareSignaturesArgs),
+    /// Compare two runs: the settings that differ and every headline metric's change,
+    /// better or worse by its health direction (run directories, digest files, or
+    /// comma-separated replications).
+    Compare(CompareArgs),
+    /// Run a sensitivity spec: a base scenario and one-at-a-time changes on the same seed,
+    /// each checked for the direction (and band) theory expects of a named metric.
+    Sensitivity(SensitivityArgs),
+    /// Replay a finished run's recorded misbehaviour reports through a family of MA
+    /// decision rules, without re-simulating: honest devices blocked per 10^6
+    /// device-hours and the attacker's time to act, per rule and parameter
+    /// (ma-replay.csv). The run needs `security.scms.report_records: true`.
+    MaReplay(MaReplayArgs),
+}
+
+/// `v2xw ma-replay`.
+#[derive(Debug, clap::Args)]
+pub struct MaReplayArgs {
+    /// The run directory (`recording.mcap`).
+    pub dir: PathBuf,
+    /// Replay this scenario's MA policy family instead of the built-in rules: every
+    /// preset of `security.scms.ma_policy` and every named policy, or the names its
+    /// `experiment.sweep` over `security.scms.ma_policy.preset` lists
+    /// (ma-replay-policies.csv). A preview: an offline replay shows no feedback.
+    #[arg(long, value_name = "SCENARIO")]
+    pub policies: Option<PathBuf>,
+}
+
+/// `v2xw sensitivity`.
+#[derive(Debug, clap::Args)]
+pub struct SensitivityArgs {
+    /// The spec file (`v2xw_engine::sensitivity::Spec`). Not used with `--catalogue`.
+    #[arg(required_unless_present_any = ["catalogue", "expect"])]
+    pub spec: Option<std::path::PathBuf>,
+    /// Sweep every published numeric and choice setting instead of running a spec: low
+    /// and high end of each setting's recommended range (or each choice) against a
+    /// same-seed base, on the family the families file routes it to.
+    #[arg(long)]
+    pub catalogue: bool,
+    /// Run the expectation table on its own: only the perturbations its rows name, plus
+    /// the interaction checks (two settings together, 2 x 2 on one family), with a
+    /// pass/fail line per row. Exits non-zero when a row fails.
+    #[arg(long, conflicts_with = "catalogue")]
+    pub expect: bool,
+    /// Interaction files for `--expect` (files or directories of `*.yaml`), comma-separated.
+    #[arg(
+        long,
+        value_name = "FILES",
+        value_delimiter = ',',
+        default_value = "crates/v2xw-engine/tests/expectations/interactions"
+    )]
+    pub interactions: Vec<std::path::PathBuf>,
+    /// The families file for `--catalogue`.
+    #[arg(
+        long,
+        value_name = "FILE",
+        default_value = "scenarios/sensitivity/catalogue.yaml"
+    )]
+    pub families: std::path::PathBuf,
+    /// Expectation files for `--catalogue` and `--expect` (YAML lists, or directories of
+    /// them), comma-separated.
+    #[arg(
+        long,
+        value_name = "FILES",
+        value_delimiter = ',',
+        default_value = "crates/v2xw-engine/tests/expectations"
+    )]
+    pub expectations: Vec<std::path::PathBuf>,
+    /// `--catalogue`: sweep only settings whose path starts with one of these prefixes
+    /// (comma-separated).
+    #[arg(long, value_name = "PREFIXES", value_delimiter = ',')]
+    pub only: Vec<String>,
+    /// `--catalogue`: parallel runs.
+    #[arg(long, default_value_t = 2)]
+    pub jobs: usize,
+    /// `--catalogue`: print the plan (settings, values, families) and run nothing.
+    #[arg(long)]
+    pub plan: bool,
+    /// `--catalogue`: a JSON-lines cache of finished perturbations; a rerun reuses the
+    /// entries whose setting, value and family scenarios match, so a stopped sweep resumes.
+    #[arg(long, value_name = "FILE")]
+    pub cache: Option<std::path::PathBuf>,
+    /// `--catalogue`: exit non-zero when an expectation is contradicted.
+    #[arg(long)]
+    pub strict: bool,
+    /// Also write the results as a Markdown table here.
+    #[arg(long, value_name = "FILE")]
+    pub markdown: Option<std::path::PathBuf>,
+    /// Print JSON rather than the table.
+    #[arg(long)]
+    pub json: bool,
+    /// Run only the base (with the spec's `set`) and print every metric it measured.
+    #[arg(long)]
+    pub base_only: bool,
+}
+
+/// `v2xw compare`.
+#[derive(Debug, clap::Args)]
+pub struct CompareArgs {
+    /// The baseline: a `v2xw run --out` directory, a run digest JSON (`runs.digest`, the
+    /// Studio's export), an experiment directory, or comma-separated replications.
+    pub a: String,
+    /// The run compared against it, in the same forms.
+    pub b: String,
+    /// Show every metric, not only the meaningful changes.
+    #[arg(long)]
+    pub all: bool,
+    /// Print JSON (`v2xw/run-comparison/1`).
+    #[arg(long, conflicts_with_all = ["markdown", "csv"])]
+    pub json: bool,
+    /// Print Markdown.
+    #[arg(long, conflicts_with = "csv")]
+    pub markdown: bool,
+    /// Print CSV.
+    #[arg(long)]
+    pub csv: bool,
+}
+
+/// `v2xw compare-signatures`.
+#[derive(Debug, clap::Args)]
+pub struct CompareSignaturesArgs {
+    /// The scenario to run under each scheme.
+    pub scenario: PathBuf,
+    /// Comma-separated scheme ids (`v2xw_sec::scheme::SIGNATURE_IDS`); ECDSA P-256 is
+    /// added as the baseline when missing.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "ecdsa-p256,ml-dsa-44,falcon-512,hybrid-mldsa44-ecdsa-p256"
+    )]
+    pub schemes: Vec<String>,
+    /// Where the outputs go. Defaults to `runs/<meta.name>-signatures`.
+    #[arg(short, long)]
+    pub out: Option<PathBuf>,
+    /// Simulated seconds per run, overriding the scenario's `time.duration_s`.
+    #[arg(long, value_name = "S")]
+    pub duration: Option<f64>,
+    /// The manifest build timestamp every run uses.
+    #[arg(long, value_name = "ISO8601")]
+    pub build_utc: Option<String>,
+    /// Write a recording per run (off by default: the comparison needs only the metrics).
+    #[arg(long)]
+    pub record: bool,
+    /// Print the comparison as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl CompareSignaturesArgs {
+    /// The library options this asks for.
+    pub fn to_options(&self) -> crate::sigcompare::CompareOptions {
+        crate::sigcompare::CompareOptions {
+            scenario: self.scenario.clone(),
+            schemes: self
+                .schemes
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            out: self.out.clone(),
+            duration_s: self.duration,
+            build_utc: self.build_utc.clone(),
+            record: self.record,
+        }
+    }
+}
+
+/// `v2xw cities`.
+#[derive(Debug, clap::Args)]
+pub struct CitiesArgs {
+    /// Only the cities whose name, id, state or state code contains this, ignoring case.
+    pub filter: Option<String>,
+    /// Print the registry as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw check-traffic`.
+#[derive(Debug, clap::Args)]
+pub struct CheckTrafficArgs {
+    /// The run directory (`recording.mcap` and `scenario.resolved.yaml`).
+    pub dir: PathBuf,
+    /// Seconds a queue head may stand on its own protected green.
+    #[arg(long, default_value_t = 6.0)]
+    pub green_stop_s: f64,
+    /// Examples printed per row.
+    #[arg(long, default_value_t = 8)]
+    pub examples: usize,
+    /// Print this actor's every step on stderr: lane, position, speed and the lamps of
+    /// the movements ahead.
+    #[arg(long)]
+    pub trace: Option<u32>,
+    /// Print the check as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw agent`.
+#[derive(Debug, clap::Args)]
+pub struct AgentArgs {
+    /// What to simulate and find out, in plain words.
+    #[arg(default_value = "")]
+    pub prompt: String,
+
+    /// A running engine to drive, e.g. http://127.0.0.1:8787. Without it an engine is
+    /// started in this process with --scenario and stopped afterwards.
+    #[arg(long, value_name = "URL")]
+    pub engine: Option<String>,
+
+    /// The scenario an in-process engine starts with.
+    #[arg(long, default_value = "scenarios/phase1-grid.yaml")]
+    pub scenario: PathBuf,
+
+    /// Run without a language model even when ANTHROPIC_API_KEY is set: the scenario runs
+    /// as shipped and the report is the analyst's alone.
+    #[arg(long)]
+    pub no_model: bool,
+
+    /// Only analyse the run the engine is serving; start nothing.
+    #[arg(long)]
+    pub analyse: bool,
+
+    /// The scenario a model-less run uses: `current` or a preset id.
+    #[arg(long, default_value = "current")]
+    pub base: String,
+
+    /// The engine's bearer token, when it requires one.
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Print the report as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl AgentArgs {
+    /// The library options this asks for.
+    pub fn to_options(&self) -> crate::agent::AgentOptions {
+        crate::agent::AgentOptions {
+            prompt: self.prompt.clone(),
+            engine: self.engine.clone(),
+            scenario: self.scenario.clone(),
+            no_model: self.no_model,
+            analyse_only: self.analyse,
+            base: self.base.clone(),
+            token: self.token.clone(),
+            json: self.json,
+        }
+    }
+}
+
+/// `v2xw serve`.
+#[derive(Debug, clap::Args)]
+pub struct ServeArgs {
+    /// The scenario to serve; without it the synthetic fixture runs.
+    #[arg(long)]
+    pub scenario: Option<PathBuf>,
+
+    /// Serve only the agent's endpoints, in front of an engine already running here.
+    #[arg(long, value_name = "URL")]
+    pub attach: Option<String>,
+
+    /// Bind address (a non-loopback bind needs --token).
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: std::net::IpAddr,
+
+    /// TCP port.
+    #[arg(long, default_value_t = 8787)]
+    pub port: u16,
+
+    /// Bearer token required on every request.
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Start the run paused at t = 0.
+    #[arg(long)]
+    pub paused: bool,
+
+    /// Multiple of real time; 0 is unthrottled.
+    #[arg(long, default_value_t = 1.0)]
+    pub speed: f64,
+
+    /// Write the MCAP recording here.
+    #[arg(long)]
+    pub record: Option<PathBuf>,
+}
+
+impl ServeArgs {
+    /// The library options this asks for.
+    pub fn to_options(&self) -> crate::agent::ServeOptions {
+        crate::agent::ServeOptions {
+            scenario: self.scenario.clone(),
+            attach: self.attach.clone(),
+            host: self.host,
+            port: self.port,
+            token: self.token.clone(),
+            paused: self.paused,
+            speed: self.speed,
+            record: self.record.clone(),
+        }
+    }
+}
+
+/// `v2xw run`.
+#[derive(Debug, clap::Args)]
+pub struct RunArgs {
+    /// The scenario file, YAML or JSON.
+    pub scenario: PathBuf,
+
+    /// Where the outputs go. Defaults to `runs/<meta.name>`.
+    #[arg(short, long)]
+    pub out: Option<PathBuf>,
+
+    /// The manifest's build timestamp. Defaults to this machine's clock; pass it
+    /// explicitly to compare two runs' manifests field by field.
+    #[arg(long, value_name = "ISO8601")]
+    pub build_utc: Option<String>,
+
+    /// The recording's keyframe period. Must be a whole number of mobility steps.
+    #[arg(long, value_name = "MS", default_value_t = 1000)]
+    pub keyframe_ms: u64,
+
+    /// Record the NODE-only profile, which refuses every ground-truth record.
+    #[arg(long)]
+    pub node_only: bool,
+
+    /// Run without writing a recording — the engine into a counting sink. This is what a
+    /// scaling measurement wants: it times the engine and not the container.
+    #[arg(long)]
+    pub no_recording: bool,
+
+    /// Also attach the world payload to the recording. Off by default: a city world is
+    /// tens of megabytes.
+    #[arg(long)]
+    pub attach_world: bool,
+
+    /// Skip reading the recording back. The read costs a second pass and reports the
+    /// content digest and the chunk checksums, so it is on by default.
+    #[arg(long)]
+    pub no_verify: bool,
+
+    /// With `--no-recording`: hash every record as it is produced (SHA-256, streaming,
+    /// nothing kept) and report it as `stream_digest`, so two scaling runs — at different
+    /// thread counts, say — can be compared bit for bit without writing either.
+    #[arg(long)]
+    pub digest: bool,
+
+    /// Override `time.duration_s`. Changes the scenario hash.
+    #[arg(long, value_name = "S")]
+    pub duration_s: Option<f64>,
+
+    /// Override `time.duration_s` with a duration in units: `90s`, `15m`, `6h`, `2d`,
+    /// `1d12h`. Changes the scenario hash. Wins over `--duration-s`.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+    pub duration: Option<f64>,
+
+    /// Override `actors.vehicles.demand.rate_veh_per_h`. Changes the scenario hash.
+    #[arg(long, value_name = "VEH_PER_H")]
+    pub rate_veh_per_h: Option<f64>,
+
+    /// Also write VeReMi traces (the scenario's `veremi` exporter) with this attack
+    /// codebook: `veremi-ext` (the VeReMi Extension's F2MD enum 0-19, hourly slices) or
+    /// `veremi-1` (VeReMi 1.0's bit codes). Adds the exporter to the scenario, or sets
+    /// its codebook when the scenario already names it; changes the scenario hash.
+    #[arg(long, value_name = "CODEBOOK")]
+    pub veremi: Option<String>,
+
+    /// Run the scenario on this city of the library (`v2xw cities` lists them), in place
+    /// of the world the file names. Changes the scenario hash.
+    #[arg(long, value_name = "ID")]
+    pub city: Option<String>,
+
+    /// Write a progress line every this much simulated time (`progress.jsonl` in the
+    /// output directory, one line on stderr): wall clock per simulated hour, memory,
+    /// fleet. Default: every 15 minutes for a run of an hour or more. `0` turns it off.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+    pub progress_every: Option<f64>,
+
+    /// Keep `progress.jsonl` but print no progress lines on stderr.
+    #[arg(long)]
+    pub quiet: bool,
+
+    /// Write a checkpoint every this much simulated time (`checkpoint.json` in the output
+    /// directory), recording in segments closed at each one, so a run of days survives a
+    /// crash: `v2xw resume <out>/checkpoint.json` carries it on.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+    pub checkpoint_every: Option<f64>,
+
+    /// How much of the run reaches the recording: `full` (the scene and every record),
+    /// `receptions` (every record, no scene), `events` (no scene and no per-reception
+    /// records: node.rx, phy.rx, node.verify) or `metrics` (metric samples and the run's
+    /// summary records only — what a run of days wants).
+    #[arg(long, value_enum, default_value = "full")]
+    pub record_level: crate::stream::RecordLevel,
+
+    /// Stop at the first progress line or checkpoint at or after this simulated time, as a
+    /// crash would.
+    /// For testing `v2xw resume`.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration, hide = true)]
+    pub stop_at: Option<f64>,
+
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// A simulated duration with units, for clap.
+fn parse_duration(text: &str) -> Result<f64, String> {
+    crate::progress::parse_duration_s(text)
+}
+
+impl RunArgs {
+    /// The library options this asks for.
+    pub fn to_options(&self) -> crate::run::RunOptions {
+        crate::run::RunOptions {
+            scenario: self.scenario.clone(),
+            out: self.out.clone(),
+            build_utc: self.build_utc.clone(),
+            keyframe_ms: self.keyframe_ms,
+            node_only: self.node_only,
+            record: !self.no_recording,
+            attach_world: self.attach_world,
+            verify: !self.no_verify && !self.no_recording,
+            stream_digest: self.digest,
+            duration_s: self.duration.or(self.duration_s),
+            rate_veh_per_h: self.rate_veh_per_h,
+            veremi: self.veremi.clone(),
+            city: self.city.clone(),
+            json: self.json,
+            long: crate::run::LongRun {
+                progress_every_s: self.progress_every,
+                quiet: self.quiet,
+                checkpoint_every_s: self.checkpoint_every,
+                record_level: self.record_level,
+                stop_at_s: self.stop_at,
+            },
+        }
+    }
+}
+
+/// `v2xw resume`.
+#[derive(Debug, clap::Args)]
+pub struct ResumeArgs {
+    /// The checkpoint: `checkpoint.json` in the interrupted run's output directory.
+    pub checkpoint: PathBuf,
+
+    /// Keep `progress.jsonl` but print no progress lines on stderr.
+    #[arg(long)]
+    pub quiet: bool,
+
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw validate`.
+#[derive(Debug, clap::Args)]
+pub struct ValidateArgs {
+    /// The scenario file, YAML or JSON.
+    pub scenario: PathBuf,
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw import-osm`.
+#[derive(Debug, clap::Args)]
+pub struct ImportArgs {
+    /// The `.osm` or `.osm.xml` extract.
+    pub extract: PathBuf,
+    /// The directory to write `world.vwb`, `world.json`, `world.v2xw` and `report.txt` to.
+    pub out: PathBuf,
+
+    /// The `highway=*` class-default speed preset. There is no default: a fallback speed
+    /// limit is a statement about a jurisdiction, and the importer refuses to guess one.
+    #[arg(long, value_name = "NAME")]
+    pub speed_preset: String,
+
+    /// The geodetic box to keep, as `min_lon,min_lat,max_lon,max_lat` in degrees — the
+    /// order the design documents write it in. It also fixes the world frame: the origin
+    /// is the box's south-west corner, so the same box always yields the same metre
+    /// coordinates. Left out, the frame comes from the extract's own bounds.
+    ///
+    /// `allow_hyphen_values` is on because every western-hemisphere box starts with a
+    /// minus sign, and without it `--bbox -73.99,40.74,...` is rejected as an unknown
+    /// flag `-7` — an error about argument syntax in answer to a correct bounding box.
+    #[arg(
+        long,
+        value_name = "MIN_LON,MIN_LAT,MAX_LON,MAX_LAT",
+        allow_hyphen_values = true
+    )]
+    pub bbox: Option<String>,
+
+    /// The import date written to the world's provenance. Defaults to this machine's
+    /// clock; it is excluded from the world's content hash either way.
+    #[arg(long, value_name = "ISO8601")]
+    pub imported_at: Option<String>,
+
+    /// Print the outcome as JSON instead of the importer's report.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw energy`.
+#[derive(Debug, clap::Args)]
+pub struct EnergyArgs {
+    /// The recording (full profile: it reads gt.kinematics).
+    pub recording: PathBuf,
+    /// A JSON or YAML file holding an `energy:` section's body; replaces the scenario's.
+    #[arg(long, value_name = "FILE")]
+    pub spec: Option<PathBuf>,
+    /// The emission model: hbefa3, phemlight, moves-opmode (or a full id).
+    #[arg(long, value_name = "ID")]
+    pub emission_model: Option<String>,
+    /// The EV model: kurczveil, vt-cpem (or a full id).
+    #[arg(long, value_name = "ID")]
+    pub ev_model: Option<String>,
+    /// Write one CSV row per vehicle here.
+    #[arg(long, value_name = "FILE")]
+    pub vehicles_csv: Option<PathBuf>,
+    /// Write the MOVES operating-mode distribution per lane (opModeDistribution) here.
+    #[arg(long, value_name = "FILE")]
+    pub opmode_csv: Option<PathBuf>,
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl EnergyArgs {
+    /// The library options these arguments describe.
+    #[must_use]
+    pub fn to_options(&self) -> crate::energy::EnergyOptions {
+        crate::energy::EnergyOptions {
+            recording: self.recording.clone(),
+            spec: self.spec.clone(),
+            emission_model: self.emission_model.clone(),
+            ev_model: self.ev_model.clone(),
+            vehicles_csv: self.vehicles_csv.clone(),
+            opmode_csv: self.opmode_csv.clone(),
+        }
+    }
+}
+
+/// `v2xw export-sumo`.
+#[derive(Debug, clap::Args)]
+pub struct ExportSumoArgs {
+    /// The scenario.
+    pub scenario: PathBuf,
+    /// The directory to write into.
+    #[arg(short, long, default_value = "sumo-export")]
+    pub out: PathBuf,
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw info`.
+#[derive(Debug, clap::Args)]
+pub struct InfoArgs {
+    /// The recording.
+    pub recording: PathBuf,
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw experiment`.
+#[derive(Debug, clap::Args)]
+pub struct ExperimentArgs {
+    /// Which part of the experiment system to use.
+    #[command(subcommand)]
+    pub command: ExperimentCommand,
+}
+
+/// The three experiment subcommands.
+#[derive(Debug, Subcommand)]
+pub enum ExperimentCommand {
+    /// Expand the sweep, run every outstanding cell, and write the results table.
+    ///
+    /// Already-finished runs are skipped whatever this is called with: the journal is the
+    /// authority, not the subcommand.
+    Run(ExperimentRunArgs),
+    /// Say how far along a sweep is, and where it stopped. Runs nothing.
+    Status(ExperimentStatusArgs),
+    /// Continue a sweep that was already started here, and refuse if it was not.
+    Resume(ExperimentRunArgs),
+}
+
+/// `v2xw experiment run` and `v2xw experiment resume`.
+#[derive(Debug, clap::Args)]
+pub struct ExperimentRunArgs {
+    /// The scenario file carrying the `experiment` block.
+    pub scenario: PathBuf,
+
+    /// Where the sweep's outputs go. Defaults to `runs/<meta.name>-sweep`.
+    #[arg(short, long)]
+    pub out: Option<PathBuf>,
+
+    /// The manifest build timestamp every run in the sweep uses. Defaults to this
+    /// machine's clock, read once, so the runs differ in their seed and in nothing else.
+    #[arg(long, value_name = "ISO8601")]
+    pub build_utc: Option<String>,
+
+    /// How many simulations to start at once.
+    ///
+    /// **The default is 1, and on a small machine it should stay there.** Each concurrent
+    /// run holds its own world, scheduler, node state and recording buffer, so `k` runs
+    /// cost `k` times the peak memory of one — and the engine already uses the machine's
+    /// cores inside a single run, so a second concurrent run mostly competes with the
+    /// first. Raising this on an 8 GB machine is how a sweep is killed at run 340 of 600.
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub concurrency: usize,
+
+    /// The confidence level for the aggregate, as a percentage.
+    ///
+    /// Spelled as a string default rather than a typed one so the flag's default reads as
+    /// the percentage a paper reports.
+    #[arg(long, value_enum, default_value = "95")]
+    pub ci: CiLevel,
+
+    /// The recording keyframe period each run uses.
+    #[arg(long, value_name = "MS", default_value_t = 1000)]
+    pub keyframe_ms: u64,
+
+    /// Run without writing a recording per cell. A long sweep writes a lot of MCAP; the
+    /// metrics, the run report and the manifest are written either way, and those are what
+    /// the results table is built from.
+    #[arg(long)]
+    pub no_recording: bool,
+
+    /// Record the NODE-only profile in every run.
+    #[arg(long)]
+    pub node_only: bool,
+
+    /// Skip reading each recording back. On by default for a single run; a sweep of
+    /// hundreds pays for it hundreds of times.
+    #[arg(long)]
+    pub no_verify: bool,
+
+    /// Also write the results table in this format, beside `results.json`.
+    #[arg(long, value_enum)]
+    pub format: Option<TableFormat>,
+
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw experiment status`.
+#[derive(Debug, clap::Args)]
+pub struct ExperimentStatusArgs {
+    /// The scenario file carrying the `experiment` block.
+    pub scenario: PathBuf,
+    /// Where the sweep's outputs are. Defaults to `runs/<meta.name>-sweep`.
+    #[arg(short, long)]
+    pub out: Option<PathBuf>,
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// The confidence level, spelled as the percentage a paper reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CiLevel {
+    /// 90 %.
+    #[value(name = "90")]
+    P90,
+    /// 95 %, the declared default confidence level.
+    #[value(name = "95")]
+    P95,
+    /// 99 %.
+    #[value(name = "99")]
+    P99,
+}
+
+impl CiLevel {
+    /// The metrics crate's level this names.
+    #[must_use]
+    pub fn level(self) -> v2xw_metrics::ConfidenceLevel {
+        match self {
+            CiLevel::P90 => v2xw_metrics::ConfidenceLevel::P90,
+            CiLevel::P95 => v2xw_metrics::ConfidenceLevel::P95,
+            CiLevel::P99 => v2xw_metrics::ConfidenceLevel::P99,
+        }
+    }
+}
+
+/// Which tabular format the results table is also written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum TableFormat {
+    /// Apache Parquet — "the primary format".
+    Parquet,
+    /// Arrow IPC.
+    Arrow,
+    /// JSON Lines.
+    Jsonl,
+}
+
+impl TableFormat {
+    /// The exporter format this names.
+    #[must_use]
+    pub fn format(self) -> v2xw_record::export::ExportFormat {
+        match self {
+            TableFormat::Parquet => v2xw_record::export::ExportFormat::Parquet,
+            TableFormat::Arrow => v2xw_record::export::ExportFormat::ArrowIpc,
+            TableFormat::Jsonl => v2xw_record::export::ExportFormat::Jsonl,
+        }
+    }
+}
+
+impl ExperimentRunArgs {
+    /// The library options this asks for. `resume` is the one thing the two subcommands
+    /// differ in.
+    #[must_use]
+    pub fn to_options(&self, resume: bool) -> crate::experiment::ExperimentOptions {
+        crate::experiment::ExperimentOptions {
+            scenario: self.scenario.clone(),
+            out: self.out.clone(),
+            build_utc: self.build_utc.clone(),
+            concurrency: self.concurrency,
+            level: self.ci.level(),
+            keyframe_ms: self.keyframe_ms,
+            record: !self.no_recording,
+            node_only: self.node_only,
+            verify: !self.no_verify && !self.no_recording,
+            format: self.format.map(TableFormat::format),
+            resume,
+        }
+    }
+}

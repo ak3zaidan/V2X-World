@@ -1,0 +1,1519 @@
+//! End-to-end behaviour of [`ObuRuntime`]: the phenomenon the simulator exists to study,
+//! and the behavioural half of the ground-truth firewall.
+//!
+//! # Faults injected to prove these checks can fail
+//!
+//! * `self.belief.pos = truth_pos;` inside `ObuRuntime::step` —
+//!   `ground_truth_changes_nothing_a_node_does` fails, because the transmissions then
+//!   differ between two runs whose only difference was the truth.
+//! * `ProfileServiceModel::service_time` made to return `Some(Duration::ZERO)` for an
+//!   uncosted operation — `a_node_that_cannot_keep_up_falls_behind` fails, because the
+//!   HSM never saturates.
+//! * The `active()` check in `ObuRuntime::generate` removed —
+//!   `a_revoked_node_stops_transmitting` fails.
+
+use v2xw_core::belief::{FixQuality, PositionEstimate};
+use v2xw_core::geom::Vec3;
+use v2xw_core::ids::NodeId;
+use v2xw_core::nodeview::NodeView;
+use v2xw_core::rng::RngRegistry;
+use v2xw_core::time::{Duration, NS_PER_MS, NS_PER_S, SimTime};
+use v2xw_msg::MsgType;
+use v2xw_node::ctx::NodeRuntimeCtx;
+use v2xw_node::generate::ServiceSet;
+use v2xw_node::policy::{OnDemand, Prioritized, VerifyAll};
+use v2xw_node::profile::HardwareProfile;
+use v2xw_node::queue::DropCause;
+use v2xw_node::runtime::{NodeConfig, ObuRuntime, RxDisposition, RxFrame, RxStamp, StepOutcome};
+use v2xw_node::stores::{CredState, CredentialHandle, VerificationState, pseudo_signer};
+use v2xw_node::telemetry::NodeState;
+
+/// The encoded §3.5.2 record, for comparisons that must survive the `NaN` fields.
+fn encode(t: &v2xw_record::wire::telemetry::NodeTelemetry) -> Vec<u8> {
+    v2xw_record::wire::telemetry::TelemetryBody::new(0, 0, vec![*t]).encode()
+}
+
+fn profile(id: &str) -> HardwareProfile {
+    v2xw_node::profiles::get(id)
+        .expect("shipped profile")
+        .clone()
+}
+
+fn belief(pos: Vec3, speed: f64) -> PositionEstimate {
+    let mut p = PositionEstimate::no_fix(0);
+    p.pos = pos;
+    p.vel = Vec3::new(speed, 0.0, 0.0);
+    p.heading_rad = 0.0;
+    p.semi_major_m = 5.0;
+    p.semi_minor_m = 3.0;
+    p.fix = FixQuality::ThreeD;
+    p
+}
+
+/// The SCMS-issued key for `(node, i, j)`: an implicit pseudonym certificate from one ACA
+/// shared by every node in this test, and `d = e·b + r`. A node signs only with a
+/// credential installed this way.
+fn test_key(node: NodeId, i: u32, j: u32) -> v2xw_sec::credential::ImplicitKey {
+    static ISSUER: std::sync::OnceLock<v2xw_sec::credential::ImplicitIssuer> =
+        std::sync::OnceLock::new();
+    let iss = ISSUER.get_or_init(|| {
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"node-tests", 0, &[0x20]).expect("issuer")
+    });
+    let mut secret = [0u8; 32];
+    secret[..4].copy_from_slice(&node.index().to_be_bytes());
+    let mut lv = [0u8; 9];
+    lv[..4].copy_from_slice(&node.index().to_be_bytes());
+    lv[4..8].copy_from_slice(&j.to_be_bytes());
+    iss.issue_factory(
+        v2xw_sec::credential::FactoryProfile::Pseudonym {
+            lv: v2xw_sec::linkage::LinkageValue::new(lv),
+        },
+        &secret,
+        i,
+        j,
+        0,
+        &[0x20],
+    )
+    .expect("issues")
+}
+
+fn credential(node: NodeId, j: u32) -> CredentialHandle {
+    CredentialHandle {
+        digest: pseudo_signer(node, j),
+        cert_coer: vec![0u8; 120],
+        key: v2xw_sec::KeyId(u64::from(j)),
+        i_period: 100,
+        j_index: j,
+        valid_from: 0,
+        valid_until: 10_000 * NS_PER_S,
+        state: CredState::Active,
+    }
+}
+
+fn node_on(profile_id: &str, services: ServiceSet) -> ObuRuntime {
+    let node = NodeId::new(1);
+    let mut rt = ObuRuntime::new(
+        node,
+        profile(profile_id),
+        Box::new(VerifyAll::new()),
+        NodeConfig {
+            services,
+            ..NodeConfig::default()
+        },
+        0,
+    );
+    rt.stores_mut().crl.set_period(100);
+    for j in 0..4 {
+        {
+            let c = credential(node, j);
+            let k = test_key(node, c.i_period, c.j_index);
+            rt.install_credential(c, &k).expect("installs");
+        }
+    }
+    rt.set_belief(belief(Vec3::ZERO, 10.0));
+    rt
+}
+
+fn frame(from: u32, pos: Vec3, at: SimTime, valid: bool) -> RxFrame {
+    RxFrame {
+        signer: Some(pseudo_signer(NodeId::new(from), 0)),
+        msg_type: MsgType::Cam,
+        bytes: 300,
+        claimed_pos: Some(pos),
+        claimed_speed_mps: 12.0,
+        claimed_heading_rad: 0.0,
+        claimed_generation_time: at,
+        full_certificate: false,
+        signature_valid: valid,
+        signer_validity: None,
+        spdu: None,
+        signer_certificate: None,
+        bsm: Default::default(),
+    }
+}
+
+/// Runs ticks `first..first + steps` of `dt`, feeding `inbox(k)` at tick `k`.
+///
+/// `first` exists because simulated time only goes forwards: a second `run` over the same
+/// runtime has to continue the timeline, not restart it. A test that restarted it would
+/// pass for the wrong reason — the node would sit with every timer in its own future and
+/// do nothing at all, which looks exactly like the behaviour under test.
+fn run_from(
+    rt: &mut ObuRuntime,
+    first: u64,
+    steps: u64,
+    dt: SimTime,
+    mut inbox: impl FnMut(u64) -> Vec<RxFrame>,
+) -> Vec<StepOutcome> {
+    let reg = RngRegistry::new(7);
+    let mut out = Vec::new();
+    for k in first..first + steps {
+        let now = k * dt;
+        let mut ctx = NodeRuntimeCtx::new(now, &reg);
+        let mut o = rt.step(&mut ctx, inbox(k), 0.0);
+        // A check that finishes before the next tick is handed over when it finishes, as
+        // the engine does it: it wakes the node at `next_completion_after`. The last tick's
+        // checks are woken for too, so a run's last message is not left in the verifier.
+        let next_tick = (k + 1) * dt;
+        let mut cursor = now;
+        let mut guard = 0;
+        while let Some(at) = rt.next_completion_after(cursor) {
+            if (k + 1 < first + steps && at >= next_tick) || guard > 1_000 {
+                break;
+            }
+            guard += 1;
+            let mut wctx = NodeRuntimeCtx::new(at, &reg);
+            let w = rt.wake_timed(&mut wctx, Vec::new());
+            o.delivered.extend(w.delivered);
+            o.rx_reports.extend(w.rx_reports);
+            cursor = at;
+        }
+        out.push(o);
+    }
+    out
+}
+
+/// Runs `steps` ticks of `dt` from the start of the run.
+fn run(
+    rt: &mut ObuRuntime,
+    steps: u64,
+    dt: SimTime,
+    inbox: impl FnMut(u64) -> Vec<RxFrame>,
+) -> Vec<StepOutcome> {
+    run_from(rt, 0, steps, dt, inbox)
+}
+
+// -------------------------------------------------------------------------------------
+// The step function
+// -------------------------------------------------------------------------------------
+
+/// The whole loop in one test: a node generates on its own schedule, signs, receives,
+/// verifies, updates its neighbour table and reports telemetry.
+#[test]
+fn a_node_generates_receives_verifies_and_reports() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let outcomes = run(&mut rt, 101, 10 * NS_PER_MS, |k| {
+        if k % 10 == 0 {
+            vec![frame(
+                9,
+                Vec3::new(50.0, 0.0, 0.0),
+                k * 10 * NS_PER_MS,
+                true,
+            )]
+        } else {
+            Vec::new()
+        }
+    });
+
+    let transmissions: usize = outcomes.iter().map(|o| o.transmissions.len()).sum();
+    assert_eq!(transmissions, 11, "10 Hz for one second, plus the first");
+    let delivered: usize = outcomes.iter().map(|o| o.delivered.len()).sum();
+    assert_eq!(delivered, 11);
+
+    // The peer is in the neighbour table, verified, with the position it claimed.
+    let peer = rt
+        .neighbors()
+        .get(&pseudo_signer(NodeId::new(9), 0))
+        .expect("the peer was heard");
+    assert_eq!(peer.state, VerificationState::Verified);
+    assert_eq!(peer.claimed_pos, Vec3::new(50.0, 0.0, 0.0));
+    assert_eq!(peer.messages, 11);
+
+    // One telemetry frame closed at the one-second boundary.
+    let telemetry: Vec<_> = outcomes
+        .iter()
+        .filter_map(|o| o.telemetry.as_ref())
+        .collect();
+    assert_eq!(telemetry.len(), 1);
+    let t = telemetry[0];
+    assert_eq!(t.node_id, 1);
+    assert_eq!(t.nbr_total, 1);
+    assert_eq!(t.nbr_verified, 1);
+    assert_eq!(t.msgs_out_per_s, 11.0);
+    assert_eq!(t.msgs_in_per_s, 11.0);
+    assert_eq!(t.verifications_per_s, 11.0);
+    assert_eq!(t.unverified_ratio_pm, 0);
+    assert_eq!(t.node_state, NodeState::Active.code());
+    assert_eq!(t.verify_policy, 0);
+}
+
+/// A bad signature is never delivered as a neighbour: the node learns the message was
+/// invalid and the table stays empty.
+/// A message reaches the applications when its signature check finishes, not when it
+/// starts. The frame arrives at the step's own instant, so its check starts then and ends
+/// one verification service time later: the step hands over nothing, the node says when
+/// the check will finish, and a wake at that instant hands the message over with a report
+/// whose `verify_done` is that instant.
+#[test]
+fn a_message_is_handed_over_when_its_verification_finishes() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let reg = RngRegistry::new(7);
+    let t0 = 1_000 * NS_PER_MS;
+    let mut ctx = NodeRuntimeCtx::new(t0, &reg);
+    let stamped = vec![(
+        frame(9, Vec3::new(50.0, 0.0, 0.0), t0, true),
+        RxStamp {
+            token: 42,
+            arrived_at: Some(t0),
+        },
+    )];
+    let step = rt.step_timed(&mut ctx, stamped, 0.0);
+    assert!(
+        step.delivered.is_empty(),
+        "delivered before its check finished: {:?}",
+        step.delivered
+    );
+    assert!(step.rx_reports.iter().all(|r| r.token != 42));
+    assert!(
+        rt.neighbors().is_empty(),
+        "the neighbour table learned it early"
+    );
+
+    let done = rt
+        .next_completion_after(t0)
+        .expect("a check is running and says when it ends");
+    assert!(done > t0, "a signature check takes time");
+    let mut wctx = NodeRuntimeCtx::new(done, &reg);
+    let woken = rt.wake_timed(&mut wctx, Vec::new());
+    assert_eq!(woken.delivered.len(), 1);
+    let report = woken
+        .rx_reports
+        .iter()
+        .find(|r| r.token == 42)
+        .expect("the report comes with the hand-over");
+    assert_eq!(report.verify_start, Some(t0));
+    assert_eq!(report.verify_done, Some(done));
+    assert_eq!(rt.neighbors().len(), 1);
+    assert_eq!(rt.next_completion(), None);
+    // A wake with nothing finished hands over nothing and generates nothing.
+    let mut again = NodeRuntimeCtx::new(done + 1, &reg);
+    let idle = rt.wake_timed(&mut again, Vec::new());
+    assert!(idle.delivered.is_empty() && idle.transmissions.is_empty());
+}
+
+/// SAE J2945/1's vehicle density counts the RVs whose BSMs were *received*, from their
+/// decoded temporary IDs (FMVSS 150 NPRM preamble, 82 FR 3890: "decode the message enough
+/// to expose the various temporary IDs of the received BSMs"), not the ones whose
+/// signature checks have finished. A station is counted at its arrival, while its check
+/// is still running, and one whose signature then fails was still received; a SPaT's
+/// sender is not a station, and one beyond 100 m is not in range.
+#[test]
+fn the_j2945_density_counts_a_station_at_reception_not_at_verification() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let reg = RngRegistry::new(7);
+    let t0 = 1_000 * NS_PER_MS;
+    let mut ctx = NodeRuntimeCtx::new(t0, &reg);
+    let mut spat = frame(30, Vec3::new(10.0, 0.0, 0.0), t0, true);
+    spat.msg_type = MsgType::Spat;
+    let stamped = [
+        frame(9, Vec3::new(50.0, 0.0, 0.0), t0, true),
+        frame(10, Vec3::new(0.0, 60.0, 0.0), t0, false),
+        frame(11, Vec3::new(150.0, 0.0, 0.0), t0, true),
+        spat,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, f)| {
+        (
+            f,
+            RxStamp {
+                token: i as u64,
+                arrived_at: Some(t0),
+            },
+        )
+    })
+    .collect();
+    let step = rt.step_timed(&mut ctx, stamped, 0.0);
+    assert!(step.delivered.is_empty(), "the checks are still running");
+    assert!(rt.neighbors().is_empty());
+    let heard = &rt.stores().heard;
+    assert_eq!(
+        heard.len(),
+        3,
+        "three stations received, the SPaT's mast is none"
+    );
+    assert_eq!(
+        heard.count_within(Vec3::ZERO, 100.0, 0),
+        2,
+        "two RVs within 100 m, one of them about to fail its check"
+    );
+    // The count is the J3161/1 window's too: nothing heard after the arrival.
+    assert_eq!(heard.count_within(Vec3::ZERO, 100.0, t0 + 1), 0);
+    // It ages as the neighbour table does: forgotten T_neighbor (3 s) after.
+    let later = t0 + 3_001 * NS_PER_MS;
+    let mut ctx = NodeRuntimeCtx::new(later, &reg);
+    let _ = rt.step_timed(&mut ctx, Vec::new(), 0.0);
+    assert!(rt.stores().heard.is_empty(), "{:?}", rt.stores().heard);
+}
+
+#[test]
+fn an_invalid_signature_never_reaches_the_neighbour_table() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let outcomes = run(&mut rt, 3, 100 * NS_PER_MS, |k| {
+        vec![frame(
+            9,
+            Vec3::new(50.0, 0.0, 0.0),
+            k * 100 * NS_PER_MS,
+            false,
+        )]
+    });
+    let delivered: Vec<_> = outcomes.iter().flat_map(|o| o.delivered.iter()).collect();
+    assert_eq!(delivered.len(), 3);
+    assert!(
+        delivered
+            .iter()
+            .all(|m| m.verification == VerificationState::Invalid)
+    );
+    assert_eq!(rt.neighbors().len(), 0);
+}
+
+// -------------------------------------------------------------------------------------
+// The phenomenon: a node that cannot keep up
+// -------------------------------------------------------------------------------------
+
+/// **The phenomenon the simulator exists to study.** One profile, two loads: below its
+/// published verification rate the node keeps up, and above it the queue fills, the waits
+/// grow and messages are dropped.
+///
+/// The rate is the profile's, not this test's. The reference profile publishes
+/// ">2500 ECDSA NIST P-256 verifications/s ('line-rate')" for the CRATON2's on-chip
+/// engine, and the two loads straddle it: 20 neighbours at 10 Hz is 200 verifications a
+/// second, and 300 neighbours at 10 Hz is 3,000 — which is also the regime NDSS 2024
+/// §VII-B is about, since it puts the requirement for 100 neighbours at >= 1 kHz.
+#[test]
+fn a_node_that_cannot_keep_up_falls_behind() {
+    let load = |neighbours: u32| {
+        move |k: u64| -> Vec<RxFrame> {
+            (0..neighbours)
+                .map(|n| {
+                    frame(
+                        n + 100,
+                        Vec3::new(f64::from(n), 0.0, 0.0),
+                        k * 100 * NS_PER_MS,
+                        true,
+                    )
+                })
+                .collect()
+        }
+    };
+    let window = |neighbours: u32| {
+        let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+        let outcomes = run(&mut rt, 11, 100 * NS_PER_MS, load(neighbours));
+        outcomes
+            .iter()
+            .filter_map(|o| o.telemetry.as_ref())
+            .next()
+            .copied()
+            .expect("a window closed")
+    };
+
+    // 200/s against a 2,500/s engine: 400 us each, 80 ms of work per second.
+    let light = window(20);
+    // 220 verifies at 400 us is 88 ms of engine time; 11 signatures at 9 ms is 99 ms of
+    // eHSM time. §3.5.2 has one security-hardware field, so the binding engine is the one
+    // reported — here the signing path, not the verification path.
+    assert_eq!(light.hsm_util_pm, 99);
+    // The harness delivers a whole tick's arrivals at one instant, so even the light load
+    // queues for the length of the burst: twenty verifications at 400 us is 7.6 ms for the
+    // last of them. That is a property of the arrival pattern, not of overload — nothing
+    // is dropped and the backlog clears inside the tick.
+    assert!(
+        light.verify_wait_p95_ms < 10.0,
+        "the burst should clear inside one tick, p95 was {} ms",
+        light.verify_wait_p95_ms
+    );
+    assert_eq!(light.drop_verify_overflow, 0);
+    assert_eq!(light.unverified_ratio_pm, 0, "everything is verified");
+
+    // 3,000/s against the same engine. What happens is the thing the simulator exists to
+    // show, and it is not "the engine saturates": the verify queue fills first, sheds the
+    // excess, and the engine ends up working on the fraction that got in. A node under
+    // this load is not slow — it is *deaf*, to 79 % of what it heard, and the telemetry
+    // says so in `drop_verify_overflow` and `unverified_ratio_pm` rather than in a
+    // utilisation figure that looks merely busy.
+    let heavy = window(300);
+    assert!(
+        heavy.hsm_util_pm > light.hsm_util_pm,
+        "the engine should be busier: {} vs {} per mille",
+        heavy.hsm_util_pm,
+        light.hsm_util_pm
+    );
+    assert!(
+        heavy.q_verify_p95 >= 60,
+        "the verify queue should sit near its configured depth of 64, p95 was {}",
+        heavy.q_verify_p95
+    );
+    // The tail wait triples, bounded by the queue depth: 64 entries at 400 us is 25.6 ms,
+    // which is what the queue depth buys and what it costs. A deeper queue would trade
+    // this latency for fewer drops, and that trade is the design question the telemetry
+    // exists to inform.
+    assert!(
+        heavy.verify_wait_p95_ms > 3.0 * light.verify_wait_p95_ms,
+        "the tail wait should grow with the backlog: {} ms vs {} ms",
+        heavy.verify_wait_p95_ms,
+        light.verify_wait_p95_ms
+    );
+    assert!(
+        heavy.verify_wait_p95_ms < 26.0,
+        "and it is bounded by the queue depth, 64 x 400 us = 25.6 ms; was {} ms",
+        heavy.verify_wait_p95_ms
+    );
+    // Which counter moves is itself the finding, and it is the verification queue's. The
+    // receive queue has no server in front of it — parsing costs nothing in any shipped
+    // profile (`app_task_us` is uncalibrated) — so no frame ever waits in it, and the
+    // backlog forms where the work is: in front of the verification engine, which sheds
+    // the excess at the instant it is full. (This used to assert the opposite: a tick's
+    // arrivals were pushed into the receive queue in one burst before any was processed,
+    // so it "overflowed" whatever the parse cost. `the_receive_queue_overflows_only_when_
+    // parsing_costs_time` is where the receive queue earns its drops.) Six counters exist
+    // precisely so that which queue overflowed is visible rather than collapsed into one
+    // "dropped" number.
+    assert!(
+        heavy.drop_verify_overflow > 0,
+        "an overloaded node must drop somewhere"
+    );
+    assert_eq!(
+        heavy.drop_rx_overflow, 0,
+        "a queue with no server in front of it cannot back up"
+    );
+    assert!(heavy.q_verify_p95 > light.q_verify_p95);
+    // Most of what this node heard never reached an application.
+    let heard = 300 * 11;
+    let shed = heavy.drop_rx_overflow + heavy.drop_verify_overflow + heavy.drop_verify_policy_skip;
+    assert!(
+        shed > heard * 3 / 4,
+        "expected most of {heard} arrivals to be shed, {shed} were"
+    );
+}
+
+/// Where the work is charged is the profile's business, not the runtime's: the reference
+/// OBU verifies on a dedicated engine outside its HSM boundary, and the software-only
+/// profile charges the same work to its CPU cores.
+#[test]
+fn the_profile_decides_which_server_is_charged() {
+    let arrivals = |k: u64| -> Vec<RxFrame> {
+        (0..40)
+            .map(|n| {
+                frame(
+                    n + 100,
+                    Vec3::new(f64::from(n), 0.0, 0.0),
+                    k * 100 * NS_PER_MS,
+                    true,
+                )
+            })
+            .collect()
+    };
+    let window = |profile_id: &str| {
+        let mut rt = node_on(profile_id, ServiceSet::SAE);
+        let outcomes = run(&mut rt, 11, 100 * NS_PER_MS, arrivals);
+        outcomes
+            .iter()
+            .filter_map(|o| o.telemetry.as_ref())
+            .next()
+            .copied()
+            .expect("a window closed")
+    };
+
+    let hardware = window(v2xw_node::profiles::REFERENCE_OBU);
+    assert!(
+        hardware.hsm_util_pm > 0,
+        "the security hardware did the work"
+    );
+    assert_eq!(hardware.cpu_util_pm, 0, "and the CPU did none of it");
+
+    let software = window("obu/generic-automotive-soc-no-hsm");
+    assert!(software.cpu_util_pm > 0, "rule H2: the CPU does it all");
+    assert_eq!(software.hsm_util_pm, 0, "there is no security hardware");
+}
+
+/// A profile that costs no verification verifies nothing, rather than verifying
+/// everything instantly. The queue fills and the telemetry says so — which is what makes
+/// an unconfigured run visibly unconfigured instead of silently optimistic.
+#[test]
+fn an_uncosted_profile_verifies_nothing_rather_than_everything() {
+    // obu/cohda-mk5 publishes a verify rate, so use the RSU profile whose every crypto
+    // figure is not-published.
+    let mut rt = node_on("rsu/cohda-mk5-rsu", ServiceSet::SAE);
+    let outcomes = run(&mut rt, 11, 100 * NS_PER_MS, |k| {
+        vec![frame(
+            9,
+            Vec3::new(50.0, 0.0, 0.0),
+            k * 100 * NS_PER_MS,
+            true,
+        )]
+    });
+    let delivered: usize = outcomes.iter().map(|o| o.delivered.len()).sum();
+    assert_eq!(
+        delivered, 0,
+        "nothing can be verified, so nothing is delivered"
+    );
+    let t = outcomes
+        .iter()
+        .filter_map(|o| o.telemetry.as_ref())
+        .next()
+        .unwrap();
+    assert_eq!(t.verifications_per_s, 0.0);
+    assert!(t.msgs_in_per_s > 0.0, "the frames did arrive");
+}
+
+// -------------------------------------------------------------------------------------
+// Credentials
+// -------------------------------------------------------------------------------------
+
+/// A node whose own certificate is on the CRL stops transmitting
+/// [CAMP-EE §2.2.10.2].
+#[test]
+fn a_revoked_node_stops_transmitting() {
+    let node = NodeId::new(1);
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let before = run(&mut rt, 6, 100 * NS_PER_MS, |_| Vec::new());
+    assert!(
+        before
+            .iter()
+            .filter(|o| !o.transmissions.is_empty())
+            .count()
+            >= 2,
+        "the node was transmitting before it was revoked"
+    );
+
+    // Revoked by the digest the store actually holds, which after the first transmission
+    // is the digest of the real certificate the node provisioned for that pseudonym — not
+    // the `pseudo_signer` stand-in it started with. Revoking the stand-in would revoke a
+    // certificate that was never on the air, and the node would carry on transmitting:
+    // that is the second fault injected to prove this test can fail.
+    let mine: Vec<_> = rt
+        .stores()
+        .certs
+        .credentials()
+        .iter()
+        .map(|c| c.digest.clone())
+        .collect();
+    assert_eq!(mine.len(), 4);
+    for d in &mine {
+        assert_ne!(
+            *d,
+            pseudo_signer(node, 0),
+            "the node must be using a certificate it can prove, not a stand-in digest"
+        );
+        rt.stores_mut().crl.revoke_own(d);
+    }
+    let after = run_from(&mut rt, 6, 6, 100 * NS_PER_MS, |_| Vec::new());
+    assert!(
+        after.iter().all(|o| o.transmissions.is_empty()),
+        "a revoked node must not transmit"
+    );
+}
+
+/// The verification policy is swappable and the telemetry says which one is in force,
+/// so a run's `unverified_ratio` can be attributed.
+#[test]
+fn the_policy_is_swappable_and_reported() {
+    for (policy, code, expect_unverified) in [
+        (
+            Box::new(VerifyAll::new()) as Box<dyn v2xw_node::policy::VerificationPolicy>,
+            0u8,
+            false,
+        ),
+        (Box::new(OnDemand::new(0.5)), 1, true),
+        (Box::new(Prioritized::new(300.0)), 2, false),
+    ] {
+        let node = NodeId::new(1);
+        let mut rt = ObuRuntime::new(
+            node,
+            profile(v2xw_node::profiles::REFERENCE_OBU),
+            policy,
+            NodeConfig {
+                services: ServiceSet::SAE,
+                ..NodeConfig::default()
+            },
+            0,
+        );
+        rt.stores_mut().crl.set_period(100);
+        {
+            let c = credential(node, 0);
+            let k = test_key(node, c.i_period, c.j_index);
+            rt.install_credential(c, &k).expect("installs");
+        }
+        rt.set_belief(belief(Vec3::ZERO, 10.0));
+
+        // The first message makes the peer known; the rest are routine updates, which is
+        // what on-demand skips.
+        let outcomes = run(&mut rt, 11, 100 * NS_PER_MS, |k| {
+            vec![frame(
+                9,
+                Vec3::new(50.0, 0.0, 0.0),
+                k * 100 * NS_PER_MS,
+                true,
+            )]
+        });
+        let t = outcomes
+            .iter()
+            .filter_map(|o| o.telemetry.as_ref())
+            .next()
+            .unwrap();
+        assert_eq!(t.verify_policy, code);
+        if expect_unverified {
+            assert!(
+                t.unverified_ratio_pm > 0,
+                "on-demand should deliver routine updates unverified"
+            );
+            assert!(t.drop_verify_policy_skip > 0);
+        } else {
+            assert_eq!(t.unverified_ratio_pm, 0);
+            assert_eq!(t.drop_verify_policy_skip, 0);
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------
+// The behavioural half of the firewall
+// -------------------------------------------------------------------------------------
+
+/// **The firewall, behaviourally.** The engine hands the node a ground-truth position
+/// error for the one §3.5.2 field that needs it. Changing *only* that number must change
+/// *only* that field: the same transmissions, the same deliveries, the same neighbour
+/// table, the same fifty-five other telemetry values.
+///
+/// `tests/firewall_sentinel.rs` checks the same property structurally, by reading the
+/// source. This one checks it by running the node, which catches a leak the text scan
+/// would miss — a ground-truth value copied into another field and used from there.
+#[test]
+fn ground_truth_changes_nothing_a_node_does() {
+    let scenario = |truth_error: f32| {
+        let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::BOTH);
+        rt.observe_truth(truth_error);
+        let outcomes = run(&mut rt, 21, 50 * NS_PER_MS, |k| {
+            if k % 2 == 0 {
+                vec![frame(
+                    9,
+                    Vec3::new(50.0, 0.0, 0.0),
+                    k * 50 * NS_PER_MS,
+                    true,
+                )]
+            } else {
+                Vec::new()
+            }
+        });
+        let telemetry = outcomes
+            .iter()
+            .filter_map(|o| o.telemetry)
+            .next()
+            .expect("a window closed");
+        let tx: Vec<_> = outcomes
+            .iter()
+            .flat_map(|o| o.transmissions.clone())
+            .collect();
+        let rx: Vec<_> = outcomes.iter().flat_map(|o| o.delivered.clone()).collect();
+        (tx, rx, telemetry, rt.neighbors().len())
+    };
+
+    let (tx_a, rx_a, t_a, n_a) = scenario(0.0);
+    let (tx_b, rx_b, t_b, n_b) = scenario(97.5);
+
+    assert_eq!(tx_a, tx_b, "the truth changed what the node transmitted");
+    assert_eq!(rx_a, rx_b, "the truth changed what the node delivered");
+    assert_eq!(n_a, n_b, "the truth changed the neighbour table");
+    assert!(
+        !tx_a.is_empty() && !rx_a.is_empty(),
+        "the scenario did something"
+    );
+
+    // Exactly one telemetry field differs, and it is the one §3.5.2 marks GT. The
+    // comparison is over the encoded bytes rather than the struct, because the record
+    // carries `NaN` in the fields this runtime does not model and `NaN != NaN` would make
+    // a struct comparison fail for two identical records.
+    assert_eq!(t_a.pos_error_m, 0.0);
+    assert_eq!(t_b.pos_error_m, 97.5);
+    let mut normalised = t_b;
+    normalised.pos_error_m = t_a.pos_error_m;
+    assert_eq!(
+        encode(&t_a),
+        encode(&normalised),
+        "a ground-truth value reached a field other than pos_error_m"
+    );
+    assert_ne!(
+        encode(&t_a),
+        encode(&t_b),
+        "the GT field itself must still differ, or the check above is vacuous"
+    );
+}
+
+/// The node's belief is what it transmits and what it reasons from: a node whose GNSS
+/// belief is wrong claims the wrong position, and a policy that orders by proximity
+/// orders by the *believed* distance.
+#[test]
+fn the_node_reasons_from_its_belief() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    rt.set_belief(belief(Vec3::new(1000.0, 0.0, 0.0), 10.0));
+    assert_eq!(rt.position().pos, Vec3::new(1000.0, 0.0, 0.0));
+
+    // Its own believed time drives generation, and its own believed position drives the
+    // claim. A NodeView is all a plug-in gets, and this is the whole of it.
+    let view: &dyn NodeView<
+        Neighbors = v2xw_node::stores::NeighborTable,
+        Credential = CredentialHandle,
+        Message = v2xw_node::runtime::VerifiedMessage,
+    > = &rt;
+    assert_eq!(view.node(), NodeId::new(1));
+    assert_eq!(view.position().pos, Vec3::new(1000.0, 0.0, 0.0));
+    assert_eq!(view.credentials().len(), 4);
+    assert!(view.active_credential().is_some());
+    assert_eq!(view.received().len(), 0);
+}
+
+/// A node whose clock has been stepped stamps its messages with the stepped time, which
+/// is the symptom a clock attack produces at every receiver's freshness check — and which
+/// a simulator that stamped the simulator's own clock would show as nothing at all.
+///
+/// Note what does *not* change: the cadence. Stepping a clock moves the instant, not the
+/// rate, so the node still transmits every 100 ms of its own time. A drifting clock would
+/// change the rate; a stepped one changes what the message claims.
+#[test]
+fn a_stepped_clock_is_visible_in_what_the_node_claims() {
+    let mut honest = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let a = run(&mut honest, 11, 100 * NS_PER_MS, |_| Vec::new());
+    let honest_tx: Vec<_> = a.iter().flat_map(|o| o.transmissions.clone()).collect();
+
+    let mut attacked = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    attacked.clock_mut().step_offset(NS_PER_S as i64);
+    let b = run(&mut attacked, 11, 100 * NS_PER_MS, |_| Vec::new());
+    let attacked_tx: Vec<_> = b.iter().flat_map(|o| o.transmissions.clone()).collect();
+
+    // The rate is unchanged: a step moves the clock, it does not speed it up.
+    assert_eq!(honest_tx.len(), attacked_tx.len());
+    assert_eq!(honest_tx.len(), 11);
+
+    // What changed is every generation time, by exactly the step.
+    assert_eq!(honest_tx[0].generation_time, 0);
+    assert_eq!(attacked_tx[0].generation_time, NS_PER_S);
+    for (h, x) in honest_tx.iter().zip(attacked_tx.iter()) {
+        assert_eq!(x.generation_time - h.generation_time, NS_PER_S);
+    }
+
+    // And the offset reaches the one ground-truth integer field of §3.5.2, which is how
+    // an analyst sees a discrepancy the node itself cannot.
+    let t = b
+        .iter()
+        .filter_map(|o| o.telemetry.as_ref())
+        .next()
+        .unwrap();
+    assert_eq!(t.clock_offset_ns, NS_PER_S as i64);
+    assert_eq!(attacked.clock().offset_ns(), NS_PER_S as i64);
+}
+
+/// A node that is off does nothing at all — and says, of every frame it was handed, that
+/// it was off, so a reception attempt at a dead radio is accounted for rather than lost
+/// between the PHY and the application.
+#[test]
+fn an_off_node_does_nothing() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::BOTH);
+    rt.set_state(NodeState::Off);
+    let outcomes = run(&mut rt, 20, 100 * NS_PER_MS, |k| {
+        vec![frame(9, Vec3::ZERO, k * 100 * NS_PER_MS, true)]
+    });
+    for o in &outcomes {
+        assert!(o.transmissions.is_empty());
+        assert!(o.delivered.is_empty());
+        assert!(o.telemetry.is_none());
+        assert_eq!(o.rx_reports.len(), 1);
+        assert_eq!(o.rx_reports[0].disposition, RxDisposition::NodeOff);
+    }
+    assert_eq!(rt.neighbors().len(), 0);
+}
+
+/// The receive queue backs up only when parsing takes time: 300 frames arriving in one
+/// instant at a node that spends 1 ms parsing each fill its 64 slots, while the same 300
+/// spread over a tenth of a second at 0.2 ms each never wait at all.
+#[test]
+fn the_receive_queue_overflows_only_when_parsing_costs_time() {
+    let run_with = |parse: Duration, spread: bool| {
+        let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+        rt.set_app_task_cost(parse);
+        let reg = RngRegistry::new(7);
+        let now = 100 * NS_PER_MS;
+        let inbox: Vec<(RxFrame, RxStamp)> = (0..300u64)
+            .map(|n| {
+                let at = if spread { n * 300_000 } else { 50 * NS_PER_MS };
+                (
+                    frame(n as u32 + 100, Vec3::new(n as f64, 0.0, 0.0), at, true),
+                    RxStamp {
+                        token: n,
+                        arrived_at: Some(at),
+                    },
+                )
+            })
+            .collect();
+        let mut ctx = NodeRuntimeCtx::new(now, &reg);
+        let out = rt.step_timed(&mut ctx, inbox, 0.0);
+        out.rx_reports
+            .iter()
+            .filter(|r| r.disposition == RxDisposition::Dropped(DropCause::RxOverflow))
+            .count()
+    };
+    assert!(run_with(Duration::from_millis(1), false) > 200);
+    assert_eq!(run_with(Duration::from_micros(200), true), 0);
+}
+
+/// Every frame handed to a node comes back as exactly one report, with its instants in
+/// order: arrived ≤ parsed ≤ verification start ≤ verification done.
+#[test]
+fn every_received_frame_is_reported_once_with_ordered_instants() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let reg = RngRegistry::new(7);
+    let mut reports = Vec::new();
+    let mut handed = 0u64;
+    for k in 1..=10u64 {
+        let now = k * 100 * NS_PER_MS;
+        let inbox: Vec<(RxFrame, RxStamp)> = (0..150u64)
+            .map(|n| {
+                // In pairs: two frames end at the same instant every 1.2 ms, so the second
+                // of each pair waits for the first's check.
+                let at = now - 100 * NS_PER_MS + (n / 2) * 1_200_000;
+                handed += 1;
+                (
+                    frame(n as u32 + 100, Vec3::new(n as f64, 0.0, 0.0), at, true),
+                    RxStamp {
+                        token: k * 1_000 + n,
+                        arrived_at: Some(at),
+                    },
+                )
+            })
+            .collect();
+        let mut ctx = NodeRuntimeCtx::new(now, &reg);
+        reports.extend(rt.step_timed(&mut ctx, inbox, 0.0).rx_reports);
+    }
+    let mut tokens: Vec<u64> = reports.iter().map(|r| r.token).collect();
+    tokens.sort_unstable();
+    let before = tokens.len();
+    tokens.dedup();
+    assert_eq!(before, tokens.len(), "a frame reported twice");
+    // What is not reported is still waiting in the verification queue, never lost.
+    assert!(reports.len() as u64 <= handed);
+    assert!(
+        handed - reports.len() as u64 <= 64,
+        "more missing than the queue holds"
+    );
+    for r in &reports {
+        assert!(r.arrived <= r.parsed, "{r:?}");
+        if let (Some(s), Some(d)) = (r.verify_start, r.verify_done) {
+            assert!(r.parsed <= s && s < d, "{r:?}");
+        }
+    }
+    // 1,500 frames a second against a 2,500/s engine: the queue waits are real but short.
+    let waits: Vec<u64> = reports
+        .iter()
+        .filter_map(|r| r.verify_start.map(|s| s - r.parsed))
+        .collect();
+    assert!(!waits.is_empty());
+    assert!(waits.iter().any(|w| *w > 0), "no check ever waited");
+}
+
+/// Two identical runs produce identical output, which is the determinism contract for
+/// this crate's share of a run: nothing here depends on iteration order, on a
+/// hash seed or on wall-clock time. The telemetry is compared as encoded bytes, because
+/// the record carries `NaN` for what this runtime does not model.
+#[test]
+fn two_identical_runs_agree() {
+    let go = || {
+        let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::BOTH);
+        let outcomes = run(&mut rt, 31, 50 * NS_PER_MS, |k| {
+            (0..7)
+                .map(|n| {
+                    frame(
+                        n + 20,
+                        Vec3::new(f64::from(n) * 11.0, 0.0, 0.0),
+                        k * 50 * NS_PER_MS,
+                        n % 3 != 0,
+                    )
+                })
+                .collect()
+        });
+        let tx: Vec<_> = outcomes
+            .iter()
+            .flat_map(|o| o.transmissions.clone())
+            .collect();
+        let rx: Vec<_> = outcomes.iter().flat_map(|o| o.delivered.clone()).collect();
+        let tel: Vec<Vec<u8>> = outcomes
+            .iter()
+            .filter_map(|o| o.telemetry.as_ref())
+            .map(encode)
+            .collect();
+        (tx, rx, tel)
+    };
+    let a = go();
+    assert!(!a.0.is_empty() && !a.1.is_empty() && !a.2.is_empty());
+    assert_eq!(a, go());
+}
+
+/// The check interval the engine must schedule is the standards' own floor, and it is not
+/// zero — a schedule that answered zero would busy-loop the engine.
+#[test]
+fn the_check_interval_is_the_standards_floor() {
+    let rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::BOTH);
+    assert_eq!(rt.schedule().check_interval(), Duration::from_millis(100));
+}
+
+/// Peer-to-peer certificate distribution: a digest signer identifier this node has never
+/// seen costs a P2PCD request, and a message that attaches the full certificate pays
+/// bytes instead and stops the requests.
+///
+/// The counters are the two §3.5.2 fields at offsets 96 and 100, and the trade between
+/// them is what the certificate-attachment cadence is choosing.
+#[test]
+fn an_unknown_signer_costs_a_p2pcd_request_and_a_full_certificate_stops_it() {
+    let mut digests_only = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let a = run(&mut digests_only, 11, 100 * NS_PER_MS, |k| {
+        vec![frame(9, Vec3::ZERO, k * 100 * NS_PER_MS, true)]
+    });
+    let ta = a
+        .iter()
+        .filter_map(|o| o.telemetry.as_ref())
+        .next()
+        .unwrap();
+    assert_eq!(ta.digest_misses, 11, "every message missed the cache");
+    assert_eq!(ta.peer_cache_entries, 0, "and nothing was learned");
+
+    let mut attaches = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let b = run(&mut attaches, 11, 100 * NS_PER_MS, |k| {
+        let mut f = frame(9, Vec3::ZERO, k * 100 * NS_PER_MS, true);
+        // The first message carries the certificate, as the attachment cadence requires
+        // periodically; the rest name it by digest.
+        f.full_certificate = k == 0;
+        vec![f]
+    });
+    let tb = b
+        .iter()
+        .filter_map(|o| o.telemetry.as_ref())
+        .next()
+        .unwrap();
+    assert_eq!(
+        tb.digest_misses, 0,
+        "one attachment served the whole second"
+    );
+    assert_eq!(tb.peer_cache_entries, 1);
+}
+
+// -------------------------------------------------------------------------------------
+// The event and infrastructure services
+// -------------------------------------------------------------------------------------
+
+/// A roadside unit signs and sends the SPaT and the MAP its controller feed installed, at
+/// 10 Hz and 1 Hz, and nothing when no feed installed one.
+#[test]
+fn a_roadside_unit_sends_what_its_controller_gave_it_at_the_standard_rates() {
+    let services = ServiceSet {
+        spat: true,
+        map: true,
+        ..ServiceSet::NONE
+    };
+    let mut rt = node_on("rsu/commsignia-its-rs4", services);
+    let silent = run(&mut rt, 5, 100 * NS_PER_MS, |_| Vec::new());
+    assert_eq!(
+        silent.iter().map(|o| o.transmissions.len()).sum::<usize>(),
+        0,
+        "no feed, nothing to send"
+    );
+    rt.set_infra_payload(MsgType::Spat, vec![0x00, 0x13, 0x05, 1, 2, 3, 4, 5]);
+    rt.set_infra_payload(
+        MsgType::Map,
+        vec![0x00, 0x12, 0x09, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+    );
+    let out = run_from(&mut rt, 5, 20, 100 * NS_PER_MS, |_| Vec::new());
+    let count = |ty: MsgType| {
+        out.iter()
+            .flat_map(|o| o.transmissions.iter())
+            .filter(|t| t.msg_type == ty)
+            .count()
+    };
+    assert_eq!(count(MsgType::Spat), 20, "10 Hz over two seconds");
+    assert_eq!(count(MsgType::Map), 2, "1 Hz over two seconds");
+    assert_eq!(
+        count(MsgType::Bsm) + count(MsgType::Cam),
+        0,
+        "a mast is not a vehicle"
+    );
+    // The payload on the air is the one the feed installed, byte for byte.
+    let spat = out
+        .iter()
+        .flat_map(|o| o.transmissions.iter())
+        .find(|t| t.msg_type == MsgType::Spat)
+        .unwrap();
+    assert_eq!(
+        spat.signed.as_ref().unwrap().payload,
+        vec![0x00, 0x13, 0x05, 1, 2, 3, 4, 5]
+    );
+}
+
+/// An emergency stop raises one electronic-emergency-brake-light DENM per episode, updated
+/// every 100 ms while the emergency stop signal is on and silent once it goes off (C2C-CC
+/// RS 2003 §3.1: no repetition, no cancellation), and the DENM decodes as a dangerous
+/// situation. Braking short of the signal's 6 m/s² raises nothing.
+#[test]
+fn hard_braking_raises_a_dangerous_situation_denm() {
+    let services = ServiceSet {
+        cam: true,
+        denm: true,
+        ..ServiceSet::NONE
+    };
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+    // Cruising, then braking at 7 m/s² for half a second, then easing to 1 m/s² (the
+    // signal goes off below 2.5 m/s²): one episode of five steps.
+    rt.set_own_acceleration(0.0);
+    let mut outs = run(&mut rt, 10, 100 * NS_PER_MS, |_| Vec::new());
+    rt.set_own_acceleration(-7.0);
+    outs.extend(run_from(&mut rt, 10, 5, 100 * NS_PER_MS, |_| Vec::new()));
+    rt.set_own_acceleration(-1.0);
+    outs.extend(run_from(&mut rt, 15, 30, 100 * NS_PER_MS, |_| Vec::new()));
+    let denms: Vec<&v2xw_node::Transmission> = outs
+        .iter()
+        .flat_map(|o| o.transmissions.iter())
+        .filter(|t| t.msg_type == MsgType::Denm)
+        .collect();
+    assert_eq!(rt.events().denm_raised(), 1, "one episode, one event");
+    assert!(
+        (4..=6).contains(&denms.len()),
+        "the new DENM and an update every 100 ms while the signal is on, then nothing: \
+         {} frames",
+        denms.len()
+    );
+    let decoded = v2xw_msg::denm::decode_denm(&denms[0].signed.as_ref().unwrap().payload)
+        .expect("a real DENM");
+    let cause = format!("{:?}", decoded.denm.situation.as_ref().unwrap().event_type);
+    assert!(cause.contains("dangerousSituation"), "{cause}");
+    // Firm braking short of the emergency stop signal raises nothing — 5 m/s², past
+    // J2735's 0.4 g hard-braking flag but under UN R48's 6 m/s².
+    let mut calm = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+    calm.set_own_acceleration(-5.0);
+    let quiet = run(&mut calm, 30, 100 * NS_PER_MS, |_| Vec::new());
+    assert_eq!(calm.events().denm_raised(), 0);
+    assert!(
+        quiet
+            .iter()
+            .flat_map(|o| o.transmissions.iter())
+            .all(|t| t.msg_type != MsgType::Denm)
+    );
+}
+
+/// IEEE 1609.2 §5.2 relevance check of `generationTime` (`rxval::GenerationTimeWindow`,
+/// C2C-CC BSP RS_BSP_168 values): on the node's own clock, a beacon more than 2 s old or
+/// any message more than 40 ms in the future is discarded before the policy, verified by
+/// no one and delivered to nothing; a DENM 3 s old is inside its 10-minute window. Widen
+/// the window and nothing is discarded.
+///
+/// Fault injected (and reverted): `GenerationTimeWindow::admits` returning `Ok(())`
+/// always fails the first assertion; dropping the future bound fails the `InFuture` one.
+#[test]
+fn a_message_outside_the_generation_time_window_is_discarded_unverified() {
+    use v2xw_node::rxval::{GenerationTimeWindow, RxReject};
+    let run = |widen: bool| {
+        let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+        if widen {
+            rt.security_mut()
+                .trust_mut()
+                .set_generation_time_window(GenerationTimeWindow::from_secs(1e9, 1e9, 1e9));
+        }
+        let reg = RngRegistry::new(7);
+        let now = 10 * NS_PER_S;
+        let at = now - 100 * NS_PER_MS;
+        let mut denm = frame(5, Vec3::new(5.0, 0.0, 0.0), at - 3 * NS_PER_S, true);
+        denm.msg_type = MsgType::Denm;
+        let frames = [
+            frame(2, Vec3::new(2.0, 0.0, 0.0), at, true),
+            frame(3, Vec3::new(3.0, 0.0, 0.0), at + 5_000 * NS_PER_S, true),
+            frame(4, Vec3::new(4.0, 0.0, 0.0), at - 3 * NS_PER_S, true),
+            denm,
+            // 39 ms ahead: inside the 40 ms tolerance.
+            frame(6, Vec3::new(6.0, 0.0, 0.0), at + 39 * NS_PER_MS, true),
+        ];
+        let inbox: Vec<(RxFrame, RxStamp)> = frames
+            .into_iter()
+            .enumerate()
+            .map(|(n, f)| {
+                (
+                    f,
+                    RxStamp {
+                        token: n as u64,
+                        arrived_at: Some(at),
+                    },
+                )
+            })
+            .collect();
+        let mut ctx = NodeRuntimeCtx::new(now, &reg);
+        let out = rt.step_timed(&mut ctx, inbox, 0.0);
+        let mut by_token = std::collections::BTreeMap::new();
+        for r in &out.rx_reports {
+            by_token.insert(r.token, r.disposition);
+        }
+        let refused = rt.security().trust().stats.refused.clone();
+        (by_token, refused)
+    };
+    let (d, refused) = run(false);
+    assert_eq!(
+        d.get(&1),
+        Some(&RxDisposition::NotRelevant(
+            RxReject::GenerationTimeInFuture
+        )),
+        "{d:?}"
+    );
+    assert_eq!(
+        d.get(&2),
+        Some(&RxDisposition::NotRelevant(RxReject::GenerationTimeTooOld)),
+        "{d:?}"
+    );
+    for fresh in [0u64, 3, 4] {
+        assert!(
+            !matches!(d.get(&fresh), Some(RxDisposition::NotRelevant(_))),
+            "token {fresh}: {d:?}"
+        );
+    }
+    assert_eq!(refused.get("generation-time-in-future"), Some(&1));
+    assert_eq!(refused.get("generation-time-too-old"), Some(&1));
+
+    let (wide, refused) = run(true);
+    assert!(
+        wide.values()
+            .all(|x| !matches!(x, RxDisposition::NotRelevant(_))),
+        "{wide:?}"
+    );
+    assert!(!refused.contains_key("generation-time-in-future"));
+}
+
+/// The first BSM signed under a new pseudonym carries its certificate,
+/// whatever the cadence had last attached under the old one. Changes every 3.05 s
+/// against the node's certificate cadence put the change at every phase of it. Fault: drop
+/// `restart_certificate_cadence` at the change in `ObuRuntime::step_timed`, and changes
+/// open with a digest no neighbour can resolve.
+#[test]
+fn the_first_bsm_under_a_new_pseudonym_carries_its_certificate() {
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, ServiceSet::SAE);
+    let certs = core::mem::take(&mut rt.stores_mut().certs);
+    rt.stores_mut().certs = certs.with_policy(v2xw_node::stores::RotationPolicy {
+        min_age: Duration::from_millis(3_050),
+        min_distance_m: f64::INFINITY,
+        require_both: false,
+    });
+    let out = run(&mut rt, 200, 100 * NS_PER_MS, |_| Vec::new());
+    let bsms: Vec<_> = out
+        .iter()
+        .flat_map(|o| o.transmissions.iter())
+        .filter(|t| t.msg_type == MsgType::Bsm)
+        .collect();
+    let mut changes = 0;
+    for w in bsms.windows(2) {
+        if w[1].signer != w[0].signer {
+            changes += 1;
+            assert!(
+                w[1].full_certificate,
+                "the first BSM under {:?} at {} named it by digest",
+                w[1].signer, w[1].generation_time
+            );
+        }
+    }
+    assert!(changes >= 5, "the run changed pseudonym {changes} times");
+}
+
+// -------------------------------------------------------------------------------------
+// The CP service under the DCC, and a traction-loss DENM on the air
+// -------------------------------------------------------------------------------------
+
+/// A node on CAM + CPM, with the CP service's DCC limit `dcc_limited`.
+fn cpm_node(dcc_limited: bool) -> ObuRuntime {
+    let node = NodeId::new(1);
+    let mut rt = ObuRuntime::new(
+        node,
+        profile(v2xw_node::profiles::REFERENCE_OBU),
+        Box::new(VerifyAll::new()),
+        NodeConfig {
+            services: ServiceSet {
+                cam: true,
+                cpm: true,
+                ..ServiceSet::NONE
+            },
+            cpm: v2xw_node::cpm::CpmConfig {
+                dcc_limited,
+                ..v2xw_node::cpm::CpmConfig::default()
+            },
+            ..NodeConfig::default()
+        },
+        0,
+    );
+    rt.stores_mut().crl.set_period(100);
+    for j in 0..4 {
+        let c = credential(node, j);
+        let k = test_key(node, c.i_period, c.j_index);
+        rt.install_credential(c, &k).expect("installs");
+    }
+    rt.set_belief(belief(Vec3::ZERO, 10.0));
+    rt
+}
+
+/// How many CPMs a node puts on the air in 3 s at 100 ms steps under a DCC gap of
+/// `t_off_ms`, its sensors reporting a car that moves 5 m a step (due at every event).
+fn cpms_under_dcc(dcc_limited: bool, t_off_ms: u64) -> usize {
+    let mut rt = cpm_node(dcc_limited);
+    rt.set_dcc(
+        v2xw_msg::generator::DccState {
+            t_off: Duration::from_millis(t_off_ms),
+            cbr: Some(0.6),
+        },
+        0,
+    );
+    let reg = RngRegistry::new(7);
+    let mut n = 0;
+    for k in 0..30u64 {
+        let now = k * 100 * NS_PER_MS;
+        rt.set_perception(
+            vec![v2xw_node::cpm::ObjectIn {
+                id: 1,
+                pos: Vec3::new(20.0 + 5.0 * k as f64, 0.0, 0.0),
+                vel: Vec3::new(50.0, 0.0, 0.0),
+                heading_rad: 0.0,
+                length_m: 4.5,
+                width_m: 1.8,
+                kind: v2xw_node::cpm::ObjectKind::Vehicle,
+                sigma_m: 0.3,
+                measured_at: now,
+                first_seen: 0,
+                sensors: 1 << 1,
+                detection_confidence: 0.95,
+            }],
+            Vec::new(),
+        );
+        let mut ctx = NodeRuntimeCtx::new(now, &reg);
+        let o = rt.step(&mut ctx, Vec::new(), 0.0);
+        n += o
+            .transmissions
+            .iter()
+            .filter(|t| t.msg_type == MsgType::Cpm)
+            .count();
+    }
+    n
+}
+
+/// ETSI TS 103 324 §6.1.2.1 and Annex D through the runtime: with
+/// `messages.cpm_dcc_limited` a 300 ms DCC gap makes the CPM rate 3.3 Hz; without it, or
+/// on an unrestricted channel, it stays at the 10 Hz generation events. Fault: the
+/// runtime handing the CP service a zero gap leaves the limited node at 30 CPMs.
+#[test]
+fn the_cpm_rate_follows_a_300_ms_dcc_interval() {
+    let limited = cpms_under_dcc(true, 300);
+    let free = cpms_under_dcc(true, 0);
+    let ignoring = cpms_under_dcc(false, 300);
+    assert_eq!(free, 30, "an unrestricted channel: every 100 ms event");
+    assert_eq!(limited, 10, "a 300 ms DCC interval: one CPM every 300 ms");
+    assert_eq!(
+        ignoring, 30,
+        "the knob off: the DCC does not reach the CP service"
+    );
+}
+
+/// The BSM's brake status reaches the receiver's observation as the frame carried
+/// it ([SM-MBR] §2.3.1.3.4 reads it): a vehicle braking at 3 m/s² (past the 0.7 m/s²
+/// brake-switch deceleration) sends `brakes_applied = Some(true)`, the same vehicle
+/// cruising sends `Some(false)`, and one with no bus reading sends `None` (the status is
+/// not available). Fault: leave the field at `None` and the braking BSM goes red.
+#[test]
+fn a_braking_vehicles_bsm_carries_its_brake_status() {
+    let services = ServiceSet {
+        bsm: true,
+        ..ServiceSet::NONE
+    };
+    let bus = |a: f64| v2xw_node::vehicle::VehicleBus {
+        t: 0,
+        speed_mps: 10.0,
+        a_long_mps2: a,
+        a_lat_mps2: 0.0,
+        yaw_rate_rad_s: 0.0,
+        hazard_lights: false,
+        low_beam: false,
+        intent: None,
+        heavy: false,
+        speed_limit_mps: 13.4,
+        non_urban: None,
+        abs_active: false,
+    };
+    let sent = |a: Option<f64>| {
+        let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+        if let Some(a) = a {
+            rt.set_vehicle_bus(bus(a));
+        }
+        let outs = run(&mut rt, 10, 100 * NS_PER_MS, |_| Vec::new());
+        let bsms: Vec<_> = outs
+            .iter()
+            .flat_map(|o| o.transmissions.iter())
+            .filter(|t| t.msg_type == MsgType::Bsm)
+            .map(|t| (t.bsm.brakes_applied, t.bsm.accel_long_mps2))
+            .collect();
+        assert!(!bsms.is_empty(), "no BSM in a second");
+        bsms
+    };
+    assert!(
+        sent(Some(-3.0))
+            .iter()
+            .all(|&(b, a)| b == Some(true) && a == Some(-3.0)),
+        "{:?}",
+        sent(Some(-3.0))
+    );
+    assert!(sent(Some(0.0)).iter().all(|&(b, _)| b == Some(false)));
+    assert!(sent(None).iter().all(|&(b, a)| b.is_none() && a.is_none()));
+}
+
+// -------------------------------------------------------------------------------------
+// The identification signer slot
+// -------------------------------------------------------------------------------------
+
+/// An OBU identification certificate for `node` valid from `valid_from_s`: implicit, from
+/// its own ACA, permitting the BSM (0x20) and the signal request (0x20_4096), as
+/// `AppCertKind::ObuIdentification` does ([CAMP122] Table 1 row 44).
+fn identification_key(node: NodeId, valid_from_s: u32) -> v2xw_sec::credential::ImplicitKey {
+    let psids = [0x20, 0x20_4096];
+    let iss =
+        v2xw_sec::credential::ImplicitIssuer::standalone(b"node-tests/identification", 0, &psids)
+            .expect("issuer");
+    let mut secret = [0u8; 32];
+    secret[..4].copy_from_slice(&node.index().to_be_bytes());
+    secret[4..8].copy_from_slice(&valid_from_s.to_be_bytes());
+    secret[31] = 0x1d;
+    iss.issue_factory(
+        v2xw_sec::credential::FactoryProfile::RsuApplication,
+        &secret,
+        valid_from_s,
+        0,
+        valid_from_s,
+        &psids,
+    )
+    .expect("issues")
+}
+
+/// A digest's eight octets.
+fn id8(d: &v2xw_msg::sec_types::HashedId8) -> [u8; 8] {
+    v2xw_sec::hashedid::id8_bytes(d)
+}
+
+/// A MAP heard from a junction 100 m ahead, so the vehicle's priority service has a
+/// target to address an SRM to.
+fn map_ahead(k: u64) -> Vec<RxFrame> {
+    let mut f = frame(40, Vec3::new(100.0, 0.0, 0.0), k * 100 * NS_PER_MS, true);
+    f.msg_type = MsgType::Map;
+    vec![f]
+}
+
+/// Who signed each SRM and BSM a run sent, read back from the SPDU on the air:
+/// `(msg_type, generation time, signer digest, carried the certificate)`.
+fn signers_on_air(rt: &ObuRuntime, outs: &[StepOutcome]) -> Vec<(MsgType, SimTime, [u8; 8], bool)> {
+    outs.iter()
+        .flat_map(|o| o.transmissions.iter())
+        .filter(|t| matches!(t.msg_type, MsgType::Srm | MsgType::Bsm))
+        .map(|t| {
+            let spdu = &t.signed.as_ref().expect("signed").spdu;
+            let parsed = rt.security().parse(spdu).expect("parses");
+            let digest = v2xw_node::NodeSecurity::parsed_signer_digest(&parsed).expect("signer");
+            assert_eq!(digest, t.signer, "the record names the SPDU's own signer");
+            let attached = v2xw_node::NodeSecurity::attached_certificate(&parsed).is_some();
+            (t.msg_type, t.generation_time, id8(&digest), attached)
+        })
+        .collect()
+}
+
+/// The digests of a node's four pseudonyms (`node_on`'s pool, period 100).
+fn pseudonym_digests(rt: &ObuRuntime) -> std::collections::BTreeSet<[u8; 8]> {
+    (0..4)
+        .filter_map(|j| rt.security().signer_for_pseudonym(100, j))
+        .map(|s| id8(s.digest()))
+        .collect()
+}
+
+/// A privileged vehicle signs its SRMs under the identification certificate
+/// valid at the time, never under a pseudonym, and its BSMs stay on pseudonyms
+/// (ASSUMPTION: unpublished for US emergency mode). A renewal takes over when it opens,
+/// and the first SRM under each identification certificate carries it whole. A vehicle
+/// whose slot holds none valid sends no SRM at all, and one never given an
+/// identification certificate signs SRMs under its pseudonym, as before.
+///
+/// Fault injected (and reverted): `NodeSecurity::sign_identified` signing under the
+/// active pseudonym fails the signer digest assert.
+#[test]
+fn an_srm_is_signed_by_the_identification_slot() {
+    let services = ServiceSet {
+        bsm: true,
+        srm: true,
+        ..ServiceSet::NONE
+    };
+    let node = NodeId::new(1);
+    let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+    // The current certificate, valid for the first 5 s, and its renewal from 4 s: the
+    // one-hour overlap of the 721 h CAMP profile, scaled down.
+    let first = rt
+        .install_identification(&identification_key(node, 0), 0, 5 * NS_PER_S)
+        .expect("the first installs");
+    let renewal = rt
+        .install_identification(&identification_key(node, 4), 4 * NS_PER_S, 20 * NS_PER_S)
+        .expect("the renewal installs");
+    assert_ne!(first, renewal);
+    assert_eq!(
+        rt.install_identification(&identification_key(node, 4), 4 * NS_PER_S, 20 * NS_PER_S)
+            .expect("again"),
+        renewal,
+        "a certificate already in the slot is the same signer"
+    );
+    let outs = run(&mut rt, 60, 100 * NS_PER_MS, map_ahead);
+    let pseudonyms = pseudonym_digests(&rt);
+    let seen = signers_on_air(&rt, &outs);
+    let srms: Vec<_> = seen.iter().filter(|s| s.0 == MsgType::Srm).collect();
+    assert!(srms.len() >= 5, "an SRM a second for 6 s: {}", srms.len());
+    for (_, at, digest, _) in &srms {
+        let want = if *at < 4 * NS_PER_S { &first } else { &renewal };
+        assert_eq!(
+            digest,
+            &id8(want),
+            "the SRM at {at} ns is signed by the identification certificate valid then"
+        );
+    }
+    let first_under = |d: &[u8; 8]| srms.iter().find(|s| &s.2 == d).map(|s| s.3);
+    assert_eq!(
+        first_under(&id8(&first)),
+        Some(true),
+        "the first SRM carries its certificate"
+    );
+    assert_eq!(
+        first_under(&id8(&renewal)),
+        Some(true),
+        "and so does the first under the renewal"
+    );
+    let bsms: Vec<_> = seen.iter().filter(|s| s.0 == MsgType::Bsm).collect();
+    assert!(!bsms.is_empty());
+    assert!(
+        bsms.iter().all(|b| pseudonyms.contains(&b.2)),
+        "every BSM stays on a pseudonym"
+    );
+    assert_eq!(rt.srm_no_identification(), 0);
+
+    // A slot whose only certificate has lapsed: no SRM goes out, under anything.
+    let mut lapsed = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+    lapsed
+        .install_identification(&identification_key(node, 0), 0, 50 * NS_PER_MS)
+        .expect("installs");
+    let outs = run(&mut lapsed, 30, 100 * NS_PER_MS, map_ahead);
+    let seen = signers_on_air(&lapsed, &outs);
+    assert!(
+        seen.iter().all(|s| s.0 != MsgType::Srm),
+        "no SRM without identification"
+    );
+    assert!(
+        lapsed.srm_no_identification() >= 2,
+        "{}",
+        lapsed.srm_no_identification()
+    );
+    assert!(
+        seen.iter().any(|s| s.0 == MsgType::Bsm),
+        "the BSMs carry on"
+    );
+
+    // No identification certificate ever: the pseudonym signs the SRM, as before.
+    let mut ordinary = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
+    let outs = run(&mut ordinary, 30, 100 * NS_PER_MS, map_ahead);
+    let seen = signers_on_air(&ordinary, &outs);
+    let srm = seen.iter().find(|s| s.0 == MsgType::Srm).expect("an SRM");
+    assert!(pseudonym_digests(&ordinary).contains(&srm.2));
+    assert_eq!(ordinary.srm_no_identification(), 0);
+}

@@ -1,0 +1,121 @@
+//! What the tool can fail with, and how it says so.
+//!
+//! Every variant carries the path or the field it is about. A command-line tool whose
+//! error is "invalid scenario" makes the operator open the loader; the engine already
+//! produces errors that name the field, and this type's job is to
+//! pass them through without flattening them into a string.
+
+use thiserror::Error;
+
+/// Anything the tool can fail with.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CliError {
+    /// A file could not be read or written.
+    #[error("{what} {path}: {source}")]
+    Io {
+        /// What the tool was doing, e.g. `cannot write`.
+        what: &'static str,
+        /// The path it was doing it to.
+        path: String,
+        /// The underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The engine refused the scenario or the run.
+    #[error(transparent)]
+    Engine(#[from] v2xw_engine::EngineError),
+
+    /// The recording could not be written or read.
+    #[error(transparent)]
+    Record(#[from] v2xw_record::RecordError),
+
+    /// A core contract failed, such as a manifest that would not serialise.
+    #[error(transparent)]
+    Core(#[from] v2xw_core::error::CoreError),
+
+    /// The importer refused.
+    #[error(transparent)]
+    World(#[from] v2xw_world::WorldError),
+
+    /// The experiment runner refused the sweep, or one of its runs failed.
+    #[error(transparent)]
+    Experiment(#[from] v2xw_experiment::ExperimentError),
+
+    /// A value on the command line is not one this build knows.
+    #[error("--{flag}: {problem}")]
+    BadArgument {
+        /// The flag, without its dashes.
+        flag: &'static str,
+        /// What is wrong with the value, including the value and the accepted ones.
+        problem: String,
+    },
+
+    /// The agent harness or the server it drives failed.
+    #[error("agent: {0}")]
+    Agent(String),
+
+    /// JSON could not be produced.
+    #[error("cannot serialise {what}: {source}")]
+    Json {
+        /// What failed to serialise.
+        what: &'static str,
+        /// The serde error.
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// A resumed run did not reproduce the run its checkpoint was taken from, so it was
+    /// not continued: carrying on would have spliced two different runs into one output.
+    #[error(
+        "resume refused: {what}. The checkpoint was taken by a different build, from a \
+         different scenario or world, or the engine is not deterministic here; the outputs \
+         before the checkpoint are kept as they were"
+    )]
+    Diverged {
+        /// What differed, with both values.
+        what: String,
+    },
+
+    /// The run was asked to stop (Ctrl-C, `kill`, the terminal closing) and stopped at a
+    /// checkpoint, every output up to it complete.
+    #[error(
+        "stopped on request at {at_s} simulated seconds, with a checkpoint; carry on with \
+         `v2xw resume {checkpoint}`"
+    )]
+    StoppedOnRequest {
+        /// The simulated second it stopped at.
+        at_s: f64,
+        /// The checkpoint it wrote.
+        checkpoint: String,
+    },
+
+    /// The run stopped at `--stop-at`, after writing its checkpoint, as a crash would stop
+    /// it: the open recording segment is left unfinished. For testing resume.
+    #[error(
+        "stopped at {at_s} simulated seconds, as asked (--stop-at); resume it with `v2xw resume`"
+    )]
+    Interrupted {
+        /// The simulated second it stopped at.
+        at_s: f64,
+    },
+}
+
+impl CliError {
+    /// An I/O failure with the context of what the tool was attempting.
+    pub fn io(
+        what: &'static str,
+        path: impl AsRef<std::path::Path>,
+        source: std::io::Error,
+    ) -> Self {
+        CliError::Io {
+            what,
+            path: path.as_ref().display().to_string(),
+            source,
+        }
+    }
+}
+
+/// The tool's result alias.
+pub type Result<T> = core::result::Result<T, CliError>;

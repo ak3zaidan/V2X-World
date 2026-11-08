@@ -1,0 +1,694 @@
+//! Scenario loading, merging, validating and saving.
+//!
+//! Each `Conflict` test names the field it expects, not just "an error": an error whose
+//! message is right by accident is exactly what the actionable-error requirement is
+//! there to prevent.
+
+use std::path::{Path, PathBuf};
+
+use v2xw_engine::error::ScenarioError;
+use v2xw_engine::scenario::{Scenario, validate};
+
+fn scenarios() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios")
+}
+
+/// Load, save, load: the scenario a tool writes is one the loader reads, with the same
+/// content hash. A "save as" that quietly changed a run would be invisible otherwise.
+#[test]
+fn a_scenario_round_trips_through_load_and_save() {
+    let loaded = Scenario::load(scenarios().join("grid-traffic.yaml")).expect("loads");
+
+    let yaml = loaded.to_yaml().expect("serialises to yaml");
+    let from_yaml = Scenario::parse(&yaml, None).expect("re-parses");
+    assert_eq!(from_yaml, loaded, "yaml round trip changed the scenario");
+
+    let json = loaded.to_json().expect("serialises to json");
+    let from_json = Scenario::parse(&json, None).expect("re-parses json");
+    assert_eq!(from_json, loaded, "json round trip changed the scenario");
+
+    // The same scenario through two syntaxes hashes the same, because the hash is over
+    // canonical JSON and not over the file's bytes.
+    assert_eq!(
+        from_yaml.content_hash().expect("hash"),
+        from_json.content_hash().expect("hash")
+    );
+}
+
+/// The `meta.base` overlay: inherited values survive, overridden ones win, and the base
+/// reference is consumed.
+#[test]
+fn an_overlay_inherits_from_its_base_and_overrides_what_it_names() {
+    let base = Scenario::load(scenarios().join("grid-base.yaml")).expect("base loads");
+    let overlay = Scenario::load(scenarios().join("grid-traffic.yaml")).expect("overlay loads");
+
+    // Inherited, and not a schema default: the base sets these and the overlay is silent.
+    assert_eq!(overlay.seed, base.seed);
+    assert_eq!(overlay.time.duration_s, base.time.duration_s);
+    assert_eq!(overlay.nodes.default_obu, base.nodes.default_obu);
+    assert_eq!(overlay.security.verification_policy, "prioritized");
+
+    // Overridden.
+    assert_eq!(overlay.meta.name, "grid-traffic");
+    assert_eq!(
+        overlay.actors.vehicles.demand.kind,
+        "mobility/demand/poisson"
+    );
+    assert_eq!(base.actors.vehicles.demand.kind, "mobility/demand/none");
+
+    // Consumed: the merged scenario does not still point at a base.
+    assert_eq!(overlay.meta.base, None);
+    assert_eq!(overlay.events.len(), 1);
+}
+
+/// The actionable-error example, verbatim in shape: the error names the field and
+/// states the conflicting value.
+#[test]
+fn an_invalid_scenario_produces_the_actionable_error_naming_the_field() {
+    let err = Scenario::load(scenarios().join("invalid-tiers.yaml")).expect_err("must not load");
+    let v2xw_engine::EngineError::Scenario(scenario_error) = err else {
+        panic!("expected a scenario error, got {err}");
+    };
+    assert_eq!(scenario_error.field(), Some("radio.tiers.phy"));
+    let message = scenario_error.to_string();
+    assert!(
+        message.starts_with("radio.tiers.phy: 'high' requires mac 'high' (mac is 'medium')"),
+        "the message does not name the field, the rule and the conflicting value: {message}"
+    );
+}
+
+/// Every rule names a dotted field path, so a UI can highlight it and a test can assert on
+/// it. A rule that returned a bare sentence would pass a "returns an error" test and fail
+/// the requirement.
+#[test]
+fn every_validation_error_names_a_field() {
+    let mut s = Scenario::minimal();
+    s.time.duration_s = 0.0;
+    s.time.mobility_step_ms = 5;
+    s.actors.vehicles.equipped_fraction = 2.0;
+    s.radio.tiers.phy = v2xw_core::card::Tier::High;
+    s.radio.tiers.mac = v2xw_core::card::Tier::Medium;
+    s.messages.sets = vec!["bsm".into(), "bsm".into()];
+    s.metrics = vec!["all".into(), "pdr".into()];
+    s.nodes.default_obu = String::new();
+    s.security.crypto_mode = v2xw_engine::scenario::CryptoModeSpec::Real;
+    s.security.signature = "ml-dsa-65".into();
+
+    let errors = validate(&s);
+    assert!(
+        errors.len() >= 8,
+        "expected every rule to fire: {errors:#?}"
+    );
+    for e in &errors {
+        let field = e.field().unwrap_or_else(|| panic!("{e} names no field"));
+        assert!(!field.is_empty());
+        assert!(
+            e.to_string().starts_with(field),
+            "the message should lead with the field: {e}"
+        );
+    }
+    let fields: Vec<&str> = errors.iter().filter_map(ScenarioError::field).collect();
+    for expected in [
+        "time.duration_s",
+        "time.mobility_step_ms",
+        "actors.vehicles.equipped_fraction",
+        "radio.tiers.phy",
+        "metrics",
+        "nodes.default_obu",
+        "security.signature",
+    ] {
+        assert!(fields.contains(&expected), "no error for {expected}");
+    }
+}
+
+/// The fault injection for the tier rule: with the MAC raised to `high` the same scenario
+/// validates, so the check is discriminating and not merely loud.
+#[test]
+fn the_tier_rule_passes_when_the_conflict_is_removed() {
+    let mut s = Scenario::minimal();
+    s.radio.tiers.phy = v2xw_core::card::Tier::High;
+    s.radio.tiers.mac = v2xw_core::card::Tier::Medium;
+    assert!(
+        validate(&s)
+            .iter()
+            .any(|e| e.field() == Some("radio.tiers.phy")),
+        "the rule did not fire on the faulty scenario"
+    );
+    s.radio.tiers.mac = v2xw_core::card::Tier::High;
+    assert!(
+        !validate(&s)
+            .iter()
+            .any(|e| e.field() == Some("radio.tiers.phy")),
+        "the rule still fires after the conflict was removed"
+    );
+}
+
+/// A `param.change` whose path names nothing is caught at load, not at the instant it
+/// would have fired. An unresolvable path that ran would change nothing and say nothing.
+#[test]
+fn a_timeline_path_that_names_nothing_is_refused_at_load() {
+    let text = r#"
+schema: v2xw/scenario/1
+world:
+  source: {kind: procedural, generator: world/source/procedural-grid, params: {}}
+events:
+  - t: 1.0
+    type: param.change
+    path: security.pseudonym_change.params.period_s
+    value: 120
+"#;
+    let err = Scenario::parse(text, None).expect_err("must not load");
+    assert!(err.to_string().contains("events[0].path"), "{err}");
+
+    // The same scenario with the real path — the schema spells it `period_s` directly —
+    // loads. This is the injected-fault counterpart: the rule distinguishes the two.
+    let fixed = text.replace(
+        "security.pseudonym_change.params.period_s",
+        "security.pseudonym_change.period_s",
+    );
+    Scenario::parse(&fixed, None).expect("the corrected path loads");
+}
+
+/// A base that does not exist is a named error, not a panic and not a silent default.
+#[test]
+fn an_unresolvable_base_is_reported_with_the_reference_it_could_not_find() {
+    let text = r#"
+schema: v2xw/scenario/1
+meta: {base: no-such-preset.yaml}
+world:
+  source: {kind: procedural, generator: world/source/procedural-grid, params: {}}
+"#;
+    let err = Scenario::parse(text, Some(&scenarios())).expect_err("must not load");
+    assert!(err.to_string().contains("meta.base"), "{err}");
+    assert!(err.to_string().contains("no-such-preset.yaml"), "{err}");
+}
+
+/// The seed accepts the three spellings §13 shows, and writes back as hex.
+#[test]
+fn the_seed_accepts_hex_and_decimal_and_writes_back_as_hex() {
+    for (text, expected) in [
+        ("seed: \"0xdead_beef\"", 0xdead_beefu64),
+        ("seed: 3735928559", 0xdead_beefu64),
+        ("seed: \"3735928559\"", 0xdead_beefu64),
+    ] {
+        let doc = format!(
+            "schema: v2xw/scenario/1\n{text}\nworld:\n  source: {{kind: procedural, \
+             generator: world/source/procedural-grid, params: {{}}}}\n"
+        );
+        let s = Scenario::parse(&doc, None).expect("loads");
+        assert_eq!(s.seed, expected, "from {text}");
+        assert!(s.to_yaml().expect("yaml").contains("0x00000000deadbeef"));
+    }
+}
+
+/// An unknown key is refused rather than ignored: a typo in a scenario is a run that did
+/// not do what its author wrote, and `deny_unknown_fields` is what turns that into a load
+/// error.
+#[test]
+fn a_misspelled_key_is_refused_rather_than_ignored() {
+    let text = r#"
+schema: v2xw/scenario/1
+world:
+  source: {kind: procedural, generator: world/source/procedural-grid, params: {}}
+time: {duration_seconds: 30}
+"#;
+    let err = Scenario::parse(text, None).expect_err("must not load");
+    assert!(err.to_string().contains("duration_seconds"), "{err}");
+}
+
+/// A key this build cannot act on is refused, not accepted and ignored.
+///
+/// The vertical-slice audit's finding: six keys were validated, documented and hashed and
+/// never reached the engine, so the scenario file overstated what it controlled. Those six
+/// are now wired; the ones that remain genuinely unimplemented are refused here, each with
+/// the field named, so that an author finds out at load rather than by reading a result
+/// the file appears to explain and does not.
+#[test]
+#[allow(
+    clippy::type_complexity,
+    reason = "a one-off tuple read where it is built; an alias would hide its fields"
+)]
+fn a_key_the_engine_cannot_act_on_is_refused_and_names_itself() {
+    // Each case sets exactly one thing and expects exactly that field back. A case that
+    // set two would pass while one of the rules was missing.
+    type Case<'a> = (&'a str, Box<dyn Fn(&mut Scenario)>);
+    let cases: Vec<Case<'_>> = vec![
+        // `radio.tiers.focus` used to be here; it is wired now (a focus region runs its
+        // receivers at the focus tier), and `radio_access::a_focus_region_runs_its_
+        // receivers_at_the_focus_tier` is its test. `hybrid` is the radio value that
+        // remains refused: it needs a per-message policy no key states.
+        (
+            "radio.rat",
+            Box::new(|s: &mut Scenario| {
+                s.radio.rat = v2xw_engine::scenario::schema::Rat::Hybrid;
+            }),
+        ),
+        // `actors.vru.device_fraction` used to be here; the node phase hosts VRU devices
+        // now, and `vru::equipped_pedestrians_send_psms_that_other_nodes_hear` is its test.
+        (
+            "actors.vehicles.demand.kind",
+            Box::new(|s: &mut Scenario| {
+                s.actors.vehicles.demand.kind = "mobility/demand/activity-based".to_string();
+            }),
+        ),
+        (
+            "actors.vehicles.classes.pedestrian",
+            Box::new(|s: &mut Scenario| {
+                s.actors.vehicles.classes.insert(
+                    "pedestrian".to_string(),
+                    v2xw_engine::scenario::schema::VehicleClassSpec {
+                        fraction: 1.0,
+                        obu: None,
+                    },
+                );
+            }),
+        ),
+        (
+            // The engine now has an exporter stage (`v2xw_engine::export`), so the list is no
+            // longer refused as a whole: an id it does not implement is, and the error names
+            // the element.
+            "exporters[0].id",
+            Box::new(|s: &mut Scenario| {
+                s.exporters = vec![v2xw_engine::scenario::ExporterSpec {
+                    id: "ma-dataset-v2".to_string(),
+                    opts: serde_json::Value::Null,
+                }];
+            }),
+        ),
+        // `net.layer: gn-btp` used to be here; the GeoNetworking/BTP header is now composed
+        // into every frame, and `gn_btp_and_a_generator_override_validate` holds that it
+        // loads. Every fragmenter runs now (`crate::frag`); what is still refused is one the
+        // stack in use cannot honour — ETSI facilities-layer segmentation on WSMP — and a
+        // generator this build does not run or cannot honour.
+        (
+            "net.fragmenter",
+            Box::new(|s: &mut Scenario| {
+                s.net.fragmenter = Some(v2xw_engine::scenario::ModelChoice::new(
+                    v2xw_net::FRAGMENTER_FACILITIES_ID,
+                ));
+            }),
+        ),
+        (
+            "messages.generator.id",
+            Box::new(|s: &mut Scenario| {
+                s.messages.generator = Some(v2xw_engine::scenario::ModelChoice::new(
+                    "generator/nonexistent",
+                ));
+            }),
+        ),
+        (
+            "messages.generator.params.nominal_itt_ms",
+            Box::new(|s: &mut Scenario| {
+                let mut g =
+                    v2xw_engine::scenario::ModelChoice::new(v2xw_msg::generator::BSM_GENERATOR_ID);
+                // Faster than the nodes are stepped: no node could send that often.
+                g.params = serde_json::json!({"nominal_itt_ms": 20.0});
+                s.messages.generator = Some(g);
+            }),
+        ),
+        (
+            "messages.sets[0]",
+            Box::new(|s: &mut Scenario| s.messages.sets = vec!["denm".to_string()]),
+        ),
+        // `messages.codec_tier: size-model` is acted on now (the generator sizes the
+        // message instead of encoding it), so it left this list. A collective perception
+        // message has no perception model to fill it and is refused by name.
+        (
+            "messages.sets[0]",
+            Box::new(|s: &mut Scenario| s.messages.sets = vec!["cpm".to_string()]),
+        ),
+    ];
+
+    for (field, apply) in cases {
+        let mut s = Scenario::minimal();
+        apply(&mut s);
+        let errors = validate(&s);
+        let fields: Vec<&str> = errors.iter().filter_map(ScenarioError::field).collect();
+        assert!(
+            fields.contains(&field),
+            "setting {field} produced no error naming it: {errors:#?}"
+        );
+        for e in &errors {
+            let f = e.field().unwrap_or_else(|| panic!("{e} names no field"));
+            assert!(
+                e.to_string().starts_with(f),
+                "the message should lead with the field: {e}"
+            );
+        }
+    }
+}
+
+/// The two keys this build now acts on load: the European network stack, and a BSM
+/// generator slowed to 5 Hz. And the generator override reaches the node configuration.
+#[test]
+fn gn_btp_and_a_generator_override_validate() {
+    let mut s = Scenario::minimal();
+    s.net.layer = "gn-btp".to_string();
+    let mut g = v2xw_engine::scenario::ModelChoice::new(v2xw_msg::generator::BSM_GENERATOR_ID);
+    g.params = serde_json::json!({"nominal_itt_ms": 200.0, "max_itt_ms": 600.0});
+    s.messages.generator = Some(g);
+    let errors = validate(&s);
+    assert!(errors.is_empty(), "{errors:#?}");
+    let (bsm, cam) = v2xw_engine::wiring::generator_params(&s);
+    assert_eq!(bsm.nominal_itt.as_nanos(), 200_000_000);
+    assert_eq!(bsm.max_itt.as_nanos(), 600_000_000);
+    assert_eq!(
+        bsm.min_itt,
+        v2xw_msg::generator::BsmGenParams::j2945_1().min_itt
+    );
+    assert_eq!(cam, v2xw_msg::generator::CamGenParams::en302637_2());
+}
+
+/// And the control: a scenario that sets none of them validates, so the rules above are
+/// refusing the keys rather than refusing everything.
+///
+/// The shipped scenarios are the fixture, because they are what the rules must not break.
+#[test]
+fn the_shipped_scenarios_still_validate() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("the crate is two levels below the workspace root")
+        .join("scenarios");
+    for name in [
+        "phase1-grid.yaml",
+        "phase1-manhattan.yaml",
+        "phase2-manhattan.yaml",
+        "pseudonym-privacy.yaml",
+        "revocation-latency.yaml",
+    ] {
+        let path = repo.join(name);
+        if !path.exists() {
+            continue;
+        }
+        let s = Scenario::load(&path).unwrap_or_else(|e| panic!("{name} does not load: {e}"));
+        let errors = validate(&s);
+        assert!(errors.is_empty(), "{name} no longer validates: {errors:#?}");
+    }
+    assert!(validate(&Scenario::minimal()).is_empty());
+}
+
+/// An on-board unit whose profile publishes no signing cost cannot send: `ObuRuntime`
+/// never signs for free, so every frame would be dropped before the air. Found in QA from
+/// the page: `obu/cohda-mk5`, which the settings list offers, ran 20 s of Manhattan with
+/// 22 vehicles and put no frame on the air. The loader now refuses it by name — for the
+/// default and for a per-class choice — and accepts the same profile when no vehicle
+/// sends anything, so the rule is about signing and not about the profile.
+#[test]
+fn an_obu_that_cannot_sign_is_refused_when_vehicles_send() {
+    let fields = |s: &Scenario| -> Vec<String> {
+        validate(s)
+            .iter()
+            .filter_map(ScenarioError::field)
+            .map(str::to_string)
+            .collect()
+    };
+    let reference = Scenario::minimal();
+    assert!(
+        !fields(&reference).iter().any(|f| f.starts_with("nodes.")),
+        "the reference OBU signs: {:?}",
+        validate(&reference)
+    );
+
+    let mut mk5 = Scenario::minimal();
+    mk5.nodes.default_obu = "obu/cohda-mk5".into();
+    let errors = validate(&mk5);
+    let named = errors
+        .iter()
+        .find(|e| e.field() == Some("nodes.default_obu"))
+        .unwrap_or_else(|| panic!("obu/cohda-mk5 was accepted: {errors:#?}"));
+    let text = named.to_string();
+    assert!(text.contains("ecdsa-p256-sign"), "{text}");
+    assert!(
+        text.contains("obu/unex-obu-301-craton2"),
+        "names one that signs: {text}"
+    );
+
+    let mut per_class = Scenario::minimal();
+    per_class
+        .nodes
+        .per_class
+        .insert("passenger".into(), "obu/cohda-mk5".into());
+    assert!(
+        fields(&per_class).contains(&"nodes.per_class.passenger".to_string()),
+        "{:#?}",
+        validate(&per_class)
+    );
+
+    // Discriminating: with nothing for a vehicle to send, the same profile is fine.
+    let mut silent = mk5.clone();
+    silent.messages.sets.clear();
+    assert!(
+        !fields(&silent).contains(&"nodes.default_obu".to_string()),
+        "{:#?}",
+        validate(&silent)
+    );
+}
+
+/// A scenario edited as a JSON document, the way the page edits one: `edits` are
+/// `(JSON Pointer, value)` pairs applied to [`Scenario::minimal`]; a pointer whose parent
+/// is missing gets it created as an object.
+fn edited(edits: &[(&str, serde_json::Value)]) -> Scenario {
+    let mut doc = serde_json::to_value(Scenario::minimal()).expect("minimal serialises");
+    for (pointer, value) in edits {
+        let mut cur = &mut doc;
+        let parts: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
+        for (i, part) in parts.iter().enumerate() {
+            if i + 1 == parts.len() {
+                cur[*part] = value.clone();
+            } else {
+                if cur.get(*part).is_none_or(serde_json::Value::is_null) {
+                    cur[*part] = serde_json::json!({});
+                }
+                cur = &mut cur[*part];
+            }
+        }
+    }
+    Scenario::from_document(doc).expect("the edited document deserialises")
+}
+
+/// The fields `validate` and `preflight` name for `s`, in order.
+fn refused_fields(s: &Scenario) -> Vec<String> {
+    validate(s)
+        .iter()
+        .chain(v2xw_engine::scenario::preflight(s).iter())
+        .filter_map(ScenarioError::field)
+        .map(str::to_string)
+        .collect()
+}
+
+/// The five causes the 2026-09-24 QA found coming back from Run as "internal error", each
+/// now refused at Check (`validate` plus `preflight`, which the server runs for
+/// `scenario.validate`, `scenario.set` and `run.start`) by the setting that causes it, with
+/// the fix in the message. Every case is discriminating: the same scenario with the one
+/// setting corrected is accepted.
+#[test]
+fn the_five_internal_error_causes_are_refused_at_check_by_their_setting() {
+    let osm = |path: &str| serde_json::json!({"kind": "osm-xml", "path": path});
+    let imported = [
+        (
+            "/world/imported_at",
+            serde_json::json!("2026-09-18T00:00:00Z"),
+        ),
+        ("/world/highway_preset", serde_json::json!("urban-us-nyc")),
+    ];
+
+    // 1. A map file that is not there.
+    let mut edits = imported.to_vec();
+    edits.push(("/world/source", osm("worlds/no-such-map.osm.xml")));
+    let missing_map = edited(&edits);
+    assert!(
+        validate(&missing_map).is_empty(),
+        "{:#?}",
+        validate(&missing_map)
+    );
+    let rows = v2xw_engine::scenario::preflight(&missing_map);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert_eq!(rows[0].field(), Some("world.source.path"));
+    let text = rows[0].to_string();
+    assert!(
+        text.contains("worlds/no-such-map.osm.xml") && text.contains("does not exist"),
+        "{text}"
+    );
+    // Run refuses it by the same setting, before any import is attempted.
+    match v2xw_engine::Engine::build(missing_map, "") {
+        Err(v2xw_engine::EngineError::Scenario(e)) => {
+            assert_eq!(e.field(), Some("world.source.path"), "{e}");
+        }
+        Err(other) => panic!("a missing map is not a scenario error: {other}"),
+        Ok(_) => panic!("a missing map built"),
+    }
+    // Discriminating: a file that exists passes the preflight.
+    let mut edits = imported.to_vec();
+    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    edits.push(("/world/source", osm(&here.display().to_string())));
+    assert!(v2xw_engine::scenario::preflight(&edited(&edits)).is_empty());
+
+    // 2. A terrain raster that is not there.
+    let missing_dem = edited(&[(
+        "/world/terrain/dem",
+        serde_json::json!("worlds/no-such.hgt"),
+    )]);
+    assert_eq!(refused_fields(&missing_dem), ["world.terrain.dem"]);
+    assert!(matches!(
+        v2xw_engine::Engine::build(missing_dem, ""),
+        Err(v2xw_engine::EngineError::Scenario(ref e)) if e.field() == Some("world.terrain.dem")
+    ));
+
+    // 3. A roadside unit at a `site` on an imported city, which has none.
+    let mut edits = imported.to_vec();
+    edits.push(("/world/source", osm("worlds/cache/manhattan.osm.xml")));
+    edits.push(("/actors/rsus", serde_json::json!([{"site": 0}])));
+    let errors = validate(&edited(&edits));
+    let site = errors
+        .iter()
+        .find(|e| e.field() == Some("actors.rsus[0].site"))
+        .unwrap_or_else(|| panic!("an RSU site on an OSM world passed Check: {errors:#?}"));
+    assert!(
+        site.to_string().contains("position_m"),
+        "names the fix: {site}"
+    );
+    // And on a grid: none without `rsu_at_junctions`, one per junction with it.
+    let grid = |rsu: bool, site: u32| {
+        edited(&[
+            (
+                "/world/source/params",
+                serde_json::json!({"cols": 3, "rows": 2, "rsu_at_junctions": rsu}),
+            ),
+            ("/actors/rsus", serde_json::json!([{"site": site}])),
+        ])
+    };
+    assert!(refused_fields(&grid(false, 0)).contains(&"actors.rsus[0].site".to_string()));
+    assert!(refused_fields(&grid(true, 6)).contains(&"actors.rsus[0].site".to_string()));
+    assert!(
+        !refused_fields(&grid(true, 5)).contains(&"actors.rsus[0].site".to_string()),
+        "{:#?}",
+        validate(&grid(true, 5))
+    );
+
+    // 4. A backend network model id this build does not ship.
+    let bad_net = edited(&[(
+        "/net/backend_net",
+        serde_json::json!({"id": "backend-net/fibre"}),
+    )]);
+    assert_eq!(refused_fields(&bad_net), ["net.backend_net"]);
+    assert!(
+        validate(&bad_net)[0]
+            .to_string()
+            .contains("backend-net/fixed")
+    );
+    let good_net = edited(&[(
+        "/net/backend_net",
+        serde_json::json!({"id": "backend-net/fixed", "params": {"latency_ms": 5}}),
+    )]);
+    assert!(validate(&good_net).is_empty(), "{:#?}", validate(&good_net));
+    let bad_net_key = edited(&[(
+        "/net/backend_net",
+        serde_json::json!({"id": "backend-net/fixed", "params": {"latency": 5}}),
+    )]);
+    assert_eq!(
+        refused_fields(&bad_net_key),
+        ["net.backend_net.params.latency"]
+    );
+
+    // 5. An authority pipeline parameter that does not exist.
+    let ma = |params: serde_json::Value| {
+        edited(&[(
+            "/detection/ma",
+            serde_json::json!({"id": "threat/ma/legacy-window", "params": params}),
+        )])
+    };
+    let bad_key = ma(serde_json::json!({"report_threshold": 3}));
+    assert_eq!(
+        refused_fields(&bad_key),
+        ["detection.ma.params.report_threshold"]
+    );
+    let text = validate(&bad_key)[0].to_string();
+    assert!(
+        text.contains("report_threshold_k"),
+        "lists the keys it takes: {text}"
+    );
+    assert!(validate(&ma(serde_json::json!({"report_threshold_k": 3}))).is_empty());
+    assert_eq!(
+        refused_fields(&ma(serde_json::json!({"revoke_window_s": -1.0}))),
+        ["detection.ma.params.revoke_window_s"]
+    );
+}
+
+/// Other build-time failures a user can cause, found by reading the world builder: a world
+/// source kind this build cannot build, grid parameters the generator refuses, a grid too
+/// large for the machine, and a detector parameter that does not exist. Each is refused at
+/// Check by its setting.
+#[test]
+fn world_and_detector_inputs_the_builder_would_refuse_are_refused_at_check() {
+    // A SUMO network builds since the interop track; an OpenDRIVE file still does not.
+    let sumo = edited(&[
+        (
+            "/world/source",
+            serde_json::json!({"kind": "open-drive", "path": "road.xodr"}),
+        ),
+        (
+            "/world/imported_at",
+            serde_json::json!("2026-09-18T00:00:00Z"),
+        ),
+    ]);
+    assert_eq!(refused_fields(&sumo), ["world.source"]);
+
+    let grid = |params: serde_json::Value| edited(&[("/world/source/params", params)]);
+    assert_eq!(
+        refused_fields(&grid(serde_json::json!({"cols": 1, "rows": 4}))),
+        ["world.source.params.cols"]
+    );
+    assert_eq!(
+        refused_fields(&grid(serde_json::json!({"columns": 4}))),
+        ["world.source.params"]
+    );
+    assert_eq!(
+        refused_fields(&grid(serde_json::json!({"cols": 1300, "rows": 34}))),
+        ["world.source.params.cols"]
+    );
+    let fine = grid(serde_json::json!({"cols": 4, "rows": 4}));
+    assert!(refused_fields(&fine).is_empty(), "{:#?}", validate(&fine));
+
+    let detector = |params: serde_json::Value| {
+        edited(&[(
+            "/detection/local",
+            serde_json::json!([{"id": "detect/legacy-12", "params": params}]),
+        )])
+    };
+    assert_eq!(
+        refused_fields(&detector(serde_json::json!({"z_thresh": 2.0}))),
+        ["detection.local[0].params.z_thresh"]
+    );
+    assert!(validate(&detector(serde_json::json!({"z_threshold": 2.0}))).is_empty());
+    for key in v2xw_engine::phase2::DETECTOR_PARAM_KEYS {
+        assert!(
+            validate(&detector(serde_json::json!({key: 1.0}))).is_empty(),
+            "{key} is listed as a detector parameter and refused"
+        );
+    }
+    // The strict US profile ([SM-MBR] v1.0 §2.3): its own keys only, and alone.
+    let us = |params: serde_json::Value| {
+        edited(&[(
+            "/detection/local",
+            serde_json::json!([{"id": "detect/us-sm-mbr", "params": params}]),
+        )])
+    };
+    assert!(validate(&us(serde_json::Value::Null)).is_empty());
+    for key in v2xw_threat::us_mbr::PARAM_KEYS {
+        assert!(
+            validate(&us(serde_json::json!({key: 1.0}))).is_empty(),
+            "{key} is a US-profile parameter and refused"
+        );
+    }
+    assert_eq!(
+        refused_fields(&us(serde_json::json!({"z_threshold": 2.0}))),
+        ["detection.local[0].params.z_threshold"],
+        "a research-suite key is not a US-profile one"
+    );
+    let both = edited(&[(
+        "/detection/local",
+        serde_json::json!([{"id": "detect/legacy-12"}, {"id": "detect/us-sm-mbr"}]),
+    )]);
+    assert_eq!(refused_fields(&both), ["detection.local[1]"]);
+}

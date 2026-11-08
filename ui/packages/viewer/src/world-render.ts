@@ -1,0 +1,1839 @@
+/**
+ * Static world construction from a decoded `vwp-world/1` payload (docs/protocol/vwp-v1.md §4).
+ *
+ * The rendering design asks for "merged static geometry per tile … unzoomed = one drawable per
+ * category, zoomed =
+ * per-tile drawables with quadtree culling" for roads, and `BatchedMesh` with three LODs for
+ * buildings. What is built here:
+ *
+ * - **Roads, junctions, crossings, landuse** are merged into **one vertex-coloured mesh per tile**
+ *   rather than one per tile *per category*. A 2 km world at the default 300 m tile is 7×7 tiles, so
+ *   the whole ground plan is ~49 draw calls instead of ~245, and three's own frustum culling drops
+ *   the off-screen ones. Category is carried in the vertex colour, which costs three floats a vertex
+ *   and saves a material switch.
+ * - **Lane markings** are a second mesh per tile (unlit, polygon-offset) so `overlay.set
+ *   {lane_markings: false}` is one `visible = false` per tile and nothing else.
+ * - **Buildings** go into a single `THREE.BatchedMesh`, one geometry per building: its real
+ *   footprint extruded, with a roof and a parapet. There used to be three LODs, and the far one was
+ *   the footprint's *axis-aligned bounding box* — on Manhattan's grid, which runs 29° off north, a
+ *   box that swallows half of every street around the block, so from 700 m out the traffic drove
+ *   through solid walls. The near/mid switch popped the parapet at 180 m. One exact geometry
+ *   costs fewer vertices than the three did together and cannot pop. If `BatchedMesh` cannot be
+ *   built — the vertex budget is exceeded, or a three build without multi-draw support throws —
+ *   the builder falls back to baking the shells into the per-tile meshes and reports
+ *   {@link WorldRenderer.buildingBackend} as `"merged"`.
+ *
+ * Also here: the ground plane, the gradient sky, and a sun/hemisphere rig driven by a time-of-day
+ * parameter, plus the building occupancy grid that `cameras.ts` uses for `keepCameraOutsideBuildings`.
+ */
+
+import {
+  BackSide,
+  BatchedMesh,
+  BufferAttribute,
+  BufferGeometry,
+  Color,
+  DirectionalLight,
+  DoubleSide,
+  Group,
+  HemisphereLight,
+  InstancedMesh,
+  Matrix4,
+  Mesh,
+  MeshBasicMaterial,
+  MeshLambertMaterial,
+  PlaneGeometry,
+  ShaderMaterial,
+  SphereGeometry,
+  Vector3,
+  type Camera,
+  type Material,
+} from "three";
+import type { SignalBlock, VwpWorld } from "@vwp/protocol";
+import { SignalRenderer } from "./signals.js";
+import { findPortals } from "./passages.js";
+import { addCrosswalk, buildLaneMarkings, type MarkingReport } from "./markings.js";
+import { MeshBuilder, addBox, addCylinder, addDisc, addExtrudedRing, addPolygon, addRibbon } from "./geometry.js";
+import type { RingShading } from "./geometry.js";
+import type { ViewerTheme } from "./theme.js";
+import type { LodLevel } from "./types.js";
+import { groundLevelOf } from "./ground.js";
+
+/** §4.3 lane types. */
+const LANE_DRIVE = 0;
+const LANE_BIKE = 1;
+const LANE_SIDEWALK = 2;
+const LANE_BUS = 3;
+const LANE_PARKING = 4;
+const LANE_JUNCTION_INTERNAL = 5;
+const LANE_CROSSING = 6;
+
+/** Height offsets, metres above the terrain, chosen to stay clear of depth-buffer noise at 500 m. */
+// Every pair of surface layers that can overlap is at least 4 cm apart: at 2 km from a 20 m near
+// plane a 24-bit depth buffer resolves 1 cm, and the glitch hunter measured the old 2 cm gap
+// between a sidewalk (0.14) and a junction disc (0.16) z-fighting at that range.
+const Z_LANDUSE = 0.02;
+const Z_ROAD = 0.1;
+const Z_JUNCTION = 0.14;
+const Z_CROSSING = 0.22;
+const Z_MARKING = 0.26;
+/** A sidewalk ribbon sits this far above the carriageway. */
+const SIDEWALK_LIFT_M = 0.08;
+/**
+ * Draw-order ranks of the road-surface layers, lowest first. The gaps above are not enough on
+ * their own at street level: from a chase camera's 0.7 m near plane a 24-bit depth buffer resolves
+ * 13 cm at 870 m, and a coloured bus lane lies exactly on the carriageway it overlaps. Each rank
+ * is therefore also pulled towards the camera by {@link LAYER_BIAS_STEPS} depth-buffer steps in
+ * the surface shader — a per-vertex `polygonOffsetUnits` — so an upper layer wins by a whole
+ * number of steps at any distance, and the order holds wherever the gap alone would not.
+ */
+const RANK_LANDUSE = -1;
+const RANK_ROAD = 0;
+const RANK_COLOURED_LANE = 1;
+const RANK_JUNCTION = 2;
+const RANK_SIDEWALK = 3;
+const RANK_CROSSING = 4;
+/** Depth-buffer steps (of a 24-bit buffer) between adjacent ranks. */
+export const LAYER_BIAS_STEPS = 2;
+/**
+ * Markings, stop bars and headlight pools must stay above the highest rank's bias: their polygon
+ * offset in units, which is `polygonOffsetUnits` (≈ one depth step each).
+ */
+export const ABOVE_SURFACE_OFFSET_UNITS = -(RANK_CROSSING * LAYER_BIAS_STEPS + 4);
+/** Pulls a surface vertex towards the camera by its rank's bias, after projection. */
+export const SURFACE_LAYER_BIAS_GLSL = "gl_Position.z -= uLayerBias * aLayer * gl_Position.w;";
+/** Width of a painted lane line, metres: `addOffsetLine`'s half-width 0.09 twice. */
+const MARKING_WIDTH_M = 0.18;
+/**
+ * Per-fragment fade of a lane marking by its own distance, in the marking fragment shader.
+ *
+ * The faint white dashes on building walls along the horizon were lane markings behind the walls:
+ * the markings' polygon offset (factor −2 and {@link ABOVE_SURFACE_OFFSET_UNITS} units) is scaled
+ * by the depth slope, and a road seen at a grazing angle 1–2 km out has a steep one, so the offset
+ * pulled a marking near a wall's foot metres in front of the wall in the depth buffer (one 24-bit
+ * step alone is ≈ 0.7 m at 2 km from a 0.35 m near plane). {@link WorldRenderer.fadeMarkings}
+ * faded markings by the camera's *target* distance only, so from street level the far ones stayed
+ * at full strength. Each fragment now applies the same coverage rule (gone below a third of a pixel,
+ * full from about one) to its own distance, with a screen-door dither (interleaved gradient noise,
+ * Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare", SIGGRAPH 2014) so
+ * the material stays opaque. `uMarkingPxK` is metres per pixel per metre of distance.
+ */
+const MARKING_DISTANCE_FADE_GLSL = `if (uMarkingPxK > 0.0) {
+  float markingCov = ${MARKING_WIDTH_M.toFixed(2)} / max(vMarkingDist * uMarkingPxK, 1e-6);
+  float markingKeep = smoothstep(0.35, 0.9, markingCov);
+  float markingNoise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  if (markingKeep <= markingNoise) discard;
+}`;
+
+/** Tuning for {@link WorldRenderer}. */
+export interface WorldRendererOptions {
+  readonly theme: ViewerTheme;
+  /** Tile edge in metres for the merged road meshes. Default 300. */
+  readonly tileSizeM?: number;
+  /** Build buildings at all. Default true. */
+  readonly buildings?: boolean;
+  /** Build lane markings. Default true. */
+  readonly laneMarkings?: boolean;
+  /**
+   * `[near→mid, mid→far]` building LOD switch distances in metres. Default `[180, 700]`. Kept for
+   * compatibility: every LOD is now the same exact footprint geometry (see the file header), so
+   * these only decide which id is recorded, never what is drawn.
+   */
+  readonly buildingLodDistancesM?: readonly [number, number];
+  /** Refuse `BatchedMesh` above this many vertices and fall back to merged tiles. Default 1,500,000. */
+  readonly maxBuildingVertices?: number;
+  /** Cast and receive shadows. Default true. */
+  readonly shadows?: boolean;
+  /** Half-edge of the sun's shadow frustum in metres. Default 260. */
+  readonly shadowExtentM?: number;
+  /** Shadow map edge in texels. Default 2048. */
+  readonly shadowMapSize?: number;
+  /**
+   * How dark a cast shadow gets, `[0, 1]`. Default 0.55.
+   *
+   * A Midtown street at 11:00 is *correctly* in the shadow of its own buildings — that shadowing is
+   * the physics the simulator models, so hiding it would be wrong. At full strength, though, a
+   * shadowed road received only the sky and the fill, about a quarter of the sunlit irradiance, and
+   * landed near #1f1f1f on a #0b0f14 background: the street was legible only where the sun happened
+   * to reach down it. Compressing the shadow keeps it plainly visible as a shadow and keeps the
+   * surface under it readable, which is the trade an instrument should make.
+   */
+  readonly shadowStrength?: number;
+  /** Hours in `[0, 24)`. Default 11. */
+  readonly timeOfDay?: number;
+  /**
+   * How much of a wall's colour is removed at its foot, `[0, 1)`. Default 0.45.
+   *
+   * See {@link RingShading}: a directional sun 57° up gives a vertical wall almost nothing, so
+   * without these three terms a city of prisms renders as one flat silhouette. They are baked into
+   * the vertex colours and cost nothing per frame.
+   */
+  readonly buildingBaseOcclusion?: number;
+  /** Value swing applied by wall azimuth, `[0, 1)`. Default 0.2. */
+  readonly buildingFaceRelief?: number;
+  /** Peak per-building tone deviation, `[0, 1)`. Default 0.11. */
+  readonly buildingToneVariation?: number;
+  /**
+   * Dim light from the anti-sun azimuth, as a fraction of the sun's intensity. Default 0.3.
+   *
+   * A single directional light plus a hemisphere fill leaves every wall facing away from the sun at
+   * the hemisphere term alone, which is the same value for all of them: adjacent buildings merge.
+   * This is the bounce off the opposite façade, and it is what separates them. It never casts.
+   */
+  readonly fillLightFraction?: number;
+}
+
+/** Which building path was taken. */
+export type BuildingBackend = "batched" | "merged" | "none";
+
+/** Bookkeeping about a built world, for the HUD and for tests. */
+export interface WorldBuildReport {
+  readonly tiles: number;
+  readonly lanes: number;
+  readonly buildings: number;
+  readonly junctions: number;
+  readonly signals: number;
+  readonly sites: number;
+  readonly crossings: number;
+  readonly landuse: number;
+  readonly buildingBackend: BuildingBackend;
+  readonly buildingVertices: number;
+  readonly buildingIndices: number;
+  readonly surfaceVertices: number;
+  readonly markingVertices: number;
+  /** Openings drawn where a road runs through a building (see `passages.ts`). */
+  readonly portals: number;
+  readonly drawables: number;
+  readonly buildMs: number;
+}
+
+/**
+ * How far up-sun of its target the `DirectionalLight` is placed, metres.
+ *
+ * Only the direction matters to the shading; this is chosen to sit comfortably inside the light's
+ * own `shadow.camera.far` of 2,500 m with the whole city in front of it.
+ */
+/** A roadside unit from the node table: its node id and its antenna position, metres. */
+export interface RoadsideUnitPlacement {
+  readonly nodeId: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/** How near a unit must stand to a world site, horizontally, to be the unit on that site. */
+const SITE_MATCH_M = 2;
+
+/** A site with no node (`vwp-world/1` and §3.1.3's `u32::MAX`). */
+const NO_NODE_ID = 0xffffffff;
+
+const SUN_DISTANCE_M = 900;
+
+const SUN_NOON = new Color(0xfff4e4);
+const SUN_LOW = new Color(0xff9a52);
+const NIGHT_TOP = new Color(0x05070f);
+/**
+ * The daylight sky the street-level views are drawn under in the dark theme (see
+ * {@link WorldRenderer.setStreetDaylight}): a clear-sky zenith and a paler, hazier horizon, the
+ * gradient a clear day shows from the ground (Preetham, Shirley and Smits 1999, "A Practical
+ * Analytic Model for Daylight", SIGGRAPH: zenith luminance well under the horizon's, and the
+ * horizon desaturated by the longer air path).
+ */
+const DAY_SKY_TOP = new Color(0x3f74b5);
+const DAY_SKY_HORIZON = new Color(0xa9c3dc);
+const DAY_SKY_BOTTOM = new Color(0x6d7884);
+/** Light bounced up off sunlit asphalt and concrete: a warm mid grey (albedo ~0.2-0.35). */
+const DAY_GROUND_BOUNCE = new Color(0x77736b);
+/**
+ * Linear gain on the building albedo in street daylight: 0x5b6674 comes out a neutral, slightly
+ * warm concrete grey (about 0x7a7d80), the colour of Midtown's limestone and concrete in the
+ * light rather than the dark page's blue-grey. A design value, read off the screenshots.
+ */
+const DAY_FACADE_GAIN = new Color().setRGB(1.75, 1.55, 1.28);
+/**
+ * Extra light at street level in daylight under {@link WorldRenderer.setStreetDaylight}. The dark
+ * theme's albedos (asphalt 0x3d454f, ground 0x28323d) under the plain 11:00 sun drew a chase view
+ * that read as night — near-black road under a navy sky. 1.6 brings the asphalt to a mid grey
+ * against the sky, a design value read off the screenshots like the plan view's 2.0.
+ */
+const STREET_DAY_LIFT = 1.6;
+const DUSK_HORIZON = new Color(0xff8a4a);
+const NIGHT_HORIZON = new Color(0x0a1020);
+
+const SKY_VERTEX = /* glsl */ `
+varying vec3 vWorld;
+void main() {
+  vWorld = (modelMatrix * vec4(position, 1.0)).xyz - cameraPosition;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const SKY_FRAGMENT = /* glsl */ `
+uniform vec3 uTop;
+uniform vec3 uHorizon;
+uniform vec3 uBottom;
+uniform vec3 uSun;
+uniform float uSunIntensity;
+varying vec3 vWorld;
+void main() {
+  vec3 dir = normalize(vWorld);
+  float h = clamp(dir.z, -1.0, 1.0);
+  // pow(h, 0.35) rather than 0.55: the gradient then spends most of its range in the first few
+  // degrees above the horizon, which is the only part of the sky a street-level camera sees. With
+  // the flatter curve the whole upper hemisphere was one value and there was no horizon at all.
+  vec3 sky = h >= 0.0 ? mix(uHorizon, uTop, pow(h, 0.35)) : mix(uHorizon, uBottom, pow(-h, 0.7));
+  // A narrow brightening either side of h = 0. This is the line the buildings are read against;
+  // without it the roofline has nothing to be a silhouette of.
+  sky += uHorizon * 0.42 * exp(-abs(h) * 26.0);
+  float sun = max(dot(dir, normalize(uSun)), 0.0);
+  sky += uSunIntensity * vec3(1.0, 0.86, 0.66) * (pow(sun, 620.0) * 1.6 + pow(sun, 12.0) * 0.16);
+  gl_FragColor = vec4(sky, 1.0);
+}
+`;
+
+/**
+ * Builds and owns the static half of the scene.
+ *
+ * Add {@link group} to the scene once; call {@link setWorld} whenever a new `vwp-world/1` payload
+ * arrives, {@link updateSignals} on every keyframe, and {@link updateLod} once per frame.
+ */
+export class WorldRenderer {
+  /** Everything static, in ENU metres. */
+  readonly group = new Group();
+  readonly tiles = new Group();
+  readonly markings = new Group();
+  readonly buildingsGroup = new Group();
+  /** Signal lanterns and stop bars; see `signals.ts`. */
+  readonly signals: SignalRenderer;
+  readonly signalsGroup: Group;
+  readonly sitesGroup = new Group();
+  readonly lights = new Group();
+
+  readonly sun: DirectionalLight;
+  /** Dim, shadowless bounce from the anti-sun side; see {@link WorldRendererOptions.fillLightFraction}. */
+  readonly fill: DirectionalLight;
+  readonly hemisphere: HemisphereLight;
+  readonly sky: Mesh<SphereGeometry, ShaderMaterial>;
+  readonly ground: Mesh<PlaneGeometry, MeshLambertMaterial>;
+
+  #theme: ViewerTheme;
+  #options: Required<Omit<WorldRendererOptions, "theme">>;
+  #world: VwpWorld | null = null;
+  #report: WorldBuildReport = {
+    tiles: 0, lanes: 0, buildings: 0, junctions: 0, signals: 0, sites: 0, crossings: 0, landuse: 0,
+    buildingBackend: "none", buildingVertices: 0, buildingIndices: 0, surfaceVertices: 0,
+    markingVertices: 0, portals: 0, drawables: 0, buildMs: 0,
+  };
+
+  #surfaceMaterial: MeshLambertMaterial;
+  /** The surface shader's per-rank depth bias, in NDC depth (a 24-bit step is 2⁻²³ of it). */
+  #layerBias = { value: LAYER_BIAS_STEPS * 2 ** -23 };
+  #markingMaterial: MeshBasicMaterial;
+  /** Metres per pixel per metre of view distance, for the per-fragment marking fade; 0 is off. */
+  #markingPxK = { value: 0 };
+  #buildingMaterial: MeshLambertMaterial;
+  #siteMaterial: MeshLambertMaterial;
+  #disposables: (BufferGeometry | Material)[] = [];
+
+  #buildings: BatchedMesh | null = null;
+  /** `3·b + lod` → BatchedMesh geometry id. */
+  #buildingGeomIds = new Int32Array(0);
+  /** Building index → BatchedMesh instance id. */
+  #buildingInstanceIds = new Int32Array(0);
+  /** Building index → currently selected LOD. */
+  #buildingLod = new Uint8Array(0);
+  /** Building centroid x, y, top z, and footprint radius. */
+  #buildingCentroid = new Float32Array(0);
+  #buildingCount = 0;
+  /** Buildings hidden this frame because the followed vehicle is inside them; see {@link setGhostBuilding}. */
+  #ghost = -1;
+  /** A second ghosted building: the one the camera itself is in; see {@link setGhostBuildings}. */
+  #ghost2 = -1;
+  /** See {@link darkness}. */
+  #darkness = 0;
+  /** See {@link setLightLift}. */
+  #lightLift = 1;
+  /** See {@link setStreetDaylight}. */
+  #streetDay = false;
+  /** What the marking pass drew, for tests and the build report. */
+  #markingReport: MarkingReport | null = null;
+  /** Buildings a road runs through (indices), from `#buildPortals`. */
+  #portalBuildings = new Set<number>();
+  /** The `lane_markings` overlay's choice; {@link fadeMarkings} only ever hides on top of it. */
+  #markingsWanted = true;
+  #buildingBackend: BuildingBackend = "none";
+  #buildError: string | null = null;
+
+  /** Occupancy grid over building footprints, CSR: `cellStart`, `cellItems`. */
+  #gridMinX = 0;
+  #gridMinY = 0;
+  #gridCell = 30;
+  #gridW = 0;
+  #gridH = 0;
+  #gridStart = new Int32Array(0);
+  #gridItems = new Int32Array(0);
+
+
+  /** Site positions, three floats each, at antenna height. */
+  #sitePos = new Float32Array(0);
+  #siteIds = new Uint32Array(0);
+  #siteNodeIds = new Uint32Array(0);
+  #siteKinds = new Uint8Array(0);
+  #siteCount = 0;
+  /** How many of the sites are the world file's; the rest are {@link setRoadsideUnits}'s. */
+  #worldSiteCount = 0;
+  /** The masts {@link setRoadsideUnits} added, removed and rebuilt on each call. */
+  #unitMesh: Mesh | null = null;
+  /** The last {@link setRoadsideUnits} list, applied again to each new world. */
+  #units: readonly RoadsideUnitPlacement[] = [];
+
+  #timeOfDay = 11;
+  #lodCamPos = new Vector3(NaN, NaN, NaN);
+  #scratchMatrix = new Matrix4();
+  #scratchColor = new Color();
+  #sunDir = new Vector3(0, 0, 1);
+  #buildingsVisible = 0;
+
+  constructor(options: WorldRendererOptions) {
+    this.#theme = options.theme;
+    this.#options = {
+      tileSizeM: options.tileSizeM ?? 300,
+      buildings: options.buildings ?? true,
+      laneMarkings: options.laneMarkings ?? true,
+      buildingLodDistancesM: options.buildingLodDistancesM ?? [180, 700],
+      maxBuildingVertices: options.maxBuildingVertices ?? 1_500_000,
+      shadows: options.shadows ?? true,
+      shadowExtentM: options.shadowExtentM ?? 260,
+      shadowMapSize: options.shadowMapSize ?? 2048,
+      shadowStrength: options.shadowStrength ?? 0.55,
+      timeOfDay: options.timeOfDay ?? 11,
+      buildingBaseOcclusion: options.buildingBaseOcclusion ?? 0.45,
+      buildingFaceRelief: options.buildingFaceRelief ?? 0.2,
+      buildingToneVariation: options.buildingToneVariation ?? 0.11,
+      fillLightFraction: options.fillLightFraction ?? 0.3,
+    };
+    this.#timeOfDay = this.#options.timeOfDay;
+
+    this.group.name = "world";
+    this.tiles.name = "world/tiles";
+    this.markings.name = "world/lane-markings";
+    this.buildingsGroup.name = "world/buildings";
+    this.signals = new SignalRenderer(options.theme);
+    this.signalsGroup = this.signals.group;
+    this.sitesGroup.name = "world/sites";
+    this.lights.name = "world/lights";
+
+    this.#surfaceMaterial = new MeshLambertMaterial({ vertexColors: true, name: "world-surface" });
+    const layerBias = this.#layerBias;
+    this.#surfaceMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uLayerBias = layerBias;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nattribute float aLayer;\nuniform float uLayerBias;")
+        .replace("#include <project_vertex>", `#include <project_vertex>\n${SURFACE_LAYER_BIAS_GLSL}`);
+    };
+    this.#surfaceMaterial.customProgramCacheKey = () => "vwp-surface-layers";
+    // Markings test depth against the road but never write it, and draw after it: where two
+    // markings overlap — the edge lines of the two directions meet on the centre line, a white and a
+    // yellow strip at exactly the same height — the later one wins, every frame, instead of the two
+    // trading places as the camera moves (measured: 1.8 % of a 1,680 x 1,050 plan view changing
+    // under a 1 cm camera move, all of it markings).
+    this.#markingMaterial = new MeshBasicMaterial({
+      vertexColors: true, name: "lane-markings", polygonOffset: true, polygonOffsetFactor: -2,
+      polygonOffsetUnits: ABOVE_SURFACE_OFFSET_UNITS,
+      toneMapped: false, depthWrite: false,
+    });
+    this.markings.renderOrder = 1;
+    this.#markingMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uMarkingPxK = this.#markingPxK;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying float vMarkingDist;")
+        .replace("#include <project_vertex>", "#include <project_vertex>\nvMarkingDist = -mvPosition.z;");
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nvarying float vMarkingDist;\nuniform float uMarkingPxK;")
+        .replace("#include <clipping_planes_fragment>", `#include <clipping_planes_fragment>\n${MARKING_DISTANCE_FADE_GLSL}`);
+    };
+    this.#markingMaterial.customProgramCacheKey = () => "vwp-marking-distance-fade";
+    this.#buildingMaterial = new MeshLambertMaterial({ vertexColors: true, name: "buildings" });
+    this.#siteMaterial = new MeshLambertMaterial({ vertexColors: true, name: "sites" });
+
+    const groundGeom = new PlaneGeometry(1, 1);
+    // Pushed behind the landuse and road layers by a constant number of depth steps (units, not
+    // slope: a slope factor at grazing angles would push it behind a tunnel 6 m down). The plane
+    // is now as large as the far plane, so far out it is the layer most likely to fight.
+    this.ground = new Mesh(groundGeom, new MeshLambertMaterial({
+      name: "ground", side: DoubleSide, polygonOffset: true, polygonOffsetFactor: 0,
+      polygonOffsetUnits: (RANK_CROSSING + 2) * LAYER_BIAS_STEPS,
+    }));
+    this.ground.name = "world/ground";
+    this.ground.receiveShadow = this.#options.shadows;
+    this.ground.matrixAutoUpdate = false;
+
+    const skyGeom = new SphereGeometry(1, 24, 16);
+    this.sky = new Mesh(skyGeom, new ShaderMaterial({
+      name: "sky",
+      uniforms: {
+        uTop: { value: new Color(this.#theme.skyTop) },
+        uHorizon: { value: new Color(this.#theme.skyHorizon) },
+        uBottom: { value: new Color(this.#theme.skyBottom) },
+        uSun: { value: new Vector3(0.3, 0.3, 0.9) },
+        uSunIntensity: { value: 1 },
+      },
+      vertexShader: SKY_VERTEX,
+      fragmentShader: SKY_FRAGMENT,
+      side: BackSide,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: true,
+    }));
+    this.sky.name = "world/sky";
+    this.sky.renderOrder = -1000;
+    this.sky.frustumCulled = false;
+    this.sky.matrixAutoUpdate = false;
+    this.sky.scale.setScalar(6000);
+
+    this.sun = new DirectionalLight(0xfff2e0, 2.2);
+    this.sun.name = "world/sun";
+    this.sun.up.set(0, 0, 1);
+    this.sun.castShadow = this.#options.shadows;
+    this.sun.shadow.mapSize.set(this.#options.shadowMapSize, this.#options.shadowMapSize);
+    this.sun.shadow.camera.up.set(0, 0, 1);
+    this.sun.shadow.camera.near = 1;
+    this.sun.shadow.camera.far = 2500;
+    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.normalBias = 0.05;
+    this.sun.shadow.intensity = Math.max(0, Math.min(1, this.#options.shadowStrength));
+    this.#applyShadowExtent();
+    this.lights.add(this.sun, this.sun.target);
+
+    this.fill = new DirectionalLight(0xdfe9ff, 0.7);
+    this.fill.name = "world/fill";
+    this.fill.up.set(0, 0, 1);
+    this.fill.castShadow = false;
+    this.lights.add(this.fill, this.fill.target);
+
+    this.hemisphere = new HemisphereLight(this.#theme.skyHorizon, this.#theme.ground, 0.9);
+    this.hemisphere.name = "world/hemisphere";
+    this.lights.add(this.hemisphere);
+
+    this.group.add(this.sky, this.ground, this.tiles, this.markings, this.buildingsGroup,
+      this.signalsGroup, this.sitesGroup, this.lights);
+    this.setTheme(this.#theme);
+    this.setTimeOfDay(this.#timeOfDay);
+    this.#resizeGround(2000);
+  }
+
+  /** The world currently built, or null. */
+  get world(): VwpWorld | null {
+    return this.#world;
+  }
+
+  /** Bookkeeping about the last {@link setWorld}. */
+  get report(): WorldBuildReport {
+    return this.#report;
+  }
+
+  /** Which building path the last build took. */
+  get buildingBackend(): BuildingBackend {
+    return this.#buildingBackend;
+  }
+
+  /** Why `BatchedMesh` was abandoned, when it was. */
+  get buildingBackendReason(): string | null {
+    return this.#buildError;
+  }
+
+  /** Buildings whose LOD instance is currently visible. */
+  get buildingsVisible(): number {
+    return this.#buildingsVisible;
+  }
+
+  /** Infrastructure site positions at antenna height, three floats per site. */
+  get sitePositions(): Float32Array {
+    return this.#sitePos;
+  }
+
+  /** `site_id` per site. */
+  get siteIds(): Uint32Array {
+    return this.#siteIds;
+  }
+
+  /** `node_id` per site, `0xFFFFFFFF` when unassigned. */
+  get siteNodeIds(): Uint32Array {
+    return this.#siteNodeIds;
+  }
+
+  /** `kind` per site: 0 rsu, 1 cell, 2 other. */
+  get siteKinds(): Uint8Array {
+    return this.#siteKinds;
+  }
+
+  /** Number of sites in the world. */
+  get siteCount(): number {
+    return this.#siteCount;
+  }
+
+  /** Hours in `[0, 24)`. */
+  get timeOfDay(): number {
+    return this.#timeOfDay;
+  }
+
+  /**
+   * Set the time of day, which drives the sun's elevation, azimuth, colour and intensity, the
+   * hemisphere fill, and the sky gradient. Hours outside `[0, 24)` wrap.
+   */
+  setTimeOfDay(hours: number): void {
+    const t = ((hours % 24) + 24) % 24;
+    this.#timeOfDay = t;
+    // Sun elevation: below the horizon before 06:00 and after 18:00, ~60° at noon.
+    const dayFrac = (t - 6) / 12;
+    const elevation = Math.sin(dayFrac * Math.PI) * (Math.PI * 0.34) - 0.035;
+    const azimuth = Math.PI * 1.5 - dayFrac * Math.PI; // rises in the east, sets in the west
+    const ce = Math.cos(elevation);
+    const dirX = Math.cos(azimuth) * ce;
+    const dirY = Math.sin(azimuth) * ce;
+    const dirZ = Math.sin(elevation);
+    const daylight = Math.max(0, dirZ);
+    this.#darkness = 1 - Math.min(1, daylight * 4);
+    // The street-daylight lift fades with the sun, so dusk and night are not brightened by it.
+    const lift = this.#lightLift * (this.#streetDay ? 1 + (STREET_DAY_LIFT - 1) * (1 - this.#darkness) : 1);
+
+    this.#sunDir.set(dirX, dirY, Math.max(0.03, dirZ)).normalize();
+    this.#placeSun();
+    this.sun.intensity = (0.15 + daylight * 2.6) * lift;
+    // Warm near the horizon, neutral at noon.
+    const warmth = 1 - Math.min(1, daylight * 2.4);
+    this.sun.color.copy(SUN_NOON).lerp(SUN_LOW, warmth);
+    this.sun.castShadow = this.#options.shadows && daylight > 0.05;
+
+    // The fill comes from the opposite azimuth at a low elevation — the bounce off the façade
+    // across the street. Low, because a high fill washes the vertical relief back out.
+    this.fill.position.set(-dirX, -dirY, 0.34).multiplyScalar(700);
+    this.fill.intensity = this.sun.intensity * this.#options.fillLightFraction;
+
+    // The sky is the only light a shadowed surface gets besides the fill, so it carries the shade.
+    this.hemisphere.intensity = (0.45 + daylight * 1.35) * lift;
+    // The sky light's colours: in street daylight a pale sky over sunlit pavement, not the dark
+    // theme's navy over its near-black ground — under those every shaded wall came out deep blue.
+    if (this.#streetDay) {
+      this.hemisphere.color.copy(DAY_SKY_HORIZON);
+      this.hemisphere.groundColor.copy(DAY_GROUND_BOUNCE);
+      // The facades' albedo, warmed and lifted by the material's colour (it multiplies the vertex
+      // colours, so no geometry is rebuilt): the dark theme's 0x5b6674 is a blue-grey chosen to
+      // sit on a dark page, and lit from the street it read as navy glass.
+      this.#buildingMaterial.color.copy(DAY_FACADE_GAIN);
+    } else {
+      this.hemisphere.color.setHex(this.#theme.skyHorizon);
+      this.hemisphere.groundColor.setHex(this.#theme.ground);
+      this.#buildingMaterial.color.setRGB(1, 1, 1);
+    }
+
+    const u = this.sky.material.uniforms;
+    const night = 1 - Math.min(1, daylight * 3);
+    const top = u.uTop.value as Color;
+    const horizon = u.uHorizon.value as Color;
+    if (this.#streetDay) {
+      top.copy(DAY_SKY_TOP);
+      horizon.copy(DAY_SKY_HORIZON);
+    } else {
+      top.setHex(this.#theme.skyTop);
+      horizon.setHex(this.#theme.skyHorizon);
+    }
+    top.lerp(NIGHT_TOP, night * 0.85);
+    horizon
+      .lerp(DUSK_HORIZON, Math.max(0, 1 - Math.abs(daylight - 0.08) * 8) * 0.55)
+      .lerp(NIGHT_HORIZON, night * 0.7);
+    if (this.#streetDay) (u.uBottom.value as Color).copy(DAY_SKY_BOTTOM).lerp(NIGHT_HORIZON, night * 0.7);
+    else (u.uBottom.value as Color).setHex(this.#theme.skyBottom);
+    (u.uSun.value as Vector3).set(dirX, dirY, dirZ);
+    u.uSunIntensity.value = daylight;
+  }
+
+  /**
+   * Multiply the sun, fill and sky light by `lift` (1 = as the time of day sets them). The plan view
+   * uses it: seen from straight above, the dark theme's asphalt and ground under the late-morning
+   * sun came out near #1d2a37 on #15212e — streets the owner could not pick out. A lift of about 2
+   * puts them where the theme's own hex values say they are. Unlit layers (overlays, markers) are
+   * untouched, so their colour-blind-safe contrast against the road is not changed by it.
+   */
+  setLightLift(lift: number): void {
+    const l = Math.max(0.1, lift);
+    if (l === this.#lightLift) return;
+    this.#lightLift = l;
+    this.setTimeOfDay(this.#timeOfDay);
+  }
+
+  /**
+   * Draw the street-level views under a daylight sky with brighter light, whatever the UI theme.
+   * The dark theme is a dark *page*; its world palette suits the plan view, but from the road it
+   * put a navy dome and near-black asphalt over a city at 11:00. Only the sky uniforms and the
+   * light intensities change, so switching is O(1) — no vertex colour is rebuilt.
+   */
+  setStreetDaylight(on: boolean): void {
+    if (on === this.#streetDay) return;
+    this.#streetDay = on;
+    this.setTimeOfDay(this.#timeOfDay);
+  }
+
+  /** Whether {@link setStreetDaylight} is on. */
+  get streetDaylight(): boolean {
+    return this.#streetDay;
+  }
+
+  /** The sky's horizon colour as last painted: what distance fog should fade into. */
+  get horizonColor(): Color {
+    return this.sky.material.uniforms.uHorizon.value as Color;
+  }
+
+  /** Swap the palette. Rebuilds vertex colours only if a world is loaded. */
+  setTheme(theme: ViewerTheme): void {
+    this.#theme = theme;
+    this.ground.material.color.setHex(theme.ground);
+    this.hemisphere.color.setHex(theme.skyHorizon);
+    this.hemisphere.groundColor.setHex(theme.ground);
+    this.signals.setTheme(theme);
+    this.setTimeOfDay(this.#timeOfDay);
+    if (this.#world) this.setWorld(this.#world);
+  }
+
+  /** Where the sun's shadow frustum is centred; follow the camera focus to keep texels small. */
+  setShadowFocus(x: number, y: number, z: number): void {
+    // Snap the focus to the shadow map's texel grid, in the light's own frame. A frustum that
+    // slides by a fraction of a texel every frame re-rasterises every shadow edge at a new phase,
+    // and the edges crawl and shimmer as the chase camera drives along — the classic "shadow
+    // swimming" (Dimitrov 2007, "Cascaded Shadow Maps", NVIDIA, §"Moving the light texel-sized
+    // increments"). Along the light direction nothing needs snapping.
+    const texel = (2 * this.#options.shadowExtentM) / Math.max(1, this.#options.shadowMapSize);
+    const d = this.#sunDir;
+    // Light-space basis: `u` horizontal and perpendicular to the sun, `v = d × u`.
+    let ux = -d.y;
+    let uy = d.x;
+    const ul = Math.hypot(ux, uy);
+    if (ul < 1e-6) {
+      ux = 1;
+      uy = 0;
+    } else {
+      ux /= ul;
+      uy /= ul;
+    }
+    const vx = d.y * 0 - d.z * uy;
+    const vy = d.z * ux - d.x * 0;
+    const vz = d.x * uy - d.y * ux;
+    const pu = x * ux + y * uy;
+    const pv = x * vx + y * vy + z * vz;
+    const pd = x * d.x + y * d.y + z * d.z;
+    const su = Math.round(pu / texel) * texel;
+    const sv = Math.round(pv / texel) * texel;
+    this.sun.target.position.set(
+      su * ux + sv * vx + pd * d.x,
+      su * uy + sv * vy + pd * d.y,
+      sv * vz + pd * d.z,
+    );
+    this.sun.target.updateMatrixWorld();
+    this.#placeSun();
+  }
+
+  /**
+   * Put the sun `SUN_DISTANCE_M` up-sun of its own target.
+   *
+   * A `DirectionalLight` shines along `position − target.position`, and `setShadowFocus` moves the
+   * target to whatever the camera is looking at. The position used to be set in absolute world
+   * coordinates — `direction × 900` — which made the light's *direction* a function of where in the
+   * world the camera was pointed. In a world whose ENU origin is a kilometre or two from the
+   * streets, an 11:00 sun computed at 57° elevation arrived at the geometry at about 15°, so
+   * horizontal surfaces got a grazing light, vertical walls got almost none, and the whole scene
+   * rendered three to four times too dark — the black void the review saw. It also meant the
+   * lighting shifted as the user panned. Offsetting from the target fixes the direction and keeps
+   * the shadow frustum, which is sized in the light's own space, centred on the same point.
+   */
+  #placeSun(): void {
+    const t = this.sun.target.position;
+    this.sun.position.set(
+      t.x + this.#sunDir.x * SUN_DISTANCE_M,
+      t.y + this.#sunDir.y * SUN_DISTANCE_M,
+      t.z + this.#sunDir.z * SUN_DISTANCE_M,
+    );
+  }
+
+  /** The sun's unit direction, `position − target`, normalised. */
+  get sunDirection(): Vector3 {
+    return this.#sunDir;
+  }
+
+  #applyShadowExtent(): void {
+    const e = this.#options.shadowExtentM;
+    const c = this.sun.shadow.camera;
+    c.left = -e;
+    c.right = e;
+    c.top = e;
+    c.bottom = -e;
+    c.updateProjectionMatrix();
+  }
+
+  #resizeGround(radiusM: number): void {
+    // ×6 rather than ×4: at a 1.25 m eye height the geometric horizon is about 4 km out, and at ×4
+    // a 2 km world's ground plane ended at almost exactly that distance, so the edge of the world
+    // was on the skyline. It is one quad either way. {@link followCamera} grows it to the far
+    // plane and keeps it centred under the camera, so every ray below the horizon that the far
+    // plane lets through lands on it.
+    const size = Math.max(200, radiusM * 6);
+    if (size === this.#groundSize) return;
+    this.#groundSize = size;
+    this.ground.geometry.dispose();
+    this.ground.geometry = new PlaneGeometry(size, size);
+    this.ground.updateMatrix();
+  }
+
+  /** Edge of the ground quad, metres. */
+  #groundSize = 0;
+  /** The world's ground level, metres; see `ground.ts`. */
+  #groundZ = 0;
+
+  /**
+   * The level the streets and buildings stand on, metres — not `bbox.minZM`, which a tunnel puts
+   * 6 m or more below it (`ground.ts`).
+   */
+  get groundZ(): number {
+    return this.#groundZ;
+  }
+
+  /** The ground quad's centre, height and half edge, metres: what a coverage check needs. */
+  get groundExtent(): { readonly cx: number; readonly cy: number; readonly z: number; readonly half: number } {
+    return { cx: this.ground.position.x, cy: this.ground.position.y, z: this.ground.position.z, half: this.#groundSize / 2 };
+  }
+
+  /**
+   * Build the static scene from a decoded world. Replaces whatever was there.
+   *
+   * Cost is linear in lane points + ring points; the Manhattan fixture (≈ 1,900 lanes, ≈ 1,000
+   * buildings) builds in a few tens of milliseconds, which is why this is done synchronously.
+   */
+  setWorld(world: VwpWorld): void {
+    const t0 = nowMs();
+    this.#clearWorld();
+    this.#world = world;
+    this.#report = { ...this.#report, portals: 0 };
+
+    const bbox = world.bbox;
+    const cx = (bbox.minXM + bbox.maxXM) / 2;
+    const cy = (bbox.minYM + bbox.maxYM) / 2;
+    const spanX = Math.max(1, bbox.maxXM - bbox.minXM);
+    const spanY = Math.max(1, bbox.maxYM - bbox.minYM);
+    const radius = Math.hypot(spanX, spanY) / 2;
+
+    const grade = groundLevelOf(world);
+    this.#groundZ = grade;
+    this.ground.position.set(cx, cy, grade - 0.05);
+    this.ground.updateMatrix();
+    this.#resizeGround(radius);
+    this.sky.scale.setScalar(Math.max(4000, radius * 8));
+    this.sky.updateMatrix();
+
+    const tile = this.#options.tileSizeM;
+    const tilesX = Math.max(1, Math.ceil(spanX / tile));
+    const tilesY = Math.max(1, Math.ceil(spanY / tile));
+    const tileIndex = (x: number, y: number): number => {
+      const ix = Math.min(tilesX - 1, Math.max(0, Math.floor((x - bbox.minXM) / tile)));
+      const iy = Math.min(tilesY - 1, Math.max(0, Math.floor((y - bbox.minYM) / tile)));
+      return iy * tilesX + ix;
+    };
+
+    const nTiles = tilesX * tilesY;
+    const surfaces: (MeshBuilder | null)[] = new Array<MeshBuilder | null>(nTiles).fill(null);
+    const marks: (MeshBuilder | null)[] = new Array<MeshBuilder | null>(nTiles).fill(null);
+    /** Tile `i`'s surface builder, stamping what is added next with draw-order `rank`. */
+    const surfaceAt = (i: number, rank: number): MeshBuilder => {
+      let b = surfaces[i];
+      if (!b) {
+        b = new MeshBuilder({ color: true, layer: true, vertexCapacity: 4096, indexCapacity: 8192 });
+        surfaces[i] = b;
+      }
+      b.layer = rank;
+      return b;
+    };
+    const surfaceOf = (i: number): MeshBuilder => surfaceAt(i, RANK_ROAD);
+    const markOf = (i: number): MeshBuilder => {
+      let b = marks[i];
+      if (!b) {
+        b = new MeshBuilder({ color: true, vertexCapacity: 2048, indexCapacity: 4096 });
+        marks[i] = b;
+      }
+      return b;
+    };
+
+    const th = this.#theme;
+    const scratch: number[] = [];
+
+    // ---- Landuse first (lowest layer), then lanes, junctions, crossings. ----
+    const ring = world.ringPoints;
+    for (let i = 0; i < world.landuse.count; i++) {
+      const lu = world.landuse.at(i);
+      if (lu.ringCount < 3) continue;
+      const hex = landuseColor(th, lu.classIdx);
+      const [r, g, b] = colorTriple(hex);
+      const t = tileIndex(ring.x[lu.ringOff], ring.y[lu.ringOff]);
+      addPolygon(surfaceAt(t, RANK_LANDUSE), ring.x, ring.y, lu.ringOff, lu.ringCount, grade + Z_LANDUSE, scratch, r, g, b);
+    }
+
+    const lanes = world.lanes;
+    const pts = world.lanePoints;
+    let laneCount = 0;
+    for (let i = 0; i < lanes.count; i++) {
+      const n = lanes.pointCount[i];
+      if (n < 2) continue;
+      const off = lanes.pointOff[i];
+      const type = lanes.laneType[i];
+      const halfWidth = Math.max(0.4, lanes.widthM[i] / 2);
+      const t = tileIndex(pts.x[off], pts.y[off]);
+      let hex = th.road;
+      let z = Z_ROAD;
+      let rank = RANK_ROAD;
+      switch (type) {
+        case LANE_SIDEWALK: hex = th.sidewalk; z = Z_ROAD + SIDEWALK_LIFT_M; rank = RANK_SIDEWALK; break;
+        case LANE_BIKE: hex = th.bikeLane; rank = RANK_COLOURED_LANE; break;
+        case LANE_BUS: hex = th.busLane; rank = RANK_COLOURED_LANE; break;
+        case LANE_PARKING: hex = th.parking; rank = RANK_COLOURED_LANE; break;
+        case LANE_JUNCTION_INTERNAL: hex = th.junction; z = Z_JUNCTION; rank = RANK_JUNCTION; break;
+        case LANE_CROSSING: hex = th.crossing; z = Z_CROSSING; rank = RANK_CROSSING; break;
+        default: break;
+      }
+      const [r, g, b] = colorTriple(hex);
+      addRibbon(surfaceAt(t, rank), pts.x, pts.y, pts.z, off, n, halfWidth, z, r, g, b);
+      laneCount++;
+
+    }
+
+    // Lane lines, edge lines, the centre line, stop lines and lane-use arrows, by the MUTCD's
+    // rules (`markings.ts`).
+    if (this.#options.laneMarkings) {
+      const white = [...colorTriple(th.laneMarking)] as [number, number, number];
+      const yellow = [...colorTriple(th.laneMarkingCentre)] as [number, number, number];
+      this.#markingReport = buildLaneMarkings(world, {
+        at: (x, y) => markOf(tileIndex(x, y)),
+        z: Z_MARKING,
+        white,
+        yellow,
+      });
+    }
+
+    // A junction's disc and crossings at the junction's own height: a bridge's junction is above
+    // grade and a tunnel's below it. At `bbox.minZM` every disc lay under its junction.
+    const junctionZ = new Map<number, number>();
+    // How far each junction's own connectors reach from its centre: their end points are where
+    // the approaches' stop lines are, so a disc of that radius fills the box and goes no further.
+    // The disc used to be sized by the connector *count* alone (2.2 + 1.1 m a connector, up to
+    // 30 m), and on Portland's multi-connector junctions it spread a 20-30 m grey disc over the
+    // corners, the sidewalks and half the block: the plan view read as blobs on a wire grid.
+    const reach = new Map<number, number>();
+    {
+      const centre = new Map<number, { x: number; y: number }>();
+      for (let i = 0; i < world.junctions.count; i++) {
+        const j = world.junctions.at(i);
+        centre.set(j.junctionId, { x: j.xM, y: j.yM });
+      }
+      for (let i = 0; i < lanes.count; i++) {
+        const jid = lanes.junctionId[i];
+        if (jid === 0xffffffff || lanes.laneType[i] !== LANE_JUNCTION_INTERNAL) continue;
+        const c = centre.get(jid);
+        const n = lanes.pointCount[i];
+        if (!c || n < 1) continue;
+        const a = lanes.pointOff[i];
+        const e = a + n - 1;
+        const d = Math.max(Math.hypot(pts.x[a] - c.x, pts.y[a] - c.y), Math.hypot(pts.x[e] - c.x, pts.y[e] - c.y));
+        if (d > (reach.get(jid) ?? 0)) reach.set(jid, d);
+      }
+    }
+    for (let i = 0; i < world.junctions.count; i++) {
+      const j = world.junctions.at(i);
+      const jz = Number.isFinite(j.zM) ? j.zM : grade;
+      junctionZ.set(j.junctionId, jz);
+      const byCount = Math.max(4, Math.min(30, 2.2 + j.laneCount * 1.1));
+      const reached = reach.get(j.junctionId);
+      // A world that ties its connectors to junctions but none to this one: a node no vehicle
+      // turns through (a path crossing, a dead end), which needs a patch, not a plaza.
+      const r = reached !== undefined ? Math.max(3, Math.min(byCount, reached)) : reach.size > 0 ? 4 : byCount;
+      const [cr, cg, cb] = colorTriple(th.junction);
+      addDisc(surfaceAt(tileIndex(j.xM, j.yM), RANK_JUNCTION), j.xM, j.yM, jz + Z_JUNCTION, r, 16, cr, cg, cb);
+    }
+
+    for (let i = 0; i < world.crossings.count; i++) {
+      const c = world.crossings.at(i);
+      const dx = c.x2M - c.x1M;
+      const dy = c.y2M - c.y1M;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.2) continue;
+      // High-visibility ladder markings: NYC DOT's standard (`markings.ts`).
+      const col = [...colorTriple(th.crossing)] as [number, number, number];
+      addCrosswalk(markOf(tileIndex(c.x1M, c.y1M)), c.x1M, c.y1M, c.x2M, c.y2M, c.widthM, (junctionZ.get(c.junctionId) ?? grade) + Z_CROSSING, col);
+    }
+
+    // ---- Buildings. ----
+    if (this.#options.buildings && world.buildings.count > 0) {
+      this.#buildBuildings(world, surfaceOf, tileIndex);
+      this.#buildPortals(world);
+    }
+
+    // ---- Publish the tile meshes. ----
+    let surfaceVerts = 0;
+    let markVerts = 0;
+    let drawables = 0;
+    for (let i = 0; i < nTiles; i++) {
+      const sb = surfaces[i];
+      if (sb && !sb.empty) {
+        surfaceVerts += sb.vertexCount;
+        const g = sb.toGeometry();
+        if (g) {
+          const m = new Mesh(g, this.#surfaceMaterial);
+          m.name = `world/tile-${i}`;
+          m.receiveShadow = this.#options.shadows;
+          m.matrixAutoUpdate = false;
+          this.tiles.add(m);
+          this.#disposables.push(g);
+          drawables++;
+        }
+      }
+      const mbld = marks[i];
+      if (mbld && !mbld.empty) {
+        markVerts += mbld.vertexCount;
+        const g = mbld.toGeometry();
+        if (g) {
+          const m = new Mesh(g, this.#markingMaterial);
+          m.name = `world/markings-${i}`;
+          m.matrixAutoUpdate = false;
+          this.markings.add(m);
+          this.#disposables.push(g);
+          drawables++;
+        }
+      }
+    }
+
+    this.signals.build(world);
+    this.#buildSites(world);
+    // The Hello that names the run's roadside units arrives before its world does.
+    if (this.#units.length > 0) this.setRoadsideUnits(this.#units);
+    if (this.#buildings) drawables++;
+    if (this.signals.count > 0) drawables += 5;
+    drawables += this.sitesGroup.children.length + 2; // ground and sky
+
+    this.#report = {
+      tiles: nTiles,
+      lanes: laneCount,
+      buildings: this.#buildingCount,
+      junctions: world.junctions.count,
+      signals: world.signals.count,
+      sites: world.sites.count,
+      crossings: world.crossings.count,
+      landuse: world.landuse.count,
+      buildingBackend: this.#buildingBackend,
+      buildingVertices: this.#report.buildingVertices,
+      buildingIndices: this.#report.buildingIndices,
+      surfaceVertices: surfaceVerts,
+      markingVertices: markVerts,
+      portals: this.#report.portals,
+      drawables: drawables + (this.#report.portals > 0 ? 1 : 0),
+      buildMs: nowMs() - t0,
+    };
+  }
+
+  /**
+   * A dark opening in every wall a road runs through (`passages.ts`): the car on a passage lane
+   * drives into it rather than into a wall. One mesh for the whole city, drawn just outside the
+   * wall with a polygon offset so it never fights the wall for depth.
+   */
+  #buildPortals(world: VwpWorld): void {
+    const portals = findPortals(world);
+    this.#report = { ...this.#report, portals: portals.length };
+    this.#portalBuildings = new Set(portals.map((p) => p.building));
+    if (portals.length === 0) return;
+    const pos = new Float32Array(portals.length * 4 * 3);
+    const idx = new Uint32Array(portals.length * 6);
+    portals.forEach((p, i) => {
+      // Outward normal of a counter-clockwise ring: the wall direction turned clockwise.
+      const nx = p.ey;
+      const ny = -p.ex;
+      const ox = p.x + nx * 0.04;
+      const oy = p.y + ny * 0.04;
+      const z0 = p.z + 0.02;
+      const z1 = p.z + p.height;
+      const corners = [
+        [ox - p.ex * p.halfWidth, oy - p.ey * p.halfWidth, z0],
+        [ox + p.ex * p.halfWidth, oy + p.ey * p.halfWidth, z0],
+        [ox + p.ex * p.halfWidth, oy + p.ey * p.halfWidth, z1],
+        [ox - p.ex * p.halfWidth, oy - p.ey * p.halfWidth, z1],
+      ];
+      corners.forEach((c, k) => pos.set(c, (i * 4 + k) * 3));
+      idx.set([i * 4, i * 4 + 1, i * 4 + 2, i * 4, i * 4 + 2, i * 4 + 3], i * 6);
+    });
+    const geom = new BufferGeometry();
+    geom.setAttribute("position", new BufferAttribute(pos, 3));
+    geom.setIndex(new BufferAttribute(idx, 1));
+    geom.computeBoundingSphere();
+    const mat = new MeshBasicMaterial({
+      color: this.#theme.portal, side: DoubleSide, name: "portals",
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    });
+    const mesh = new Mesh(geom, mat);
+    mesh.name = "world/portals";
+    mesh.matrixAutoUpdate = false;
+    this.buildingsGroup.add(mesh);
+    this.#disposables.push(geom, mat);
+  }
+
+  #buildBuildings(
+    world: VwpWorld,
+    surfaceOf: (tile: number) => MeshBuilder,
+    tileIndex: (x: number, y: number) => number,
+  ): void {
+    const b = world.buildings;
+    const ring = world.ringPoints;
+    const B = b.count;
+    const [wr, wg, wb] = colorTriple(this.#theme.building);
+    const [rr, rg, rb] = colorTriple(this.#theme.buildingRoof);
+    const scratch: number[] = [];
+    // One mutable shading record, rewritten per building: 3,024 buildings × 3 LODs would otherwise
+    // be 9,072 short-lived objects during a world build.
+    const shading: { tone: number; baseOcclusion: number; faceRelief: number; parapetGain: number } = {
+      tone: 1,
+      baseOcclusion: this.#options.buildingBaseOcclusion,
+      faceRelief: this.#options.buildingFaceRelief,
+      parapetGain: 1.16,
+    };
+    const toneAmp = this.#options.buildingToneVariation;
+    /** Deterministic per-building tone, so a rebuild or a theme swap never reshuffles the city. */
+    const toneOf = (i: number): number => 1 + toneAmp * (hash01(b.buildingId[i], i) * 2 - 1);
+
+    // Pass 1: measure, so the BatchedMesh can be sized exactly.
+    const probe = new MeshBuilder({ color: true, vertexCapacity: 512, indexCapacity: 1024 });
+    let totalV = 0;
+    let totalI = 0;
+    const perLodV = new Int32Array(B * 3);
+    const perLodI = new Int32Array(B * 3);
+    for (let i = 0; i < B; i++) {
+      const n = b.ringCount[i];
+      if (n < 3) continue;
+      shading.tone = toneOf(i);
+      probe.reset();
+      addExtrudedRing(probe, ring.x, ring.y, b.ringOff[i], n, b.baseZM[i], Math.max(1, b.heightM[i]),
+        0, scratch, wr, wg, wb, rr, rg, rb, shading);
+      perLodV[i * 3] = probe.vertexCount;
+      perLodI[i * 3] = probe.indexCount;
+      totalV += probe.vertexCount;
+      totalI += probe.indexCount;
+    }
+
+    this.#buildingCount = B;
+    this.#buildingCentroid = new Float32Array(B * 4);
+    this.#buildingLod = new Uint8Array(B).fill(255);
+    this.#buildingGeomIds = new Int32Array(B * 3).fill(-1);
+    this.#buildingInstanceIds = new Int32Array(B).fill(-1);
+
+    for (let i = 0; i < B; i++) {
+      const n = b.ringCount[i];
+      const off = b.ringOff[i];
+      let sx = 0;
+      let sy = 0;
+      let maxR = 0;
+      for (let k = 0; k < n; k++) {
+        sx += ring.x[off + k];
+        sy += ring.y[off + k];
+      }
+      const cx = n > 0 ? sx / n : 0;
+      const cy = n > 0 ? sy / n : 0;
+      for (let k = 0; k < n; k++) {
+        const d = Math.hypot(ring.x[off + k] - cx, ring.y[off + k] - cy);
+        if (d > maxR) maxR = d;
+      }
+      this.#buildingCentroid[i * 4] = cx;
+      this.#buildingCentroid[i * 4 + 1] = cy;
+      this.#buildingCentroid[i * 4 + 2] = b.baseZM[i] + Math.max(1, b.heightM[i]);
+      this.#buildingCentroid[i * 4 + 3] = maxR;
+    }
+    this.#buildGrid(world);
+
+    const useBatched = totalV > 0 && totalV <= this.#options.maxBuildingVertices;
+    if (useBatched) {
+      let mesh: BatchedMesh | null = null;
+      try {
+        mesh = new BatchedMesh(B, Math.ceil(totalV * 1.02) + 64, Math.ceil(totalI * 1.02) + 128,
+          this.#buildingMaterial);
+        mesh.name = "world/buildings";
+        mesh.castShadow = this.#options.shadows;
+        mesh.receiveShadow = this.#options.shadows;
+        mesh.perObjectFrustumCulled = true;
+        mesh.sortObjects = false;
+        const builder = new MeshBuilder({ color: true, vertexCapacity: 512, indexCapacity: 1024 });
+        const identity = this.#scratchMatrix.identity();
+        for (let i = 0; i < B; i++) {
+          const n = b.ringCount[i];
+          if (n < 3) continue;
+          shading.tone = toneOf(i);
+          builder.reset();
+          addExtrudedRing(builder, ring.x, ring.y, b.ringOff[i], n, b.baseZM[i], Math.max(1, b.heightM[i]),
+            0, scratch, wr, wg, wb, rr, rg, rb, shading);
+          const g = builder.toGeometry();
+          if (!g) continue;
+          const id = mesh.addGeometry(g);
+          g.dispose();
+          // Every LOD slot names the one exact geometry; see the file header.
+          this.#buildingGeomIds[i * 3] = id;
+          this.#buildingGeomIds[i * 3 + 1] = id;
+          this.#buildingGeomIds[i * 3 + 2] = id;
+          const g0 = this.#buildingGeomIds[i * 3 + 1];
+          if (g0 < 0) continue;
+          const inst = mesh.addInstance(g0);
+          mesh.setMatrixAt(inst, identity);
+          this.#buildingInstanceIds[i] = inst;
+          this.#buildingLod[i] = 1;
+        }
+        this.#buildings = mesh;
+        this.buildingsGroup.add(mesh);
+        this.#buildingBackend = "batched";
+        this.#report = { ...this.#report, buildingVertices: totalV, buildingIndices: totalI };
+        return;
+      } catch (err) {
+        // BatchedMesh refused (budget, or a three build without multi-draw support). Fall through to
+        // the merged path; the partially built mesh is dropped so it cannot leak a GPU buffer.
+        if (mesh) {
+          mesh.removeFromParent();
+          mesh.dispose();
+        }
+        this.#buildings = null;
+        this.#buildingGeomIds.fill(-1);
+        this.#buildingInstanceIds.fill(-1);
+        this.#buildingLod.fill(255);
+        this.#buildingBackend = "merged";
+        this.#buildError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    // Fallback: bake the mid LOD into the per-tile meshes. One extra draw call per tile, no LOD.
+    this.#buildingBackend = "merged";
+    for (let i = 0; i < B; i++) {
+      const n = b.ringCount[i];
+      if (n < 3) continue;
+      const off = b.ringOff[i];
+      const t = tileIndex(ring.x[off], ring.y[off]);
+      shading.tone = toneOf(i);
+      addExtrudedRing(surfaceOf(t), ring.x, ring.y, off, n, b.baseZM[i], Math.max(1, b.heightM[i]),
+        0, scratch, wr, wg, wb, rr, rg, rb, shading);
+    }
+    this.#report = { ...this.#report, buildingVertices: totalV, buildingIndices: totalI };
+  }
+
+  /** Uniform grid over building footprints, for {@link buildingTopAt}. */
+  #buildGrid(world: VwpWorld): void {
+    const b = world.buildings;
+    const B = b.count;
+    const bbox = world.bbox;
+    const cell = Math.max(10, Math.min(60, Math.hypot(bbox.maxXM - bbox.minXM, bbox.maxYM - bbox.minYM) / 120));
+    this.#gridCell = cell;
+    this.#gridMinX = bbox.minXM;
+    this.#gridMinY = bbox.minYM;
+    this.#gridW = Math.max(1, Math.ceil((bbox.maxXM - bbox.minXM) / cell) + 1);
+    this.#gridH = Math.max(1, Math.ceil((bbox.maxYM - bbox.minYM) / cell) + 1);
+    const cells = this.#gridW * this.#gridH;
+    const counts = new Int32Array(cells + 1);
+
+    const cellRange = (i: number): [number, number, number, number] => {
+      const cx = this.#buildingCentroid[i * 4];
+      const cy = this.#buildingCentroid[i * 4 + 1];
+      const r = this.#buildingCentroid[i * 4 + 3];
+      const x0 = Math.max(0, Math.floor((cx - r - this.#gridMinX) / cell));
+      const x1 = Math.min(this.#gridW - 1, Math.floor((cx + r - this.#gridMinX) / cell));
+      const y0 = Math.max(0, Math.floor((cy - r - this.#gridMinY) / cell));
+      const y1 = Math.min(this.#gridH - 1, Math.floor((cy + r - this.#gridMinY) / cell));
+      return [x0, x1, y0, y1];
+    };
+
+    let total = 0;
+    for (let i = 0; i < B; i++) {
+      if (b.ringCount[i] < 3) continue;
+      const [x0, x1, y0, y1] = cellRange(i);
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          counts[y * this.#gridW + x + 1]++;
+          total++;
+        }
+      }
+    }
+    for (let i = 0; i < cells; i++) counts[i + 1] += counts[i];
+    const items = new Int32Array(total);
+    const cursor = counts.slice(0, cells);
+    for (let i = 0; i < B; i++) {
+      if (b.ringCount[i] < 3) continue;
+      const [x0, x1, y0, y1] = cellRange(i);
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const c = y * this.#gridW + x;
+          items[cursor[c]++] = i;
+        }
+      }
+    }
+    this.#gridStart = counts;
+    this.#gridItems = items;
+  }
+
+  /**
+   * The top of the building covering `(x, y)`, or `-Infinity` when the point is outside every
+   * footprint. `cameras.ts` calls this to keep the chase camera out of geometry.
+   */
+  buildingTopAt(x: number, y: number): number {
+    const i = this.#buildingAt(x, y, true);
+    return i < 0 ? -Infinity : this.#buildingCentroid[i * 4 + 2];
+  }
+
+  /**
+   * Index of the tallest building whose footprint covers `(x, y)`, or −1. Unlike
+   * {@link buildingTopAt} this also reports a ghosted building.
+   */
+  buildingIndexAt(x: number, y: number): number {
+    return this.#buildingAt(x, y, false);
+  }
+
+  /** The `building_id` of building `i`, or −1. */
+  buildingIdOf(i: number): number {
+    const w = this.#world;
+    return w && i >= 0 && i < w.buildings.count ? w.buildings.buildingId[i] : -1;
+  }
+
+  /** Roof height of building `i` (base + height), or −∞. */
+  buildingTopOf(i: number): number {
+    return i >= 0 && i < this.#buildingCount ? this.#buildingCentroid[i * 4 + 2] : -Infinity;
+  }
+
+  /** What the lane-marking pass drew, or null before a world (or with markings off). */
+  get markingReport(): MarkingReport | null {
+    return this.#markingReport;
+  }
+
+  /**
+   * How dark the scene is, `[0, 1]`: 0 in daylight, 1 at night, from the sun the time of day puts
+   * in the sky. Lamps glow in proportion (`actor-material.ts`).
+   */
+  get darkness(): number {
+    return this.#darkness;
+  }
+
+  /**
+   * The thinnest vertical gap between two road-surface layers that can overlap, metres: what the
+   * depth buffer has to resolve for the road not to z-fight (the glitch hunter checks it).
+   */
+  get minLayerGapM(): number {
+    return this.#minLayerGapM();
+  }
+
+  /**
+   * Depth-buffer steps (24-bit) the surface shader separates adjacent layer ranks by, read back
+   * from the uniform the shader actually uses. Settable, so a test can take the bias away.
+   */
+  get layerBiasSteps(): number {
+    return this.#layerBias.value / 2 ** -23;
+  }
+
+  set layerBiasSteps(steps: number) {
+    this.#layerBias.value = steps * 2 ** -23;
+  }
+
+  #minLayerGapM(): number {
+    const layers = [Z_LANDUSE, Z_ROAD, Z_ROAD + SIDEWALK_LIFT_M, Z_JUNCTION, Z_CROSSING];
+    let gap = Infinity;
+    for (let i = 0; i < layers.length; i++) {
+      for (let j = i + 1; j < layers.length; j++) gap = Math.min(gap, Math.abs(layers[i] - layers[j]));
+    }
+    return gap;
+  }
+
+  /**
+   * Whether a road runs through building `i` (it has a portal, `passages.ts`): a vehicle inside
+   * its footprint is in a real passage, not inside a wall.
+   */
+  hasPassage(i: number): boolean {
+    return this.#portalBuildings.has(i);
+  }
+
+  /** The building currently ghosted, or −1. */
+  get ghostBuilding(): number {
+    return this.#ghost;
+  }
+
+  /**
+   * Hide one building — the one the followed vehicle is driving *through*.
+   *
+   * The engine's lanes pass through building footprints where the map has a road under a building
+   * (a passage, an arcade, a ramp into a terminal: measured on Manhattan, 39 of 2,406 drive lanes
+   * cross a footprint for 1.7 km in all). A chase camera behind a car in such a passage used to be
+   * thrown onto the roof — 172 m up for one of them — looking down at a roof that hid the car. The
+   * building is hidden instead, and the camera logic treats it as open space, for as long as the
+   * followed vehicle is inside it. Only the batched backend can hide one building; with the merged
+   * fallback this is a no-op and the old roof rule applies.
+   */
+  setGhostBuilding(index: number): void {
+    this.setGhostBuildings(index, -1);
+  }
+
+  /**
+   * Hide up to two buildings: the one the followed vehicle is inside and the one a street-level
+   * camera is inside (it followed that vehicle in, and a change of subject flies it out). Both are
+   * open space to the camera logic while hidden.
+   */
+  setGhostBuildings(first: number, second: number): void {
+    const norm = (i: number): number => (i >= 0 && i < this.#buildingCount && this.#buildingInstanceIds[i] >= 0 ? i : -1);
+    const a = norm(first);
+    let b = norm(second);
+    if (b === a) b = -1;
+    if (a === this.#ghost && b === this.#ghost2) return;
+    const mesh = this.#buildings;
+    if (!mesh) {
+      this.#ghost = -1;
+      this.#ghost2 = -1;
+      return;
+    }
+    for (const prev of [this.#ghost, this.#ghost2]) {
+      if (prev >= 0 && prev !== a && prev !== b) mesh.setVisibleAt(this.#buildingInstanceIds[prev], true);
+    }
+    for (const next of [a, b]) if (next >= 0) mesh.setVisibleAt(this.#buildingInstanceIds[next], false);
+    this.#ghost = a;
+    this.#ghost2 = b;
+  }
+
+  /** The second ghosted building, or −1. */
+  get ghostBuilding2(): number {
+    return this.#ghost2;
+  }
+
+  #buildingAt(x: number, y: number, skipGhost: boolean): number {
+    const world = this.#world;
+    if (!world || this.#gridItems.length === 0) return -1;
+    const gx = Math.floor((x - this.#gridMinX) / this.#gridCell);
+    const gy = Math.floor((y - this.#gridMinY) / this.#gridCell);
+    if (!(gx >= 0 && gy >= 0 && gx < this.#gridW && gy < this.#gridH)) return -1;
+    const c = gy * this.#gridW + gx;
+    const start = this.#gridStart[c];
+    const end = this.#gridStart[c + 1];
+    const b = world.buildings;
+    const ring = world.ringPoints;
+    let top = -Infinity;
+    let best = -1;
+    for (let k = start; k < end; k++) {
+      const i = this.#gridItems[k];
+      if (skipGhost && (i === this.#ghost || i === this.#ghost2)) continue;
+      const dx = x - this.#buildingCentroid[i * 4];
+      const dy = y - this.#buildingCentroid[i * 4 + 1];
+      const r = this.#buildingCentroid[i * 4 + 3];
+      if (dx * dx + dy * dy > r * r) continue;
+      if (pointInRing(ring.x, ring.y, b.ringOff[i], b.ringCount[i], x, y)) {
+        const t = this.#buildingCentroid[i * 4 + 2];
+        if (t > top) {
+          top = t;
+          best = i;
+        }
+      }
+    }
+    return best;
+  }
+
+  #buildSites(world: VwpWorld): void {
+    const n = world.sites.count;
+    this.#siteCount = n;
+    this.#worldSiteCount = n;
+    this.#sitePos = new Float32Array(n * 3);
+    this.#siteIds = new Uint32Array(n);
+    this.#siteNodeIds = new Uint32Array(n);
+    this.#siteKinds = new Uint8Array(n);
+    if (n === 0) return;
+    const builder = new MeshBuilder({ color: true, vertexCapacity: 256, indexCapacity: 512 });
+    const [r, g, b] = colorTriple(this.#theme.rsu);
+    for (let i = 0; i < n; i++) {
+      const s = world.sites.at(i);
+      const top = s.zM + Math.max(1, s.antennaHeightM);
+      this.#sitePos[i * 3] = s.xM;
+      this.#sitePos[i * 3 + 1] = s.yM;
+      this.#sitePos[i * 3 + 2] = top;
+      this.#siteIds[i] = s.siteId;
+      this.#siteNodeIds[i] = s.nodeId;
+      this.#siteKinds[i] = s.kind;
+      addCylinder(builder, s.xM, s.yM, s.zM, top, 0.18, 6, 0.35, 0.38, 0.42);
+      addBox(builder, s.xM, s.yM, top + 0.35, 0.7, 0.28, 0.7, 0, r, g, b);
+    }
+    const geom = builder.toGeometry();
+    if (!geom) return;
+    this.#disposables.push(geom);
+    const mesh = new Mesh(geom, this.#siteMaterial);
+    mesh.name = "world/site-masts";
+    mesh.castShadow = false;
+    mesh.matrixAutoUpdate = false;
+    this.sitesGroup.add(mesh);
+  }
+
+  /**
+   * The run's roadside units, from the node table a `Hello` carries (kind 2, `pos_m` at the
+   * antenna), so that every unit is drawn, can be clicked and can be watched from.
+   *
+   * A world file's sites are where a unit *may* be mounted; a scenario can also place one by
+   * `position_m`, on no site at all, and such a unit was on no layer of the page: not drawn, not
+   * pickable, and the `rsu` camera refused for want of a mast. A unit within {@link SITE_MATCH_M} of
+   * a world site is that site — it lends the site its node id when the world left it unassigned, so
+   * a click on the mast selects the unit — and every other one is appended as a mast of its own
+   * after the world's sites, which is what picking, the `rsu` camera and the coverage overlay read.
+   *
+   * Idempotent: each call replaces the previous call's masts. The list is kept and applied again
+   * to the next world, because the `Hello` that names the units arrives before its world does.
+   * Returns how many masts were added.
+   */
+  setRoadsideUnits(units: readonly RoadsideUnitPlacement[]): number {
+    this.#units = units;
+    // A run with no units, after one with none placed off-site, changes nothing: every Hello (a
+    // reconnect, a re-attach) comes through here.
+    if (units.length === 0 && this.#unitMesh === null && this.#siteCount === this.#worldSiteCount) return 0;
+    if (this.#unitMesh !== null) {
+      this.sitesGroup.remove(this.#unitMesh);
+      this.#unitMesh.geometry.dispose();
+      this.#unitMesh = null;
+    }
+    const base = this.#worldSiteCount;
+    const pos = this.#sitePos;
+    const nodeIds = this.#siteNodeIds;
+    const extra: RoadsideUnitPlacement[] = [];
+    for (const u of units) {
+      if (!Number.isFinite(u.x) || !Number.isFinite(u.y) || !Number.isFinite(u.z)) continue;
+      let site = -1;
+      for (let i = 0; i < base; i++) {
+        if (nodeIds[i] === u.nodeId) {
+          site = i;
+          break;
+        }
+        const dx = pos[i * 3] - u.x;
+        const dy = pos[i * 3 + 1] - u.y;
+        if (dx * dx + dy * dy <= SITE_MATCH_M * SITE_MATCH_M && site < 0) site = i;
+      }
+      if (site >= 0) {
+        if (nodeIds[site] === NO_NODE_ID) nodeIds[site] = u.nodeId;
+        continue;
+      }
+      extra.push(u);
+    }
+    const n = base + extra.length;
+    const grow = <T extends Float32Array | Uint32Array | Uint8Array>(a: T, make: (len: number) => T, per: number): T => {
+      const out = make(n * per);
+      out.set(a.subarray(0, base * per));
+      return out;
+    };
+    this.#sitePos = grow(this.#sitePos, (l) => new Float32Array(l), 3);
+    this.#siteIds = grow(this.#siteIds, (l) => new Uint32Array(l), 1);
+    this.#siteNodeIds = grow(this.#siteNodeIds, (l) => new Uint32Array(l), 1);
+    this.#siteKinds = grow(this.#siteKinds, (l) => new Uint8Array(l), 1);
+    this.#siteCount = n;
+    if (extra.length === 0) return 0;
+
+    const ground = this.#groundZ;
+    const builder = new MeshBuilder({ color: true, vertexCapacity: 256, indexCapacity: 512 });
+    const [r, g, b] = colorTriple(this.#theme.rsu);
+    extra.forEach((u, k) => {
+      const i = base + k;
+      this.#sitePos[i * 3] = u.x;
+      this.#sitePos[i * 3 + 1] = u.y;
+      this.#sitePos[i * 3 + 2] = u.z;
+      this.#siteIds[i] = NO_NODE_ID;
+      this.#siteNodeIds[i] = u.nodeId;
+      this.#siteKinds[i] = 0;
+      // The mast stands on the ground under the antenna; a unit on a roof or a gantry whose
+      // antenna is far above the map's floor gets a short mast of its own rather than a tower.
+      const foot = u.z - ground > 1 && u.z - ground < 30 ? ground : u.z - Math.min(6, Math.max(1, u.z - ground));
+      addCylinder(builder, u.x, u.y, foot, u.z, 0.18, 6, 0.35, 0.38, 0.42);
+      addBox(builder, u.x, u.y, u.z + 0.35, 0.7, 0.28, 0.7, 0, r, g, b);
+    });
+    const geom = builder.toGeometry();
+    if (!geom) return 0;
+    const mesh = new Mesh(geom, this.#siteMaterial);
+    mesh.name = "world/rsu-masts";
+    mesh.castShadow = false;
+    mesh.matrixAutoUpdate = false;
+    this.sitesGroup.add(mesh);
+    this.#unitMesh = mesh;
+    return extra.length;
+  }
+
+  /**
+   * Apply signal rows on top of the current state, keyed by controller (`signal_id`), to every head
+   * of that controller. Pass `null` to forget every state. Kept for callers that hold a lone block
+   * (the replay path); a stream should use {@link applySignalKeyframe} and {@link applySignalDelta},
+   * which is what makes a seek or a reconnect come out right.
+   */
+  updateSignalPhases(block: SignalBlock | null): void {
+    if (block) this.signals.applyDelta(block);
+    else this.signals.resetStates();
+  }
+
+  /** A keyframe's signal block: the complete state (§3.3.3); unmentioned heads have no data. */
+  applySignalKeyframe(block: SignalBlock | null): void {
+    this.signals.applyKeyframe(block);
+  }
+
+  /** A delta's signal block: only the rows that changed (§3.4.7). */
+  applySignalDelta(block: SignalBlock | null): void {
+    this.signals.applyDelta(block);
+  }
+
+  /** Convenience alias matching the message name. */
+  updateSignals(block: SignalBlock): void {
+    this.updateSignalPhases(block);
+  }
+
+  /**
+   * Re-pick building LODs for the current camera. Cheap and idempotent: it returns immediately
+   * unless the camera has moved at least `moveThresholdM` since the last call, and it only touches
+   * the instances whose band actually changed.
+   */
+  updateLod(camera: Camera, moveThresholdM = 12): number {
+    const mesh = this.#buildings;
+    if (!mesh) return 0;
+    const e = camera.matrixWorld.elements;
+    const cx = e[12];
+    const cy = e[13];
+    const cz = e[14];
+    const p = this.#lodCamPos;
+    if (Number.isFinite(p.x)) {
+      const dx = cx - p.x;
+      const dy = cy - p.y;
+      const dz = cz - p.z;
+      if (dx * dx + dy * dy + dz * dz < moveThresholdM * moveThresholdM) return this.#buildingsVisible;
+    }
+    p.set(cx, cy, cz);
+
+    const [d0, d1] = this.#options.buildingLodDistancesM;
+    const d0Sq = d0 * d0;
+    const d1Sq = d1 * d1;
+    let visible = 0;
+    for (let i = 0; i < this.#buildingCount; i++) {
+      const inst = this.#buildingInstanceIds[i];
+      if (inst < 0) continue;
+      visible++;
+      const dx = this.#buildingCentroid[i * 4] - cx;
+      const dy = this.#buildingCentroid[i * 4 + 1] - cy;
+      const dz = this.#buildingCentroid[i * 4 + 2] - cz;
+      const dist = dx * dx + dy * dy + dz * dz;
+      const lod = dist < d0Sq ? 0 : dist < d1Sq ? 1 : 2;
+      if (this.#buildingLod[i] === lod) continue;
+      const gid = this.#buildingGeomIds[i * 3 + lod];
+      if (gid < 0) continue;
+      mesh.setGeometryIdAt(inst, gid);
+      this.#buildingLod[i] = lod;
+    }
+    this.#buildingsVisible = visible;
+    return visible;
+  }
+
+  /**
+   * Fade the lane markings out as they shrink below a pixel.
+   *
+   * A marking is 0.18 m wide. From the plan view's 1.4 km that is a sixth of a pixel, and a line
+   * that thin is rasterised as a scatter of pixels that changes with every sub-pixel camera move:
+   * measured at 1,680 x 1,050, a one-pixel pan changed 8.5 % of the frame, all of it markings (the
+   * road surfaces alone: 0.04 %). Full strength from about one pixel wide, gone below a third.
+   * `distanceM` is the camera's distance to what it looks at, `fovDeg` and `viewportPx` its
+   * vertical field and height.
+   */
+  fadeMarkings(distanceM: number, fovDeg: number, viewportPx: number): void {
+    this.signals.setBarVisibility(distanceM);
+    const pxK = (2 * Math.tan((fovDeg * Math.PI) / 360)) / Math.max(1, viewportPx);
+    this.#markingPxK.value = pxK;
+    const mPerPx = Math.max(1, distanceM) * pxK;
+    const coverage = MARKING_WIDTH_M / mPerPx;
+    const t = Math.min(1, Math.max(0, (coverage - 0.35) / (0.9 - 0.35)));
+    const opacity = t * t * (3 - 2 * t);
+    const m = this.#markingMaterial;
+    this.markings.visible = this.#markingsWanted && opacity > 0.02;
+    if (Math.abs(m.opacity - opacity) > 0.01) {
+      m.opacity = opacity;
+      m.transparent = opacity < 0.999;
+    }
+  }
+
+  /** Whether lane markings are wanted at all (the `lane_markings` overlay). */
+  get markingsEnabled(): boolean {
+    return this.#markingsWanted;
+  }
+
+  set markingsEnabled(v: boolean) {
+    this.#markingsWanted = v;
+    this.markings.visible = v;
+  }
+
+  /** Keep the sky centred on the camera so its radius never has to cover the whole world. */
+  followCamera(camera: Camera): void {
+    const e = camera.matrixWorld.elements;
+    this.sky.position.set(e[12], e[13], e[14]);
+    this.sky.updateMatrix();
+    // And the ground under it, as far as the far plane reaches: a quad centred on the world ended
+    // at three world radii, so a camera near the world's edge, or high in the free camera, saw
+    // the sky's underside through the gap between the quad's edge and the horizon.
+    const far = (camera as unknown as { far?: number }).far;
+    // Half-edge 2.5 far planes: a corner ray of a 68°, 2.5:1 view reaches 2.07 far planes out
+    // horizontally before its depth passes the far plane.
+    if (far !== undefined && Number.isFinite(far)) this.#resizeGround((Math.max(far, 100) * 5) / 6);
+    if (this.ground.position.x !== e[12] || this.ground.position.y !== e[13]) {
+      this.ground.position.x = e[12];
+      this.ground.position.y = e[13];
+      this.ground.updateMatrix();
+    }
+  }
+
+  #clearWorld(): void {
+    this.#portalBuildings = new Set<number>();
+    // The signal renderer rebuilds itself in `setWorld`, keeping what the lamps showed when the
+    // world is the same one (a theme swap).
+    for (const g of [this.tiles, this.markings, this.buildingsGroup, this.sitesGroup]) {
+      for (let i = g.children.length - 1; i >= 0; i--) {
+        const child = g.children[i];
+        g.remove(child);
+        if (child instanceof InstancedMesh || child instanceof BatchedMesh) child.dispose();
+      }
+    }
+    for (const d of this.#disposables) d.dispose();
+    this.#disposables = [];
+    this.#unitMesh?.geometry.dispose();
+    this.#unitMesh = null;
+    this.#buildings = null;
+    this.#ghost = -1;
+    this.#ghost2 = -1;
+    this.#buildingCount = 0;
+    this.#buildingBackend = "none";
+    this.#buildError = null;
+    this.#buildingsVisible = 0;
+    this.#lodCamPos.set(NaN, NaN, NaN);
+    this.#world = null;
+  }
+
+  /** Release every GPU resource. */
+  dispose(): void {
+    this.#clearWorld();
+    // The shadow map and its depth render target belong to the light, not to the renderer:
+    // `WebGLRenderer.dispose()` does not touch them, and `LightShadow.dispose()` is the only thing
+    // that frees `map` and `mapPass` (three 0.186.0, LightShadow.js). Without this every disposed
+    // viewer leaks a 2048² depth target, ~16 MiB.
+    this.sun.shadow.dispose();
+    this.sun.shadow.map = null;
+    this.sun.shadow.mapPass = null;
+    this.ground.geometry.dispose();
+    this.ground.material.dispose();
+    this.sky.geometry.dispose();
+    this.sky.material.dispose();
+    this.#surfaceMaterial.dispose();
+    this.#markingMaterial.dispose();
+    this.#buildingMaterial.dispose();
+    this.signals.dispose();
+    this.#siteMaterial.dispose();
+    this.group.removeFromParent();
+  }
+}
+
+function nowMs(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+const TRIPLE_COLOR = new Color();
+const TRIPLE_OUT: [number, number, number] = [0, 0, 0];
+
+/**
+ * A stable `[0, 1)` from two integers — the per-building tone variation's only source of randomness.
+ *
+ * Deterministic on purpose: the tone has to survive a theme swap, a reconnect and a second
+ * `setWorld` of the same payload, or the city reshuffles itself under the user while they watch.
+ */
+function hash01(a: number, b: number): number {
+  let h = (a | 0) * 0x27d4eb2d ^ (b | 0) * 0x165667b1;
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  h ^= h >>> 15;
+  return (h >>> 8) / 0x1000000;
+}
+
+/** Convert a packed sRGB hex to a linear working-space triple. Returns a shared array — copy it. */
+function colorTriple(hex: number): [number, number, number] {
+  TRIPLE_COLOR.setHex(hex);
+  TRIPLE_OUT[0] = TRIPLE_COLOR.r;
+  TRIPLE_OUT[1] = TRIPLE_COLOR.g;
+  TRIPLE_OUT[2] = TRIPLE_COLOR.b;
+  return TRIPLE_OUT;
+}
+
+/** §4.5 landuse class → theme colour. */
+function landuseColor(theme: ViewerTheme, cls: number): number {
+  switch (cls) {
+    case 4: return theme.water;
+    case 5: return theme.park;
+    case 6: return theme.industrial;
+    default: return theme.ground;
+  }
+}
+
+/** A thin line parallel to a polyline, offset `offset` metres to the left. */
+function addOffsetLine(
+  b: MeshBuilder,
+  xs: Float32Array, ys: Float32Array, zs: Float32Array | null,
+  off: number, count: number,
+  offset: number, halfWidth: number, zOffset: number,
+  r: number, g: number, bl: number,
+): void {
+  if (count < 2) return;
+  b.reserve(count * 2, (count - 1) * 6);
+  let prevL = -1;
+  let prevR = -1;
+  for (let i = 0; i < count; i++) {
+    const k = off + i;
+    const x = xs[k];
+    const y = ys[k];
+    const z = (zs ? zs[k] : 0) + zOffset;
+    let dx: number;
+    let dy: number;
+    if (i === 0) {
+      dx = xs[k + 1] - x;
+      dy = ys[k + 1] - y;
+    } else if (i === count - 1) {
+      dx = x - xs[k - 1];
+      dy = y - ys[k - 1];
+    } else {
+      dx = xs[k + 1] - xs[k - 1];
+      dy = ys[k + 1] - ys[k - 1];
+    }
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const ox = nx * offset;
+    const oy = ny * offset;
+    const li = b.addVertex(x + ox + nx * halfWidth, y + oy + ny * halfWidth, z, 0, 0, 1, 0, 0, r, g, bl);
+    const ri = b.addVertex(x + ox - nx * halfWidth, y + oy - ny * halfWidth, z, 0, 0, 1, 1, 0, r, g, bl);
+    if (prevL >= 0) b.addQuad(prevL, prevR, ri, li);
+    prevL = li;
+    prevR = ri;
+  }
+}
+
+/** One zebra bar: a quad centred at `(cx, cy)`, `halfLen` along `(ux, uy)`, `halfW` along `(px, py)`. */
+function addQuadStrip(
+  b: MeshBuilder,
+  cx: number, cy: number,
+  ux: number, uy: number, px: number, py: number,
+  halfLen: number, halfW: number, z: number,
+  r: number, g: number, bl: number,
+): void {
+  const v0 = b.addVertex(cx - ux * halfLen - px * halfW, cy - uy * halfLen - py * halfW, z, 0, 0, 1, 0, 0, r, g, bl);
+  const v1 = b.addVertex(cx + ux * halfLen - px * halfW, cy + uy * halfLen - py * halfW, z, 0, 0, 1, 1, 0, r, g, bl);
+  const v2 = b.addVertex(cx + ux * halfLen + px * halfW, cy + uy * halfLen + py * halfW, z, 0, 0, 1, 1, 1, r, g, bl);
+  const v3 = b.addVertex(cx - ux * halfLen + px * halfW, cy - uy * halfLen + py * halfW, z, 0, 0, 1, 0, 1, r, g, bl);
+  b.addQuad(v0, v1, v2, v3);
+}
+
+/** Even-odd point-in-polygon over a ring stored in parallel arrays. */
+export function pointInRing(
+  xs: Float32Array, ys: Float32Array, off: number, count: number, px: number, py: number,
+): boolean {
+  let inside = false;
+  for (let i = 0, j = count - 1; i < count; j = i++) {
+    const xi = xs[off + i];
+    const yi = ys[off + i];
+    const xj = xs[off + j];
+    const yj = ys[off + j];
+    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi || 1e-12) + xi) inside = !inside;
+  }
+  return inside;
+}

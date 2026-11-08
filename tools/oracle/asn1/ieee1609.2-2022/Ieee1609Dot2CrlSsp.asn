@@ -1,0 +1,69 @@
+--***************************************************************************--
+--                   IEEE Std 1609.2: CRL SSP Data Types                     --
+--***************************************************************************--
+
+/**
+ * @note Section references in this file are to clauses in IEEE Std
+ * 1609.2 unless indicated otherwise. Full forms of acronyms and
+ * abbreviations used in this file are specified in 3.2.
+ */
+
+Ieee1609Dot2CrlSsp {iso(1) identified-organization(3) ieee(111)
+  standards-association-numbered-series-standards(2) wave-stds(1609) dot2(2)
+  crl(3) ssp(3) major-version-2(2) minor-version-2(2)}
+
+DEFINITIONS AUTOMATIC TAGS ::= BEGIN
+
+IMPORTS
+  CrlSeries,
+  Uint8
+FROM Ieee1609Dot2BaseTypes {iso(1) identified-organization(3) ieee(111)
+  standards-association-numbered-series-standards(2) wave-stds(1609) dot2(2)
+  base(1) base-types(2) major-version-2(2) minor-version-4(4)}
+WITH SUCCESSORS
+;
+
+/**
+ * @brief In this structure:
+ * 
+ * @param version: is the version number of the SSP and is 1 for this version 
+ * of the SSP.
+ * 
+ * @param associatedCraca: identifies the relationship between this 
+ * certificate and the CRACA. If associatedCraca = isCraca, this certificate 
+ * is the CRACA certificate and signs CRLs for certificates which chain back 
+ * to this certificate. If associatedCraca = issuerIsCraca, the issuer of 
+ * this certificate is the CRACA and this certificate may sign CRLs for 
+ * certificates which chain back to its issuer.
+ * 
+ * @param crls: identifies what type of CRLs may be issued by the certificate 
+ * holder.
+ */
+CrlSsp::= SEQUENCE {
+  version         Uint8(1),
+  associatedCraca CracaType,
+  crls            PermissibleCrls,
+  ...
+}
+
+/**
+ * @brief This type is used to determine the validity of the crlCraca field 
+ * in the CrlContents structure. 
+ *   - If this takes the value isCraca, the crlCraca field in the CrlContents 
+ * structure is invalid unless it indicates the certificate that signs the 
+ * CRL.
+ *   - If this takes the value issuer, the isCracaDelegate field in the 
+ * CrlContents structure is invalid unless it indicates the certificate that 
+ * issued the certificate that signs the CRL.
+ */
+CracaType ::= ENUMERATED {isCraca, issuerIsCraca}
+
+/**
+ * @brief This type is used to determine the validity of the crlSeries field 
+ * in the CrlContents structure. The crlSeries field in the CrlContents 
+ * structure is invalid unless that value appears as an entry in the 
+ * SEQUENCE contained in this field.
+ */
+PermissibleCrls ::= SEQUENCE OF CrlSeries
+
+END

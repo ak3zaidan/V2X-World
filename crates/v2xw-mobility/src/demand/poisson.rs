@@ -1,0 +1,760 @@
+//! `mobility/demand/poisson-thinned` — the arrival process.
+//!
+//! # The process
+//!
+//! Candidate arrivals form a Poisson process at rate `arrival_rate · cand_boost`, and each
+//! candidate is **kept** with probability `m(f) / cand_boost`, where `m` is the time-of-day
+//! shape ([`DemandProfile`]) and `f = t / duration`. Thinning a homogeneous process by an
+//! acceptance probability is an exact simulation of the inhomogeneous process of rate
+//! `arrival_rate · m(f)`, which is why the boost exists: a scenario whose event multipliers
+//! can push the rate above the base rate raises the candidate rate once, and the thinning
+//! takes it back down everywhere else. With no events the boost is 1 and the draw sequence
+//! is the legacy engine's [`run.py` L1705-1730].
+//!
+//! # Why the cursor is state
+//!
+//! `spawns_in` is called once per mobility step with consecutive windows, but the arrival
+//! process does not know about windows: it has a *next candidate time*, which may be many
+//! windows away. Keeping that cursor in the model is what makes the draw sequence
+//! independent of how the caller chopped time up — the property invariant I-M2 needs, and
+//! the one a model that redrew per window would lose.
+//!
+//! # Draw count
+//!
+//! Per candidate: one exponential for the next arrival time, one coin for the thinning,
+//! and — only if the candidate survives — one class draw, three origin-destination draws
+//! and one lane-offset draw, all from the actor-independent `spawn` stream. The desired
+//! speed comes from a *per-trip* `desired-speed` stream, so a change to the fleet mix
+//! cannot shift the speeds of unrelated trips.
+
+use serde::{Deserialize, Serialize};
+use v2xw_core::card::{
+    Determinism, Equation, Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation,
+    ValidationStatus,
+};
+use v2xw_core::rng::{EntityRef, RngDomain};
+use v2xw_core::time::{Duration, SimTime, secs_to_ns};
+use v2xw_world::World;
+
+use crate::ctx::MobCtx;
+use crate::demand::{
+    DemandProfile, FleetMix, LEGACY_ARRIVAL_RATE_PER_S, OdModel, OdParams, SpeedLaw,
+    shared_parameters,
+};
+use crate::error::Result;
+use crate::traits::Demand;
+use crate::views::TripRequest;
+
+/// The model id.
+pub const MODEL_ID: &str = "mobility/demand/poisson-thinned";
+
+/// The model version.
+pub const MODEL_VERSION: &str = "1.0.0";
+
+/// The arrival process's parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PoissonParams {
+    /// Base arrival rate, trips per second.
+    pub arrival_rate_per_s: f64,
+    /// Candidate-rate boost. At least 1; a scenario with demand surges sets it to the
+    /// largest multiplier any event applies, so the thinning can reproduce the surge.
+    pub candidate_boost: f64,
+    /// Cap on the total number of trips, or `0` for no cap (the legacy
+    /// `max_total_vehicles`).
+    pub max_total_vehicles: u64,
+    /// The time-of-day shape.
+    pub profile: DemandProfile,
+    /// The run duration, which turns an instant into the fraction `f` the shape takes.
+    pub duration: Duration,
+    /// Which classes the fleet is drawn from.
+    pub fleet: FleetMix,
+    /// How a trip's desired speed is drawn.
+    ///
+    /// The default is [`SpeedLaw::ClassSpeedDev`], SUMO's per-vehicle maximum: the native
+    /// engine takes the speed a driver actually chooses on a lane as their speed factor
+    /// times the posted limit (`engine::DriverTraits`), and the trip's desired speed is
+    /// the ceiling over that. The legacy law — uniform 8-18 m/s — capped 43 % of drivers
+    /// below a 25 mph limit on an empty avenue, which is no city's free-speed distribution;
+    /// a scenario that wants it names it (`speed: {law: legacy-uniform, ...}`).
+    pub speed: SpeedLaw,
+    /// Demand by the hour of the local day ([`crate::demand::daily`]), on top of
+    /// `profile`: what makes a run of days have a night and a rush hour. `None` keeps the
+    /// rate flat over the clock, and is left out of the serialised parameters so every
+    /// scenario without it keeps its card and its draw sequence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily: Option<crate::demand::DailyProfile>,
+    /// Hold this many vehicles on the road for the whole run, or `0` (the default) for the
+    /// arrival process. With a fleet the arrival rate is not used: the engine tops the
+    /// fleet up whenever a trip ends or a trip could not enter ([`Demand::fleet_target`]),
+    /// as SUMO's `--max-num-vehicles` with continuous rerouting or a closed-loop
+    /// `routeProbe` demand does. Left out of the serialised parameters when `0`, so every
+    /// scenario without it keeps its card and its draw sequence.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub fleet_size: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+impl Default for PoissonParams {
+    fn default() -> Self {
+        Self {
+            arrival_rate_per_s: LEGACY_ARRIVAL_RATE_PER_S,
+            candidate_boost: 1.0,
+            max_total_vehicles: 0,
+            profile: DemandProfile::Uniform,
+            duration: Duration::from_secs(600),
+            fleet: FleetMix::CarsOnly,
+            speed: SpeedLaw::ClassSpeedDev,
+            daily: None,
+            fleet_size: 0,
+        }
+    }
+}
+
+impl PoissonParams {
+    /// The candidate rate, trips per second.
+    pub fn candidate_rate_per_s(&self) -> f64 {
+        self.arrival_rate_per_s * self.candidate_boost.max(1.0)
+    }
+}
+
+/// The thinned-Poisson demand model.
+#[derive(Debug, Clone)]
+pub struct PoissonDemand {
+    params: PoissonParams,
+    od: OdModel,
+    /// The next candidate arrival time, once the process has started.
+    next: Option<SimTime>,
+    /// How many trips have been produced, which is also the next trip's `seq` (I-M2).
+    seq: u64,
+    /// How many produced trips never reached the road ([`Demand::refund`]): the cap on
+    /// trips counts `seq - refunded`, the vehicles actually placed.
+    refunded: u64,
+    /// The scenario timeline's demand multiplier in force, `1` when
+    /// none is. It scales the thinning probability, so it is exact while it is at most
+    /// `candidate_boost` — which is what the engine sizes the boost to.
+    event_multiplier: f64,
+    card: ModelCard,
+}
+
+impl PoissonDemand {
+    /// The model over `world`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`OdModel::build`] refuses — a world with no lane the fleet can use.
+    pub fn new(world: &World, params: PoissonParams, od: OdParams) -> Result<Self> {
+        let od = OdModel::build(world, od)?;
+        Ok(Self {
+            card: card(&params, od.params()),
+            params,
+            od,
+            next: None,
+            seq: 0,
+            refunded: 0,
+            event_multiplier: 1.0,
+        })
+    }
+
+    /// The parameters in force.
+    pub fn params(&self) -> &PoissonParams {
+        &self.params
+    }
+
+    /// The origin-destination model.
+    pub fn od(&self) -> &OdModel {
+        &self.od
+    }
+
+    /// How many trips it has produced.
+    pub fn produced(&self) -> u64 {
+        self.seq
+    }
+
+    /// The demand shape's value at `t`.
+    pub fn multiplier_at(&self, t: SimTime) -> f64 {
+        let duration = self.params.duration.as_secs_f64();
+        let f = if duration > 0.0 {
+            (v2xw_core::time::ns_to_secs(t) / duration).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.params.profile.multiplier(f)
+    }
+
+    /// The instant of the candidate after `t`.
+    fn advance(&self, ctx: &mut dyn MobCtx, t: SimTime) -> SimTime {
+        let rate = self.params.candidate_rate_per_s();
+        if rate <= 0.0 {
+            return SimTime::MAX;
+        }
+        let gap_s = ctx
+            .rng(RngDomain::Spawn, EntityRef::Global)
+            .exponential(rate);
+        t.saturating_add(secs_to_ns(gap_s).max(1))
+    }
+
+    /// The daily profile's factor at `t`, `1` without one.
+    pub fn daily_factor_at(&self, t: SimTime) -> f64 {
+        self.params.daily.map_or(1.0, |d| d.factor(t))
+    }
+
+    /// Turns a surviving candidate into a trip.
+    fn make_trip(&mut self, ctx: &mut dyn MobCtx, t: SimTime) -> Option<TripRequest> {
+        let multiplier = self.multiplier_at(t);
+        let keep = multiplier * self.daily_factor_at(t) * self.event_multiplier
+            / self.params.candidate_boost.max(1.0);
+        if !ctx
+            .rng(RngDomain::Spawn, EntityRef::Global)
+            .bool(keep.clamp(0.0, 1.0))
+        {
+            return None;
+        }
+        if self.params.max_total_vehicles > 0
+            && self.seq.saturating_sub(self.refunded) >= self.params.max_total_vehicles
+        {
+            return None;
+        }
+        Some(self.draw_trip(ctx, t, multiplier))
+    }
+
+    /// Draws the class, origin, destination, offset and speed of trip `self.seq`.
+    fn draw_trip(&mut self, ctx: &mut dyn MobCtx, t: SimTime, multiplier: f64) -> TripRequest {
+        let class = {
+            let mut rng = ctx.rng(RngDomain::Spawn, EntityRef::Global);
+            self.params.fleet.draw(&mut rng)
+        };
+        let (origin, destination) = {
+            let world = ctx.world();
+            // The world borrow and the RNG borrow are both `&self`-shaped, so they coexist.
+            let mut rng = ctx.rng(RngDomain::Spawn, EntityRef::Global);
+            self.od.draw(world, &mut rng, multiplier)
+        };
+        let origin_s_m = {
+            let length = ctx.world().lane(origin).length_m;
+            let mut rng = ctx.rng(RngDomain::Spawn, EntityRef::Global);
+            rng.uniform(0.0, length)
+        };
+        let seq = self.seq;
+        // A per-trip stream, so a change to the fleet mix or the arrival rate cannot shift
+        // the speed an unrelated trip was given.
+        let desired_speed_mps = {
+            let mut rng = ctx.rng(RngDomain::DesiredSpeed, EntityRef::custom(MODEL_ID, seq));
+            self.params.speed.draw(class, &mut rng)
+        };
+        self.seq += 1;
+        TripRequest {
+            seq,
+            t,
+            origin,
+            origin_s_m,
+            destination,
+            class,
+            desired_speed_mps,
+        }
+    }
+}
+
+impl v2xw_core::model::Model for PoissonDemand {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+impl Demand for PoissonDemand {
+    fn trip_stream_id(&self) -> Option<String> {
+        Some(MODEL_ID.to_string())
+    }
+
+    fn spawns_in(&mut self, ctx: &mut dyn MobCtx, from: SimTime, to: SimTime) -> Vec<TripRequest> {
+        let mut out = Vec::new();
+        if to <= from || self.params.fleet_size > 0 {
+            return out;
+        }
+        if self.next.is_none() {
+            self.next = Some(self.advance(ctx, from));
+        }
+        while let Some(t) = self.next {
+            if t >= to {
+                break;
+            }
+            if t >= from {
+                if let Some(trip) = self.make_trip(ctx, t) {
+                    out.push(trip);
+                }
+            }
+            self.next = Some(self.advance(ctx, t));
+        }
+        out
+    }
+
+    fn resume_after_pause(&mut self, paused: Duration) {
+        if let Some(t) = self.next.as_mut() {
+            *t = t.saturating_add(paused.as_nanos());
+        }
+    }
+
+    fn set_multiplier(&mut self, m: f64) -> bool {
+        self.event_multiplier = if m.is_finite() { m.max(0.0) } else { 1.0 };
+        true
+    }
+
+    fn refund(&mut self) {
+        self.refunded = (self.refunded + 1).min(self.seq);
+    }
+
+    fn fleet_target(&self) -> Option<u64> {
+        (self.params.fleet_size > 0).then_some(self.params.fleet_size)
+    }
+
+    fn top_up(&mut self, ctx: &mut dyn MobCtx, t: SimTime) -> Option<TripRequest> {
+        if self.params.fleet_size == 0 {
+            return None;
+        }
+        let multiplier = self.multiplier_at(t);
+        Some(self.draw_trip(ctx, t, multiplier))
+    }
+
+    /// A new origin and destination for an arrival that had no route: the arrival keeps its
+    /// instant (the Poisson process is not thinned), only the OD pair is drawn again. The
+    /// cap still holds, because the unroutable trip's slot was refunded first.
+    fn redraw(&mut self, ctx: &mut dyn MobCtx, t: SimTime) -> Option<TripRequest> {
+        if self.params.max_total_vehicles > 0
+            && self.seq.saturating_sub(self.refunded) >= self.params.max_total_vehicles
+        {
+            return None;
+        }
+        let multiplier = self.multiplier_at(t);
+        Some(self.draw_trip(ctx, t, multiplier))
+    }
+}
+
+/// The model card.
+pub fn card(params: &PoissonParams, od: &OdParams) -> ModelCard {
+    let legacy = Source {
+        kind: SourceKind::Code,
+        reference: "legacy/scms_sim_ref/mock_pipeline/run.py L1705-1730 (the thinning loop)"
+            .to_string(),
+        accessed: Some("2026-09-18".to_string()),
+        note: None,
+    };
+    let mut card = ModelCard::new(
+        MODEL_ID,
+        Family::Mobility,
+        MODEL_VERSION,
+        "Trip arrivals as a thinned Poisson process: candidates at a boosted constant rate, \
+         kept with the probability the time-of-day shape gives, which is an exact \
+         simulation of the inhomogeneous process.",
+    );
+    card.tier = vec![Tier::Abstract, Tier::Medium, Tier::High];
+    card.equations = vec![
+        Equation {
+            name: "candidate process".to_string(),
+            latex_or_text: "inter-arrival ~ Exp(arrival_rate · cand_boost)".to_string(),
+            notes: None,
+        },
+        Equation {
+            name: "thinning".to_string(),
+            latex_or_text: "keep with probability m(f) / cand_boost,  f = t / duration".to_string(),
+            notes: Some(
+                "exact for the inhomogeneous process of rate arrival_rate·m(f) whenever \
+                 cand_boost ≥ sup m"
+                    .to_string(),
+            ),
+        },
+    ];
+    card.parameters = vec![
+        Parameter::new(
+            "arrival_rate",
+            "1/s",
+            serde_json::json!(params.arrival_rate_per_s),
+            legacy.clone(),
+        ),
+        Parameter::new(
+            "cand_boost",
+            "1",
+            serde_json::json!(params.candidate_boost),
+            legacy.clone(),
+        ),
+        Parameter::new(
+            "max_total_vehicles",
+            "-",
+            serde_json::json!(params.max_total_vehicles),
+            legacy.clone(),
+        ),
+        Parameter::new(
+            "duration",
+            "s",
+            serde_json::json!(params.duration.as_secs_f64()),
+            legacy,
+        ),
+    ];
+    card.parameters.extend(shared_parameters(
+        params.profile,
+        params.fleet,
+        params.speed,
+    ));
+    card.parameters.push(Parameter::new(
+        "od",
+        "-",
+        serde_json::json!(od.law.label()),
+        Source::new(
+            SourceKind::Code,
+            "the origin-destination model, carded separately as \
+             `mobility/demand/od-gravity`",
+        ),
+    ));
+    if params.fleet_size > 0 {
+        card.parameters.push(Parameter::new(
+            "fleet_size",
+            "veh",
+            serde_json::json!(params.fleet_size),
+            Source::new(
+                SourceKind::Code,
+                "a stated choice of the scenario: the vehicles held on the road; a \
+                 finished or refused trip is replaced by a new one",
+            ),
+        ));
+    }
+    card.assumptions = vec![
+        "The arrival cursor is model state, so the draw sequence does not depend on how \
+         the caller chopped time into windows (invariant I-M2)."
+            .to_string(),
+        "Role coins (attacker, faulty, colluder) are drawn in the threat layer, not here."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "A candidate boost below the shape's supremum under-represents the peaks; \
+         `DemandProfile::supremum` is what a scenario should set it from."
+            .to_string(),
+    ];
+    card.determinism = Determinism {
+        uses_rng: true,
+        rng_domains: vec![
+            RngDomain::Spawn.as_str().to_string(),
+            RngDomain::DesiredSpeed.as_str().to_string(),
+        ],
+    };
+    card.validation = Validation {
+        status: ValidationStatus::UnitTested,
+        references: Vec::new(),
+        tests: vec![
+            "demand::poisson::tests::the_mean_arrival_rate_matches_the_parameter".to_string(),
+            "demand::poisson::tests::the_stream_does_not_depend_on_the_window_size".to_string(),
+        ],
+    };
+    card
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ctx::MobilityCtx;
+    use v2xw_core::model::Model;
+    use v2xw_core::rng::RngRegistry;
+    use v2xw_core::time::NS_PER_S;
+    use v2xw_world::{ImportOptions, procedural::GridParams};
+
+    fn world() -> World {
+        v2xw_world::procedural::grid(&GridParams::legacy(), &ImportOptions::default())
+            .expect("grid")
+    }
+
+    fn demand(world: &World, params: PoissonParams) -> PoissonDemand {
+        PoissonDemand::new(world, params, OdParams::default()).expect("built")
+    }
+
+    /// Collects every trip in `[0, seconds)` using `step`-second windows.
+    fn collect(
+        model: &mut PoissonDemand,
+        world: &World,
+        rng: &RngRegistry,
+        seconds: u64,
+        step_ms: u64,
+    ) -> Vec<TripRequest> {
+        let mut out = Vec::new();
+        let step = step_ms * v2xw_core::time::NS_PER_MS;
+        let mut t = 0u64;
+        while t < seconds * NS_PER_S {
+            let mut ctx = MobilityCtx::new(t, world, rng);
+            out.extend(model.spawns_in(&mut ctx, t, t + step));
+            t += step;
+        }
+        out
+    }
+
+    /// A day of arrivals under the NYC DOT daily profile has the day's shape: the hour of
+    /// the morning peak brings several times the arrivals of the night's quietest hour,
+    /// the afternoon is as busy as the morning, and the day's total is the mean rate times
+    /// a day. Counted from the model itself over a day, in one-minute windows.
+    ///
+    /// Shown able to fail: with the daily factor left out of the thinning probability
+    /// (`keep` without `daily_factor_at`) the 08:00/03:00 ratio is 1.0 ± noise and the
+    /// first assertion fails.
+    #[test]
+    fn a_day_of_arrivals_follows_the_daily_profile() {
+        let w = world();
+        let rng = RngRegistry::new(77);
+        // 2027-03-04, a Thursday, from local midnight in New York (UTC−5).
+        let daily = crate::demand::DailyProfile {
+            curve: crate::demand::DailyCurve::NycDotManhattan,
+            utc_offset_h: Some(-5.0),
+            t0_unix_s: 1_804_118_400.0 + 5.0 * 3600.0,
+        };
+        let mut m = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 600.0 / 3600.0,
+                candidate_boost: daily.supremum(),
+                duration: Duration::from_secs(86_400),
+                daily: Some(daily),
+                ..PoissonParams::default()
+            },
+        );
+        let trips = collect(&mut m, &w, &rng, 86_400, 60_000);
+        let mut by_hour = [0u32; 24];
+        for t in &trips {
+            by_hour[(t.t / (3600 * NS_PER_S)) as usize] += 1;
+        }
+        let (night, morning, afternoon) = (by_hour[3], by_hour[8], by_hour[16]);
+        assert!(
+            f64::from(morning) > 3.0 * f64::from(night),
+            "08:00 brought {morning} arrivals and 03:00 {night}: {by_hour:?}"
+        );
+        assert!(
+            f64::from(afternoon) > 0.9 * f64::from(morning),
+            "16:00 {afternoon} against 08:00 {morning}"
+        );
+        // 600 veh/h on average over a weekday is 14,400 arrivals, ± a few sigma.
+        let n = trips.len() as f64;
+        assert!((n - 14_400.0).abs() < 600.0, "{n} arrivals in the day");
+    }
+
+    #[test]
+    fn the_mean_arrival_rate_matches_the_parameter() {
+        let w = world();
+        let rng = RngRegistry::new(1234);
+        let mut m = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 2.0,
+                duration: Duration::from_secs(300),
+                ..PoissonParams::default()
+            },
+        );
+        let trips = collect(&mut m, &w, &rng, 300, 100);
+        // 2 trips/s over 300 s is 600 trips; a Poisson count has standard deviation √600 ≈
+        // 24.5, so a 5 % window is about two sigma.
+        let n = trips.len() as f64;
+        assert!((n - 600.0).abs() < 60.0, "{n} trips");
+        // Times are inside the window and non-decreasing, and `seq` is dense from zero.
+        for (i, trip) in trips.iter().enumerate() {
+            assert_eq!(trip.seq, i as u64, "seq is the demand stream order (I-M2)");
+            if i > 0 {
+                assert!(trip.t >= trips[i - 1].t);
+            }
+        }
+    }
+
+    /// A scenario timeline's `demand.multiplier` scales the arrival
+    /// rate, exactly, as long as the candidate boost covers it; and a multiplier of one is
+    /// no multiplier at all — the stream is the one without it, draw for draw.
+    #[test]
+    fn a_demand_multiplier_scales_the_rate_and_one_changes_nothing() {
+        let w = world();
+        let params = PoissonParams {
+            arrival_rate_per_s: 2.0,
+            candidate_boost: 3.0,
+            duration: Duration::from_secs(300),
+            ..PoissonParams::default()
+        };
+        let mut plain = demand(&w, params);
+        let base = collect(&mut plain, &w, &RngRegistry::new(5), 300, 100);
+        let mut unit = demand(&w, params);
+        assert!(
+            unit.set_multiplier(1.0),
+            "the Poisson model honours a multiplier"
+        );
+        let same = collect(&mut unit, &w, &RngRegistry::new(5), 300, 100);
+        assert_eq!(base, same, "a multiplier of one changes nothing");
+
+        let mut tripled = demand(&w, params);
+        tripled.set_multiplier(3.0);
+        let more = collect(&mut tripled, &w, &RngRegistry::new(5), 300, 100);
+        // 600 expected against 1,800: each is a Poisson count, so a 10 % band is several
+        // standard deviations wide on both.
+        let (n, m) = (base.len() as f64, more.len() as f64);
+        assert!((n - 600.0).abs() < 60.0, "{n} trips at the base rate");
+        assert!((m - 1800.0).abs() < 180.0, "{m} trips at three times it");
+    }
+
+    #[test]
+    fn the_stream_does_not_depend_on_the_window_size() {
+        // One registry per run: the registry is stateful, so a shared one would have the
+        // second run continue the first one's streams.
+        let w = world();
+        let mut coarse = demand(&w, PoissonParams::default());
+        let a = collect(&mut coarse, &w, &RngRegistry::new(99), 60, 1000);
+        let mut fine = demand(&w, PoissonParams::default());
+        let b = collect(&mut fine, &w, &RngRegistry::new(99), 60, 10);
+        assert_eq!(a.len(), b.len(), "{} vs {}", a.len(), b.len());
+        assert_eq!(a, b, "the trips are identical whatever the step");
+    }
+
+    #[test]
+    fn the_rush_profile_peaks_where_the_shape_does() {
+        let w = world();
+        let rng = RngRegistry::new(7);
+        let mut m = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 4.0,
+                profile: DemandProfile::Rush,
+                duration: Duration::from_secs(1000),
+                ..PoissonParams::default()
+            },
+        );
+        let trips = collect(&mut m, &w, &rng, 1000, 100);
+        // Count trips in the morning peak (f ∈ [0.2, 0.3]) against the trough
+        // (f ∈ [0.45, 0.55]): the shape says about 1.0 against about 0.2.
+        let count_in = |lo: f64, hi: f64| {
+            trips
+                .iter()
+                .filter(|t| {
+                    let f = v2xw_core::time::ns_to_secs(t.t) / 1000.0;
+                    f >= lo && f < hi
+                })
+                .count()
+        };
+        let peak = count_in(0.2, 0.3);
+        let trough = count_in(0.45, 0.55);
+        assert!(
+            peak > 3 * trough,
+            "peak {peak} is not markedly above the trough {trough}"
+        );
+    }
+
+    #[test]
+    fn the_cap_bounds_the_total() {
+        let w = world();
+        let rng = RngRegistry::new(3);
+        let mut m = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 10.0,
+                max_total_vehicles: 25,
+                ..PoissonParams::default()
+            },
+        );
+        let trips = collect(&mut m, &w, &rng, 60, 100);
+        assert_eq!(trips.len(), 25);
+        assert_eq!(m.produced(), 25);
+    }
+
+    #[test]
+    fn a_refused_trip_gives_its_cap_slot_back() {
+        // A cap of 2 means 2 vehicles placed: a trip the engine could not put on the road
+        // (no room, no route) is refunded, and the process draws another.
+        let w = world();
+        let rng = RngRegistry::new(3);
+        let mut m = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 10.0,
+                max_total_vehicles: 2,
+                ..PoissonParams::default()
+            },
+        );
+        let first = collect(&mut m, &w, &rng, 1, 100);
+        assert_eq!(first.len(), 2);
+        m.refund();
+        let more = {
+            let mut ctx = MobilityCtx::new(2 * v2xw_core::time::NS_PER_S, &w, &rng);
+            m.spawns_in(
+                &mut ctx,
+                v2xw_core::time::NS_PER_S,
+                5 * v2xw_core::time::NS_PER_S,
+            )
+        };
+        assert_eq!(more.len(), 1, "the refunded slot was not drawn again");
+        assert_eq!(
+            more[0].seq, 2,
+            "a redrawn trip takes the next sequence number"
+        );
+    }
+
+    #[test]
+    fn the_boost_is_thinned_back_out() {
+        // The same seed with and without a boost must give the same *rate*, because the
+        // thinning is exact. (Not the same trips: the boost changes the draw sequence.)
+        let w = world();
+        let mut plain = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 3.0,
+                ..PoissonParams::default()
+            },
+        );
+        let mut boosted = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 3.0,
+                candidate_boost: 4.0,
+                ..PoissonParams::default()
+            },
+        );
+        let a = collect(&mut plain, &w, &RngRegistry::new(55), 400, 100).len() as f64;
+        let b = collect(&mut boosted, &w, &RngRegistry::new(55), 400, 100).len() as f64;
+        assert!(
+            (a - b).abs() / a < 0.15,
+            "the boosted rate {b} differs from the plain rate {a} by more than 15 %"
+        );
+    }
+
+    #[test]
+    fn every_trip_is_usable() {
+        let w = world();
+        let rng = RngRegistry::new(8);
+        let mut m = demand(
+            &w,
+            PoissonParams {
+                fleet: FleetMix::LegacyMixed,
+                ..PoissonParams::default()
+            },
+        );
+        let trips = collect(&mut m, &w, &rng, 30, 100);
+        assert!(!trips.is_empty());
+        for trip in &trips {
+            let origin = w.lane(trip.origin);
+            assert!(origin.kind.is_motorised());
+            assert!((0.0..=origin.length_m).contains(&trip.origin_s_m));
+            assert!(trip.desired_speed_mps > 0.0);
+            assert!(w.lane(trip.destination).kind.is_motorised());
+        }
+    }
+
+    #[test]
+    fn the_same_seed_gives_the_same_trips() {
+        let w = world();
+        let rng_a = RngRegistry::new(4242);
+        let rng_b = RngRegistry::new(4242);
+        let mut a = demand(&w, PoissonParams::default());
+        let mut b = demand(&w, PoissonParams::default());
+        assert_eq!(
+            collect(&mut a, &w, &rng_a, 120, 100),
+            collect(&mut b, &w, &rng_b, 120, 100)
+        );
+    }
+
+    #[test]
+    fn the_card_validates() {
+        let w = world();
+        demand(&w, PoissonParams::default())
+            .card()
+            .validate()
+            .expect("validates");
+    }
+}

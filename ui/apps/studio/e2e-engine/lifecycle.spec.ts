@@ -1,0 +1,388 @@
+/**
+ * The simulator, driven through its page, against the real engine.
+ *
+ * Four things the owner reported or asked for, each as a test:
+ *
+ *  1. **Applying settings works** — an edit in the form reaches the next run, proven by what the
+ *     run produced: its horizon, its output digest (and that the same seed reproduces it), its
+ *     fleet, its radio outcome, its message family.
+ *  2. **Every transport control does what it says**, and a stopped run's kernel is gone.
+ *  3. **Run after run keeps working** — a soak of consecutive runs with edits and scenario switches
+ *     in between, with the engine's memory and the tab's heap measured along the way.
+ *     `VWP_SOAK_RUNS` sets the count (default 4; the long soak is 30).
+ *  4. **The page survives the engine going away** — a reload mid-run reattaches, and a killed and
+ *     restarted engine is reconnected to with a plain-language message in between.
+ */
+
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { expect, test, type Page } from "@playwright/test";
+
+import {
+  EngineProcess,
+  closeSettings,
+  heapBytes,
+  open,
+  openSettings,
+  runToEnd,
+  setChecks,
+  setField,
+  status,
+  streaming,
+  writeScenarios,
+  type Status,
+} from "./support.js";
+
+const scenarios = writeScenarios();
+const engine = new EngineProcess(scenarios.a);
+
+test.describe.configure({ mode: "serial" });
+
+test.beforeAll(async () => {
+  await engine.start();
+});
+
+test.afterAll(async () => {
+  await engine.stop();
+});
+
+async function apply(page: Page): Promise<string> {
+  await page.getByTestId("apply").click();
+  const message = page.getByTestId("scenario-message");
+  await expect(message).toContainText(/take effect when you restart|Run starts with these settings|No change from the run on screen/);
+  return message.innerText();
+}
+
+test("an edited setting reaches the next run: duration, seed, arrival rate, radio, message family", async ({ page }) => {
+  await open(page);
+
+  // --- duration: the horizon of the next run ----------------------------------------------------
+  await setField(page, "/time/duration_s", "4");
+  // The engine holds its run at 0 s and nothing has run yet: Run starts with the change.
+  expect(await apply(page)).toContain("Run starts with these settings");
+  await expect(page.getByTestId("staged-note")).toContainText("wait for the next run");
+  const first = await runToEnd(page);
+  expect(first.t_end_ns).toBe(4_000_000_000);
+  expect(first.t_ns, "the clock stops at the horizon").toBe(4_000_000_000);
+  await expect(page.getByTestId("time-state")).toContainText("4.0 s");
+  await expect(page.getByTestId("staged-note")).toHaveCount(0);
+
+  // --- seed: the digest moves, and the same seed reproduces it ---------------------------------
+  const again = await runToEnd(page);
+  expect(again.engine.output_digest, "the same settings and seed reproduce the run").toBe(first.engine.output_digest);
+  await setField(page, "/seed", "0x2a");
+  await apply(page);
+  const seeded = await runToEnd(page);
+  expect(seeded.engine.output_digest, "another seed is another run").not.toBe(first.engine.output_digest);
+  const seededAgain = await runToEnd(page);
+  expect(seededAgain.engine.output_digest).toBe(seeded.engine.output_digest);
+
+  // --- arrival rate: the fleet ------------------------------------------------------------------
+  await setField(page, "/time/duration_s", "20");
+  await setField(page, "/actors/vehicles/demand/rate_veh_per_h", "30");
+  // Run applies unapplied edits itself.
+  const sparse = await runToEnd(page);
+  expect(sparse.t_end_ns).toBe(20_000_000_000);
+  await setField(page, "/actors/vehicles/demand/rate_veh_per_h", "6000");
+  const dense = await runToEnd(page);
+  expect(dense.engine.stats.actors_seen, "raising the arrival rate spawns more vehicles").toBeGreaterThan(
+    sparse.engine.stats.actors_seen * 3,
+  );
+
+  // --- radio: the radio models change the reception outcome -------------------------------------
+  // This used to switch the PHY and MAC tiers to high. Since every vehicle generates at its own
+  // phase, frames on this grid do not overlap, and the high PHY's only addition (preamble capture)
+  // decides overlapping frames alone, while the high MAC is the medium one: the tiers are correctly
+  // inert here, and the engine's KEY_STATUS says so. `radio.models` changes every received power.
+  expect(dense.engine.stats.rx_attempts, "the dense run has receptions to compare").toBeGreaterThan(0);
+  await setField(
+    page,
+    "/radio/models",
+    '{"propagation": {"id": "propagation/free-space"}, "fading": {"id": "fading/none"}}',
+  );
+  const high = await runToEnd(page);
+  expect([high.engine.stats.rx_ok, high.engine.output_digest]).not.toEqual([
+    dense.engine.stats.rx_ok,
+    dense.engine.output_digest,
+  ]);
+  // A transmit-power key, when the engine publishes one, must move the received power.
+  await openSettings(page);
+  const txPower = page.locator('[data-testid="setting"][data-pointer*="tx_power"]');
+  if ((await txPower.count()) > 0) {
+    const pointer = (await txPower.first().getAttribute("data-pointer")) ?? "";
+    await setField(page, pointer, "10");
+    const quieter = await runToEnd(page);
+    expect(quieter.engine.stats.mean_rssi_dbm ?? 0).toBeLessThan((high.engine.stats.mean_rssi_dbm ?? 0) - 5);
+  } else {
+    test.info().annotations.push({
+      type: "not tested",
+      description: "this engine publishes no transmit-power setting yet; radio.models is the radio proof",
+    });
+  }
+
+  // --- message family: what goes on the air ------------------------------------------------------
+  // A list from a closed set, drawn as a checkbox per message type.
+  await setChecks(page, "/messages/sets", ["cam"]);
+  const cam = await runToEnd(page);
+  expect(cam.engine.stats.tx_by_type.cam ?? 0).toBeGreaterThan(0);
+  expect(cam.engine.stats.tx_by_type.bsm, "no BSM once the set is [cam]").toBeUndefined();
+
+  // --- a setting the engine does not act on is marked, and an edit to it is called out ---------
+  // weather.visibility_m was the example until the traffic track wired it (drivers keep to their
+  // sight distance), and nodes.backend_tier until the security track did (each backend entity is
+  // an M/M/c queue at medium and high). It is now marked as partly applied, as its KEY_STATUS row
+  // says. Whatever the engine still reads nothing from is found in the published surface and
+  // checked; the engine's own table says there is none, and then that is what is asserted.
+  await openSettings(page);
+  await page.getByTestId("settings-filter").fill("backend_tier");
+  const partial = page.locator('[data-testid="setting"][data-pointer="/nodes/backend_tier"]');
+  // "Partly applied" is said in the row's "more" since a4fb36a3 (a pill on every deployment row
+  // was noise): no pill, and the engine's note on what it applies one click away.
+  await expect(partial).toBeVisible();
+  await expect(partial.getByTestId("field-status")).toHaveCount(0);
+  await partial.getByRole("button", { name: "more" }).click();
+  await expect(partial.locator(".status-note")).toContainText("M/M/c");
+  await page.getByTestId("settings-filter").fill("");
+  // Settings the engine reads nothing from sit behind the Unsupported filter; show them to look.
+  await page.getByTestId("settings-unsupported").click();
+  await expect(page.getByTestId("settings-unsupported")).toHaveAttribute("aria-pressed", "true");
+  const notApplied = page
+    .locator('[data-testid="setting"]')
+    .filter({ has: page.getByTestId("field-status").filter({ hasText: /^not applied$/ }) });
+  const inertKeys = await notApplied.count();
+  if (inertKeys > 0) {
+    const inert = notApplied.first();
+    const control = inert.locator("select, input").first();
+    if ((await control.evaluate((e) => e.tagName)) === "SELECT") {
+      const options = await control.locator("option").allTextContents();
+      const current = await control.inputValue();
+      await control.selectOption(options.find((o) => o !== current) ?? current);
+    } else {
+      await control.fill(`${(await control.inputValue()) || "0"}1`);
+    }
+    await expect(page.getByTestId("inert-edits")).toContainText("nothing in this build");
+    await page.getByTestId("discard-edits").click();
+    await page.getByTestId("settings-unsupported").click();
+  } else {
+    await page.getByTestId("settings-unsupported").click();
+    // The leaves the form is built from (`fields`), each with the engine's own status.
+    const statuses = await page.evaluate(async () => {
+      const engine = window.__vwpStudio?.engine as unknown as {
+        requestHttp(m: string, p: unknown, o: unknown): Promise<{ fields?: { "x-path"?: string; "x-status"?: string }[] }>;
+      };
+      const res = await engine.requestHttp("scenario.get", { with_schema: true }, { quiet: true });
+      return (res.fields ?? []).map((f) => [f["x-path"] ?? "", f["x-status"] ?? ""] as const);
+    });
+    expect(statuses.length, "the published surface was read").toBeGreaterThan(50);
+    expect(
+      statuses.filter(([, st]) => st === "not-implemented" || st === "unknown").map(([p]) => p),
+      "the engine publishes no setting it reads nothing from",
+    ).toEqual([]);
+    test.info().annotations.push({
+      type: "not tested",
+      description: "no setting in this build is read by nothing, so the not-applied call-out has no subject",
+    });
+  }
+
+  // --- an edit the loader refuses is said so, and nothing is held -------------------------------
+  await setField(page, "/radio/tiers/propagation", "abstract");
+  await page.getByTestId("apply").click();
+  await expect(page.getByTestId("scenario-message")).toContainText("refused");
+  await expect(page.getByTestId("validation-err")).toContainText("propagation");
+  await page.getByTestId("discard-edits").click();
+});
+
+test("every transport control does what it says, and a stopped run leaves no kernel behind", async ({ page }) => {
+  await open(page);
+  const baseline = engine.threads();
+  await setField(page, "/time/duration_s", "30");
+  await setField(page, "/actors/vehicles/demand/rate_veh_per_h", "3000");
+  await apply(page);
+  await closeSettings(page);
+  await page.getByTestId("speed").selectOption("1");
+  await expect.poll(async () => (await status(page)).speed).toBe(1);
+  await openSettings(page);
+  await page.getByTestId("run-start").click();
+  await expect(page.getByTestId("settings-window"), "Run closes the settings to show the run").toHaveCount(0);
+  await expect.poll(async () => (await status(page)).state).toBe("running");
+  await expect.poll(async () => (await status(page)).t_ns, { timeout: 20_000 }).toBeGreaterThan(1_000_000_000);
+  // One kernel at most. It may already be 0: the kernel computes ahead of a stream paced to real
+  // time, and a short run can be fully computed while its first seconds are still being shown.
+  expect((await status(page)).engine.kernel_threads).toBeLessThanOrEqual(1);
+
+  await page.getByTestId("pause").click();
+  await expect.poll(async () => (await status(page)).state).toBe("paused");
+  const held = (await status(page)).t_ns;
+  await page.waitForTimeout(600);
+  expect((await status(page)).t_ns, "a paused clock does not move").toBe(held);
+
+  await page.getByTestId("step").click();
+  await expect.poll(async () => (await status(page)).t_ns).toBe(held + 100_000_000);
+
+  // Back one step and to the start are the timeline's own keys: the left arrow and Home.
+  await page.getByTestId("scrub-range").focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(async () => (await status(page)).t_ns).toBe(held);
+
+  await page.keyboard.press("Home");
+  await expect.poll(async () => (await status(page)).t_ns).toBe(0);
+
+  await page.getByTestId("play").click();
+  await expect.poll(async () => (await status(page)).state).toBe("running");
+  await expect.poll(async () => (await status(page)).t_ns).toBeGreaterThan(held);
+
+  // Stop is in the header's menu; the transport bar keeps play, step, speed and the timeline.
+  await page.getByTestId("app-menu-button").click();
+  await page.getByTestId("stop").click();
+  await expect.poll(async () => (await status(page)).state).toBe("finished");
+  expect((await status(page)).engine.kernel_threads, "run.stop joins the kernel").toBe(0);
+  expect(engine.threads(), "the process is back to its thread count without a kernel").toBeLessThanOrEqual(baseline);
+  await expect(page.getByTestId("connection-state"), "the page keeps its connection after a stop").toHaveAttribute(
+    "data-state",
+    "streaming",
+  );
+
+  // Restart from the header's menu, at full speed, to the end.
+  await page.getByTestId("speed").selectOption("0");
+  const restarted = await runToEnd(page, "restart");
+  expect(restarted.t_ns).toBe(restarted.t_end_ns);
+  // After the end the socket is still open, so the bar can still seek back through the run.
+  await page.getByTestId("scrub-range").focus();
+  await page.keyboard.press("Home");
+  await expect.poll(async () => (await status(page)).t_ns).toBe(0);
+  await expect(page.getByTestId("time-notice")).toHaveCount(0);
+});
+
+test("run after run keeps working, with edits and scenario switches between runs", async ({ page }) => {
+  const runs = Number(process.env.VWP_SOAK_RUNS ?? "4");
+  // Whatever the console says across all the runs: a soak that stays up while the page throws is
+  // not a clean soak.
+  const consoleErrors: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error") consoleErrors.push(m.text());
+  });
+  page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message}`));
+  await open(page);
+  await setField(page, "/time/duration_s", "3");
+  await closeSettings(page);
+  await page.getByTestId("speed").selectOption("0");
+  const samples: { run: number; rssKb: number; footprintKb: number; heapMb: number; threads: number }[] = [];
+  // Every fifth run, so a trend (a plateau or a slope) is visible and not just two end points.
+  const sampleAt = new Set([1, 2, runs, ...Array.from({ length: Math.floor(runs / 5) }, (_, k) => (k + 1) * 5)]);
+  let previous: Status | null = null;
+  for (let i = 1; i <= runs; i++) {
+    if (i % 5 === 0) {
+      // A scenario switch: load the other preset, which the next Run runs.
+      const target = i % 10 === 0 ? "e2e-grid-a" : "e2e-grid-b";
+      await openSettings(page);
+      // The presets sit in a collapsed section; open it unless an earlier switch left it open.
+      const presets = page.getByTestId("presets");
+      if (!(await presets.evaluate((d) => (d as HTMLDetailsElement).open))) await presets.locator("summary").click();
+      await page.locator(`[data-testid="preset-load"][data-preset="${target}"]`).click();
+      await expect(page.getByTestId("scenario-message")).toContainText(/Loaded|already running/);
+    } else if (i % 3 === 0) {
+      await setField(page, "/time/duration_s", String(2 + (i % 2)));
+    }
+    const done = await runToEnd(page);
+    expect(done.t_ns, `run ${i} reached its end`).toBe(done.t_end_ns);
+    // The kernel thread ends a moment after its last step is streamed.
+    await expect.poll(async () => (await status(page)).engine.kernel_threads, { message: `run ${i}: its kernel ended` }).toBe(0);
+    if (previous !== null) expect(done.generation, `run ${i} is a new run`).toBe(previous.generation + 1);
+    // It streamed: the page's own pose buffer reached the run's last instant.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => Number((window.__vwpStudio?.engine.client?.poses as unknown as { simTimeNs?: bigint } | undefined)?.simTimeNs ?? -1)),
+        { message: `run ${i} streamed to its end` },
+      )
+      .toBe(done.t_end_ns);
+    await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "streaming");
+    previous = done;
+    if (sampleAt.has(i)) {
+      samples.push({
+        run: i,
+        rssKb: engine.rssKb(),
+        footprintKb: engine.footprintKb(),
+        heapMb: (await heapBytes(page)) / 2 ** 20,
+        threads: engine.threads(),
+      });
+    }
+    // `VWP_SOAK_SNAPSHOTS=<dir>`: a heap snapshot of the tab at run 10 and at the last run, for
+    // telling a leak (a constructor whose count grows with the runs) from a cache filling up.
+    const snapshots = process.env.VWP_SOAK_SNAPSHOTS;
+    if (snapshots && (i === 10 || i === runs)) {
+      const cdp = await page.context().newCDPSession(page);
+      const chunks: string[] = [];
+      cdp.on("HeapProfiler.addHeapSnapshotChunk", (e: { chunk: string }) => chunks.push(e.chunk));
+      await cdp.send("HeapProfiler.collectGarbage");
+      await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+      writeFileSync(join(snapshots, `run-${i}.heapsnapshot`), chunks.join(""));
+      await cdp.detach();
+    }
+  }
+  console.warn(
+    `soak of ${runs} runs:\n${samples
+      .map(
+        (s) =>
+          `  run ${s.run}: engine footprint ${(s.footprintKb / 1024).toFixed(1)} MB (RSS ${(s.rssKb / 1024).toFixed(1)} MB), tab heap ${s.heapMb.toFixed(1)} MB, threads ${s.threads}`,
+      )
+      .join("\n")}`,
+  );
+  expect(consoleErrors, "the console showed no error across the runs").toEqual([]);
+  if (samples.length >= 2) {
+    // Flat: measured from a warm sample — run 10 in the long soak, run 2 in the short one — so
+    // the one-off costs of the first run (the world payload, the shaders, the allocator's first
+    // arenas, the retained timeline filling) are not counted as growth.
+    const warm = samples.find((s) => s.run === 10) ?? samples.find((s) => s.run === 2) ?? samples[0];
+    const last = samples[samples.length - 1];
+    // The physical footprint, not RSS: macOS compresses pages under pressure and RSS falls and
+    // rises with that (25.9 MB at run 20, 132.9 MB at run 30 in one soak), which is not the
+    // engine's memory changing. The bound is the one this check always had.
+    expect(last.footprintKb, "engine memory is flat across runs").toBeLessThan(warm.footprintKb * 1.25 + 20_000);
+    expect(last.heapMb, "tab memory is flat across runs").toBeLessThan(warm.heapMb * 1.25 + 10);
+    expect(last.threads, "no thread accumulates across runs").toBeLessThanOrEqual(warm.threads);
+  }
+});
+
+test("a reload mid-run reattaches, and a restarted engine is reconnected to", async ({ page }) => {
+  await open(page);
+  await setField(page, "/time/duration_s", "60");
+  await setField(page, "/actors/vehicles/demand/rate_veh_per_h", "6000");
+  await apply(page);
+  await closeSettings(page);
+  await page.getByTestId("speed").selectOption("1");
+  await expect.poll(async () => (await status(page)).speed).toBe(1);
+  const before = (await status(page)).generation;
+  await openSettings(page);
+  await page.getByTestId("run-start").click();
+  await expect.poll(async () => (await status(page)).generation).toBe(before + 1);
+  await expect.poll(async () => JSON.stringify(await status(page))).toContain('"state":"running"');
+  await expect.poll(async () => page.evaluate(() => window.__vwpStudio?.actorCount() ?? 0), { timeout: 30_000 }).toBeGreaterThan(0);
+
+  // Reload mid-run: the new page attaches to the run in progress.
+  await page.reload();
+  await streaming(page);
+  expect((await status(page)).state).toBe("running");
+  await expect.poll(async () => page.evaluate(() => window.__vwpStudio?.actorCount() ?? 0), { timeout: 15_000 }).toBeGreaterThan(0);
+
+  // Reload a paused run: the page shows where it stands at once, not an empty city.
+  await page.getByTestId("pause").click();
+  await expect.poll(async () => (await status(page)).state).toBe("paused");
+  await page.reload();
+  await streaming(page);
+  await expect.poll(async () => page.evaluate(() => window.__vwpStudio?.actorCount() ?? 0), { timeout: 15_000 }).toBeGreaterThan(0);
+
+  // The engine dies with the page open.
+  await engine.stop("SIGKILL");
+  await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "reconnecting", { timeout: 15_000 });
+  await expect(page.getByTestId("status-headline")).toContainText("Lost contact with the engine");
+  await expect(page.getByTestId("status-banner")).toContainText("reconnects by itself");
+
+  // It comes back: the page reconnects by itself and can run again.
+  await engine.start();
+  await streaming(page, 60_000);
+  await expect(page.getByText("Lost contact with the engine")).toHaveCount(0);
+  const after = await runToEnd(page);
+  expect(after.state).toBe("finished");
+});

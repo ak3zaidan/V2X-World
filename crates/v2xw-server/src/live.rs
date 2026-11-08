@@ -1,0 +1,6209 @@
+//! The real engine behind the [`crate::engine::Engine`] seam: a live `v2xw-engine` run.
+//!
+//! [`crate::stub::StubEngine`] exists because this module could not: the transport was
+//! written before the kernel. The kernel is here now, and this module is what binds it.
+//!
+//! # What the binding has to bridge
+//!
+//! `v2xw_engine::Engine` is not the same shape as [`crate::engine::Engine`], and the
+//! difference is not cosmetic. Three facts about the kernel decide this module's design,
+//! and each one is stated here because each one is a constraint a reader will otherwise
+//! think was a choice:
+//!
+//! 1. **The kernel is not `Send`.** `v2xw_engine::Engine` holds `Box<dyn Mobility>`,
+//!    `Box<dyn GnssModel>`, the two radio boxes and a `BTreeMap<NodeId, ObuRuntime>`, and
+//!    none of those trait objects carries a `Send` bound — `v2xw_core::model::Model`, the
+//!    supertrait of every family, does not require one (`v2xw-engine`'s `on_node_phase`
+//!    documents the same consequence for `rayon`). The kernel therefore cannot be moved
+//!    into a task, and it cannot live behind the `Mutex<Box<dyn Engine>>` [`crate::Run`]
+//!    holds, because that box is `Send`. So the kernel is **built on its own thread and
+//!    never leaves it**: [`spawn_host`] sends a `Scenario` (which is `Send`) across the
+//!    boundary and the engine is constructed on the far side.
+//! 2. **The run loop runs to the horizon.** `v2xw_engine::Engine::run` is one
+//!    `while let Some(..) = scheduler.pop()` to the end of the scenario; the scheduler is
+//!    private, so there is no `run_until` and no way to advance one step from outside. The
+//!    step boundary this module needs is therefore taken from the **record stream**:
+//!    [`StepRecorder`] watches the instant each record is emitted at and closes a step
+//!    when that instant crosses a mobility-step boundary. Backpressure is a bounded
+//!    channel — when the transport stops draining, the recorder's `send` blocks and the
+//!    kernel stops inside it. Blocking there is safe precisely because the kernel reads no
+//!    wall clock: stopping it for a second changes nothing it computes.
+//! 3. **A record stream is not a scene.** `gt.kinematics`, `node.tx`, `phy.rx`,
+//!    `node.verify` and `metric.sample` carry what happened; a `Keyframe` needs a *scene*.
+//!    [`Projector`] rebuilds one: it holds the actor table, allocates the `u32` slots
+//!    §0.1 requires to be stable for an actor's lifetime, and turns each channel's
+//!    reader-side view into the §3.6 payload of its wire channel. Nothing is invented — a
+//!    field the records do not carry is written as the §3.5.2 sentinel for *unknown*,
+//!    which is the honest encoding and the one the client is required to handle.
+//!
+//! # The one thing the record stream does not carry
+//!
+//! **Which actor a node is mounted on.** `gt.kinematics` names an actor; `node.tx` names a
+//! node; no channel joins them, and `v2xw_engine::Engine` exposes no accessor for the map
+//! it keeps internally. [`Projector::equip`] reconstructs it from the three published
+//! facts that decide it, and [`Projector::mapping_is_consistent`] reports whether every
+//! node the run actually named was one the reconstruction accounted for. That check is the
+//! reason the coupling is tolerable and not the reason it is a good idea: the engine should
+//! publish the map, and this module says so in one place rather than being quietly wrong
+//! in many.
+//!
+//! The three facts, each of which the reconstruction got wrong at least once:
+//!
+//! 1. **The draw.** `RngRegistry::checkout(RngDomain::Spawn, EntityRef::Actor(a))
+//!    .bool(equipped_fraction)` — keyed by the actor, so it does not depend on how many
+//!    spawned before it.
+//! 2. **The masts are out of the counter's way.** `Engine::create_rsus` names unit `i`
+//!    `v2xw_engine::run::ROADSIDE_ID_BASE + i` and vehicle spawn counts from 0, so the
+//!    first vehicle is node 0 whatever the roadside deployment (until 2026-10-27 the masts
+//!    took the counter's first `n` values and shifted every vehicle by `n`).
+//! 3. **A node is named before its actor is.** The mobility phase publishes the state of
+//!    the instant it is *dispatched* at, and a spawn's state belongs to the next instant,
+//!    so an equipped vehicle's first frame lands one mobility step before its first
+//!    `gt.kinematics` row. An id named ahead of its actor is held, not condemned: see
+//!    [`Projector::unmapped_nodes`].
+//!
+//! # No wall clock
+//!
+//! Nothing here reads one. The host thread's pacing is the transport's
+//! ([`crate::http::producer`]); the engine's own timeline is `SimTime` throughout, and the
+//! manifest timestamp is [`LiveOptions::build_utc`], supplied by the caller exactly as
+//! `v2xw_engine::Engine::build` requires.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+
+use serde_json::{Value, json};
+use v2xw_core::card::Family;
+use v2xw_core::ctx::OwnedRecord;
+use v2xw_core::ids::{ActorId, LaneId, NodeId, SignalId};
+use v2xw_core::time::{Duration, SimTime};
+use v2xw_engine::{Scenario, run::RunReport};
+use v2xw_metrics::channels::{
+    DetObservationView, GtKinematicsView, MacCbrView, NodeDropView, NodeRxView, NodeTelemetryView,
+    NodeTxView, NodeVerifyView, PhyRxView, ProtoRevocationView, RxOutcome, SecCertView, SignerId,
+    VerifyOutcome, decode,
+};
+use v2xw_metrics::def::MetricSample;
+use v2xw_mobility::VehicleClass;
+use v2xw_record::encoder::{
+    ActorPose, Cadence, SignalState as WireSignal, SlotAllocator, Snapshot,
+};
+use v2xw_record::wire::event::EventEntry;
+use v2xw_record::wire::hello::{
+    ChannelRow, ClassRow, HELLO_LIVE, HELLO_SEEKABLE, HelloBody, NODE_HAS_HSM, NodeRow, WorldRef,
+};
+use v2xw_record::wire::metric::MetricRow;
+use v2xw_record::wire::provenance::{PROV_FINAL, ProvEntry, ProvenanceBody};
+use v2xw_record::wire::snapshot::{ST_EQUIPPED, ST_TRANSMITTING};
+use v2xw_record::wire::telemetry::NodeTelemetry;
+use v2xw_record::wire::{StrTable, U32_NONE};
+use v2xw_world::WorldPayload;
+use v2xw_world::model::SignalState;
+
+use crate::engine::{
+    Control, ControlOutcome, Engine, Query, RunDescriptor, RunState, ScenarioSource, StageRequest,
+    Staged, StepOutput,
+};
+use crate::error::{ParamError, Result, ServerError};
+use crate::introspect::{Introspect, MetricInfo};
+
+/// How many steps one `extend_to` slice takes before it returns to the transport, which then
+/// reports progress and gives the run lock back.
+const EXTEND_SLICE_STEPS: usize = 50;
+
+/// How many finished runs' digests the engine keeps for `runs.list` / `runs.compare`. A
+/// digest is a few hundred kilobytes (every headline series at 400 points).
+pub const PAST_RUNS: usize = 8;
+
+/// How a live run is started.
+#[derive(Debug, Clone)]
+pub struct LiveOptions {
+    /// The manifest build timestamp. The engine may not read a clock, so the caller
+    /// supplies this; it is excluded from every digest, and `""` is a legitimate choice.
+    pub build_utc: String,
+    /// Start the run paused at `t = 0`.
+    pub paused: bool,
+    /// The initial speed multiple; `0` is unthrottled.
+    pub speed: f64,
+    /// A human label for `Hello.str_run_label`.
+    pub label: String,
+    /// The session token, interned into the `Hello` table up front.
+    ///
+    /// It is interned here and not only in [`crate::session::Session::hello_frame`] so
+    /// that the symbol-table size the §3.8 extension is based on is the size the client
+    /// computes. See [`crate::session`]'s rebase for the general case.
+    pub session_token: String,
+    /// Where to write the MCAP recording, if anywhere.
+    pub recording: Option<std::path::PathBuf>,
+    /// How many produced-but-unread mobility steps the host thread may run ahead.
+    ///
+    /// The kernel simulates far faster than real time (the Phase 1 Manhattan scenario is
+    /// 60 simulated seconds in 27 ms), so this is what stops it from running a whole
+    /// scenario into memory before the first client connects.
+    pub lookahead_steps: usize,
+    /// How many produced steps to retain for `run.seek` (§6.6: a live run seeks backwards
+    /// into recorded time).
+    pub retain_steps: usize,
+    /// The most memory the retained steps may take, bytes (approximately: see
+    /// [`StepOutput::approx_bytes`]). Whichever of this and `retain_steps` is reached first bounds
+    /// the history; a seek before the oldest retained step is refused with its range.
+    pub retain_bytes: usize,
+    /// `Hello.actor_capacity` (§3.1.1), and the **bound this run enforces on slot ids**.
+    ///
+    /// §3.1.1 calls the field "max concurrent actor slots for the run; a preallocation
+    /// hint", and those two readings are not the same thing. `@vwp/protocol`, written from
+    /// the specification without reference to any server, enforces the first: a slot at or
+    /// beyond `actor_capacity` is a `ProtocolError` and the client stops applying the
+    /// frame. So the stricter reading is the one that interoperates, and this server obeys
+    /// it — [`Projector::absorb`] refuses a slot past this number rather than sending one
+    /// the client is required to reject.
+    pub actor_capacity: u32,
+}
+
+impl Default for LiveOptions {
+    fn default() -> Self {
+        LiveOptions {
+            build_utc: String::new(),
+            paused: false,
+            speed: 1.0,
+            label: String::new(),
+            session_token: String::new(),
+            recording: None,
+            // 64 steps is 6.4 s at the default cadence: enough that the kernel never waits
+            // on a transport hiccup, small enough that a paused run stops the kernel.
+            lookahead_steps: 64,
+            // 36 000 steps is an hour of simulated time at the default cadence. A step is
+            // the scene plus that step's events, so this is bounded by the scenario's
+            // actor count rather than by its length.
+            retain_steps: 36_000,
+            // The step count alone did not bound memory: a step carries every reception
+            // record, and on the SCMS lifecycle with 42 radios one step is about 180 kB, so
+            // an hour's 36 000 steps would have been 6.5 GB on an 8 GB machine (measured:
+            // 1.2 GB at 655 s of the long soak). 1 GiB keeps minutes of seekable history on
+            // such a run and the whole run on a small one.
+            retain_bytes: 1 << 30,
+            // `@vwp/protocol`'s own ceiling (`MAX_ACTOR_SLOTS`, 1 << 20) clamps anything
+            // larger, so this is the largest number that means anything on the wire. A
+            // scenario that knows its own fleet size should set it smaller: it is what a
+            // client preallocates.
+            actor_capacity: 1 << 20,
+        }
+    }
+}
+
+// --- the host thread ---------------------------------------------------------------
+
+/// One mobility step of raw engine output: the records emitted inside it, in emission
+/// order.
+#[derive(Debug)]
+struct RawStep {
+    /// The step index; `sim_time = index · mobility_step`.
+    index: u64,
+    /// Every record the engine emitted in this step, in the order it emitted them.
+    records: Vec<OwnedRecord>,
+    /// The octets of every frame put on the air in this step, by message id
+    /// (`RunRecorder::tap_frame`). Not records: nothing recorded or digested sees them.
+    taps: Vec<Tap>,
+}
+
+/// What the host thread reports.
+#[derive(Debug)]
+enum HostMsg {
+    /// One step of output.
+    Step(RawStep),
+    /// The run reached its horizon. Carries the kernel's own report.
+    Done(Box<RunReport>),
+    /// The run aborted.
+    Failed(String),
+    /// What the scenario's exporters wrote, or why they could not.
+    Exported(std::result::Result<Vec<v2xw_engine::export::Exported>, String>),
+}
+
+/// Everything about the run the kernel knows before its first step.
+///
+/// Assembled on the host thread, where the engine lives, and sent across once. Every
+/// field of it is `Send`, which is the reason the split exists: the engine is not.
+#[derive(Debug)]
+struct Setup {
+    /// The imported world in the engine's exact native form, for the next run's kernel.
+    world_memo: Option<WorldMemo>,
+    world_payload: WorldPayload,
+    world_json: String,
+    hello: HelloBody,
+    cadence: Cadence,
+    origin_m: [f64; 3],
+    duration: SimTime,
+    scenario_doc: Value,
+    scenario_hash_hex: String,
+    manifest: Value,
+    provenance: ProvenanceBody,
+    /// The same entries as `provenance`, resolved to strings for `explain` (§6.9).
+    prov_chain: Vec<Value>,
+    catalogue: Vec<MetricInfo>,
+    /// Series names that are another series under a second spelling: a breakdown with a
+    /// single declared value is the metric's headline (`bytes_air[air]` is `bytes_air`).
+    metric_aliases: Vec<(String, String)>,
+    /// Class names by `class_idx`, so the projector can map `gt.kinematics.class`.
+    class_names: Vec<String>,
+    /// Signal plans as `(signal id, phase boundaries)`, evaluated by the projector.
+    signals: Vec<SignalPlan>,
+    equipped_fraction: f64,
+    /// `actors.vru.device_fraction`: what the kernel draws a pedestrian's or a cyclist's
+    /// device with, instead of `equipped_fraction`.
+    vru_device_fraction: f64,
+    /// How many roadside units the scenario declares: nodes
+    /// `ROADSIDE_ID_BASE..ROADSIDE_ID_BASE + roadside_nodes`. See [`roadside_node_count`].
+    roadside_nodes: u32,
+    /// The roadside units' node rows, which every `Hello` lists ahead of the vehicles:
+    /// a unit never spawns, so no stream frame would ever announce it.
+    rsu_facts: Vec<crate::engine::NodeFacts>,
+    actor_capacity: u32,
+    seed: u64,
+    run_id_bytes: [u8; 16],
+    obu_profile: String,
+    /// `security.signature`: which sign and verify operations a node's profile is asked for.
+    signature: String,
+    recording_path: Option<String>,
+    /// The `prov_id` a `MetricSample` resolves through: the registered metric-family
+    /// model, or `0` when the run installed none.
+    metric_prov: u32,
+}
+
+/// The last world this process imported, kept for the next run of the same world.
+///
+/// Kept as `v2xw_world::serde_native` bytes, whose round trip is exact (same content hash,
+/// same lane graph), under `v2xw_engine::wiring::world_cache_key`, which covers every input
+/// of the import. A run on a kept world is therefore the same run as one on a fresh import.
+#[derive(Debug)]
+struct WorldMemo {
+    key: String,
+    bytes: Vec<u8>,
+}
+
+/// Where a vehicle's body is centred, from the reference point mobility publishes.
+///
+/// `gt.kinematics` carries the rear-axle reference, taken at the rear bumper
+/// (`v2xw_mobility::engine`, "The reference point"), with the heading along the body. A
+/// renderer draws a body centred on the pose it is given, so streaming the reference point
+/// as it is drew every vehicle half a length behind where it is: stopped well short of its
+/// stop line, and swung outwards through a turn. The stream's pose is therefore the body's
+/// centre, half the class's length ahead of the reference along the heading. The recording
+/// and every metric keep the reference point; this is the display projection only.
+fn body_centre(reference: [f64; 3], heading_rad: f64, class_idx: u8) -> [f64; 3] {
+    let half = VehicleClass::ALL
+        .get(usize::from(class_idx))
+        .map_or(0.0, |c| c.spec().length_m * 0.5);
+    [
+        reference[0] + half * v2xw_core::math::cos(heading_rad),
+        reference[1] + half * v2xw_core::math::sin(heading_rad),
+        reference[2],
+    ]
+}
+
+/// Every signal *group*'s timeline, flattened for evaluation without the world: one entry
+/// per group of heads, keyed by [`v2xw_world::signal_group_wire_id`].
+///
+/// The stream used to carry one state per controller — its *first* movement's — and the
+/// renderer keyed every head of a junction by the controller id, so all but one head of a
+/// junction stayed dark and the one that lit showed whichever approach happened to be
+/// movement 0: half the junctions' lights looked wrong. Each group now carries the state
+/// its own heads show (`SignalPlan::group_timelines`), and its time to change is the time
+/// to that group's next change. A plan with no heads — nothing to draw — keeps the old
+/// controller-wide entry under its plain id.
+fn group_signal_plans(world: &v2xw_world::World) -> Vec<SignalPlan> {
+    world.group_signals()
+}
+
+/// One head group's timeline — the world's own evaluation ([`v2xw_world::GroupSignal`]),
+/// which reads the phase with exactly the arithmetic the vehicles' signal model uses.
+type SignalPlan = v2xw_world::GroupSignal;
+
+/// How many kernel threads exist in this process right now.
+///
+/// Counted by the thread itself — incremented as its body starts, decremented by a guard
+/// as it returns, however it returns — so the number is the threads that are actually
+/// alive, not the handles somebody remembered to drop. `run.status` publishes it, and the
+/// lifecycle tests hold it to one: before the kernel had a cancellation point, every
+/// restart left the previous kernel computing to its horizon beside the new one.
+static KERNEL_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+/// How many kernel threads have ever been started in this process.
+static KERNEL_THREADS_STARTED: AtomicUsize = AtomicUsize::new(0);
+
+/// The number of kernel threads alive in this process.
+pub fn kernel_threads() -> usize {
+    KERNEL_THREADS.load(Ordering::SeqCst)
+}
+
+/// Decrements [`KERNEL_THREADS`] when the kernel thread's body ends, by any path.
+struct KernelThreadGuard;
+
+impl KernelThreadGuard {
+    fn enter() -> Self {
+        KERNEL_THREADS.fetch_add(1, Ordering::SeqCst);
+        KERNEL_THREADS_STARTED.fetch_add(1, Ordering::SeqCst);
+        KernelThreadGuard
+    }
+}
+
+impl Drop for KernelThreadGuard {
+    fn drop(&mut self) {
+        KERNEL_THREADS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A handle on the thread the kernel runs on.
+#[derive(Debug)]
+struct Host {
+    steps: Receiver<HostMsg>,
+    stop: Arc<AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Host {
+    /// Tells the kernel to stop, without waiting for it.
+    ///
+    /// The kernel checks the flag between every two events (`RunRecorder::cancelled`), and
+    /// a recorder blocked on a full channel checks it every 2 ms, so the thread ends within
+    /// one event's work of this call.
+    fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Stops the kernel and waits for its thread to end.
+    ///
+    /// The wait is bounded by one event's work plus one world import: a kernel still
+    /// building its world when it is told to stop finishes the build, then sees the flag
+    /// before its first event. Draining the channel while waiting is what keeps a recorder
+    /// blocked on a full channel from waiting on us while we wait on it.
+    fn shutdown(&mut self) {
+        self.stop();
+        if let Some(join) = self.join.take() {
+            while !join.is_finished() {
+                while self.steps.try_recv().is_ok() {}
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            let _ = join.join();
+        }
+    }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        // Joined, now that the kernel can be stopped: a dropped run must not leave a
+        // simulation computing on its own thread (the defect `KERNEL_THREADS` exists to
+        // catch).
+        self.shutdown();
+    }
+}
+
+/// One tapped frame: its message id and the SPDU octets (`RunRecorder::tap_frame`).
+type Tap = (u64, Arc<[u8]>);
+
+/// The kernel's sink: groups records into mobility steps and hands each step over.
+///
+/// This is the whole of the step-boundary machinery. `v2xw_engine::Engine::run` dispatches
+/// in `(time, priority, seq)` order, so the instant a record is emitted at never goes
+/// backwards, and a step closes exactly when that instant crosses into the next one.
+///
+/// Steps with no records are emitted too, empty. That is not a detail: a scenario whose
+/// demand model has not produced a vehicle yet emits nothing at all for its first steps,
+/// and a stream that skipped them would open with a `Keyframe` at `t = 6.1 s` and a client
+/// with no idea why.
+struct StepRecorder {
+    step_ns: u64,
+    /// The step being accumulated, its records and its tapped frames.
+    current: Option<(u64, Vec<OwnedRecord>, Vec<Tap>)>,
+    /// The last step index that was handed over, so the empty ones between can be filled.
+    emitted_through: Option<u64>,
+    /// The final step index of the run, from the scenario horizon.
+    last_index: u64,
+    tx: SyncSender<HostMsg>,
+    stop: Arc<AtomicBool>,
+    /// Set once the transport has gone away or asked to stop; the recorder then only feeds
+    /// the recording, if there is one.
+    closed: bool,
+    recording: Option<v2xw_record::RecordingWriter<std::io::BufWriter<std::fs::File>>>,
+    refused: u64,
+}
+
+impl StepRecorder {
+    /// Hands `index` over as a complete step, with every empty step before it.
+    fn hand_over(&mut self, index: u64, records: Vec<OwnedRecord>, taps: Vec<Tap>) {
+        let first = self.emitted_through.map_or(0, |e| e + 1);
+        for empty in first..index {
+            if !self.send(RawStep {
+                index: empty,
+                records: Vec::new(),
+                taps: Vec::new(),
+            }) {
+                return;
+            }
+        }
+        let _ = self.send(RawStep {
+            index,
+            records,
+            taps,
+        });
+    }
+
+    /// Blocks until the transport takes the step. Returns `false` once closed.
+    ///
+    /// The block is the backpressure: a paused run stops draining, the channel fills, and
+    /// the kernel stops inside this call. It reads no clock, so being stopped here is
+    /// indistinguishable, to the run, from not having been started yet.
+    fn send(&mut self, step: RawStep) -> bool {
+        if self.closed {
+            return false;
+        }
+        self.emitted_through = Some(step.index);
+        let mut pending = HostMsg::Step(step);
+        loop {
+            if self.stop.load(Ordering::Relaxed) {
+                self.closed = true;
+                return false;
+            }
+            match self.tx.try_send(pending) {
+                Ok(()) => return true,
+                Err(TrySendError::Full(back)) => {
+                    pending = back;
+                    // A short park rather than a blocking `send`, so the stop flag is
+                    // still checked while the transport is not draining. The kernel is
+                    // idle here by construction; no simulated quantity depends on it.
+                    std::thread::yield_now();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.closed = true;
+                    return false;
+                }
+            }
+        }
+    }
+
+    /// Closes the last step and every empty step up to the horizon.
+    fn finish(&mut self) {
+        if let Some((index, records, taps)) = self.current.take() {
+            self.hand_over(index, records, taps);
+        }
+        let first = self.emitted_through.map_or(0, |e| e + 1);
+        for empty in first..=self.last_index {
+            if !self.send(RawStep {
+                index: empty,
+                records: Vec::new(),
+                taps: Vec::new(),
+            }) {
+                break;
+            }
+        }
+        if let Some(writer) = self.recording.take() {
+            let _ = writer.finish();
+        }
+    }
+}
+
+impl StepRecorder {
+    /// The accumulator of step `index`, handing the previous step over when the instant
+    /// has crossed into a new one.
+    fn step_at(&mut self, index: u64) -> (&mut Vec<OwnedRecord>, &mut Vec<Tap>) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|(current, _, _)| *current != index)
+        {
+            if let Some((current, records, taps)) = self.current.take() {
+                self.hand_over(current, records, taps);
+            }
+        }
+        let (_, records, taps) = self
+            .current
+            .get_or_insert_with(|| (index, Vec::new(), Vec::new()));
+        (records, taps)
+    }
+}
+
+impl v2xw_engine::RunRecorder for StepRecorder {
+    fn write(&mut self, at: SimTime, record: &OwnedRecord) {
+        if let Some(writer) = &mut self.recording
+            && v2xw_record::RecordingWriter::write_record(writer, at, record).is_err()
+        {
+            self.refused += 1;
+        }
+        if self.closed {
+            return;
+        }
+        let index = at / self.step_ns.max(1);
+        self.step_at(index).0.push(record.clone());
+    }
+
+    fn tap_frame(&mut self, at: SimTime, _node: v2xw_core::ids::NodeId, msg: u64, spdu: &[u8]) {
+        if self.closed {
+            return;
+        }
+        let index = at / self.step_ns.max(1);
+        self.step_at(index).1.push((msg, Arc::from(spdu)));
+    }
+
+    // Forwarded, not defaulted. `RunRecorder::write_wire_frame` discards by default so a
+    // record-only recorder need not know the binary path exists, but a WRAPPER that
+    // forwards `write` and not this one silently drops the normative binary stream and
+    // nothing in the resulting file says so. That is exactly what happened here: every
+    // run wrote zero keyframes and zero deltas while reporting success.
+    fn write_wire_frame(&mut self, frame: &v2xw_record::wire::Frame) {
+        if let Some(writer) = &mut self.recording {
+            let _ = v2xw_record::RecordingWriter::write_frame(writer, frame);
+        }
+    }
+
+    fn refused(&self) -> u64 {
+        self.refused
+    }
+
+    fn cancelled(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+}
+
+/// Builds the kernel on a dedicated thread and streams its steps back.
+///
+/// The `Scenario` crosses the thread boundary; the engine does not, because it cannot
+/// (see the module header). Returns once the engine is built, so a caller that gets an
+/// `Ok` has a world, a `Hello` and a run id — and a caller that gets an `Err` has the
+/// scenario's or the importer's own error rather than a server that is listening on a run
+/// that failed to load.
+fn spawn_host(
+    scenario: Scenario,
+    options: &LiveOptions,
+    lookahead: usize,
+    memo: Option<WorldMemo>,
+) -> Result<(Box<Setup>, Host)> {
+    let (setup_tx, setup_rx) =
+        std::sync::mpsc::channel::<std::result::Result<Box<Setup>, ServerError>>();
+    let (step_tx, step_rx) = std::sync::mpsc::sync_channel::<HostMsg>(lookahead.max(1));
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let build_utc = options.build_utc.clone();
+    let actor_capacity = options.actor_capacity.max(1);
+    let label = options.label.clone();
+    let token = options.session_token.clone();
+    // Naming an exporter makes the run record: every exporter reads the recording, so the
+    // recording is written to `runs/<meta.name>/` (the command line's convention) when the
+    // server was not given a path of its own.
+    let exporters = scenario.exporters.clone();
+    let recording = options.recording.clone().or_else(|| {
+        (!exporters.is_empty()).then(|| {
+            std::path::PathBuf::from("runs")
+                .join(&scenario.meta.name)
+                .join("recording.mcap")
+        })
+    });
+    let host_stop = Arc::clone(&stop);
+    let export_stop = Arc::clone(&stop);
+    let join = std::thread::Builder::new()
+        .name("v2xw-engine".to_string())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            let _alive = KernelThreadGuard::enter();
+            // The world: the one this process imported last time when every input of the
+            // import is unchanged (the key covers them all, source file contents included),
+            // a fresh import otherwise. Every Run is a fresh kernel, and before this every one
+            // of them imported the map again — on Manhattan, most of the wait after Run.
+            let key = v2xw_engine::wiring::world_cache_key(&scenario).ok();
+            let kept = match (memo, key.as_ref()) {
+                (Some(m), Some(k)) if &m.key == k => v2xw_world::serde_native::from_bytes(&m.bytes)
+                    .ok()
+                    .map(|w| (w, m.bytes)),
+                _ => None,
+            };
+            let (world, bytes) = match kept {
+                Some((world, bytes)) => (world, Some(bytes)),
+                None => match v2xw_engine::wiring::build_world(&scenario) {
+                    Ok(world) => {
+                        let bytes = v2xw_world::serde_native::to_bytes(&world).ok();
+                        (world, bytes)
+                    }
+                    Err(e) => {
+                        let _ = setup_tx.send(Err(setup_error(e)));
+                        return;
+                    }
+                },
+            };
+            // `world.cache` names a directory to keep the world in across processes; a kept
+            // world still belongs there, so it is written when the entry is missing.
+            if let (Some(dir), Some(k), Some(b)) = (
+                scenario
+                    .world
+                    .cache
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|d| !d.is_empty()),
+                key.as_ref(),
+                bytes.as_ref(),
+            ) {
+                let entry = std::path::Path::new(dir).join(format!("{k}.v2xwworld"));
+                if !entry.exists() && std::fs::create_dir_all(dir).is_ok() {
+                    let partial = entry.with_extension(format!("{}.partial", std::process::id()));
+                    if std::fs::write(&partial, b).is_ok()
+                        && std::fs::rename(&partial, &entry).is_err()
+                    {
+                        let _ = std::fs::remove_file(&partial);
+                    }
+                }
+            }
+            let world_memo = key.zip(bytes).map(|(key, bytes)| WorldMemo { key, bytes });
+            let mut engine =
+                match v2xw_engine::Engine::build_with_world(scenario, world, &build_utc) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        let _ = setup_tx.send(Err(setup_error(e)));
+                        return;
+                    }
+                };
+            let setup = match assemble_setup(
+                &engine,
+                &label,
+                &token,
+                recording.as_deref(),
+                actor_capacity,
+            ) {
+                Ok(mut s) => {
+                    s.world_memo = world_memo;
+                    s
+                }
+                Err(e) => {
+                    let _ = setup_tx.send(Err(e));
+                    return;
+                }
+            };
+            let step_ns = setup.cadence.mobility_step.as_nanos().max(1);
+            let last_index = setup.duration / step_ns;
+            let writer = recording.as_deref().and_then(|path| {
+                let mut writer =
+                    open_recording(path, setup.cadence, &setup.manifest, &setup.scenario_doc)
+                        .ok()?;
+                // The run's `Hello` first, as a connection would receive it at t = 0: the
+                // replay server (§7) builds its run from the recording's `Hello`, and without
+                // one it refused every recording this server wrote ("holds no Hello frame").
+                let descriptor = descriptor_of(&setup);
+                if let Ok(hello) = crate::session::Session::new(
+                    crate::session::ConnectParams::default(),
+                    &descriptor,
+                )
+                .hello_frame(&descriptor, RunState::Paused, 0, "")
+                {
+                    let _ = v2xw_record::RecordingWriter::write_frame(&mut writer, &hello);
+                }
+                Some(writer)
+            });
+            if setup_tx.send(Ok(setup)).is_err() {
+                return;
+            }
+            let mut recorder = StepRecorder {
+                step_ns,
+                current: None,
+                emitted_through: None,
+                last_index,
+                tx: step_tx.clone(),
+                stop: host_stop,
+                closed: false,
+                recording: writer,
+                refused: 0,
+            };
+            let outcome = engine.run(&mut recorder);
+            recorder.finish();
+            // The exporters, on this thread so the transport stays responsive, and only for a
+            // run that reached its end: a stopped run's recording is a fragment.
+            if outcome.is_ok()
+                && !exporters.is_empty()
+                && !export_stop.load(Ordering::SeqCst)
+                && let Some(path) = recording.as_deref()
+            {
+                let out_dir = path.parent().unwrap_or(std::path::Path::new("."));
+                let result = v2xw_engine::export::run_exporters_in(
+                    &exporters,
+                    path,
+                    out_dir,
+                    Some(engine.world()),
+                )
+                .map_err(|e| e.to_string());
+                let _ = step_tx.send(HostMsg::Exported(result));
+            }
+            let _ = match outcome {
+                Ok(report) => step_tx.send(HostMsg::Done(Box::new(report))),
+                Err(e) => step_tx.send(HostMsg::Failed(e.to_string())),
+            };
+        })
+        .map_err(|e| ServerError::Io {
+            path: "v2xw-engine thread".to_string(),
+            errno: e.to_string(),
+        })?;
+
+    let setup = match setup_rx.recv() {
+        Ok(Ok(setup)) => setup,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            return Err(ServerError::Internal(
+                "the engine thread ended before it reported a run".to_string(),
+            ));
+        }
+    };
+    Ok((
+        setup,
+        Host {
+            steps: step_rx,
+            stop,
+            join: Some(join),
+        },
+    ))
+}
+
+/// The run-scoped facts a `Hello` is built from, for the run `setup` describes.
+fn descriptor_of(setup: &Setup) -> RunDescriptor {
+    RunDescriptor {
+        run_id: crate::stub::uuid_string(&setup.run_id_bytes),
+        run_id_bytes: setup.run_id_bytes,
+        hello: setup.hello.clone(),
+        cadence: setup.cadence,
+        origin_m: setup.origin_m,
+        duration: setup.duration,
+        live: true,
+        // §3.1.2 sets `HELLO_SEEKABLE` on a live run "once ≥ 1 keyframe is recorded".
+        // The first keyframe is step 0, which is produced before any client can have
+        // connected, so the flag is set from the start rather than flipped later —
+        // which it could not be anyway, because `Run` snapshots this descriptor per run.
+        seekable: true,
+        scenario: setup.scenario_doc.clone(),
+        scenario_hash_hex: setup.scenario_hash_hex.clone(),
+        recording_path: setup.recording_path.clone(),
+        provenance: Some(setup.provenance.clone()),
+    }
+}
+
+/// Opens the MCAP recording a live run writes, declaring the cadence and attaching the
+/// scenario, exactly as `v2xw run` does.
+fn open_recording(
+    path: &std::path::Path,
+    cadence: Cadence,
+    manifest: &Value,
+    scenario: &Value,
+) -> Result<v2xw_record::RecordingWriter<std::io::BufWriter<std::fs::File>>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| ServerError::Io {
+            path: parent.display().to_string(),
+            errno: e.to_string(),
+        })?;
+    }
+    let mut writer = v2xw_record::RecordingWriter::create(
+        path,
+        v2xw_record::RecordingOptions {
+            cadence,
+            profile: v2xw_record::Profile::Full,
+            ..v2xw_record::RecordingOptions::default()
+        },
+    )?;
+    writer.write_manifest(&serde_json::to_string_pretty(manifest).unwrap_or_default())?;
+    writer.attach(
+        "scenario.json",
+        "application/json",
+        serde_json::to_string_pretty(scenario)
+            .unwrap_or_default()
+            .as_bytes(),
+    )?;
+    Ok(writer)
+}
+
+/// The model-card schema's `family` enum as §3.8's index, in declaration order.
+///
+/// `Family` is `#[non_exhaustive]`-free but closed by policy, and it publishes
+/// no index of its own, so the mapping is written out. A variant added without updating
+/// this table is a compile error, which is the point of the exhaustive match.
+const fn family_code(family: Family) -> u16 {
+    match family {
+        Family::World => 0,
+        Family::Mobility => 1,
+        Family::Vru => 2,
+        Family::Weather => 3,
+        Family::Gnss => 4,
+        Family::Clock => 5,
+        Family::Propagation => 6,
+        Family::Fading => 7,
+        Family::Obstacle => 8,
+        Family::Phy => 9,
+        Family::Mac => 10,
+        Family::Dcc => 11,
+        Family::Net => 12,
+        Family::Fragmenter => 13,
+        Family::Backhaul => 14,
+        Family::Cellular => 15,
+        Family::BackendNet => 16,
+        Family::Codec => 17,
+        Family::Generator => 18,
+        Family::Envelope => 19,
+        Family::Primitive => 20,
+        Family::CryptoBackend => 21,
+        Family::VerificationPolicy => 22,
+        Family::SafetyApp => 23,
+        Family::Protocol => 24,
+        Family::ServiceModel => 25,
+        Family::HardwareProfile => 26,
+        Family::Perception => 27,
+        Family::Attacker => 28,
+        Family::Detector => 29,
+        Family::MaPipeline => 30,
+        Family::Responder => 31,
+        Family::Metric => 32,
+        Family::Exporter => 33,
+        Family::Emission => 34,
+        Family::Energy => 35,
+    }
+}
+
+/// `subject_kind` of §3.8 for a family: what a value produced by it is *about*.
+const fn subject_kind(family: Family) -> u16 {
+    match family {
+        Family::Metric => 4,
+        Family::Propagation | Family::Fading | Family::Obstacle | Family::Phy => 2,
+        Family::World => 6,
+        Family::Mobility | Family::Vru | Family::Attacker => 3,
+        _ => 1,
+    }
+}
+
+/// Everything the `Hello`, the manifest and the introspection answers are built from,
+/// read off the kernel once it exists.
+fn assemble_setup(
+    engine: &v2xw_engine::Engine,
+    label: &str,
+    session_token: &str,
+    recording: Option<&std::path::Path>,
+    actor_capacity: u32,
+) -> Result<Box<Setup>> {
+    let world = engine.world();
+    let scenario = engine.scenario();
+    let payload = v2xw_world::serde_vwp::write(world)?;
+    let world_json = v2xw_world::serde_vwp::to_json_string(world)?;
+    let manifest = engine.manifest();
+
+    // The kernel's own snapshot cadence: a keyframe every simulated second, rounded up to a
+    // whole number of steps. This was `Cadence::new(1 s, step)`, which refuses a step that
+    // does not divide a second — a 30 ms `time.mobility_step_ms`, inside the loader's
+    // 10–100 ms bounds, came back from Run as "internal error: recording: …".
+    let cadence = engine.snapshot_cadence();
+    let duration = scenario.time.horizon_ns();
+
+    let scenario_doc: Value = serde_json::from_str(
+        &scenario
+            .to_json()
+            .map_err(|e| ServerError::Internal(e.to_string()))?,
+    )
+    .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let scenario_hash_hex = scenario
+        .content_hash()
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let manifest_json: Value = serde_json::from_str(
+        &manifest
+            .to_json_pretty()
+            .map_err(|e| ServerError::Internal(e.to_string()))?,
+    )
+    .map_err(|e| ServerError::Internal(e.to_string()))?;
+
+    // The run id is a function of what the run *is*: the scenario digest and the seed.
+    // There is no clock and no randomness to draw a UUIDv7 from, and a run id that
+    // changed between two identical runs would make a recording unidentifiable.
+    let run_id_bytes = run_id_of(&scenario_hash_hex, scenario.seed);
+
+    let mut strings = StrTable::new();
+    let str_engine_version = strings.intern(&format!(
+        "v2xw {} ({})",
+        v2xw_engine::manifest::ENGINE_VERSION,
+        v2xw_engine::manifest::GIT_COMMIT
+    ));
+    let str_scenario_name = strings.intern(&scenario.meta.name);
+    let str_run_label = strings.intern(label);
+    // Interned before the session needs it, so the §2.5 table the client builds has the
+    // size this module assumed when it numbered the §3.8 extension.
+    let str_session_token = strings.intern(session_token);
+    let str_url = strings.intern(&payload.url_path());
+
+    // §3.1.3: the node table the connection opens with. A vehicle's radio is announced by
+    // its spawn row, but a roadside unit never spawns, so a live Hello that listed nothing
+    // left every unit out of the page's node table: the inspector could not count them and
+    // the developer chip said "0 RSUs" beside one. Unit `i`, in the scenario's order, is
+    // node `ROADSIDE_ID_BASE + i` ([`roadside_node_count`]).
+    let rsu_facts: Vec<crate::engine::NodeFacts> = scenario
+        .actors
+        .rsus
+        .iter()
+        .enumerate()
+        .filter_map(|(i, spec)| {
+            let pos = match (spec.site, spec.position_m) {
+                (Some(site), None) => world.sites.get(site as usize)?.antenna_position(),
+                (None, Some(p)) => v2xw_core::geom::Vec3::new(
+                    p[0],
+                    p[1],
+                    p[2] + v2xw_engine::phase2::RSU_MAST_HEIGHT_M,
+                ),
+                _ => return None,
+            };
+            let profile = spec
+                .profile
+                .as_deref()
+                .unwrap_or(v2xw_engine::phase2::DEFAULT_RSU_PROFILE);
+            Some(crate::engine::NodeFacts {
+                node_id: v2xw_engine::run::roadside_node(i).index(),
+                actor_id: U32_NONE,
+                pos_m: [pos.x as f32, pos.y as f32, pos.z as f32],
+                label: format!("rsu_{i:04}"),
+                profile_id: profile.to_string(),
+                flags: NODE_HAS_HSM,
+                kind: 2,
+                class_idx: 0xFF,
+            })
+        })
+        .collect();
+    let rsu_rows: Vec<NodeRow> = rsu_facts
+        .iter()
+        .map(|f| NodeRow {
+            node_id: f.node_id,
+            actor_id: f.actor_id,
+            pos_m: f.pos_m,
+            str_label: strings.intern(&f.label),
+            str_profile_id: strings.intern(&f.profile_id),
+            flags: f.flags,
+            kind: f.kind,
+            class_idx: f.class_idx,
+        })
+        .collect();
+
+    let mut class_names = Vec::with_capacity(VehicleClass::ALL.len());
+    let classes: Vec<ClassRow> = VehicleClass::ALL
+        .iter()
+        .map(|class| {
+            let spec = class.spec();
+            class_names.push(class.as_str().to_string());
+            ClassRow {
+                str_name: strings.intern(class.as_str()),
+                length_m: spec.length_m as f32,
+                width_m: spec.width_m as f32,
+                height_m: spec.height_m as f32,
+                color_rgba: class_colour(*class),
+                category: class_category(*class),
+            }
+        })
+        .collect();
+
+    let channels: Vec<ChannelRow> = v2xw_record::CHANNELS
+        .iter()
+        .filter_map(|c| c.wire_id.map(|id| (c, id)))
+        .map(|(c, id)| ChannelRow {
+            str_id: strings.intern(c.name),
+            channel_id: id,
+            visibility: crate::visibility_code(c.visibility),
+            enabled: 0,
+        })
+        .collect();
+
+    // The metric catalogue, from the same provider set the run installed, so a name the
+    // stream can carry is a name the symbol table already holds (§2.5 is append-only and
+    // a `MetricSample` has nowhere to put an extension).
+    let mut registry = v2xw_core::registry::Registry::new();
+    v2xw_engine::wiring::register_all(&mut registry)
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let providers = v2xw_engine::wiring::build_metrics(scenario, &mut registry)
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    // One catalogue row per *series* the stream can carry, each interned now: §2.5's table
+    // is append-only and a `MetricSample` has nowhere to put an extension, so every name a
+    // sample can be sent under has to be in the table before the first frame. A metric is
+    // its headline series; a distribution adds its three percentiles; a metric that
+    // declares a breakdown adds one series per declared value (see `metric_series`).
+    let mut catalogue: Vec<MetricInfo> = Vec::new();
+    let mut metric_aliases: Vec<(String, String)> = Vec::new();
+    for def in providers.catalog() {
+        let visibility = crate::visibility_name(def.visibility).to_string();
+        let source = def
+            .source
+            .as_ref()
+            .map(|s| s.reference.clone())
+            .unwrap_or_default();
+        for series in metric_series(&def) {
+            match series {
+                Series::Alias { from, to } => metric_aliases.push((from, to)),
+                Series::Row { name, agg, note } => catalogue.push(MetricInfo {
+                    str_id: strings.intern(&name),
+                    series_id: name.clone(),
+                    aggregate: def.aggregate.as_str().to_string(),
+                    stage_kinds: def
+                        .stage_kinds
+                        .iter()
+                        .map(|(s, k)| (s.clone(), k.as_str().to_string()))
+                        .collect(),
+                    coverage: def
+                        .coverage
+                        .as_ref()
+                        .and_then(|c| serde_json::to_value(c).ok()),
+                    reference: def
+                        .reference
+                        .as_ref()
+                        .and_then(|r| serde_json::to_value(r).ok()),
+                    agg_code: agg_code(&agg),
+                    name,
+                    unit: def.unit.clone(),
+                    agg,
+                    visibility: visibility.clone(),
+                    definition_md: if note.is_empty() {
+                        def.definition_md.clone()
+                    } else {
+                        format!("{note} {}", def.definition_md)
+                    },
+                    dims: def.dims.iter().map(ToString::to_string).collect(),
+                    not_accounted: def.not_accounted.clone(),
+                    source: source.clone(),
+                    base: def.name.clone(),
+                    health: def
+                        .health
+                        .as_ref()
+                        .and_then(|h| serde_json::to_value(h).ok()),
+                }),
+            }
+        }
+    }
+
+    // §3.8: one provenance entry per registered model, so every `prov_id` the stream
+    // references resolves to a real card rather than to a fixture's invention.
+    let mut extension = StrTable {
+        strings: Vec::new(),
+    };
+    let base = u32::try_from(strings.strings.len()).unwrap_or(0);
+    let mut ext_id = |s: &str| base + extension.intern(s);
+    let mut entries = Vec::new();
+    let mut prov_chain = Vec::new();
+    let mut metric_prov = 0u32;
+    for (i, (_, model)) in engine.registry().iter_by_id().enumerate() {
+        let prov_id = u32::try_from(i + 1).unwrap_or(u32::MAX);
+        let card = &model.card;
+        if card.family == Family::Metric && metric_prov == 0 {
+            metric_prov = prov_id;
+        }
+        prov_chain.push(json!({
+            "prov_id": prov_id,
+            "model_id": card.id,
+            "model_version": card.version,
+            "family": card.family.to_string(),
+            "param_set_id": format!("sha256:{}", &model.content_hash_hex()[..16]),
+            "card_url": format!("/cards/{}", card.id.replace('/', "-")),
+            "card_hash": model.content_hash_hex(),
+            "tier": card.tier.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "purpose": card.purpose,
+        }));
+        entries.push(ProvEntry {
+            prov_id,
+            str_model_id: ext_id(&card.id),
+            str_model_version: ext_id(&card.version),
+            // The parameter set is identified by the card's own content hash: this build
+            // binds parameters at registration, so the card *is* the parameter set. A
+            // build with live parameter overrides must put its `ParamSetId` here instead.
+            str_param_set_id: ext_id(&format!("sha256:{}", &model.content_hash_hex()[..16])),
+            str_card_url: ext_id(&format!("/cards/{}", card.id.replace('/', "-"))),
+            family: family_code(card.family),
+            subject_kind: subject_kind(card.family),
+        });
+    }
+    let provenance = ProvenanceBody {
+        sim_time_ns: 0,
+        entries,
+        dims: Vec::new(),
+        strings: Some(extension),
+        flags: PROV_FINAL,
+    };
+
+    let signals = group_signal_plans(world);
+
+    let bbox = world.bbox;
+    let mut scenario_hash = [0u8; 32];
+    for (i, byte) in hex_bytes(&scenario_hash_hex)
+        .into_iter()
+        .take(32)
+        .enumerate()
+    {
+        scenario_hash[i] = byte;
+    }
+    let hello = HelloBody {
+        version_minor: 0,
+        hello_flags: HELLO_LIVE | HELLO_SEEKABLE,
+        run_id: run_id_bytes,
+        scenario_hash,
+        world_hash: payload.content_hash,
+        t0_wall_ns: i64::try_from(engine.wall_clock().unix_nanos_at(0)).unwrap_or(0),
+        sim_duration_ns: duration,
+        mobility_step_ns: cadence.mobility_step.as_nanos(),
+        keyframe_period_ns: cadence.keyframe_period.as_nanos(),
+        telemetry_period_ns: 1_000_000_000,
+        metric_period_ns: scenario.time.metric_period().as_nanos(),
+        resume_seq: 0,
+        sim_time_ns: 0,
+        origin_lat_deg: world.origin.lat_deg,
+        origin_lon_deg: world.origin.lon_deg,
+        origin_alt_m: world.origin.alt_m,
+        bbox_m: [bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y],
+        actor_capacity,
+        nodes: rsu_rows,
+        classes,
+        channels,
+        world_ref: WorldRef {
+            mode: 0,
+            format: 0,
+            payload_bytes: u32::try_from(payload.bytes.len()).unwrap_or(u32::MAX),
+            str_url,
+        },
+        str_engine_version,
+        str_scenario_name,
+        str_run_label,
+        str_session_token,
+        strings,
+    };
+
+    Ok(Box::new(Setup {
+        world_memo: None,
+        world_payload: payload,
+        world_json,
+        hello,
+        cadence,
+        origin_m: [bbox.min.x.floor(), bbox.min.y.floor(), 0.0],
+        duration,
+        scenario_doc,
+        scenario_hash_hex,
+        manifest: manifest_json,
+        provenance,
+        prov_chain,
+        catalogue,
+        metric_aliases,
+        class_names,
+        signals,
+        equipped_fraction: scenario.actors.vehicles.equipped_fraction,
+        vru_device_fraction: scenario.actors.vru.device_fraction,
+        roadside_nodes: roadside_node_count(scenario),
+        rsu_facts,
+        actor_capacity,
+        seed: scenario.seed,
+        run_id_bytes,
+        obu_profile: scenario.nodes.default_obu.clone(),
+        signature: scenario.security.signature.clone(),
+        recording_path: recording.map(|p| p.display().to_string()),
+        metric_prov,
+    }))
+}
+
+/// How many roadside units the scenario declares.
+///
+/// A roadside unit is a node and **not** an actor: `v2xw_engine::Engine::create_rsus` names
+/// unit `i` `ROADSIDE_ID_BASE + i` at build time, and vehicle spawn counts from 0. So the
+/// masts occupy `ROADSIDE_ID_BASE..ROADSIDE_ID_BASE + n` and the first vehicle is node 0
+/// whatever `n` is. (Before 2026-10-27 the masts took the vehicle counter's first `n`
+/// values; this count was then the offset of every vehicle's node id.)
+fn roadside_node_count(scenario: &Scenario) -> u32 {
+    u32::try_from(scenario.actors.rsus.len()).unwrap_or(u32::MAX)
+}
+
+/// The 16 run-id bytes, stamped with the UUIDv7 version and variant nibbles (RFC 9562).
+fn run_id_of(scenario_hash_hex: &str, seed: u64) -> [u8; 16] {
+    let digest = v2xw_core::hash::sha256(format!("v2xw/run/{scenario_hash_hex}/{seed}").as_bytes());
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&digest[..16]);
+    out[6] = (out[6] & 0x0F) | 0x70;
+    out[8] = (out[8] & 0x3F) | 0x80;
+    out
+}
+
+/// Parses a lower-case hex digest into bytes; a malformed digit reads as zero.
+fn hex_bytes(hex: &str) -> Vec<u8> {
+    hex.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let hi = (pair[0] as char).to_digit(16).unwrap_or(0) as u8;
+            let lo = pair
+                .get(1)
+                .and_then(|c| (*c as char).to_digit(16))
+                .unwrap_or(0) as u8;
+            (hi << 4) | lo
+        })
+        .collect()
+}
+
+/// One series a metric contributes to the stream's catalogue.
+enum Series {
+    /// A row of its own: a name to intern, its aggregation tag, and a note on what the
+    /// series is, prefixed to the metric's definition.
+    Row {
+        name: String,
+        agg: String,
+        note: String,
+    },
+    /// A second spelling of another series.
+    Alias { from: String, to: String },
+}
+
+/// The series one metric is streamed as: [`v2xw_metrics::MetricDef::series`], whose ids
+/// are the stable series ids (U5) and the names the stream interns.
+///
+/// The headline (no dimension); for a distribution, its p50, p95 and p99; and for a metric
+/// that declares a breakdown (`MetricDef::breakdown`), one `name[value]` series per
+/// declared value — or, when it declares exactly one value, an alias of the headline. A
+/// metric declared `breakdown_only` has no headline (every sample carries its value), so
+/// it offers only the per-value series rather than a row that would never receive data.
+fn metric_series(def: &v2xw_metrics::MetricDef) -> Vec<Series> {
+    def.series()
+        .into_iter()
+        .map(|s| match s {
+            v2xw_metrics::SeriesSpec::Row { id, agg, note } => Series::Row {
+                name: id,
+                agg,
+                note,
+            },
+            v2xw_metrics::SeriesSpec::Alias { from, to } => Series::Alias { from, to },
+        })
+        .collect()
+}
+
+/// `MetricAgg` of §3.7 for an aggregation's tag.
+fn agg_code(tag: &str) -> u16 {
+    match tag {
+        "sum" => 0,
+        "mean" => 1,
+        "p50" => 2,
+        "p95" => 3,
+        "p99" => 4,
+        "ratio" => 5,
+        "rate" => 6,
+        "max" => 7,
+        "min" => 8,
+        // `count` and `distribution` have no §3.7 code; a count is a sum of ones and is
+        // reported as one, which is what the exported table's `agg` column also says.
+        _ => 0,
+    }
+}
+
+/// The §3.1.4 `category` for a class: `0` vehicle, `1` VRU, `2` infrastructure.
+const fn class_category(class: VehicleClass) -> u8 {
+    match class {
+        VehicleClass::Bicycle | VehicleClass::Pedestrian | VehicleClass::Scooter => 1,
+        _ => 0,
+    }
+}
+
+/// A renderer hint. Nothing depends on it and it is not a measurement.
+const fn class_colour(class: VehicleClass) -> u32 {
+    match class {
+        VehicleClass::Passenger => 0x4C_9A_FF_FF,
+        VehicleClass::Emergency => 0xFF_4C_4C_FF,
+        VehicleClass::Delivery => 0xF2_C0_4C_FF,
+        VehicleClass::Truck | VehicleClass::Trailer => 0xE0_7B_39_FF,
+        VehicleClass::Bus | VehicleClass::Coach => 0xF2_D0_5C_FF,
+        VehicleClass::Motorcycle | VehicleClass::Moped => 0xB4_7B_FF_FF,
+        VehicleClass::Bicycle | VehicleClass::Scooter => 0x5F_D3_9B_FF,
+        VehicleClass::Pedestrian => 0xFF_8A_A8_FF,
+    }
+}
+
+// --- the projector -----------------------------------------------------------------
+
+/// One actor as the record stream describes it.
+#[derive(Debug, Clone)]
+struct LiveActor {
+    class_idx: u8,
+    node: Option<NodeId>,
+    pos_m: [f64; 3],
+    heading_rad: f64,
+    speed_mps: f64,
+    accel_mps2: f64,
+    lane: Option<LaneId>,
+    /// What the road user is doing (§3.3.5).
+    activity: u8,
+    /// Its exterior lamps (vwp-v1 §3.3.5), as `gt.kinematics` carried them.
+    lamps: u8,
+    /// The last step this actor published kinematics in.
+    last_step: u64,
+}
+
+/// What a node's own records say about it over the current telemetry window.
+///
+/// Every field starts absent, and an absent field is written as §3.5.2's *unknown*
+/// sentinel rather than as a zero. That distinction is the whole value of the frame: a
+/// client that reads `verifications_per_s = 0` is told the node verified nothing, and a
+/// client that reads the sentinel is told the server does not know — which is the truth
+/// for every counter this build's node runtime does not publish.
+#[derive(Debug, Clone, Default)]
+struct WindowCounters {
+    tx_msgs: u32,
+    tx_airtime_us: u64,
+    full_cert_msgs: u32,
+    rx_attempts: u32,
+    rx_ok: u32,
+    verifies: u32,
+    verify_waits_ns: Vec<u64>,
+    cbr: Option<f64>,
+    dcc_state: Option<u16>,
+    tx_power_cdbm: Option<i16>,
+    certs_seen: u32,
+    /// A `node.telemetry` record, if the engine ever emits one: it wins outright.
+    reported: Option<NodeTelemetryView>,
+}
+
+/// How many reception attempts per node pair the projector keeps for `inspect.link`.
+const LINK_HISTORY: usize = 256;
+
+/// How far behind a pair's newest attempt its older ones are kept, ns. `inspect.link`
+/// averages over `window_ns` (1 s by default) ending at the stream's instant, which trails
+/// the projector by at most its lookahead (6.4 s at the default cadence), so 15 s covers
+/// the default window with room. Kept for as long as the count cap alone allowed (512
+/// attempts, 51 s of a 10 Hz sender), the store held 1.7 million attempts, 70 MB, for 61
+/// radios on a 3 × 3 grid, and grows with the square of the fleet.
+const LINK_KEEP_NS: u64 = 15_000_000_000;
+
+/// A node pair not heard for this long behind the stream has its link history dropped:
+/// the pair is out of range, or one of them has left the run. The same as
+/// [`RETIRED_GRACE_NS`], so a pair still held has both ends alive or recently retired.
+const LINK_IDLE_NS: u64 = RETIRED_GRACE_NS;
+
+/// How long behind the stream a retired node's rows are kept: the projector runs ahead of
+/// the stream by its lookahead, so a node that retired in the projector may still be on the
+/// page's screen. Past this, nothing reads them.
+const RETIRED_GRACE_NS: u64 = 30_000_000_000;
+
+/// How often, in stream time, [`Projector::prune`] sweeps the link histories.
+const LINK_SWEEP_NS: u64 = 1_000_000_000;
+
+/// One reception attempt, kept so `inspect.link` can answer from measurements.
+///
+/// Single precision: 40 bytes an attempt instead of 64, for a store that holds up to 512
+/// per node pair (a dense street has thousands of pairs). `inspect.link` reports these to
+/// two and three decimals, well inside an `f32`'s seven digits.
+#[derive(Debug, Clone, Copy)]
+struct LinkObservation {
+    t: SimTime,
+    rssi_dbm: Option<f32>,
+    sinr_db: Option<f32>,
+    dist_m: Option<f32>,
+    received: bool,
+}
+
+/// Turns the kernel's record stream into the scene and the frames of §3.
+#[derive(Debug)]
+struct Projector {
+    step_ns: u64,
+    steps_per_second: u64,
+    class_index: BTreeMap<String, u8>,
+    slots: SlotAllocator,
+    actors: BTreeMap<ActorId, LiveActor>,
+    /// node → actor, as reconstructed. See the module header.
+    nodes: BTreeMap<NodeId, ActorId>,
+    rng: v2xw_core::rng::RngRegistry,
+    equipped_fraction: f64,
+    /// `actors.vru.device_fraction`: what the kernel draws a pedestrian's or a cyclist's
+    /// device with, instead of `equipped_fraction`.
+    vru_device_fraction: f64,
+    /// How many node ids from `ROADSIDE_ID_BASE` the kernel gave to masts and not to actors.
+    /// No reconstruction is owed for them and none is possible: a roadside unit has no
+    /// `gt.kinematics` record because it has no actor.
+    roadside_nodes: u32,
+    next_node: u32,
+    /// Every node id the reconstruction has assigned, kept after the actor retires.
+    ///
+    /// Separate from `nodes`, which is dropped on retirement so that a pose or an
+    /// `inspect` lookup answers about live actors only. A node id the kernel never reuses
+    /// stays explained here, so a record that trails its actor's last kinematics row is
+    /// not reported as an unreconstructed node.
+    assigned_nodes: BTreeSet<u32>,
+    signals: Vec<SignalPlan>,
+    /// Interned strings from the `Hello` table, for the payloads that carry a string id.
+    str_ids: BTreeMap<String, u32>,
+    /// metric name → (string id, `MetricAgg`, visibility code).
+    metric_ids: BTreeMap<String, (u32, u16, u8)>,
+    metric_prov: u32,
+    counters: BTreeMap<NodeId, WindowCounters>,
+    /// §3.1.1's `actor_capacity`, enforced: a slot at or beyond it is never sent.
+    actor_capacity: u32,
+    /// Actors refused a slot because the run is at `actor_capacity`.
+    over_capacity: BTreeSet<u32>,
+    /// Node ids the records named that the reconstruction has not accounted for.
+    ///
+    /// An id is *removed* again when the reconstruction reaches it, because a node
+    /// transmits in the same mobility step it spawns in while its actor's first
+    /// `gt.kinematics` row is stamped one step later — the mobility phase publishes the
+    /// state of the instant it is dispatched at, and a spawn's state is the state of the
+    /// *next* instant. So the first frame of every equipped vehicle names a node whose
+    /// actor the projector has not seen yet, and treating that as a disagreement reported
+    /// every run as inconsistent. What is left here at the end of a run is what the
+    /// reconstruction never explained, which is the disagreement worth reporting.
+    unmapped_nodes: BTreeSet<u32>,
+    /// Metric names the stream carried that the symbol table does not hold.
+    unnamed_metrics: BTreeSet<String>,
+    /// Every dimensioned metric sample the run produced, by metric, for a grouped
+    /// `metrics.query` (the delivery ratio per distance bin, the latency stage per message
+    /// type, a per-node figure). The §3.7 stream carries a metric's headline and its
+    /// declared breakdown as series; everything else a metric measures reaches a client
+    /// through this store. Each entry keeps the counts that let windows be *pooled*
+    /// ([`BreakdownEntry`]), and the store is bounded per metric ([`BreakdownStore`]).
+    breakdowns: BTreeMap<String, BreakdownStore>,
+    /// Per node, its latest `node.security` row (certificate pool, current pseudonym,
+    /// backend link, CRL state) and its most recent `sec.pseudonym` changes, for
+    /// `inspect.node`'s `certs` and `crl` sections.
+    security: BTreeMap<NodeId, (Value, std::collections::VecDeque<Value>)>,
+    /// The credential system's recent `backend.state` snapshots, `(t, record bytes)`,
+    /// oldest first, for `inspect.entity` and the Backend view. Bounded at
+    /// [`BACKEND_HISTORY`] snapshots and [`BACKEND_BYTES`] bytes.
+    ///
+    /// Kept as the record's JSON and parsed when asked: parsed, each snapshot was some
+    /// hundreds of `serde_json` maps (a 640-byte heap block apiece), and a heap census of
+    /// the long soak found ten minutes of them the largest thing the server grew by.
+    backend: std::collections::VecDeque<(u64, Box<[u8]>)>,
+    /// The bytes `backend` holds.
+    backend_bytes: usize,
+    /// The PKI view's records, for `inspect.pdu`, `inspect.cert` and
+    /// `inspect.knowledge`.
+    pki: crate::pki::PkiStore,
+    /// Every node's recent traffic, for the followed node's message feed and queues and for
+    /// `inspect.node`'s `messages` section (`crate::feed`).
+    feed: crate::feed::FeedStore,
+    /// Channels seen in the stream that this projector has no §3.6 payload for.
+    unprojected_channels: BTreeSet<String>,
+    /// Channels whose records the channel's own reader-side view could not decode.
+    ///
+    /// This is separate from `unprojected_channels`, and the separation is the point: a
+    /// channel with no arm here is a gap in *this* module, while a channel whose records
+    /// its declared view refuses is a disagreement between the producer and the reader —
+    /// the defect `v2xw-engine::records` exists to prevent, caught only when someone
+    /// actually decodes. Counting it is what stops it from being a silently empty stream.
+    undecodable_channels: BTreeMap<String, u64>,
+    /// Reception attempts per `(tx, rx)` node pair, for `inspect.link` (§6.8). Bounded:
+    /// the newest [`LINK_HISTORY`] observations of each pair, which is what an averaging
+    /// window over the recent past needs and all it needs.
+    links: BTreeMap<(u32, u32), std::collections::VecDeque<LinkObservation>>,
+    /// `scenario.event` records seen since the owner last took them: the scenario
+    /// timeline's items as they fired, with what each did.
+    scenario_events: Vec<Value>,
+    /// Nodes whose actor left the run, with the instant it left, oldest first: their
+    /// security rows and link histories are dropped once the stream is past that instant by
+    /// [`RETIRED_GRACE_NS`] (see [`Projector::prune`]). Without it every vehicle that ever
+    /// drove kept its rows for the rest of the run: the long soak measured the server
+    /// growing by hundreds of megabytes over eight simulated minutes of churn.
+    retired: std::collections::VecDeque<(NodeId, SimTime)>,
+    /// The stream instant of the last [`Projector::prune`] sweep of the link histories.
+    links_swept: SimTime,
+    last_index: u64,
+    /// The run's headline metrics pooled over every window produced, for the run digest
+    /// `runs.compare` compares (`crate::compare`).
+    pools: crate::compare::DigestBuilder,
+}
+
+impl Projector {
+    fn new(setup: &Setup) -> Self {
+        let class_index = setup
+            .class_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), u8::try_from(i).unwrap_or(0)))
+            .collect();
+        let str_ids = setup
+            .hello
+            .strings
+            .strings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), u32::try_from(i).unwrap_or(0)))
+            .collect();
+        let mut metric_ids: BTreeMap<String, (u32, u16, u8)> = setup
+            .catalogue
+            .iter()
+            .map(|m| {
+                (
+                    m.name.clone(),
+                    (m.str_id, m.agg_code, visibility_code_of(&m.visibility)),
+                )
+            })
+            .collect();
+        for (from, to) in &setup.metric_aliases {
+            if let Some(ids) = metric_ids.get(to).copied() {
+                metric_ids.insert(from.clone(), ids);
+            }
+        }
+        let step_ns = setup.cadence.mobility_step.as_nanos().max(1);
+        Projector {
+            step_ns,
+            steps_per_second: (1_000_000_000 / step_ns).max(1),
+            class_index,
+            slots: SlotAllocator::new(setup.cadence.keyframe_period),
+            actors: BTreeMap::new(),
+            nodes: BTreeMap::new(),
+            rng: v2xw_core::rng::RngRegistry::new(setup.seed),
+            equipped_fraction: setup.equipped_fraction,
+            vru_device_fraction: setup.vru_device_fraction,
+            roadside_nodes: setup.roadside_nodes,
+            // Zero: the masts are numbered from `ROADSIDE_ID_BASE` (`roadside_node_count`).
+            next_node: 0,
+            assigned_nodes: BTreeSet::new(),
+            signals: setup.signals.clone(),
+            str_ids,
+            metric_ids,
+            metric_prov: setup.metric_prov,
+            counters: BTreeMap::new(),
+            actor_capacity: setup.actor_capacity,
+            over_capacity: BTreeSet::new(),
+            unmapped_nodes: BTreeSet::new(),
+            unnamed_metrics: BTreeSet::new(),
+            breakdowns: BTreeMap::new(),
+            security: BTreeMap::new(),
+            backend: std::collections::VecDeque::new(),
+            backend_bytes: 0,
+            pki: crate::pki::PkiStore::default(),
+            feed: crate::feed::FeedStore::new(step_ns),
+            unprojected_channels: BTreeSet::new(),
+            undecodable_channels: BTreeMap::new(),
+            links: BTreeMap::new(),
+            scenario_events: Vec::new(),
+            retired: std::collections::VecDeque::new(),
+            links_swept: 0,
+            last_index: setup.duration / step_ns,
+            pools: crate::compare::DigestBuilder::new(false),
+        }
+    }
+
+    /// The string id of `s`, or `0` (the mandatory empty string) when the table has none.
+    fn str_id(&self, s: &str) -> u32 {
+        self.str_ids.get(s).copied().unwrap_or(0)
+    }
+
+    /// Assigns the node the kernel would have given this actor, if it equips it.
+    ///
+    /// **This is the reconstruction the module header names**, and all three of its facts
+    /// are here: the draw is keyed by `(RngDomain::Spawn, EntityRef::Actor)` so it does not
+    /// depend on spawn order; node ids are dense and ascending in spawn order from 0,
+    /// because the masts are numbered apart, from `ROADSIDE_ID_BASE`;
+    /// and the id counts as accounted for the moment it is handed out, even if a record
+    /// named it a step earlier. The caller equips a step's new actors in `ActorId` order,
+    /// which is spawn order, because the kernel assigns `ActorId`s ascending at spawn.
+    fn equip(&mut self, actor: ActorId, vru: bool) -> Option<NodeId> {
+        let fraction = if vru {
+            self.vru_device_fraction
+        } else {
+            self.equipped_fraction
+        };
+        let equipped = self
+            .rng
+            .checkout(
+                v2xw_core::rng::RngDomain::Spawn,
+                v2xw_core::rng::EntityRef::Actor(actor),
+            )
+            .bool(fraction);
+        if !equipped {
+            return None;
+        }
+        let node = NodeId::new(self.next_node);
+        self.next_node += 1;
+        self.nodes.insert(node, actor);
+        // The id is now explained, whether or not a record has already named it: see
+        // `unmapped_nodes` for why a record can arrive one step ahead of the actor.
+        self.assigned_nodes.insert(node.index());
+        self.unmapped_nodes.remove(&node.index());
+        Some(node)
+    }
+
+    /// True if every node the records named is one the reconstruction accounted for.
+    ///
+    /// Asked at the end of a run this is the question it reads as. Asked in the middle it
+    /// may also be answering "not yet", because an equipped vehicle's first frame precedes
+    /// its first `gt.kinematics` row by one mobility step; `explain`'s caveat says so with
+    /// the ids, which is the honest form of a mid-run answer.
+    fn mapping_is_consistent(&self) -> bool {
+        self.unmapped_nodes.is_empty()
+    }
+
+    /// Projects one raw step into the state a connection encodes its frames from.
+    fn project(&mut self, raw: &RawStep) -> StepOutput {
+        let t: SimTime = raw.index.saturating_mul(self.step_ns);
+        let mut events: Vec<EventEntry> = Vec::new();
+        let mut metrics: Vec<MetricRow> = Vec::new();
+        let mut kinematics: Vec<GtKinematicsView> = Vec::new();
+        let mut transmitting: BTreeSet<NodeId> = BTreeSet::new();
+
+        // Two passes, and the order is load-bearing. `gt.kinematics` is what creates an
+        // actor and therefore what assigns its node, and a node transmits in the *same*
+        // step it spawns in: reading `node.tx` first would find a node id the actor table
+        // does not hold yet and report every run's first transmission as an
+        // unreconstructed node.
+        for record in &raw.records {
+            if record.channel == "gt.kinematics"
+                && let Ok(view) = decode::<GtKinematicsView>(record)
+            {
+                events.push(EventEntry {
+                    sim_time_ns: t,
+                    channel_id: 1,
+                    payload: gt_kinematics_payload(&view),
+                });
+                kinematics.push(view);
+            }
+        }
+        if !kinematics.is_empty() {
+            self.absorb(raw.index, t, &kinematics);
+        }
+        for (msg, spdu) in &raw.taps {
+            self.feed.tap(*msg, Arc::clone(spdu));
+        }
+
+        for record in &raw.records {
+            match record.channel {
+                "gt.kinematics" => {}
+                "node.tx" => match decode::<NodeTxView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => {
+                        self.note_node(view.node);
+                        transmitting.insert(view.node);
+                        let counters = self.counters.entry(view.node).or_default();
+                        counters.tx_msgs += 1;
+                        counters.tx_airtime_us += view.airtime_us.unwrap_or(0);
+                        if view.signer == Some(SignerId::Certificate) {
+                            counters.full_cert_msgs += 1;
+                        }
+                        if let Some(power) = view.power_dbm {
+                            counters.tx_power_cdbm = Some((power * 100.0).round() as i16);
+                        }
+                        self.feed.on_tx(&view);
+                        events.push(EventEntry {
+                            sim_time_ns: t,
+                            channel_id: 10,
+                            payload: node_tx_payload(&view),
+                        });
+                    }
+                },
+                "phy.rx" => match decode::<PhyRxView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => {
+                        self.note_node(view.rx);
+                        if let Some(tx) = view.tx {
+                            self.note_node(tx);
+                        }
+                        let counters = self.counters.entry(view.rx).or_default();
+                        counters.rx_attempts += 1;
+                        if view.outcome == RxOutcome::Ok {
+                            counters.rx_ok += 1;
+                        }
+                        if let Some(tx) = view.tx {
+                            let key = (tx.index(), view.rx.index());
+                            let history = self.links.entry(key).or_default();
+                            if history.len() >= LINK_HISTORY {
+                                history.pop_front();
+                            }
+                            let keep_from = view.t_end.saturating_sub(LINK_KEEP_NS);
+                            while history.front().is_some_and(|o| o.t < keep_from) {
+                                history.pop_front();
+                            }
+                            history.push_back(LinkObservation {
+                                t: view.t_end,
+                                rssi_dbm: view.rssi_dbm.map(|v| v as f32),
+                                sinr_db: view.sinr_db.map(|v| v as f32),
+                                dist_m: view.dist_m.map(|v| v as f32),
+                                received: view.outcome == RxOutcome::Ok,
+                            });
+                        }
+                        events.push(EventEntry {
+                            sim_time_ns: t,
+                            channel_id: 11,
+                            payload: phy_rx_payload(&view),
+                        });
+                    }
+                },
+                "node.verify" => match decode::<NodeVerifyView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => {
+                        self.note_node(view.node);
+                        let counters = self.counters.entry(view.node).or_default();
+                        counters.verifies += 1;
+                        if let (Some(start), done) = (view.t_start, view.t_done) {
+                            let _ = done;
+                            counters
+                                .verify_waits_ns
+                                .push(start.saturating_sub(view.t_enqueue));
+                        }
+                        events.push(EventEntry {
+                            sim_time_ns: t,
+                            channel_id: 14,
+                            payload: node_verify_payload(&view),
+                        });
+                    }
+                },
+                "mac.cbr" => match decode::<MacCbrView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => {
+                        self.note_node(view.node);
+                        let counters = self.counters.entry(view.node).or_default();
+                        counters.cbr = Some(view.cbr);
+                        events.push(EventEntry {
+                            sim_time_ns: t,
+                            channel_id: 12,
+                            payload: mac_cbr_payload(&view),
+                        });
+                    }
+                },
+                "sec.cert" => match decode::<SecCertView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => {
+                        self.note_node(view.node);
+                        let counters = self.counters.entry(view.node).or_default();
+                        counters.certs_seen += 1;
+                        events.push(EventEntry {
+                            sim_time_ns: t,
+                            channel_id: 20,
+                            payload: sec_cert_payload(&view),
+                        });
+                    }
+                },
+                "det.observation" => match decode::<DetObservationView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => {
+                        self.note_node(view.node);
+                        let detector = self.str_id(&view.detector);
+                        let subject = self
+                            .nodes
+                            .get(&view.node)
+                            .map_or(U32_NONE, |actor| actor.index());
+                        events.push(EventEntry {
+                            sim_time_ns: t,
+                            channel_id: 30,
+                            payload: det_observation_payload(
+                                &view,
+                                detector,
+                                subject,
+                                self.metric_prov,
+                            ),
+                        });
+                    }
+                },
+                "proto.revocation" => match decode::<ProtoRevocationView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => {
+                        events.push(EventEntry {
+                            sim_time_ns: t,
+                            channel_id: 22,
+                            payload: revocation_payload(&view),
+                        });
+                    }
+                },
+                "node.telemetry" => match decode::<NodeTelemetryView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => {
+                        let node = view.node;
+                        self.note_node(node);
+                        self.counters.entry(node).or_default().reported = Some(view);
+                    }
+                },
+                // One reception attempt's fate, a backend flow's latency trace and a
+                // transfer's byte accounting are recording and metric channels: the stream
+                // carries what they measure as metric samples, not as §3.6 payloads.
+                "node.rx" => match decode::<NodeRxView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => self.feed.on_rx(&view),
+                },
+                // Drops no frame carries, for the followed node's queue table.
+                "node.drop" => match decode::<NodeDropView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => self.feed.on_drop(&view),
+                },
+                // The security panel's rows: the newest `node.security` per node, and a
+                // short history of its pseudonym changes.
+                "node.security" | "sec.pseudonym" => {
+                    if let Ok(value) = serde_json::from_slice::<Value>(&record.json)
+                        && let Some(node) = value["node"].as_u64()
+                    {
+                        let node = NodeId::new(node as u32);
+                        let entry = self
+                            .security
+                            .entry(node)
+                            .or_insert_with(|| (Value::Null, std::collections::VecDeque::new()));
+                        if record.channel == "node.security" {
+                            self.pki.absorb_security(&value);
+                            entry.0 = value;
+                        } else {
+                            if entry.1.len() >= MESSAGE_LOG {
+                                entry.1.pop_front();
+                            }
+                            entry.1.push_back(value);
+                        }
+                    } else {
+                        self.undecodable(record.channel);
+                    }
+                }
+                // `phy.prr` is one transmission's reception census (3GPP TR 36.885 PRR),
+                // ground truth for the `pdr` metric, which is what the stream carries; the
+                // two reassembly channels are what the fragmentation metrics measure.
+                "msg.latency" | "net.bytes" | "phy.prr" | "net.frag" | "net.reassembly" => {}
+                // The backend's entities and flows, kept for `inspect.entity`: one snapshot
+                // a simulated second, the newest few minutes of them.
+                "backend.state" => match serde_json::from_slice::<SnapshotTime>(&record.json) {
+                    Ok(stamp) => {
+                        let at = stamp.t.unwrap_or(t);
+                        let bytes: Box<[u8]> = record.json.as_slice().into();
+                        self.backend_bytes += bytes.len();
+                        self.backend.push_back((at, bytes));
+                        while self.backend.len() > 1
+                            && (self.backend.len() > BACKEND_HISTORY
+                                || self.backend_bytes > BACKEND_BYTES)
+                        {
+                            if let Some((_, old)) = self.backend.pop_front() {
+                                self.backend_bytes -= old.len();
+                            }
+                        }
+                    }
+                    Err(_) => self.undecodable(record.channel),
+                },
+                // The security path's own records, which the page does not draw.
+                "privacy.link" | "ma.report" | "ma.decision" => {}
+                // The PKI view: kept for its inspect queries; the case board's
+                // transitions feed `inspect.pki {topic: cases}`.
+                "pki.state" | "pki.flow" | "pki.knowledge" | "node.credentials" | "pki.case" => {
+                    self.pki.absorb(record.channel, &record.json);
+                }
+                // A scenario timeline item firing: kept for `run.status` (`timeline`), which
+                // is how the page marks an event as having happened and says what it did.
+                "scenario.event" => match serde_json::from_slice::<Value>(&record.json) {
+                    Ok(v) => self.scenario_events.push(v),
+                    Err(_) => self.undecodable(record.channel),
+                },
+                "metric.sample" => match serde_json::from_slice::<MetricSample>(&record.json) {
+                    Ok(sample) => {
+                        self.pools.add(&sample);
+                        self.push_metric(&sample, &mut metrics);
+                    }
+                    Err(_) => self.undecodable(record.channel),
+                },
+                other => {
+                    self.unprojected_channels.insert(other.to_string());
+                }
+            }
+        }
+
+        // The scene. A step that published kinematics decided who exists (above); a step
+        // that published none carries the previous set forward, because `gt.despawn` is in
+        // the channel table and nothing in this build emits it.
+        let mut poses: Vec<ActorPose> = Vec::with_capacity(self.actors.len());
+        for (actor, live) in &self.actors {
+            let Some(slot) = self.slots.slot_of(*actor) else {
+                continue;
+            };
+            let mut state = 0u8;
+            if let Some(node) = live.node {
+                state |= ST_EQUIPPED;
+                if transmitting.contains(&node) {
+                    state |= ST_TRANSMITTING;
+                }
+            }
+            poses.push(ActorPose {
+                slot,
+                actor: *actor,
+                node: live.node,
+                pos_m: body_centre(live.pos_m, live.heading_rad, live.class_idx),
+                heading_rad: live.heading_rad,
+                speed_mps: live.speed_mps,
+                accel_mps2: live.accel_mps2,
+                lane: live.lane,
+                class_idx: live.class_idx,
+                state,
+                // The node's neighbour table is in `ObuRuntime` and is not on any channel
+                // this build emits, so the count is not known here. Zero is the §3.3.2
+                // encoding and the honest one: no neighbour is *known* to be verified.
+                verified_neighbors: 0,
+                activity: live.activity,
+                lamps: live.lamps,
+            });
+        }
+        let mut snapshot = Snapshot::new(t, poses);
+        snapshot.signals = self.signals_at(t);
+
+        let telemetry = if raw.index > 0 && raw.index % self.steps_per_second == 0 {
+            self.flush_telemetry()
+        } else {
+            Vec::new()
+        };
+
+        self.feed.end_step();
+        events.sort_by_key(|e| (e.sim_time_ns, e.channel_id));
+        StepOutput {
+            sim_time: t,
+            snapshot,
+            telemetry,
+            events,
+            metrics,
+            provenance: None,
+            end_of_run: raw.index >= self.last_index,
+            recorded: Vec::new(),
+            generation: 0,
+        }
+    }
+
+    /// Counts one record its channel's own reader-side view refused.
+    fn undecodable(&mut self, channel: &str) {
+        *self
+            .undecodable_channels
+            .entry(channel.to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// Records that a node id appeared in the stream, and whether it was predicted.
+    fn note_node(&mut self, node: NodeId) {
+        // A mast is a node the kernel minted at build time and no actor carries, so there
+        // is nothing to reconstruct and nothing to disagree about.
+        let base = v2xw_engine::run::ROADSIDE_ID_BASE;
+        if (base..base.saturating_add(self.roadside_nodes)).contains(&node.index()) {
+            return;
+        }
+        if self.assigned_nodes.contains(&node.index()) {
+            return;
+        }
+        self.unmapped_nodes.insert(node.index());
+    }
+
+    /// Takes the step's kinematics as the authoritative actor set.
+    fn absorb(&mut self, index: u64, t: SimTime, kinematics: &[GtKinematicsView]) {
+        let mut present: BTreeSet<ActorId> = BTreeSet::new();
+        let mut fresh: Vec<ActorId> = Vec::new();
+        let mut vru: BTreeSet<ActorId> = BTreeSet::new();
+        for view in kinematics {
+            present.insert(view.actor);
+            if !self.actors.contains_key(&view.actor) {
+                fresh.push(view.actor);
+            }
+            if matches!(view.class.as_deref(), Some("pedestrian" | "bicycle")) {
+                vru.insert(view.actor);
+            }
+        }
+        // Spawn order is `ActorId` order, and the node ids the kernel hands out are dense
+        // and ascending in it. Sorting here rather than trusting the record order is what
+        // makes the reconstruction independent of the mobility provider's iteration.
+        fresh.sort_unstable();
+        for actor in fresh {
+            // The equipped draw happens for every actor whether or not it gets a slot, so
+            // that a run at capacity still assigns the node ids the kernel assigned: the
+            // draw is what keeps the reconstruction aligned with the kernel's own.
+            // The kernel draws a pedestrian's or a cyclist's device with
+            // `actors.vru.device_fraction` (v2xw_engine::wiring::is_vru_class), so the
+            // reconstruction does too; drawing them with the vehicles' fraction minted
+            // node ids the kernel never did and shifted every later vehicle's.
+            let node = self.equip(actor, vru.contains(&actor));
+            let slot = self.slots.allocate(actor, t);
+            if slot >= self.actor_capacity {
+                // §3.1.1: the client refuses a slot at or beyond `actor_capacity`, so
+                // sending one would stop it applying the frame at all. The actor is kept
+                // in the table — it still exists, and its node still transmits — but it
+                // holds no slot and therefore no pose reaches the wire. It is counted, and
+                // `over_capacity` reaches a client through the caveats rather than the
+                // actor silently not being drawn.
+                self.slots.release(actor, t);
+                self.over_capacity.insert(actor.index());
+            }
+            self.actors.insert(
+                actor,
+                LiveActor {
+                    class_idx: 0,
+                    node,
+                    pos_m: [0.0, 0.0, 0.0],
+                    heading_rad: 0.0,
+                    speed_mps: 0.0,
+                    accel_mps2: 0.0,
+                    lane: None,
+                    activity: 0,
+                    lamps: 0,
+                    last_step: index,
+                },
+            );
+        }
+        for view in kinematics {
+            let class_idx = view
+                .class
+                .as_deref()
+                .and_then(|c| self.class_index.get(c).copied())
+                .unwrap_or(0);
+            if let Some(live) = self.actors.get_mut(&view.actor) {
+                live.class_idx = class_idx;
+                live.pos_m = [view.x_m, view.y_m, view.z_m.unwrap_or(0.0)];
+                live.heading_rad = view.heading_rad.unwrap_or(live.heading_rad);
+                live.speed_mps = view.speed_mps;
+                live.accel_mps2 = view.acc_mps2.unwrap_or(0.0);
+                live.lane = view.lane.map(LaneId::new);
+                live.activity = view.activity.unwrap_or(0);
+                live.lamps = view.lamps;
+                live.last_step = index;
+            }
+        }
+        let gone: Vec<ActorId> = self
+            .actors
+            .keys()
+            .copied()
+            .filter(|a| !present.contains(a))
+            .collect();
+        for actor in gone {
+            if let Some(live) = self.actors.remove(&actor)
+                && let Some(node) = live.node
+            {
+                self.nodes.remove(&node);
+                self.counters.remove(&node);
+                self.retired.push_back((node, t));
+            }
+            self.slots.release(actor, t);
+        }
+    }
+
+    /// The signal states of §3.3.3, from the world's own fixed-time plans.
+    ///
+    /// The kernel schedules no `Event::SignalPhase` in this build, so what a client sees
+    /// here is the plan the world was imported with, evaluated at `t` — real scenario
+    /// data, but a plan and not a controller: nothing in the run reads it back.
+    fn signals_at(&self, t: SimTime) -> Vec<WireSignal> {
+        let t_s = (t as f64) * 1e-9;
+        self.signals
+            .iter()
+            .filter_map(|plan| {
+                let (state, remaining) = plan.at(t_s)?;
+                Some(WireSignal {
+                    signal: SignalId::new(plan.wire_id),
+                    phase: movement_phase(state),
+                    time_to_change: Some(Duration::from_nanos((remaining * 1e9) as u64)),
+                })
+            })
+            .collect()
+    }
+
+    /// Turns the window's counters into one `NodeTelemetry` per node and clears them.
+    fn flush_telemetry(&mut self) -> Vec<NodeTelemetry> {
+        let mut out = Vec::with_capacity(self.counters.len());
+        let nodes: Vec<NodeId> = self.counters.keys().copied().collect();
+        for node in nodes {
+            let Some(counters) = self.counters.get_mut(&node) else {
+                continue;
+            };
+            let mut row = NodeTelemetry::unknown(node.index());
+            if let Some(reported) = &counters.reported {
+                // The node published its own report, which is the only source that can
+                // fill the fields a record stream cannot see. Take it whole.
+                apply_reported(&mut row, reported);
+            }
+            // The node's security row fills the §3.5.2 credential fields the telemetry
+            // view does not carry: the valid pool, the stored pool, the CRL it holds and
+            // the reports waiting for connectivity.
+            if let Some((sec, _)) = self.security.get(&node)
+                && !sec.is_null()
+            {
+                let small = |v: &Value| v.as_u64().map(|n| n.min(u64::from(u16::MAX - 1)));
+                if let Some(n) = small(&sec["pool_valid"]) {
+                    row.cert_active = n as u16;
+                }
+                if let Some(n) = sec["pool_stored"].as_u64() {
+                    row.cert_stored = u32::try_from(n).unwrap_or(u32::MAX - 1);
+                }
+                if let Some(n) = sec["crl_entries"].as_u64() {
+                    row.crl_entries = u32::try_from(n).unwrap_or(u32::MAX - 1);
+                }
+                if let Some(n) = sec["outbox_reports"].as_u64() {
+                    row.outbox_msgs = u32::try_from(n).unwrap_or(u32::MAX - 1);
+                }
+            }
+            row.msgs_out_per_s = counters.tx_msgs as f32;
+            row.msgs_in_per_s = counters.rx_ok as f32;
+            row.verifications_per_s = counters.verifies as f32;
+            row.full_cert_msgs = counters.full_cert_msgs;
+            row.airtime_ms_per_s = (counters.tx_airtime_us as f32) * 1e-3;
+            if !counters.verify_waits_ns.is_empty() {
+                let mut waits = core::mem::take(&mut counters.verify_waits_ns);
+                waits.sort_unstable();
+                row.verify_wait_p50_ms = percentile_ms(&waits, 0.50);
+                row.verify_wait_p95_ms = percentile_ms(&waits, 0.95);
+            }
+            if let Some(cbr) = counters.cbr {
+                row.cbr_pm = (cbr * 1000.0).round().clamp(0.0, 65534.0) as u16;
+            }
+            if let Some(dcc) = counters.dcc_state {
+                row.dcc_state = dcc;
+            }
+            if let Some(power) = counters.tx_power_cdbm {
+                row.tx_power_cdbm = power;
+            }
+            // `sec.cert` events (changes, top-ups, revocations) are not a store count; they
+            // stand in for one only when the node published no security row.
+            if counters.certs_seen > 0 && !self.security.contains_key(&node) {
+                row.cert_stored = counters.certs_seen;
+            }
+            // §3.5.2's `node_state`: the run only produces records for a node that is
+            // running, so `2` (active) is what has been observed. A node the scenario
+            // turned off stops appearing and keeps its last row.
+            row.node_state = 2;
+            out.push(row.quantised());
+            *counters = WindowCounters {
+                reported: counters.reported.clone(),
+                ..WindowCounters::default()
+            };
+        }
+        out.sort_by_key(|r| r.node_id);
+        out
+    }
+
+    /// Forgets what nothing can read any more, with the stream at `now`: the message feed
+    /// older than its window, the link histories of pairs silent for [`LINK_IDLE_NS`], and
+    /// the security rows of nodes that left the run [`RETIRED_GRACE_NS`] ago.
+    ///
+    /// Every store here is bounded by what is alive, not by what has ever been: a run of an
+    /// hour with vehicles arriving and leaving holds what a run of a minute holds.
+    fn prune(&mut self, now: SimTime) {
+        self.feed.prune(now.saturating_sub(crate::feed::HISTORY_NS));
+        let grace = now.saturating_sub(RETIRED_GRACE_NS);
+        while let Some(&(node, at)) = self.retired.front() {
+            if at >= grace {
+                break;
+            }
+            self.retired.pop_front();
+            // A node id is never reused (`assigned_nodes`), so a retired node's rows are
+            // dead once the stream is past it.
+            self.security.remove(&node);
+        }
+        if now >= self.links_swept.saturating_add(LINK_SWEEP_NS) {
+            self.links_swept = now;
+            let idle = now.saturating_sub(LINK_IDLE_NS);
+            self.links
+                .retain(|_, h| h.back().is_some_and(|o| o.t >= idle));
+        }
+    }
+
+    /// The sizes of the projector's stores, for `run.status` (`engine.stores`): what a soak
+    /// asserts is flat, and what to read first when the server's memory is not.
+    fn stores(&self) -> Value {
+        let (frames, receptions) = self.feed.size();
+        json!({
+            "actors": self.actors.len(),
+            // Radios alive in the projector (roadside units and equipped actors), and every
+            // radio the run has had: what the stores below are bounded by, and not.
+            "nodes_live": self.nodes.len() + self.roadside_nodes as usize,
+            "nodes_ever": self.assigned_nodes.len() + self.roadside_nodes as usize,
+            "link_pairs": self.links.len(),
+            "link_observations": self.links.values().map(std::collections::VecDeque::len).sum::<usize>(),
+            "breakdown_metrics": self.breakdowns.len(),
+            "breakdown_entries": self.breakdowns.values().map(BreakdownStore::len).sum::<usize>(),
+            "breakdown_dim_sets": self.breakdowns.values().map(BreakdownStore::dim_sets).sum::<usize>(),
+            "breakdown_evicted_sets": self.breakdowns.values().map(|b| b.evicted).sum::<u64>(),
+            "security_nodes": self.security.len(),
+            "security_changes": self.security.values().map(|(_, c)| c.len()).sum::<usize>(),
+            "backend_snapshots": self.backend.len(),
+            "backend_bytes": self.backend_bytes,
+            "feed_nodes": self.feed.nodes(),
+            "feed_frames": frames,
+            "feed_receptions": receptions,
+            "retired_pending": self.retired.len(),
+        })
+    }
+
+    /// Keeps one dimensioned sample for the grouped `metrics.query`.
+    fn keep_breakdown(&mut self, sample: &MetricSample) {
+        let dims: BTreeMap<String, String> = sample
+            .dims
+            .iter()
+            .map(|(d, v)| (d.to_string(), v.to_string()))
+            .filter(|(d, _)| d != "t")
+            .collect();
+        if dims.is_empty() {
+            return;
+        }
+        self.breakdowns
+            .entry(sample.metric.clone())
+            .or_default()
+            .push(sample.t, dims, &sample.value);
+        bound_breakdowns(&mut self.breakdowns, BREAKDOWN_TOTAL_CAP);
+    }
+
+    /// One metric's kept breakdown, grouped by `dim` and pooled over `[from, to]`, among
+    /// the samples whose other dimensions are exactly `filter`.
+    fn breakdown_groups(
+        &self,
+        name: &str,
+        dim: &str,
+        filter: &BTreeMap<String, String>,
+        from: SimTime,
+        to: SimTime,
+    ) -> Vec<crate::introspect::GroupRow> {
+        self.breakdowns
+            .get(name)
+            .map(|store| store.groups(dim, filter, from, to))
+            .unwrap_or_default()
+    }
+
+    /// Appends the §3.7 rows one metric sample produces.
+    ///
+    /// A sample is sent under the series its dimensions name (see `metric_series`): no
+    /// dimension is the headline, plus the three percentiles of a distribution; one
+    /// declared breakdown dimension is `name[value]`. A per-node sample is not a series —
+    /// one plot line per node would be thousands of lines — and the metric's headline
+    /// carries the across-node figure. A sample under no interned series is counted in
+    /// `unnamed_metrics` rather than sent under a name the client cannot resolve, and
+    /// before this every dimensioned sample was sent under its bare name, so a metric's
+    /// plot interleaved its distance bins, its causes and its nodes into one zig-zag line.
+    fn push_metric(&mut self, sample: &MetricSample, out: &mut Vec<MetricRow>) {
+        self.keep_breakdown(sample);
+        if sample.dims.iter().any(|(d, _)| d.to_string() == "node") {
+            return;
+        }
+        let dims: Vec<String> = sample
+            .dims
+            .iter()
+            .filter(|(d, _)| d.to_string() != "t")
+            .map(|(_, v)| v.to_string())
+            .collect();
+        let mut rows: Vec<(String, Option<f64>)> = Vec::new();
+        match dims.as_slice() {
+            [] => {
+                rows.push((sample.metric.clone(), sample.value.point()));
+                if let v2xw_metrics::SampleValue::Distribution(d) = &sample.value {
+                    for (suffix, q) in [
+                        ("p50", v2xw_metrics::Percentile::P50),
+                        ("p95", v2xw_metrics::Percentile::P95),
+                        ("p99", v2xw_metrics::Percentile::P99),
+                    ] {
+                        rows.push((format!("{}.{suffix}", sample.metric), d.quantile(q)));
+                    }
+                }
+            }
+            [value] => rows.push((format!("{}[{value}]", sample.metric), sample.value.point())),
+            _ => return,
+        }
+        for (series, value) in rows {
+            let Some((str_metric, agg, visibility)) = self.metric_ids.get(&series).copied() else {
+                // A breakdown the metric does not declare is left to the recording and
+                // `metrics.json` on purpose. Only a metric the table does not know at all is
+                // the defect `unnamed_metrics` exists to surface.
+                if !self.metric_ids.contains_key(&sample.metric) {
+                    self.unnamed_metrics.insert(sample.metric.clone());
+                }
+                continue;
+            };
+            // An insufficient sample is a refusal, not a zero, and §3.7 has no encoding for
+            // one. Dropping it is right: the client sees a gap, which is what
+            // "insufficient" means.
+            let Some(value) = value else { continue };
+            out.push(MetricRow {
+                value,
+                str_metric,
+                // The dimension is in the series name, so the row carries none; `0` is
+                // §3.7's "no dimensions".
+                dim_key: 0,
+                node_id: U32_NONE,
+                count: u32::try_from(sample.value.n()).unwrap_or(u32::MAX),
+                agg,
+                visibility,
+                prov_id: self.metric_prov,
+            });
+        }
+        out.sort_by_key(|r| (r.str_metric, r.node_id));
+        out.dedup_by_key(|r| (r.str_metric, r.node_id));
+    }
+}
+
+/// One metric's samples, `rows` in ascending time, binned onto `[from, to]` at `bin`: one
+/// `(edge, mean)` per bin, at most `limit` of them.
+///
+/// The bin's value is the mean of the samples whose instant falls in `[edge, edge + bin)`,
+/// reduced with `sum_ordered` so two builds agree to the last bit. A bin with no sample is
+/// `None` and is reported as JSON `null`: the metric was not observed there, which is not
+/// the same as being zero there.
+///
+/// One pass over the samples in range. The history is appended in step order and only
+/// ever cleared (a new run), so it is sorted, and each bin's slice is found by a binary
+/// search from the previous bin's end. Before this every bin scanned the whole history, so
+/// a query was bins x samples: the metrics dashboard asking for an hour of a 1 s metric
+/// at full resolution cost 3,600 x 3,600 comparisons per series, and a ten-hour run a
+/// hundred times that, on the thread that serves the stream.
+fn series_bins(
+    rows: &[(SimTime, f64)],
+    from: u64,
+    to: u64,
+    bin: u64,
+    limit: usize,
+) -> Vec<(u64, Option<f64>)> {
+    debug_assert!(
+        rows.windows(2).all(|w| w[0].0 <= w[1].0),
+        "a metric's history is appended in time order"
+    );
+    let bin = bin.max(1);
+    let mut out = Vec::new();
+    let mut edge = from - (from % bin);
+    let mut start = rows.partition_point(|(t, _)| *t < edge);
+    while edge <= to && out.len() < limit {
+        let upper = edge.saturating_add(bin);
+        let end = start + rows[start..].partition_point(|(t, _)| *t < upper);
+        let inside = &rows[start..end];
+        let value = (!inside.is_empty()).then(|| {
+            v2xw_core::math::sum_ordered(inside.iter().map(|(_, v)| *v)) / inside.len() as f64
+        });
+        out.push((edge, value));
+        start = end;
+        if upper == edge {
+            break;
+        }
+        edge = upper;
+    }
+    out
+}
+
+/// How many points one metric series' history ([`SeriesHistory`]) holds: an hour of a 1 s
+/// metric window one by one, at 20 bytes a point (80 KB a series; a run with every metric
+/// on serves several hundred series, so the histories stay under about 100 MB whatever the
+/// run's length). Older points are merged, not dropped.
+const HISTORY_POINTS: usize = 1 << 12;
+
+/// One metric series' history, for `metrics.query`'s plots and the run digest's window
+/// series, in bounded memory. It held every window's point for the whole run, so a served
+/// run's footprint grew with elapsed time (about 50 MB per simulated hour on a
+/// ten-vehicle grid with every other store flat).
+/// Past [`HISTORY_POINTS`] the older half is merged pairwise, each merged point the
+/// window-weighted mean of the two it replaces and stamped with the earlier one's time, so
+/// the newest quarter of the cap is always held one by one, the mean over any span of
+/// whole merged points is the windows' mean, and a ten-hour run keeps coarser points at
+/// its old end rather than dropping them (as the breakdown store does).
+#[derive(Debug, Default)]
+struct SeriesHistory {
+    rows: Vec<(SimTime, f64)>,
+    /// The metric windows each point holds: 1, or the sum of the two it merged.
+    weight: Vec<u32>,
+}
+
+impl SeriesHistory {
+    fn push(&mut self, t: SimTime, value: f64) {
+        self.push_capped(t, value, HISTORY_POINTS);
+    }
+
+    fn push_capped(&mut self, t: SimTime, value: f64, cap: usize) {
+        self.rows.push((t, value));
+        self.weight.push(1);
+        if self.rows.len() > cap.max(8) {
+            self.merge_older_half();
+        }
+    }
+
+    /// Merges the older half pairwise: the series shrinks by a quarter.
+    fn merge_older_half(&mut self) {
+        let half = (self.rows.len() / 2) & !1;
+        let mut rows = Vec::with_capacity(self.rows.len() - half / 2);
+        let mut weight = Vec::with_capacity(rows.capacity());
+        for i in (0..half).step_by(2) {
+            let ((t0, x0), (_, x1)) = (self.rows[i], self.rows[i + 1]);
+            let (w0, w1) = (self.weight[i], self.weight[i + 1]);
+            let x = match (x0.is_finite(), x1.is_finite()) {
+                (true, true) => {
+                    (f64::from(w0) * x0 + f64::from(w1) * x1) / (f64::from(w0) + f64::from(w1))
+                }
+                (false, true) => x1,
+                _ => x0,
+            };
+            rows.push((t0, x));
+            weight.push(w0.saturating_add(w1));
+        }
+        rows.extend_from_slice(&self.rows[half..]);
+        weight.extend_from_slice(&self.weight[half..]);
+        self.rows = rows;
+        self.weight = weight;
+    }
+
+    fn rows(&self) -> &[(SimTime, f64)] {
+        &self.rows
+    }
+
+    fn len(&self) -> usize {
+        self.rows.len()
+    }
+}
+
+/// How many dimensioned samples a metric's breakdown store keeps one by one: half an hour
+/// of a 20 m-binned delivery ratio (fifty bins a second), twenty seconds of a per-node
+/// figure on a 5,000-node fleet. Older samples are merged into time blocks, not dropped.
+const BREAKDOWN_RECENT: usize = 100_000;
+
+/// How many merged time blocks (one per block, dimension values and kind) a metric's
+/// breakdown store keeps before it doubles the block size and merges them again.
+const BREAKDOWN_BLOCKS: usize = 100_000;
+
+/// The first block size: ten metric windows at the default 1 s period.
+const BREAKDOWN_FIRST_BLOCK_NS: SimTime = 10_000_000_000;
+
+/// One metric's dimensioned samples, for the grouped `metrics.query`, in bounded memory
+/// over a run of any length.
+///
+/// Before this the store kept the newest 200,000 samples and dropped the oldest, so on a
+/// dense run the breakdowns silently lost their past: a per-node figure on 1,000 nodes is
+/// 1,000 samples a second, and a breakdown "over the whole run" of an hour pooled only its
+/// last 200 s while the page said 0-3,600 s. Now the newest samples are kept one by one
+/// and older ones are *merged* per time block, dimension values and kind — which loses
+/// nothing a pool needs, because every kind pools by sums (successes and trials, a ratio's
+/// two sums, a distribution's sample sum and count, a point's weighted sum). What it loses
+/// is time resolution at the old end: a block is pooled whole, when its middle is in the
+/// asked range, and the answer says which span it pooled and how big the blocks were
+/// (`GroupRow::span`, `GroupRow::block_ns`). The blocks double in size whenever there
+/// are more than [`BREAKDOWN_BLOCKS`] of them, so memory is bounded and a ten-hour run
+/// keeps blocks of minutes rather than dropping its first nine hours.
+///
+/// Dimension values are interned (a per-node figure's `{node: "1234"}` is stored once, not
+/// per sample), which also lets a query decide once per distinct set whether it matches.
+#[derive(Debug)]
+struct BreakdownStore {
+    dims: Vec<BTreeMap<String, String>>,
+    dims_index: BTreeMap<BTreeMap<String, String>, u32>,
+    /// The newest samples, in the order produced (time ascending).
+    recent: std::collections::VecDeque<BreakdownEntry>,
+    /// Older samples merged, keyed by (block start, dimension set, kind): time order.
+    blocks: BTreeMap<(SimTime, u32, u8), BreakdownEntry>,
+    /// The current block size; 0 until the first merge.
+    block_ns: SimTime,
+    recent_cap: usize,
+    block_cap: usize,
+    first_block_ns: SimTime,
+    /// The latest sample instant of each interned dimension set, by id: what eviction
+    /// orders by (the series silent longest go first).
+    last_seen: Vec<SimTime>,
+    /// Ids of evicted dimension sets, reused before a new id is minted, so the interned
+    /// sets are bounded by what is held and not by every set the run has produced.
+    free: Vec<u32>,
+    /// Dimension sets evicted so far (with every entry they held).
+    evicted: u64,
+}
+
+/// How many entries (samples held one by one plus merged blocks) the breakdown stores hold
+/// across every metric: about 120 MB at an entry's ~120 bytes. Per metric alone, forty
+/// per-node metrics over an hour of churn would each fill their own caps.
+const BREAKDOWN_TOTAL_CAP: usize = 1_000_000;
+
+/// Holds the breakdown stores to [`BREAKDOWN_TOTAL_CAP`] as a whole: while they hold more,
+/// the largest sheds half of what it holds (merged into coarser blocks, not dropped).
+fn bound_breakdowns(stores: &mut BTreeMap<String, BreakdownStore>, cap: usize) {
+    let mut total: usize = stores.values().map(BreakdownStore::len).sum();
+    while total > cap {
+        let Some(largest) = stores.values_mut().max_by_key(|s| s.len()) else {
+            break;
+        };
+        let before = largest.len();
+        largest.shed();
+        let after = largest.len();
+        if after >= before {
+            break;
+        }
+        total -= before - after;
+    }
+}
+
+impl Default for BreakdownStore {
+    fn default() -> Self {
+        Self::with_caps(BREAKDOWN_RECENT, BREAKDOWN_BLOCKS, BREAKDOWN_FIRST_BLOCK_NS)
+    }
+}
+
+impl BreakdownStore {
+    fn with_caps(recent_cap: usize, block_cap: usize, first_block_ns: SimTime) -> Self {
+        BreakdownStore {
+            dims: Vec::new(),
+            dims_index: BTreeMap::new(),
+            recent: std::collections::VecDeque::new(),
+            blocks: BTreeMap::new(),
+            block_ns: 0,
+            recent_cap: recent_cap.max(4),
+            block_cap: block_cap.max(2),
+            first_block_ns: first_block_ns.max(1),
+            last_seen: Vec::new(),
+            free: Vec::new(),
+            evicted: 0,
+        }
+    }
+
+    fn push(
+        &mut self,
+        t: SimTime,
+        dims: BTreeMap<String, String>,
+        value: &v2xw_metrics::SampleValue,
+    ) {
+        let id = match self.dims_index.get(&dims) {
+            Some(id) => *id,
+            None => {
+                let id = if let Some(id) = self.free.pop() {
+                    self.dims[id as usize] = dims.clone();
+                    id
+                } else {
+                    self.dims.push(dims.clone());
+                    self.last_seen.push(t);
+                    u32::try_from(self.dims.len() - 1).unwrap_or(u32::MAX)
+                };
+                self.dims_index.insert(dims, id);
+                id
+            }
+        };
+        if let Some(seen) = self.last_seen.get_mut(id as usize) {
+            *seen = t;
+        }
+        self.recent.push_back(BreakdownEntry::of(t, id, value));
+        if self.recent.len() > self.recent_cap {
+            self.compact(self.recent_cap / 4);
+        }
+    }
+
+    /// The dimension sets it has interned and holds entries of.
+    fn dim_sets(&self) -> usize {
+        self.dims_index.len()
+    }
+
+    /// Evicts the `count` dimension sets whose latest sample is oldest, with every entry
+    /// they hold: the series that stopped reporting longest ago (in a churning fleet, the
+    /// vehicles that left first). Their ids are freed for reuse. The last resort of a store
+    /// over its cap that coarsening cannot shrink: two dimension sets never merge, so a
+    /// store with more sets than its cap was otherwise unbounded.
+    fn evict_oldest_sets(&mut self, count: usize) {
+        let mut ids: Vec<(SimTime, u32)> = self
+            .dims_index
+            .values()
+            .map(|&id| (self.last_seen.get(id as usize).copied().unwrap_or(0), id))
+            .collect();
+        ids.sort_unstable();
+        let gone: std::collections::BTreeSet<u32> =
+            ids.into_iter().take(count).map(|(_, id)| id).collect();
+        if gone.is_empty() {
+            return;
+        }
+        self.blocks.retain(|(_, d, _), _| !gone.contains(d));
+        self.recent.retain(|e| !gone.contains(&e.dims));
+        for &id in &gone {
+            let dims = std::mem::take(&mut self.dims[id as usize]);
+            self.dims_index.remove(&dims);
+            self.free.push(id);
+        }
+        self.evicted += gone.len() as u64;
+    }
+
+    /// The entries it holds: samples one by one and merged blocks.
+    fn len(&self) -> usize {
+        self.recent.len() + self.blocks.len()
+    }
+
+    /// Halves what it holds: the older half of its recent samples merged into blocks, or,
+    /// with few left one by one, the blocks coarsened to half as many (the store's block
+    /// cap falls with them, so it stays there).
+    fn shed(&mut self) {
+        let before = self.len();
+        if self.recent.len() >= 8 {
+            self.compact(self.recent.len() / 2);
+        } else {
+            self.block_cap = self.blocks.len().max(4);
+            self.compact(self.recent.len());
+        }
+        // Coarsening cannot merge two dimension sets: a store that holds more sets than it
+        // can shed by merging drops its stalest half.
+        if self.len() >= before {
+            self.evict_oldest_sets((self.dim_sets() / 2).max(1));
+        }
+        // What was shed gives its memory back. A `VecDeque` keeps its capacity when drained, so
+        // every metric that ever held many samples kept its high-water block (7 MB at the
+        // default cap) while the entries the total cap counts stayed flat: 105 MB of capacity
+        // for under 1,000,000 entries at 3 h, growing as more metrics crossed a doubling
+        // (malloc_history: 35 of the 63 MB grown from 7,000 s to 11,000 s).
+        self.recent
+            .shrink_to(self.recent.len().saturating_mul(5) / 4);
+    }
+
+    /// Merges the oldest `count` recent samples into blocks, then coarsens the blocks
+    /// while there are too many of them.
+    fn compact(&mut self, count: usize) {
+        if self.block_ns == 0 {
+            self.block_ns = self.first_block_ns;
+        }
+        let block = self.block_ns;
+        for e in self.recent.drain(..count.min(self.recent.len())) {
+            let start = e.t - e.t % block;
+            match self.blocks.entry((start, e.dims, e.kind())) {
+                std::collections::btree_map::Entry::Vacant(v) => {
+                    v.insert(e);
+                }
+                std::collections::btree_map::Entry::Occupied(mut o) => o.get_mut().absorb(&e),
+            }
+        }
+        // Down to half the cap, so a run does not re-merge on every push. A run whose
+        // distinct dimension sets alone exceed the cap stops once one block spans it all.
+        while self.blocks.len() > self.block_cap / 2 {
+            let latest = self.blocks.keys().next_back().map_or(0, |k| k.0);
+            if self.block_ns > latest {
+                break;
+            }
+            self.block_ns = self.block_ns.saturating_mul(2);
+            let block = self.block_ns;
+            let old = std::mem::take(&mut self.blocks);
+            for ((start, dims, kind), e) in old {
+                let key = (start - start % block, dims, kind);
+                match self.blocks.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(v) => {
+                        v.insert(e);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut o) => {
+                        o.get_mut().absorb(&e);
+                    }
+                }
+            }
+        }
+        // One block spans the run and the distinct sets alone still exceed the cap.
+        if self.blocks.len() > self.block_cap {
+            let sets = self.dim_sets();
+            self.evict_oldest_sets(sets - sets * self.block_cap / (2 * self.blocks.len()));
+        }
+    }
+
+    /// Grouped by `dim` and pooled over `[from, to]`, among the samples whose other
+    /// dimensions are exactly `filter`. A merged block counts when the middle of the
+    /// samples it holds is in the range.
+    fn groups(
+        &self,
+        dim: &str,
+        filter: &BTreeMap<String, String>,
+        from: SimTime,
+        to: SimTime,
+    ) -> Vec<crate::introspect::GroupRow> {
+        let keys: Vec<Option<&String>> = self
+            .dims
+            .iter()
+            .map(|d| {
+                let key = d.get(dim)?;
+                let others_match =
+                    d.len() == filter.len() + 1 && filter.iter().all(|(k, v)| d.get(k) == Some(v));
+                others_match.then_some(key)
+            })
+            .collect();
+        let mut pools: BTreeMap<&String, Pool> = BTreeMap::new();
+        for e in self.blocks.values() {
+            let Some(Some(key)) = keys.get(e.dims as usize) else {
+                continue;
+            };
+            let middle = e.t + (e.t_end - e.t) / 2;
+            if middle < from || middle > to {
+                continue;
+            }
+            pools.entry(key).or_default().add(e, self.block_ns);
+        }
+        for e in self.recent.iter().filter(|e| e.t >= from && e.t <= to) {
+            let Some(Some(key)) = keys.get(e.dims as usize) else {
+                continue;
+            };
+            pools.entry(key).or_default().add(e, 0);
+        }
+        pools
+            .into_iter()
+            .map(|(key, p)| p.row(key.clone()))
+            .collect()
+    }
+}
+
+/// One dimensioned metric sample — or, once merged, several with the same dimension values
+/// and kind in one time block — with what it takes to pool it with others.
+///
+/// **56 bytes, by kind.** Each kind pools by one pair of numbers ([`Pool::add`]):
+/// a proportion its successes and trials, a ratio of sums its numerator and denominator, a
+/// distribution its sample sum (with `n`), a point its value and weight. The entry held all
+/// of them for every kind, 128 bytes, so the stores' 1,000,000-entry cap was about 120 MB;
+/// it now holds its kind's pair in `a` and `b`, and the same cap is about 56 MB plus the
+/// block map's nodes. The numbers stored and the arithmetic that merges and pools them are
+/// the ones it had, so no answer changes: what it dropped is the point and weight of a
+/// proportion, a ratio or a distribution, which merged but were never pooled.
+#[derive(Debug, Clone, Copy)]
+struct BreakdownEntry {
+    /// The earliest sample instant it holds.
+    t: SimTime,
+    /// The latest; `t` for a single sample.
+    t_end: SimTime,
+    /// Its sample count.
+    n: u64,
+    /// By kind: successes; the numerator's bits; the sample sum's bits; the point's bits.
+    a: u64,
+    /// By kind: trials; the denominator's bits; unused; the point's weight (its sample
+    /// count, at least 1; merged, their sum).
+    b: u64,
+    /// The samples the metric's definition asks for before it reports anything; the
+    /// pooled group is held to the same floor.
+    required: u64,
+    /// The interned dimension values (`BreakdownStore::dims`).
+    dims: u32,
+    /// How it pools: 0 a proportion's counts, 1 a ratio's sums, 2 a distribution's sum, 3
+    /// a point, 4 nothing but its count.
+    kind: u8,
+}
+
+/// [`BreakdownEntry::kind`] values.
+const KIND_COUNTS: u8 = 0;
+const KIND_SUMS: u8 = 1;
+const KIND_TOTAL: u8 = 2;
+const KIND_POINT: u8 = 3;
+const KIND_NONE: u8 = 4;
+
+impl BreakdownEntry {
+    /// How it pools (`Pool::add`): only entries of one kind are merged, so a merged entry
+    /// pools exactly as the samples it holds would have.
+    const fn kind(&self) -> u8 {
+        self.kind
+    }
+
+    /// A proportion's successes and trials, which pool exactly.
+    const fn counts(&self) -> Option<(u64, u64)> {
+        if self.kind == KIND_COUNTS {
+            Some((self.a, self.b))
+        } else {
+            None
+        }
+    }
+
+    /// A ratio of sums' numerator and denominator, which pool exactly.
+    fn sums(&self) -> Option<(f64, f64)> {
+        (self.kind == KIND_SUMS).then(|| (f64::from_bits(self.a), f64::from_bits(self.b)))
+    }
+
+    /// A distribution's sample sum, which pools exactly into a mean.
+    fn total(&self) -> Option<f64> {
+        (self.kind == KIND_TOTAL).then(|| f64::from_bits(self.a))
+    }
+
+    /// A point's value; merged, the weighted mean of the points.
+    fn point(&self) -> Option<f64> {
+        (self.kind == KIND_POINT).then(|| f64::from_bits(self.a))
+    }
+
+    /// A point's weight in a pool.
+    const fn weight(&self) -> u64 {
+        self.b
+    }
+
+    /// Merges `o`, of the same dimension values and kind, into this entry.
+    fn absorb(&mut self, o: &BreakdownEntry) {
+        debug_assert_eq!((self.dims, self.kind()), (o.dims, o.kind()));
+        self.t = self.t.min(o.t);
+        self.t_end = self.t_end.max(o.t_end);
+        self.required = self.required.max(o.required);
+        self.n += o.n;
+        match self.kind {
+            KIND_COUNTS => {
+                self.a += o.a;
+                self.b += o.b;
+            }
+            KIND_SUMS => {
+                self.a = (f64::from_bits(self.a) + f64::from_bits(o.a)).to_bits();
+                self.b = (f64::from_bits(self.b) + f64::from_bits(o.b)).to_bits();
+            }
+            KIND_TOTAL => {
+                self.a = (f64::from_bits(self.a) + f64::from_bits(o.a)).to_bits();
+            }
+            KIND_POINT => {
+                let (p, q) = (f64::from_bits(self.a), f64::from_bits(o.a));
+                let w = (self.b + o.b) as f64;
+                self.a = ((p * self.b as f64 + q * o.b as f64) / w).to_bits();
+                self.b += o.b;
+            }
+            _ => {}
+        }
+    }
+
+    fn of(t: SimTime, dims: u32, value: &v2xw_metrics::SampleValue) -> Self {
+        use v2xw_metrics::{DistributionSummary, RatioEstimate, SampleValue};
+        let (total, required) = match value {
+            SampleValue::Distribution(DistributionSummary::Insufficient {
+                required, sum, ..
+            }) => (*sum, *required),
+            SampleValue::Distribution(d) => (d.mean().map(|m| m * d.n() as f64), 1),
+            SampleValue::Ratio(RatioEstimate::Insufficient { required, .. }) => (None, *required),
+            _ => (None, 1),
+        };
+        let (counts, sums) = match value {
+            SampleValue::Ratio(RatioEstimate::Proportion {
+                successes, trials, ..
+            }) => (Some((*successes, *trials)), None),
+            // A proportion too thin to estimate in its own window still carries its counts,
+            // and pooled with the other windows it counts.
+            SampleValue::Ratio(RatioEstimate::Insufficient {
+                trials,
+                successes: Some(successes),
+                ..
+            }) => (Some((*successes, *trials)), None),
+            SampleValue::Ratio(RatioEstimate::RatioOfSums {
+                numerator,
+                denominator,
+                ..
+            }) => (None, Some((*numerator, *denominator))),
+            _ => (None, None),
+        };
+        // The first of counts, sums, a sum, a point it has decides how it pools.
+        let (kind, a, b) = match (counts, sums, total, value.point()) {
+            (Some((s, n)), ..) => (KIND_COUNTS, s, n),
+            (None, Some((x, y)), ..) => (KIND_SUMS, x.to_bits(), y.to_bits()),
+            (None, None, Some(s), _) => (KIND_TOTAL, s.to_bits(), 0),
+            (None, None, None, Some(p)) => (KIND_POINT, p.to_bits(), value.n().max(1)),
+            (None, None, None, None) => (KIND_NONE, 0, 0),
+        };
+        BreakdownEntry {
+            t,
+            t_end: t,
+            n: value.n(),
+            a,
+            b,
+            required,
+            dims,
+            kind,
+        }
+    }
+}
+
+/// The running pool of one group of a grouped query.
+#[derive(Debug, Default)]
+struct Pool {
+    successes: u64,
+    trials: u64,
+    num: Vec<f64>,
+    den: Vec<f64>,
+    /// Distribution windows' sample sums, and the samples behind them.
+    totals: Vec<f64>,
+    total_n: u64,
+    /// `(point, n)` of the entries that carry neither counts nor sums.
+    points: Vec<(f64, u64)>,
+    n: u64,
+    /// The largest sample floor any pooled window declared.
+    required: u64,
+    /// The earliest and latest sample instants pooled.
+    span: Option<(SimTime, SimTime)>,
+    /// The largest time block pooled whole; 0 when every entry was one sample.
+    block_ns: SimTime,
+}
+
+impl Pool {
+    /// Pools `e`, which is a merged time block of `block_ns` (0: a single sample).
+    fn add(&mut self, e: &BreakdownEntry, block_ns: SimTime) {
+        self.required = self.required.max(e.required);
+        self.span = Some(
+            self.span
+                .map_or((e.t, e.t_end), |(a, b)| (a.min(e.t), b.max(e.t_end))),
+        );
+        self.block_ns = self.block_ns.max(block_ns);
+        match (e.counts(), e.sums(), e.total()) {
+            (Some((s, t)), _, _) => {
+                self.successes += s;
+                self.trials += t;
+                self.n += t;
+            }
+            (None, Some((num, den)), _) => {
+                self.num.push(num);
+                self.den.push(den);
+                self.n += e.n;
+            }
+            (None, None, Some(total)) => {
+                self.totals.push(total);
+                self.total_n += e.n;
+                self.n += e.n;
+            }
+            _ => {
+                if let Some(p) = e.point() {
+                    self.points.push((p, e.weight()));
+                }
+                self.n += e.n;
+            }
+        }
+    }
+
+    /// Proportions pool their counts and carry the pooled Wilson interval; ratios of sums
+    /// pool their sums; distributions pool their sample sums into a mean; anything else is
+    /// the sample-count-weighted mean of the points. A group still short of the metric's
+    /// own sample floor once pooled reports its count and no value.
+    fn row(self, key: String) -> crate::introspect::GroupRow {
+        use v2xw_core::math::sum_ordered;
+        let mut row = crate::introspect::GroupRow {
+            key,
+            value: None,
+            lo: None,
+            hi: None,
+            n: self.n,
+            span: self.span,
+            block_ns: self.block_ns,
+        };
+        if self.n < self.required {
+            return row;
+        }
+        if self.trials > 0 {
+            let p = (self.successes as f64) / (self.trials as f64);
+            let (lo, hi) = v2xw_metrics::stats::wilson_interval(
+                self.successes,
+                self.trials,
+                v2xw_metrics::ConfidenceLevel::P95,
+            );
+            row.value = Some(p);
+            row.lo = Some(lo);
+            row.hi = Some(hi);
+        } else if !self.den.is_empty() {
+            let den = sum_ordered(self.den);
+            if den != 0.0 && den.is_finite() {
+                row.value = Some(sum_ordered(self.num) / den);
+            }
+        } else if self.total_n > 0 {
+            row.value = Some(sum_ordered(self.totals) / (self.total_n as f64));
+        } else if !self.points.is_empty() {
+            let weight: u64 = self.points.iter().map(|(_, n)| *n).sum();
+            let total = sum_ordered(self.points.iter().map(|(p, n)| p * (*n as f64)));
+            row.value = Some(total / (weight as f64));
+        }
+        row
+    }
+}
+
+/// How many `backend.state` snapshots the projector keeps: ten minutes at one a second.
+const BACKEND_HISTORY: usize = 600;
+
+/// How many bytes of `backend.state` snapshots the projector keeps, whatever their count:
+/// a snapshot grows with the fleet and the backend's queues, so the count alone does not
+/// bound the memory. The oldest go first.
+const BACKEND_BYTES: usize = 64 * 1024 * 1024;
+
+/// The one field of a `backend.state` record the projector reads as it arrives.
+#[derive(serde::Deserialize)]
+struct SnapshotTime {
+    t: Option<u64>,
+}
+
+/// How many of a node's pseudonym changes the security panel keeps (and, before the
+/// message feed replaced it, how many sent and received messages the evidence log kept).
+///
+/// The log is filled as steps are absorbed, which is up to [`LiveOptions::lookahead_steps`]
+/// ahead of the stream plus the host channel's own lookahead, and read at the stream's
+/// instant, so it has to hold that lead and some history behind it: 384 frames is 38 s of
+/// a 10 Hz sender, and 384 receptions about 13 s at the 30 a second a dense street gives.
+const MESSAGE_LOG: usize = 384;
+/// `MovementPhaseState` (SAE J2735) for a world signal state.
+const fn movement_phase(state: SignalState) -> u8 {
+    state.j2735_phase()
+}
+
+/// The nearest-rank percentile of a sorted nanosecond list, in milliseconds.
+///
+/// Nearest rank rather than interpolation: the samples are integers on a known grid, and
+/// an interpolated value would be a number no observation took.
+fn percentile_ms(sorted: &[u64], q: f64) -> f32 {
+    if sorted.is_empty() {
+        return f32::NAN;
+    }
+    let rank = ((sorted.len() as f64) * q).ceil() as usize;
+    let index = rank.saturating_sub(1).min(sorted.len() - 1);
+    (sorted[index] as f32) * 1e-6
+}
+
+/// Copies a node's own published telemetry into the wire row, field by field.
+///
+/// `node.telemetry` carries six fields; §3.5.2 has fifty-one. The rest stay at their
+/// unknown sentinels, which is the difference between "the node reports no certificate
+/// store" and "this build does not publish one".
+fn apply_reported(row: &mut NodeTelemetry, view: &NodeTelemetryView) {
+    if let Some(bytes) = view.storage_bytes {
+        row.storage_used_b = bytes;
+    }
+    if let Some(bytes) = view.ram_bytes {
+        row.ram_used_kib = u32::try_from(bytes / 1024).unwrap_or(u32::MAX);
+    }
+    if let Some(cpu) = view.cpu {
+        row.cpu_util_pm = (cpu * 1000.0).round().clamp(0.0, 65534.0) as u16;
+    }
+    if let Some(hsm) = view.hsm {
+        row.hsm_util_pm = (hsm * 1000.0).round().clamp(0.0, 65534.0) as u16;
+    }
+    if let Some(depth) = view.verify_queue_depth {
+        row.q_verify_p50 = u16::try_from(depth).unwrap_or(u16::MAX);
+        row.q_verify_p95 = u16::try_from(depth).unwrap_or(u16::MAX);
+    }
+    // The queues' own window percentiles, when the node published its window.
+    if let Some([p50, p95]) = view.q_rx {
+        (row.q_rx_p50, row.q_rx_p95) = (p50, p95);
+    }
+    if let Some([p50, p95]) = view.q_verify {
+        (row.q_verify_p50, row.q_verify_p95) = (p50, p95);
+    }
+    if let Some([p50, p95]) = view.q_app {
+        (row.q_app_p50, row.q_app_p95) = (p50, p95);
+    }
+    if let Some([p50, p95]) = view.q_tx {
+        (row.q_tx_p50, row.q_tx_p95) = (p50, p95);
+    }
+    if let Some([p50, p95]) = view.q_crl {
+        (row.q_crl_p50, row.q_crl_p95) = (p50, p95);
+    }
+    if let Some(ms) = view.verify_wait_p95_ms {
+        row.verify_wait_p95_ms = v2xw_record::grid::quantise_f32(ms, 1e-3);
+    }
+    if let Some(n) = view.cert_active {
+        row.cert_active = n;
+    }
+    if let Some(n) = view.nbr_total {
+        row.nbr_total = n;
+    }
+    if let Some(n) = view.nbr_verified {
+        row.nbr_verified = n;
+    }
+    if let Some(n) = view.digest_misses {
+        row.digest_misses = n;
+    }
+}
+
+/// The §6.5 `Visibility` code for a token.
+fn visibility_code_of(name: &str) -> u8 {
+    match name {
+        "NODE" => 1,
+        "PUBLIC" => 2,
+        "MIXED" => 3,
+        "DERIVED" => 4,
+        "META" => 5,
+        _ => 0,
+    }
+}
+
+// --- §3.6 payload encoders ---------------------------------------------------------
+//
+// One function per channel, writing the exact byte layout §3.6 names, from the reader-side
+// view of the record the kernel emitted. A field the record does not carry is written as
+// that field's §0 sentinel: `0xFFFF_FFFF` for a `u32` id, `0xFF` for a `u8`, `NaN` for a
+// float. Nothing here invents a value.
+
+fn put_u32(out: &mut [u8], at: usize, v: u32) {
+    out[at..at + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+fn put_u64(out: &mut [u8], at: usize, v: u64) {
+    out[at..at + 8].copy_from_slice(&v.to_le_bytes());
+}
+
+fn put_f32(out: &mut [u8], at: usize, v: f32) {
+    out[at..at + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+fn put_u16(out: &mut [u8], at: usize, v: u16) {
+    out[at..at + 2].copy_from_slice(&v.to_le_bytes());
+}
+
+fn put_i16(out: &mut [u8], at: usize, v: i16) {
+    out[at..at + 2].copy_from_slice(&v.to_le_bytes());
+}
+
+/// A message id narrowed to the `u32` the wire carries, keeping `U32_NONE` free.
+fn msg_id_of(msg: Option<u64>) -> u32 {
+    match msg {
+        Some(m) => u32::try_from(m % u64::from(U32_NONE)).unwrap_or(0),
+        None => U32_NONE,
+    }
+}
+
+/// §3.6.3's `MsgType` for the kernel's own spelling of it.
+fn msg_type_code(name: Option<&str>) -> u16 {
+    match name {
+        Some("bsm") => 1,
+        Some("cam") => 2,
+        Some("denm") => 3,
+        Some("spat") => 4,
+        Some("map") => 5,
+        Some("psm") => 6,
+        Some("vam") => 7,
+        Some("cpm") => 8,
+        Some("srm") => 9,
+        Some("ssm") => 10,
+        Some("wsa") => 11,
+        Some("crl") => 12,
+        _ => 0,
+    }
+}
+
+/// §3.6.11 `gt.kinematics`, 56 bytes.
+fn gt_kinematics_payload(view: &GtKinematicsView) -> Vec<u8> {
+    let mut p = vec![0u8; 56];
+    put_u32(&mut p, 0, view.actor.index());
+    put_u32(&mut p, 4, view.lane.unwrap_or(U32_NONE));
+    put_f32(&mut p, 8, view.x_m as f32);
+    put_f32(&mut p, 12, view.y_m as f32);
+    put_f32(&mut p, 16, view.z_m.unwrap_or(0.0) as f32);
+    // The record carries ground speed and heading, not the velocity vector; the components
+    // are the published decomposition of the two and not a second source.
+    let heading = view.heading_rad.unwrap_or(0.0);
+    put_f32(
+        &mut p,
+        20,
+        (view.speed_mps * v2xw_core::math::cos(heading)) as f32,
+    );
+    put_f32(
+        &mut p,
+        24,
+        (view.speed_mps * v2xw_core::math::sin(heading)) as f32,
+    );
+    put_f32(&mut p, 28, 0.0);
+    put_f32(&mut p, 32, view.acc_mps2.unwrap_or(0.0) as f32);
+    put_f32(&mut p, 36, 0.0);
+    put_f32(&mut p, 40, 0.0);
+    put_f32(&mut p, 44, heading as f32);
+    put_f32(&mut p, 48, f32::NAN);
+    put_f32(&mut p, 52, view.lane_pos_m.unwrap_or(0.0) as f32);
+    p
+}
+
+/// §3.6.4 `node.tx`, 40 bytes.
+fn node_tx_payload(view: &NodeTxView) -> Vec<u8> {
+    let mut p = vec![0u8; 40];
+    put_u32(&mut p, 0, view.node.index());
+    put_u32(&mut p, 4, msg_id_of(view.msg));
+    put_u32(
+        &mut p,
+        8,
+        u32::try_from(view.bytes_on_wire).unwrap_or(u32::MAX),
+    );
+    put_f32(
+        &mut p,
+        12,
+        view.airtime_us.map_or(f32::NAN, |us| (us as f32) * 1e-3),
+    );
+    put_u16(&mut p, 16, msg_type_code(view.msg_type.as_deref()));
+    put_i16(
+        &mut p,
+        18,
+        view.power_dbm
+            .map_or(i16::MIN, |dbm| (dbm * 100.0).round() as i16),
+    );
+    put_u16(&mut p, 20, view.channel.unwrap_or(0xFFFF));
+    p[22] = view.mcs.unwrap_or(0xFF);
+    p[23] = view.ac.unwrap_or(0xFF);
+    p[24] = match view.dcc_state.as_deref() {
+        Some("unrestricted") | Some("UNRESTRICTED") => 0,
+        Some("active") => 1,
+        Some("restrictive") => 2,
+        _ => 0xFF,
+    };
+    p[25] = match view.signer {
+        Some(SignerId::Digest) => 0,
+        Some(SignerId::Certificate) => 1,
+        Some(SignerId::SelfSigned) => 2,
+        None => 0xFF,
+    };
+    put_u16(
+        &mut p,
+        26,
+        view.payload_bytes
+            .and_then(|b| u16::try_from(b).ok())
+            .unwrap_or(0xFFFF),
+    );
+    // §3.6.10's `pseudonym_digest`: the HashedId8 of the signing certificate, which
+    // `node.tx` now carries (it rotates on the air when the node changes pseudonym, and
+    // the page's HUD shows it). Eight zero bytes, §0's "absent", when a record has none.
+    if let Some(hex) = view.pseudonym.as_deref()
+        && hex.len() == 16
+    {
+        for (i, byte) in p[28..36].iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap_or(0);
+        }
+    }
+    put_u32(&mut p, 36, 0);
+    p
+}
+
+/// §3.6.5 `phy.rx`, 48 bytes.
+fn phy_rx_payload(view: &PhyRxView) -> Vec<u8> {
+    let mut p = vec![0u8; 48];
+    put_u64(&mut p, 0, view.t_start);
+    put_u64(&mut p, 8, view.t_end);
+    put_u32(&mut p, 16, view.rx.index());
+    put_u32(&mut p, 20, view.tx.map_or(U32_NONE, |n| n.index()));
+    put_u32(&mut p, 24, msg_id_of(view.msg));
+    put_f32(&mut p, 28, view.rssi_dbm.unwrap_or(f64::NAN) as f32);
+    put_f32(&mut p, 32, view.sinr_db.unwrap_or(f64::NAN) as f32);
+    put_f32(&mut p, 36, view.dist_m.unwrap_or(f64::NAN) as f32);
+    p[40] = match view.outcome {
+        RxOutcome::Ok => 0,
+        // §3.6.5's outcome codes name the *mechanism*; the kernel reports `lost` plus a
+        // cause, and the cause is what picks the code. An unrecognised cause reads as
+        // `5` (sinr-fail), which is the class a link-budget decision belongs to.
+        RxOutcome::Lost => match view.cause.as_deref() {
+            Some("per") | Some("fading") | Some("sinr") => 5,
+            Some("below-sensitivity") | Some("path-loss") => 1,
+            Some("collision") | Some("interference") => 2,
+            Some("capture") => 3,
+            Some("half-duplex") => 4,
+            Some("crc") => 6,
+            _ => 5,
+        },
+    };
+    p[41] = match view.cause.as_deref() {
+        None => 0,
+        Some("path-loss") | Some("below-sensitivity") => 1,
+        Some("shadowing") => 2,
+        Some("per") | Some("fading") => 3,
+        Some("interference") | Some("collision") => 4,
+        Some("hidden-terminal") => 5,
+        Some("half-duplex") => 6,
+        Some("dcc-gate") => 7,
+        Some("queue-drop") => 8,
+        Some("out-of-range") => 9,
+        Some(_) => 0,
+    };
+    // Line-of-sight class: `v2xw-engine` evaluates every link as `LosResult::clear()`
+    // because no obstacle model is composed in this build, so `0` (LOS) is what the run
+    // actually used — not a guess, and not the `0xFF` that would claim it is unknown.
+    p[42] = 0;
+    p
+}
+
+/// §3.6.6 `node.verify`, 48 bytes.
+fn node_verify_payload(view: &NodeVerifyView) -> Vec<u8> {
+    let mut p = vec![0u8; 48];
+    put_u64(&mut p, 0, view.t_enqueue);
+    put_u64(&mut p, 8, view.t_start.unwrap_or(u64::MAX));
+    put_u64(&mut p, 16, view.t_done.unwrap_or(u64::MAX));
+    put_u32(&mut p, 24, view.node.index());
+    put_u32(&mut p, 28, msg_id_of(view.msg));
+    put_f32(&mut p, 32, view.cost_us.map_or(f32::NAN, |us| us as f32));
+    put_u16(
+        &mut p,
+        36,
+        match view.primitive.as_deref() {
+            Some("ecdsa-p256-verify") | Some("ecdsa-p256") => 1,
+            Some("ecdsa-p256-sign") => 2,
+            Some("ecdsa-p384-verify") => 3,
+            Some("ml-dsa-65-verify") => 4,
+            Some("ml-dsa-65-sign") => 5,
+            Some("falcon-512-verify") => 6,
+            Some("slh-dsa-shake-128s-verify") => 7,
+            Some("ecqv-p256-reconstruct") => 8,
+            Some("sha-256") => 9,
+            Some("aes-128-ccm") => 10,
+            _ => 0,
+        },
+    );
+    p[38] = match view.outcome {
+        VerifyOutcome::Valid => 0,
+        VerifyOutcome::Invalid => 1,
+        VerifyOutcome::Skipped => 5,
+        VerifyOutcome::Dropped => 6,
+    };
+    p[39] = match view.policy.as_deref() {
+        Some("now") | Some("admit") => 0,
+        Some("deferred") => 1,
+        Some("skipped") => 2,
+        Some("evicted") => 3,
+        _ => 0xFF,
+    };
+    p[40] = 0;
+    // `where_run`: this build charges every verification against the node's HSM, which is
+    // what the hardware profile's service rate describes.
+    p[41] = 1;
+    put_u16(
+        &mut p,
+        42,
+        view.queue_depth
+            .and_then(|d| u16::try_from(d).ok())
+            .unwrap_or(0xFFFF),
+    );
+    p
+}
+
+/// §3.6.13 `mac.cbr`, 16 bytes.
+fn mac_cbr_payload(view: &MacCbrView) -> Vec<u8> {
+    let mut p = vec![0u8; 16];
+    put_u32(&mut p, 0, view.node.index());
+    put_f32(&mut p, 4, view.cbr as f32);
+    put_u16(&mut p, 8, view.channel.unwrap_or(0xFFFF));
+    put_u16(&mut p, 10, 0);
+    put_i16(&mut p, 12, i16::MIN);
+    p
+}
+
+/// §3.6.7 `sec.cert`, 40 bytes.
+fn sec_cert_payload(view: &SecCertView) -> Vec<u8> {
+    let mut p = vec![0u8; 40];
+    put_u64(&mut p, 0, view.t);
+    put_u64(&mut p, 8, u64::MAX);
+    put_u32(&mut p, 16, view.node.index());
+    put_u32(&mut p, 20, 0);
+    if let Some(digest) = &view.digest {
+        for (i, byte) in hex_bytes(digest).into_iter().take(8).enumerate() {
+            p[24 + i] = byte;
+        }
+    }
+    p[32] = match view.event.as_str() {
+        "change" => 0,
+        "expire" => 1,
+        "topup-request" | "top-up" => 2,
+        "topup-complete" => 3,
+        "learn-p2pcd" | "learn" => 4,
+        "learn-full-cert" => 5,
+        "install" => 6,
+        "evict" => 7,
+        "revoked-self-detected" => 8,
+        _ => 0,
+    };
+    p[33] = 0;
+    put_u16(&mut p, 34, 0xFFFF);
+    put_u16(&mut p, 36, 0xFFFF);
+    put_u16(&mut p, 38, 1);
+    p
+}
+
+/// §3.6.8 `det.observation`, 32 bytes.
+fn det_observation_payload(
+    view: &DetObservationView,
+    str_detector: u32,
+    subject_actor: u32,
+    prov_id: u32,
+) -> Vec<u8> {
+    let mut p = vec![0u8; 32];
+    put_u32(&mut p, 0, view.node.index());
+    put_u32(&mut p, 4, str_detector);
+    for (i, byte) in hex_bytes(&view.subject).into_iter().take(8).enumerate() {
+        p[8 + i] = byte;
+    }
+    put_f32(&mut p, 16, view.score.unwrap_or(f64::NAN) as f32);
+    put_u32(&mut p, 20, subject_actor);
+    put_u16(&mut p, 24, 0);
+    p[26] = 0;
+    put_u32(&mut p, 28, prov_id);
+    p
+}
+
+/// §3.6.10 `proto.revocation`, 32 bytes.
+fn revocation_payload(view: &ProtoRevocationView) -> Vec<u8> {
+    let mut p = vec![0u8; 32];
+    put_u32(&mut p, 0, view.node.map_or(U32_NONE, |n| n.index()));
+    put_u32(
+        &mut p,
+        4,
+        u32::try_from(
+            v2xw_core::hash::sha256(view.id.as_bytes())[..4]
+                .iter()
+                .fold(0u64, |acc, b| (acc << 8) | u64::from(*b))
+                % u64::from(U32_NONE),
+        )
+        .unwrap_or(0),
+    );
+    for (i, byte) in hex_bytes(&view.id).into_iter().take(8).enumerate() {
+        p[8 + i] = byte;
+    }
+    put_u64(&mut p, 16, view.size_bytes.unwrap_or(0));
+    put_u32(&mut p, 24, view.node.map_or(U32_NONE, |n| n.index()));
+    p[28] = match view.stage.as_str() {
+        "detect" => 0,
+        "report_sent" => 1,
+        "report_received" => 2,
+        "decision" => 3,
+        "resolved" => 4,
+        "issued" => 5,
+        "published" => 6,
+        "downloaded" => 7,
+        "processed" => 8,
+        "enforced" => 9,
+        "residual_harm" => 10,
+        "rsu_installed" => 11,
+        _ => 0,
+    };
+    p[29] = 0;
+    put_u16(
+        &mut p,
+        30,
+        view.entries
+            .and_then(|e| u16::try_from(e).ok())
+            .unwrap_or(0xFFFF),
+    );
+    p
+}
+
+// --- the engine --------------------------------------------------------------------
+
+/// A live `v2xw-engine` run, served over VWP.
+///
+/// Holds the kernel at arm's length — on its own thread, behind a bounded channel — and
+/// turns what it emits into the state a connection encodes frames from. See the module
+/// header for why the arm's length is a requirement and not a preference.
+#[derive(Debug)]
+pub struct LiveEngine {
+    scenario: Scenario,
+    options: LiveOptions,
+    descriptor: RunDescriptor,
+    world: Arc<WorldPayload>,
+    world_json: String,
+    setup: Box<Setup>,
+    projector: Projector,
+    host: Host,
+    /// Every step produced and not yet dropped, oldest first. This is the "recorded time"
+    /// §6.6 lets a live run seek backwards into.
+    timeline: std::collections::VecDeque<StepOutput>,
+    /// [`StepOutput::approx_bytes`] summed over `timeline`.
+    timeline_bytes: usize,
+    /// The step index of `timeline.front()`.
+    base_index: u64,
+    /// The next step index the stream will emit.
+    cursor: u64,
+    /// One past the highest step index produced.
+    produced: u64,
+    /// The scenario timeline's items as the kernel fired them, `(t_ns, record)`, in order.
+    /// Reported by `run.status` up to the stream position, not the kernel's frontier.
+    fired: Vec<(u64, Value)>,
+    /// A step a seek is waiting for, beyond the bounded lead: while it is set, [`Self::pump`]
+    /// takes steps past `lookahead_steps` until it is produced. Cleared by the seek.
+    seek_goal: Option<u64>,
+    state: RunState,
+    speed: f64,
+    client_sync: bool,
+    report: Option<RunReport>,
+    failure: Option<String>,
+    /// True when `failure` is a run the user's settings could not build (a refused
+    /// `run.start`), false when the engine itself failed. It decides whether a later
+    /// `run.step` is told there is no run (`-32002`) or that the engine broke (`-32603`).
+    failure_is_input: bool,
+    /// Every metric sample produced, by name, for `metrics.query` (§6.12): each series
+    /// held to [`HISTORY_POINTS`] points ([`SeriesHistory`]).
+    history: BTreeMap<String, SeriesHistory>,
+    /// string id → metric name, for reading a produced row back.
+    metric_names: BTreeMap<u32, String>,
+    /// The most recent telemetry row per node, for `inspect.node` (§6.8).
+    last_telemetry: BTreeMap<u32, NodeTelemetry>,
+    /// Every string this run has appended to the symbol table, in append order.
+    ///
+    /// Append-only even across a despawn: see [`Engine::live_strings`]. It is the labels
+    /// of every node the run has ever streamed, plus the one hardware-profile id.
+    appended_strings: Vec<String>,
+    /// Membership test for `appended_strings`, so the append is O(log n) and not O(n).
+    appended_index: BTreeSet<String>,
+    /// The scenario the next `run.start` runs, when `scenario.set` or `scenario.load` put
+    /// one in place (§6.6 "or the already-set one").
+    staged: Option<Scenario>,
+    /// Where the scenario this engine was opened on came from, for resolving presets.
+    source: Option<std::path::PathBuf>,
+    /// A running SHA-256 over every step the kernel produced, in order: the run's output
+    /// digest. Two runs with the same scenario and seed agree on it and two runs with
+    /// different seeds do not, which is the reproducibility claim made checkable.
+    digest: sha2::Sha256,
+    /// How many steps the digest covers.
+    digest_steps: u64,
+    /// Set once the digest covers the whole run.
+    digest_final: Option<String>,
+    /// How many runs this engine has started, counting the first.
+    runs_started: u64,
+    /// Whole-run totals, accumulated as the kernel produces steps.
+    stats: RunStats,
+    /// The digests of the runs this engine ran before the current one, newest first, at
+    /// most [`PAST_RUNS`]: what "compare with the previous run" compares against.
+    past_runs: std::collections::VecDeque<crate::compare::RunDigest>,
+    /// What the scenario's exporters wrote after the run, or why they could not.
+    exports: Option<std::result::Result<Vec<v2xw_engine::export::Exported>, String>>,
+    /// The last imported world, for the next run's kernel (see [`WorldMemo`]).
+    world_memo: Option<WorldMemo>,
+}
+
+/// Whole-run totals, read off the steps the kernel produced — not off what a connection
+/// subscribed to — so they describe the run and not one viewer of it.
+///
+/// They are what makes a changed setting checkable from outside: a changed arrival rate
+/// moves `actors_seen`, a changed propagation model moves `mean_rssi_dbm`, a changed message
+/// set moves `tx_by_type`. Published under `run.status.engine.stats`.
+#[derive(Debug, Default, Clone)]
+struct RunStats {
+    /// Distinct actors that appeared in any step.
+    actors: BTreeSet<u32>,
+    /// Frames put on the air, by message family.
+    tx_by_type: BTreeMap<&'static str, u64>,
+    /// Sum of the transmit power of the frames that reported one, dBm.
+    tx_power_sum_dbm: f64,
+    /// How many frames reported a transmit power.
+    tx_power_n: u64,
+    /// Reception attempts evaluated, and how many decoded.
+    rx_attempts: u64,
+    rx_ok: u64,
+    /// Sum of the received power of the attempts that reported one, dBm.
+    rssi_sum_dbm: f64,
+    rssi_n: u64,
+}
+
+impl RunStats {
+    fn absorb(&mut self, out: &StepOutput) {
+        for pose in &out.snapshot.actors {
+            self.actors.insert(pose.actor.index());
+        }
+        let tx = v2xw_record::channels::by_name("node.tx").and_then(|c| c.wire_id);
+        let rx = v2xw_record::channels::by_name("phy.rx").and_then(|c| c.wire_id);
+        for event in &out.events {
+            let p = &event.payload;
+            if Some(event.channel_id) == tx && p.len() >= 20 {
+                let code = u16::from_le_bytes([p[16], p[17]]);
+                *self.tx_by_type.entry(msg_type_name(code)).or_insert(0) += 1;
+                let centi = i16::from_le_bytes([p[18], p[19]]);
+                if centi != i16::MIN {
+                    self.tx_power_sum_dbm += f64::from(centi) / 100.0;
+                    self.tx_power_n += 1;
+                }
+            } else if Some(event.channel_id) == rx && p.len() >= 41 {
+                self.rx_attempts += 1;
+                if p[40] == 0 {
+                    self.rx_ok += 1;
+                }
+                let rssi = f32::from_le_bytes([p[28], p[29], p[30], p[31]]);
+                if rssi.is_finite() {
+                    self.rssi_sum_dbm += f64::from(rssi);
+                    self.rssi_n += 1;
+                }
+            }
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        let mean = |sum: f64, n: u64| (n > 0).then(|| sum / n as f64);
+        json!({
+            "actors_seen": self.actors.len(),
+            "tx_frames": self.tx_by_type.values().sum::<u64>(),
+            "tx_by_type": self.tx_by_type,
+            "mean_tx_power_dbm": mean(self.tx_power_sum_dbm, self.tx_power_n),
+            "rx_attempts": self.rx_attempts,
+            "rx_ok": self.rx_ok,
+            "mean_rssi_dbm": mean(self.rssi_sum_dbm, self.rssi_n),
+        })
+    }
+}
+
+/// The message family a `node.tx` type code names (the inverse of `msg_type_code`).
+fn msg_type_name(code: u16) -> &'static str {
+    match code {
+        1 => "bsm",
+        2 => "cam",
+        3 => "denm",
+        4 => "spat",
+        5 => "map",
+        6 => "psm",
+        7 => "vam",
+        8 => "cpm",
+        9 => "srm",
+        10 => "ssm",
+        11 => "wsa",
+        12 => "crl",
+        _ => "other",
+    }
+}
+
+impl LiveEngine {
+    /// Loads a scenario, builds the kernel and starts it.
+    ///
+    /// # Errors
+    /// [`ServerError::ScenarioInvalid`] naming the setting for anything the scenario file
+    /// causes — a refused value, a map or terrain file that is not there — with the file's
+    /// path in the message; [`ServerError::Io`] if the file cannot be read or the host
+    /// thread cannot be spawned; [`ServerError::Internal`] only for what the engine itself
+    /// fails at.
+    pub fn open(path: impl AsRef<std::path::Path>, options: LiveOptions) -> Result<Self> {
+        let at = path.as_ref().display().to_string();
+        let in_file = |e: ServerError| match e {
+            ServerError::ScenarioInvalid(mut rows) => {
+                for row in &mut rows {
+                    row.message = format!("{at}: {}", row.message);
+                }
+                ServerError::ScenarioInvalid(rows)
+            }
+            other => other,
+        };
+        let scenario = Scenario::load(path.as_ref()).map_err(|e| in_file(setup_error(e)))?;
+        let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&scenario)
+            .iter()
+            .map(scenario_error)
+            .collect();
+        if !missing.is_empty() {
+            return Err(in_file(ServerError::ScenarioInvalid(missing)));
+        }
+        let mut engine = Self::new(scenario, options).map_err(in_file)?;
+        engine.source = Some(path.as_ref().to_path_buf());
+        Ok(engine)
+    }
+
+    /// Builds the kernel from a scenario already in hand.
+    ///
+    /// # Errors
+    /// As [`LiveEngine::open`].
+    pub fn new(scenario: Scenario, options: LiveOptions) -> Result<Self> {
+        let (mut setup, host) =
+            spawn_host(scenario.clone(), &options, options.lookahead_steps, None)?;
+        let world_memo = setup.world_memo.take();
+        let projector = Projector::new(&setup);
+        let metric_names = setup
+            .catalogue
+            .iter()
+            .map(|m| (m.str_id, m.name.clone()))
+            .collect();
+        let descriptor = descriptor_of(&setup);
+        let world = Arc::new(setup.world_payload.clone());
+        let world_json = setup.world_json.clone();
+        Ok(LiveEngine {
+            scenario,
+            state: if options.paused {
+                RunState::Paused
+            } else {
+                RunState::Running
+            },
+            speed: options.speed,
+            options,
+            descriptor,
+            world,
+            world_json,
+            setup,
+            projector,
+            host,
+            timeline: std::collections::VecDeque::new(),
+            timeline_bytes: 0,
+            base_index: 0,
+            cursor: 0,
+            produced: 0,
+            fired: Vec::new(),
+            seek_goal: None,
+            client_sync: false,
+            report: None,
+            failure: None,
+            failure_is_input: false,
+            history: BTreeMap::new(),
+            metric_names,
+            last_telemetry: BTreeMap::new(),
+            appended_strings: Vec::new(),
+            appended_index: BTreeSet::new(),
+            staged: None,
+            source: None,
+            digest: <sha2::Sha256 as sha2::Digest>::new(),
+            digest_steps: 0,
+            digest_final: None,
+            runs_started: 1,
+            stats: RunStats::default(),
+            past_runs: crate::compare::load_digests(PAST_RUNS),
+            exports: None,
+            world_memo,
+        })
+    }
+
+    /// The `vwp-world/1` JSON form, for [`crate::Run::new`].
+    pub fn world_json(&self) -> &str {
+        &self.world_json
+    }
+
+    /// The run manifest, for `run.status`.
+    pub fn manifest(&self) -> &Value {
+        &self.setup.manifest
+    }
+
+    /// The kernel's own report, once the run has finished.
+    pub fn report(&self) -> Option<&RunReport> {
+        self.report.as_ref()
+    }
+
+    /// True if every node the record stream named was one the actor→node reconstruction
+    /// predicted. See the module header.
+    pub fn mapping_is_consistent(&self) -> bool {
+        self.projector.mapping_is_consistent()
+    }
+
+    /// **A test hook, not an option.** Makes the actor→node reconstruction draw against a
+    /// different equipped fraction from the one the kernel is using.
+    ///
+    /// It exists so that [`LiveEngine::mapping_is_consistent`] can be shown to go red. A
+    /// consistency check that has never failed pins nothing, and this reconstruction is
+    /// the one part of the live path that is recomputed rather than read, so it is exactly
+    /// the part that needs a check that can fail.
+    pub fn mis_predict_equipped_fraction_for_test(&mut self, fraction: f64) {
+        self.projector.equipped_fraction = fraction;
+    }
+
+    /// Channels the kernel emitted that this build has no §3.6 payload for, and metric
+    /// names the symbol table does not hold — two ways a stream can silently lose content,
+    /// reported rather than swallowed.
+    pub fn unprojected(&self) -> (Vec<String>, Vec<String>) {
+        (
+            self.projector
+                .unprojected_channels
+                .iter()
+                .cloned()
+                .collect(),
+            self.projector.unnamed_metrics.iter().cloned().collect(),
+        )
+    }
+
+    /// Channels whose records their own declared reader-side view could not decode, with
+    /// how many records each lost.
+    ///
+    /// A non-empty map is a producer/reader schema disagreement in the workspace, not a
+    /// transport problem: the channel is in `v2xw-record`'s table, the producer wrote it,
+    /// and `v2xw-metrics`' view of it refused the bytes. Reported through
+    /// [`Introspect::caveats`] as well, so it reaches a client and not only a test.
+    pub fn undecodable_channels(&self) -> &BTreeMap<String, u64> {
+        &self.projector.undecodable_channels
+    }
+
+    fn step_ns(&self) -> u64 {
+        self.descriptor.cadence.mobility_step.as_nanos().max(1)
+    }
+
+    /// The last step the stream emitted, which is what every published view is *as of*.
+    ///
+    /// The projector runs at the kernel's frontier, and the kernel outruns real time by
+    /// three orders of magnitude: by the time a client has watched two simulated minutes
+    /// the projector has finished the run. So the node table, the actor and node counts
+    /// and the telemetry a client is answered with come from here — the step at
+    /// `sim_time()` — and never from the projector's own tables, which describe a future
+    /// the client has not been sent. Answering from the frontier was a real defect: a
+    /// `view.follow` on the newest node in the `Hello` table subscribed to a node that
+    /// does not exist yet at the stream's position, and no `Telemetry` frame ever arrived.
+    fn emitted(&self) -> Option<&StepOutput> {
+        self.at(self.cursor.checked_sub(1)?)
+    }
+
+    /// The node table as of the emitted step, for `Hello` (§3.1.3) and `inspect.node`.
+    fn node_rows(&self) -> Vec<crate::engine::NodeFacts> {
+        // The roadside units first: they hold node ids from `ROADSIDE_ID_BASE` and never spawn, so this
+        // table is the only place a client learns of them.
+        let mut rows: Vec<crate::engine::NodeFacts> = self.setup.rsu_facts.clone();
+        let Some(step) = self.emitted() else {
+            return rows;
+        };
+        rows.extend(step.snapshot.actors.iter().filter_map(|pose| {
+            let node = pose.node?;
+            Some(crate::engine::NodeFacts {
+                node_id: node.index(),
+                actor_id: pose.actor.index(),
+                pos_m: [
+                    pose.pos_m[0] as f32,
+                    pose.pos_m[1] as f32,
+                    // 1.5 m: the antenna height `v2xw-radio`'s isotropic endpoint uses
+                    // for a car. A rendering offset, not a model input.
+                    (pose.pos_m[2] + 1.5) as f32,
+                ],
+                label: self.node_label(pose.actor, pose.class_idx),
+                profile_id: self.node_profile(pose.class_idx),
+                flags: NODE_HAS_HSM,
+                // §3.1.3 `kind`: a pedestrian's or a cyclist's handset is a
+                // `vru-device` (1), everything else riding an actor an OBU (0).
+                kind: if self.is_vru_class(pose.class_idx) {
+                    1
+                } else {
+                    0
+                },
+                class_idx: pose.class_idx,
+            })
+        }));
+        // §3.1.3: "node_id ascending, dense where possible".
+        rows.sort_by_key(|row| row.node_id);
+        rows
+    }
+
+    /// Takes everything the host thread has ready, without waiting.
+    fn pump(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        loop {
+            // Retention bounds how much history is kept; `lookahead_steps` bounds how far
+            // ahead of the stream the kernel may run. Once the stream is that far behind,
+            // nothing more is taken off the channel, the channel fills, and the kernel
+            // stops in `StepRecorder::send` — which is what the option's own documentation
+            // promised ("small enough that a paused run stops the kernel"), and what this
+            // loop did not do: it absorbed until the retention was full, so a client at 1x
+            // saw a kernel that had already simulated the whole run. That cost memory
+            // proportional to the run, made the followed vehicle's message log (filled at
+            // absorb time, read at the stream's instant) show only the run's last seconds,
+            // and made run.status report counters from the end of the run.
+            // A seek waiting beyond the lead lifts both bounds until its step is here: the
+            // retention window then slides forward past the stream position (see `absorb`),
+            // because the seek is about to move the stream there anyway.
+            let seeking = self.seek_goal.is_some_and(|goal| self.produced <= goal);
+            if !seeking
+                && (self.timeline.len() >= self.options.retain_steps
+                    || self.timeline_bytes >= self.options.retain_bytes)
+                && self.base_index >= self.cursor
+            {
+                break;
+            }
+            if !seeking
+                && self.produced
+                    >= self
+                        .cursor
+                        .saturating_add(self.options.lookahead_steps.max(1) as u64)
+            {
+                break;
+            }
+            match self.host.steps.try_recv() {
+                Ok(message) => {
+                    if !self.absorb(message) {
+                        break;
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.kernel_vanished();
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Waits up to `budget` for one more step, for `run.step` on a run the kernel has not
+    /// produced yet.
+    ///
+    /// This is a **transport** wait, in the same sense as §1.5's stall timeout and §1.2's
+    /// ping interval: it reads a wall clock, and no simulated or recorded quantity depends
+    /// on how long it waits. The kernel's own timeline is unaffected — it is `SimTime`,
+    /// and a step it has already computed is byte-identical whenever it is collected.
+    fn pump_blocking(&mut self, budget: std::time::Duration) {
+        self.pump();
+        if self.has(self.cursor) || self.report.is_some() || self.failure.is_some() {
+            return;
+        }
+        match self.host.steps.recv_timeout(budget) {
+            Ok(message) => {
+                let _ = self.absorb(message);
+                self.pump();
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => self.kernel_vanished(),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+
+    /// The kernel thread's channel closed with no `Done` and no `Failed` in it: the thread
+    /// ended without reporting, which only a panic in the kernel does (every return path
+    /// sends one of the two). Without this the run stayed `running` with no step ever to
+    /// come, and a caller waiting for the next step (`Run::tick_wait`, `run.step`) waited
+    /// forever. A stopped run is `finished` already and is left alone.
+    fn kernel_vanished(&mut self) {
+        if self.report.is_none()
+            && self.failure.is_none()
+            && matches!(
+                self.state,
+                RunState::Running | RunState::Paused | RunState::Seeking
+            )
+        {
+            self.failure = Some(
+                "the simulation kernel ended without a report (it panicked); see the server's \
+                 log"
+                .to_string(),
+            );
+            self.failure_is_input = false;
+            self.state = RunState::Error;
+        }
+    }
+
+    /// Takes one host message. Returns `false` when the stream from the host has ended.
+    fn absorb(&mut self, message: HostMsg) -> bool {
+        match message {
+            HostMsg::Step(raw) => {
+                let index = raw.index;
+                let out = self.projector.project(&raw);
+                for event in self.projector.scenario_events.drain(..) {
+                    let t = event.get("t").and_then(Value::as_u64).unwrap_or(0);
+                    self.fired.push((t, event));
+                }
+                self.digest_step(&out);
+                self.stats.absorb(&out);
+                for row in &out.metrics {
+                    if let Some(name) = self.metric_names.get(&row.str_metric) {
+                        self.history
+                            .entry(name.clone())
+                            .or_default()
+                            .push(out.sim_time, row.value);
+                    }
+                }
+                if self.timeline.is_empty() {
+                    self.base_index = index;
+                }
+                let mut out = out;
+                out.shrink();
+                self.timeline_bytes += out.approx_bytes();
+                self.timeline.push_back(out);
+                self.produced = index + 1;
+                let seeking = self.seek_goal.is_some();
+                while (self.timeline.len() > self.options.retain_steps
+                    || self.timeline_bytes > self.options.retain_bytes)
+                    && self.timeline.len() > 1
+                    && (self.base_index < self.cursor || seeking)
+                {
+                    if let Some(old) = self.timeline.pop_front() {
+                        self.timeline_bytes =
+                            self.timeline_bytes.saturating_sub(old.approx_bytes());
+                    }
+                    self.base_index += 1;
+                }
+                // Only while seeking can the window have slid past the stream position; the
+                // position then waits at the oldest step still held, where the seek finds it.
+                self.cursor = self.cursor.max(self.base_index);
+                true
+            }
+            HostMsg::Done(report) => {
+                self.report = Some(*report);
+                false
+            }
+            HostMsg::Exported(result) => {
+                self.exports = Some(result);
+                true
+            }
+            HostMsg::Failed(message) => {
+                self.failure = Some(message);
+                self.failure_is_input = false;
+                self.state = RunState::Error;
+                false
+            }
+        }
+    }
+
+    /// True if step `index` is in the retained window.
+    fn has(&self, index: u64) -> bool {
+        index >= self.base_index && index < self.base_index + self.timeline.len() as u64
+    }
+
+    fn at(&self, index: u64) -> Option<&StepOutput> {
+        if !self.has(index) {
+            return None;
+        }
+        self.timeline
+            .get(usize::try_from(index - self.base_index).unwrap_or(usize::MAX))
+    }
+
+    /// True if the class at `class_idx` is a vulnerable road user, whose node is the VRU
+    /// device `v2xw_engine::hosted` builds rather than an OBU.
+    fn is_vru_class(&self, class_idx: u8) -> bool {
+        self.setup
+            .class_names
+            .get(usize::from(class_idx))
+            .is_some_and(|n| n == "pedestrian" || n == "bicycle")
+    }
+
+    /// A node's label: `ped_`, `bike_` or `veh_` and the actor id.
+    fn node_label(&self, actor: v2xw_core::ids::ActorId, class_idx: u8) -> String {
+        let prefix = match self
+            .setup
+            .class_names
+            .get(usize::from(class_idx))
+            .map(String::as_str)
+        {
+            Some("pedestrian") => "ped",
+            Some("bicycle") => "bike",
+            _ => "veh",
+        };
+        format!("{prefix}_{:04}", actor.index())
+    }
+
+    /// A node's hardware profile id: the handset profile for a VRU device, the scenario's
+    /// OBU profile otherwise.
+    fn node_profile(&self, class_idx: u8) -> String {
+        if self.is_vru_class(class_idx) {
+            v2xw_engine::hosted::VRU_DEVICE_PROFILE.to_string()
+        } else {
+            self.setup.obu_profile.clone()
+        }
+    }
+
+    /// Appends any string the emitted step's node table needs and has not used before.
+    fn intern_labels(&mut self, step: &StepOutput) {
+        let mut wanted: Vec<String> = vec![
+            self.setup.obu_profile.clone(),
+            v2xw_engine::hosted::VRU_DEVICE_PROFILE.to_string(),
+        ];
+        wanted.extend(
+            step.snapshot
+                .actors
+                .iter()
+                .filter(|pose| pose.node.is_some())
+                .map(|pose| self.node_label(pose.actor, pose.class_idx)),
+        );
+        for string in wanted {
+            if self
+                .setup
+                .hello
+                .strings
+                .strings
+                .iter()
+                .any(|s| s == &string)
+            {
+                continue;
+            }
+            if self.appended_index.insert(string.clone()) {
+                self.appended_strings.push(string);
+            }
+        }
+    }
+
+    /// Starts `scenario` from `t = 0` on a fresh kernel thread, after the previous one has
+    /// stopped and been joined — so there is never more than one kernel in the process.
+    ///
+    /// On a build failure (a world that does not import, say) the previous run's streamed
+    /// history is kept, so the page still shows what it showed, the state becomes `error`
+    /// with the engine's own message, and the scenario is not changed: pressing Run again
+    /// runs the last scenario that built.
+    fn restart(&mut self, scenario: Scenario) -> Result<()> {
+        self.host.shutdown();
+        let (mut setup, host) = match spawn_host(
+            scenario.clone(),
+            &self.options,
+            self.options.lookahead_steps,
+            self.world_memo.take(),
+        ) {
+            Ok(pair) => pair,
+            Err(e) => {
+                self.failure = Some(crate::error::describe(&e));
+                self.failure_is_input = e.code() != -32603;
+                self.state = RunState::Error;
+                return Err(e);
+            }
+        };
+        self.world_memo = setup.world_memo.take();
+        self.metric_names = setup
+            .catalogue
+            .iter()
+            .map(|m| (m.str_id, m.name.clone()))
+            .collect();
+        self.descriptor = descriptor_of(&setup);
+        self.world = Arc::new(setup.world_payload.clone());
+        self.world_json = setup.world_json.clone();
+        self.projector = Projector::new(&setup);
+        self.setup = setup;
+        self.host = host;
+        self.scenario = scenario;
+        self.timeline.clear();
+        self.timeline_bytes = 0;
+        self.base_index = 0;
+        self.cursor = 0;
+        self.produced = 0;
+        self.fired.clear();
+        self.seek_goal = None;
+        self.report = None;
+        self.failure = None;
+        self.failure_is_input = false;
+        self.history.clear();
+        self.last_telemetry.clear();
+        // Every connection gets a fresh `Hello` for the new run (`Run` moves to a new
+        // generation on every start), so the strings the previous run appended are
+        // nobody's any more. Keeping them grew every `Hello` with every run.
+        self.appended_strings.clear();
+        self.appended_index.clear();
+        self.digest = <sha2::Sha256 as sha2::Digest>::new();
+        self.digest_steps = 0;
+        self.digest_final = None;
+        self.stats = RunStats::default();
+        self.exports = None;
+        self.runs_started += 1;
+        Ok(())
+    }
+
+    /// The current run reduced to a [`crate::compare::RunDigest`], or `None` before it
+    /// has produced a metric window.
+    fn current_digest(&self) -> Option<crate::compare::RunDigest> {
+        let series: BTreeMap<String, Vec<(f64, f64)>> = self
+            .history
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    v.rows().iter().map(|&(t, x)| (t as f64 / 1e9, x)).collect(),
+                )
+            })
+            .collect();
+        let metrics = self.projector.pools.metrics(Some(&series));
+        if metrics.is_empty() {
+            return None;
+        }
+        Some(crate::compare::RunDigest {
+            schema: crate::compare::DIGEST_SCHEMA.to_string(),
+            run_id: self.descriptor.run_id.clone(),
+            label: self.scenario.meta.name.clone(),
+            seed: self.scenario.seed,
+            city: self.scenario.current_city().map(|c| c.id.clone()),
+            scenario_hash: self.descriptor.scenario_hash_hex.clone(),
+            scenario: self.descriptor.scenario.clone(),
+            t_reached_s: self.projector.pools.t_max_s(),
+            t_end_s: self.descriptor.duration as f64 / 1e9,
+            source: "live".to_string(),
+            metrics,
+        })
+    }
+
+    /// The scenario `run.start` will run when it names none: the staged one, else the
+    /// current one.
+    fn next_scenario(&self) -> Scenario {
+        self.staged.clone().unwrap_or_else(|| self.scenario.clone())
+    }
+
+    /// Resolves a preset id or a path to a loaded, validated scenario.
+    fn load_preset(&self, id: &str) -> Result<Scenario> {
+        let path = self
+            .preset_paths()
+            .into_iter()
+            .find(|p| preset_id(p) == id)
+            .unwrap_or_else(|| std::path::PathBuf::from(id));
+        Scenario::load(&path).map_err(|e| {
+            ServerError::param(
+                "/scenario",
+                &format!("{}: {e}", path.display()),
+                "pick one of the scenarios scenario.list offers",
+            )
+        })
+    }
+
+    /// The ready-made scenarios offered beside the one this engine was opened on.
+    fn preset_paths(&self) -> Vec<std::path::PathBuf> {
+        self.preset_entries().into_iter().map(|(p, _)| p).collect()
+    }
+
+    /// The ready-made scenarios with the heading each is listed under.
+    ///
+    /// When the folder has a `ready-made.txt` catalogue, it is the list, in its order:
+    /// one file name per line, `## Heading` starting a group, `#` a comment. That is how
+    /// the page offers a curated set while the folder also holds the study and test
+    /// scenarios other code loads by path (those still load by path through
+    /// `scenario.load`; they are just not listed). Without a catalogue every scenario
+    /// file in the folder is listed, sorted, with no heading.
+    fn preset_entries(&self) -> Vec<(std::path::PathBuf, Option<String>)> {
+        let Some(dir) = self.source.as_ref().and_then(|p| p.parent()) else {
+            return Vec::new();
+        };
+        let dir = if dir.as_os_str().is_empty() {
+            std::path::Path::new(".")
+        } else {
+            dir
+        };
+        if let Ok(text) = std::fs::read_to_string(dir.join("ready-made.txt")) {
+            let mut out = Vec::new();
+            let mut group: Option<String> = None;
+            for line in text.lines().map(str::trim) {
+                if let Some(heading) = line.strip_prefix("##") {
+                    group = Some(heading.trim().to_string());
+                } else if !line.is_empty() && !line.starts_with('#') {
+                    out.push((dir.join(line), group.clone()));
+                }
+            }
+            return out;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut paths: Vec<std::path::PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|x| x == "yaml" || x == "yml" || x == "json")
+            })
+            .collect();
+        paths.sort();
+        paths.into_iter().map(|p| (p, None)).collect()
+    }
+
+    /// Parses, migrates and validates an inline document the way the loader does a file.
+    ///
+    /// `meta.base` is resolved against the directory of the scenario this engine was
+    /// opened on, which is where a document the page edited came from.
+    fn scenario_from_document(
+        &self,
+        doc: &Value,
+    ) -> std::result::Result<Scenario, Vec<ParamError>> {
+        let text = serde_json::to_string(doc)
+            .map_err(|e| vec![ParamError::new("/", e.to_string(), "pass a JSON object")])?;
+        let base = self.source.as_ref().and_then(|p| p.parent());
+        match Scenario::parse(&text, base) {
+            // The files it names are checked here too, so Check, Apply and Run all refuse a
+            // missing map by its setting, and a refused Run leaves the run on screen alone.
+            Ok(s) => {
+                let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&s)
+                    .iter()
+                    .map(scenario_error)
+                    .collect();
+                if missing.is_empty() {
+                    Ok(s)
+                } else {
+                    Err(missing)
+                }
+            }
+            Err(first) => {
+                // `parse` stops at the first problem. Collect all of them when the
+                // document at least deserialises, so a form can mark every bad field.
+                let mut migrated = doc.clone();
+                let _ = v2xw_engine::scenario::Chain::shipped().migrate(&mut migrated);
+                match Scenario::from_document(migrated) {
+                    Ok(s) => {
+                        let all: Vec<ParamError> = v2xw_engine::scenario::validate(&s)
+                            .iter()
+                            .chain(v2xw_engine::scenario::preflight(&s).iter())
+                            .map(scenario_error)
+                            .collect();
+                        if all.is_empty() {
+                            Err(vec![engine_error(&first)])
+                        } else {
+                            Err(all)
+                        }
+                    }
+                    Err(_) => Err(vec![engine_error(&first)]),
+                }
+            }
+        }
+    }
+
+    /// Records one produced step in the run's output digest.
+    fn digest_step(&mut self, out: &StepOutput) {
+        use sha2::Digest;
+        let d = &mut self.digest;
+        d.update(out.sim_time.to_le_bytes());
+        d.update((out.snapshot.actors.len() as u64).to_le_bytes());
+        for pose in &out.snapshot.actors {
+            d.update(pose.actor.index().to_le_bytes());
+            for v in pose.pos_m {
+                d.update(v.to_bits().to_le_bytes());
+            }
+            d.update(pose.heading_rad.to_bits().to_le_bytes());
+            d.update(pose.speed_mps.to_bits().to_le_bytes());
+        }
+        d.update((out.events.len() as u64).to_le_bytes());
+        for event in &out.events {
+            d.update(event.channel_id.to_le_bytes());
+            d.update(event.sim_time_ns.to_le_bytes());
+            d.update(&event.payload);
+        }
+        self.digest_steps += 1;
+        if out.end_of_run {
+            self.digest_final = Some(hex_of(&self.digest.clone().finalize()));
+        }
+    }
+}
+
+/// The id `scenario.list` gives a scenario file: its path as the engine was given it.
+fn preset_id(path: &std::path::Path) -> String {
+    path.display().to_string()
+}
+
+/// A loader error as a `{path, message, hint}` row (§6.4).
+///
+/// The path is a JSON Pointer: `actors.rsus[0].site` becomes `/actors/rsus/0/site`, which is
+/// what the page matches against its fields (it was `/actors/rsus[0]/site`, which matched no
+/// field, so the refusal was listed at the top instead of marked on the setting). The hint is
+/// the field's published range or choices when it has one; the loader's message already says
+/// what to change, so a row with neither carries no hint rather than a generic one.
+fn scenario_error(e: &v2xw_engine::ScenarioError) -> ParamError {
+    let dotted = e.field().unwrap_or("");
+    let path = dotted_to_pointer(dotted);
+    let bare_path: String = {
+        // `actors.rsus[0].site` → `actors.rsus[].site`, the spelling the tables use.
+        let mut out = String::with_capacity(dotted.len());
+        let mut in_index = false;
+        for c in dotted.chars() {
+            match c {
+                '[' => {
+                    in_index = true;
+                    out.push('[');
+                }
+                ']' => {
+                    in_index = false;
+                    out.push(']');
+                }
+                _ if in_index => {}
+                _ => out.push(c),
+            }
+        }
+        out
+    };
+    let hint = v2xw_engine::scenario::validate::bound_of(&bare_path)
+        .map(|b| format!("allowed: {}", b.describe()))
+        .or_else(|| {
+            v2xw_engine::scenario::validate::choices_of(&bare_path)
+                .map(|c| format!("one of: {}", c.values.join(", ")))
+        });
+    ParamError {
+        path,
+        message: e.to_string(),
+        hint,
+        severity: None,
+    }
+}
+
+/// `a.b[2].c` as the JSON Pointer `/a/b/2/c`; the empty path as `/`.
+fn dotted_to_pointer(dotted: &str) -> String {
+    if dotted.is_empty() {
+        return "/".to_string();
+    }
+    let mut out = String::new();
+    for segment in dotted.split('.') {
+        let (name, rest) = match segment.find('[') {
+            Some(i) => (&segment[..i], &segment[i..]),
+            None => (segment, ""),
+        };
+        out.push('/');
+        out.push_str(&name.replace('~', "~0").replace('/', "~1"));
+        for index in rest.split(['[', ']']).filter(|s| !s.is_empty()) {
+            out.push('/');
+            out.push_str(index);
+        }
+    }
+    out
+}
+
+/// An engine error from the loader as a `{path, message, hint}` row.
+fn engine_error(e: &v2xw_engine::EngineError) -> ParamError {
+    match e {
+        v2xw_engine::EngineError::Scenario(inner) => scenario_error(inner),
+        other => ParamError::new("/", other.to_string(), "check the scenario document"),
+    }
+}
+
+/// A failure to build a run, as the JSON-RPC error the caller gets.
+///
+/// Whatever the scenario caused — a value the loader refuses, a file it names that is not
+/// there, a world site the world does not have — is `-32004` with the setting's row, so the
+/// page marks the field and says how to fix it. Only what the user cannot have caused (a
+/// model card that does not register, an importer invariant) is `-32603`. Before this every
+/// build failure was `-32603 internal error`, including a missing map file.
+fn setup_error(e: v2xw_engine::EngineError) -> ServerError {
+    match e {
+        v2xw_engine::EngineError::Scenario(inner) => {
+            ServerError::ScenarioInvalid(vec![scenario_error(&inner)])
+        }
+        v2xw_engine::EngineError::Io { path, source } => ServerError::Io {
+            path,
+            errno: source.to_string(),
+        },
+        other => ServerError::Internal(other.to_string()),
+    }
+}
+
+/// Lower-case hex of a digest.
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Every JSON Pointer at which `a` and `b` differ, down to the leaves, sorted.
+fn changed_pointers(a: &Value, b: &Value) -> Vec<String> {
+    fn walk(a: Option<&Value>, b: Option<&Value>, at: &str, out: &mut Vec<String>) {
+        match (a, b) {
+            (Some(Value::Object(x)), Some(Value::Object(y))) => {
+                let keys: BTreeSet<&String> = x.keys().chain(y.keys()).collect();
+                for k in keys {
+                    let child = format!("{at}/{}", k.replace('~', "~0").replace('/', "~1"));
+                    walk(x.get(k), y.get(k), &child, out);
+                }
+            }
+            (x, y) if x == y => {}
+            // `274` and `274.0` are one value. A document that went through a browser comes
+            // back with every whole float written as an integer (JavaScript has one number
+            // type), and inside an opaque `Value` block — a world generator's parameters —
+            // nothing re-types it, so a plain `==` reported untouched fields as edits.
+            (Some(Value::Number(x)), Some(Value::Number(y))) if x.as_f64() == y.as_f64() => {}
+            _ => out.push(if at.is_empty() {
+                "/".to_string()
+            } else {
+                at.to_string()
+            }),
+        }
+    }
+    let mut out = Vec::new();
+    walk(Some(a), Some(b), "", &mut out);
+    out
+}
+
+/// Applies an RFC 6902 patch's `add`, `replace`, `remove` and `test` operations.
+fn apply_patch(doc: &mut Value, ops: &[Value]) -> std::result::Result<(), ParamError> {
+    for (i, op) in ops.iter().enumerate() {
+        let kind = op.get("op").and_then(Value::as_str).unwrap_or("");
+        let path = op.get("path").and_then(Value::as_str).ok_or_else(|| {
+            ParamError::new(format!("/patch/{i}/path"), "required", "a JSON Pointer")
+        })?;
+        let (parent, key) = match path.rfind('/') {
+            Some(at) => (
+                &path[..at],
+                path[at + 1..].replace("~1", "/").replace("~0", "~"),
+            ),
+            None => {
+                return Err(ParamError::new(
+                    format!("/patch/{i}/path"),
+                    "must start with /",
+                    "e.g. /time/duration_s",
+                ));
+            }
+        };
+        let value = op.get("value").cloned();
+        match kind {
+            "test" => {
+                if doc.pointer(path) != value.as_ref() {
+                    return Err(ParamError::new(
+                        format!("/patch/{i}"),
+                        format!("test failed at {path}"),
+                        "the document changed under this patch",
+                    ));
+                }
+            }
+            "add" | "replace" | "remove" => {
+                let target = doc.pointer_mut(parent).ok_or_else(|| {
+                    ParamError::new(
+                        format!("/patch/{i}/path"),
+                        format!("`{parent}` does not exist"),
+                        "add the enclosing object first",
+                    )
+                })?;
+                match (target, kind) {
+                    (Value::Object(map), "remove") => {
+                        map.remove(&key);
+                    }
+                    (Value::Object(map), _) => {
+                        map.insert(key, value.unwrap_or(Value::Null));
+                    }
+                    (Value::Array(items), _) => {
+                        let index = if key == "-" {
+                            items.len()
+                        } else {
+                            key.parse::<usize>().map_err(|_| {
+                                ParamError::new(
+                                    format!("/patch/{i}/path"),
+                                    "not an array index",
+                                    "use a number or -",
+                                )
+                            })?
+                        };
+                        match kind {
+                            "remove" if index < items.len() => {
+                                items.remove(index);
+                            }
+                            "replace" if index < items.len() => {
+                                items[index] = value.unwrap_or(Value::Null);
+                            }
+                            "add" if index <= items.len() => {
+                                items.insert(index, value.unwrap_or(Value::Null));
+                            }
+                            _ => {
+                                return Err(ParamError::new(
+                                    format!("/patch/{i}/path"),
+                                    "index out of range",
+                                    "check the array's length",
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(ParamError::new(
+                            format!("/patch/{i}/path"),
+                            format!("`{parent}` is not an object or an array"),
+                            "patch a field inside an object",
+                        ));
+                    }
+                }
+            }
+            other => {
+                return Err(ParamError::new(
+                    format!("/patch/{i}/op"),
+                    format!("`{other}` is not supported here"),
+                    "use add, replace, remove or test",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+impl Engine for LiveEngine {
+    fn descriptor(&self) -> &RunDescriptor {
+        &self.descriptor
+    }
+
+    fn world(&self) -> &Arc<WorldPayload> {
+        &self.world
+    }
+
+    fn state(&self) -> RunState {
+        self.state
+    }
+
+    fn sim_time(&self) -> SimTime {
+        // The instant of the last step the stream sent — the one on the client's screen,
+        // and the one `emitted()`, the node table and the counts all describe. It was
+        // `cursor · Δt`, one step ahead of all three, so a finished 5 s run reported
+        // `t_ns = 5.1 s` against `t_end_ns = 5 s` and the page's clock read past the end.
+        self.cursor.saturating_sub(1).saturating_mul(self.step_ns())
+    }
+
+    fn speed(&self) -> (f64, bool) {
+        (self.speed, self.client_sync)
+    }
+
+    fn counts(&self) -> (u32, u32) {
+        // As of the emitted step, for the same reason `emitted` exists: `run.status`
+        // reports `t_ns` and the counts together, and they have to describe one instant.
+        let Some(step) = self.emitted() else {
+            return (0, 0);
+        };
+        (
+            u32::try_from(step.snapshot.actors.len()).unwrap_or(u32::MAX),
+            u32::try_from(
+                step.snapshot
+                    .actors
+                    .iter()
+                    .filter(|pose| pose.node.is_some())
+                    .count(),
+            )
+            .unwrap_or(u32::MAX),
+        )
+    }
+
+    fn live_nodes(&self) -> Option<Vec<crate::engine::NodeFacts>> {
+        Some(self.node_rows())
+    }
+
+    fn live_strings(&self) -> Vec<String> {
+        self.appended_strings.clone()
+    }
+
+    fn metric_catalogue(&self) -> Vec<MetricInfo> {
+        self.setup.catalogue.clone()
+    }
+
+    fn run_history(
+        &self,
+    ) -> (
+        Option<crate::compare::RunDigest>,
+        Vec<crate::compare::RunDigest>,
+    ) {
+        (
+            self.current_digest(),
+            self.past_runs.iter().cloned().collect(),
+        )
+    }
+
+    fn control(&mut self, command: Control) -> Result<ControlOutcome> {
+        let mut extra = BTreeMap::new();
+        match command {
+            Control::Start {
+                paused,
+                speed,
+                seed,
+                scenario,
+                city,
+            } => {
+                // §6.6 refuses a start while the run is moving (-32001); the page pauses
+                // first. From any other state the previous kernel is stopped and joined
+                // before the next one is built, so there is never a second kernel.
+                if self.state == RunState::Running {
+                    return Err(ServerError::RunAlreadyRunning);
+                }
+                let mut next = match scenario {
+                    Some(ScenarioSource::Document(doc)) => self
+                        .scenario_from_document(&doc)
+                        .map_err(ServerError::ScenarioInvalid)?,
+                    Some(ScenarioSource::Preset(id)) => self.load_preset(&id)?,
+                    None => self.next_scenario(),
+                };
+                if let Some(city) = city {
+                    next = next
+                        .with_city(&city)
+                        .map_err(|e| ServerError::ScenarioInvalid(vec![scenario_error(&e)]))?;
+                }
+                if let Some(seed) = seed {
+                    next.seed = seed;
+                }
+                // Refused before the run on screen is stopped: a map deleted since Apply, or
+                // a preset naming one that was never there, is the user's to fix, and the
+                // page keeps what it was showing rather than going to `error`.
+                let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&next)
+                    .iter()
+                    .map(scenario_error)
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(ServerError::ScenarioInvalid(missing));
+                }
+                // The run on screen becomes "the previous run" once the next one builds; a
+                // start that is refused keeps it the current one.
+                let previous = self.current_digest();
+                self.restart(next)?;
+                if let Some(d) = previous {
+                    crate::compare::save_digest(&d);
+                    self.past_runs.push_front(d);
+                    self.past_runs.truncate(PAST_RUNS);
+                }
+                // Staged edits are consumed by the run that runs them; the form then shows
+                // the running scenario, which is now the edited one.
+                self.staged = None;
+                if let Some(speed) = speed {
+                    self.speed = speed;
+                }
+                self.state = if paused {
+                    RunState::Paused
+                } else {
+                    RunState::Running
+                };
+                extra.insert("run_id".to_string(), json!(self.descriptor.run_id.clone()));
+            }
+            Control::Pause => {
+                if self.state != RunState::Running {
+                    return Err(ServerError::RunNotRunning(format!(
+                        "state is {}",
+                        self.state.as_str()
+                    )));
+                }
+                self.state = RunState::Paused;
+            }
+            Control::Resume => {
+                if self.state != RunState::Paused {
+                    return Err(ServerError::RunNotRunning(format!(
+                        "state is {}, not paused",
+                        self.state.as_str()
+                    )));
+                }
+                self.state = RunState::Running;
+            }
+            Control::Speed { speed, client_sync } => {
+                self.speed = speed;
+                self.client_sync = client_sync;
+            }
+            Control::Stop { finalize_exports } => {
+                // Stopped and joined: the kernel thread is gone when this returns, not
+                // computing to the horizon with nobody listening.
+                self.host.shutdown();
+                self.state = RunState::Finished;
+                if let Some(path) = &self.descriptor.recording_path {
+                    extra.insert("recording_path".to_string(), json!(path));
+                    if finalize_exports {
+                        // The recording is finished by the host thread when its run ends;
+                        // the digest is over the file as it stands, which is what a caller
+                        // asking for it wants to compare.
+                        if let Ok(bytes) = std::fs::read(path) {
+                            extra.insert(
+                                "digest".to_string(),
+                                json!(v2xw_core::hash::sha256_hex(&bytes)),
+                            );
+                            extra.insert(
+                                "files".to_string(),
+                                json!([{
+                                    "path": path,
+                                    "sha256": v2xw_core::hash::sha256_hex(&bytes),
+                                    "bytes": bytes.len(),
+                                }]),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(ControlOutcome {
+            state: self.state,
+            t_ns: self.sim_time(),
+            extra,
+        })
+    }
+
+    fn step(&mut self) -> Result<Option<StepOutput>> {
+        if let Some(message) = &self.failure {
+            return Err(if self.failure_is_input {
+                ServerError::RunNotRunning(format!(
+                    "the last run.start was refused ({message}); fix the setting and start \
+                     again"
+                ))
+            } else {
+                ServerError::Internal(message.clone())
+            });
+        }
+        // 60 ms is longer than the 50 ms the producer sleeps on an empty step and shorter
+        // than any client's stall deadline, so `run.step` gets its step and a producer
+        // that finds nothing does not hold the run lock.
+        self.pump_blocking(std::time::Duration::from_millis(60));
+        if !self.has(self.cursor) {
+            // Steps run from index 0 to `duration / step` inclusive: the one *at* the horizon
+            // is the last, and it carries `end_of_run`. So the stream has ended when the
+            // cursor is past it, not on it. With `>=` a stream that caught up with a slow
+            // kernel (the SCMS lifecycle with a followed vehicle, measured: 239.9 s of a
+            // 240 s run) was declared finished one step early; the transport then stopped
+            // stepping, the final step never streamed, and the run published no digest.
+            if self.report.is_some()
+                || self.cursor.saturating_mul(self.step_ns()) > self.descriptor.duration
+            {
+                self.state = RunState::Finished;
+            }
+            return Ok(None);
+        }
+        let out = self.at(self.cursor).cloned();
+        self.cursor += 1;
+        if let Some(out) = &out {
+            for row in &out.telemetry {
+                self.last_telemetry.insert(row.node_id, *row);
+            }
+            self.intern_labels(out);
+            self.projector.prune(out.sim_time);
+        }
+        if let Some(out) = &out
+            && out.end_of_run
+        {
+            self.state = RunState::Finished;
+        }
+        Ok(out)
+    }
+
+    fn seek(&mut self, t: SimTime) -> Result<Vec<StepOutput>> {
+        // Whatever the seek decides, the lead goes back to its bound afterwards.
+        self.seek_goal = None;
+        self.pump();
+        let (min_ns, max_ns) = self.seek_range();
+        if t < min_ns || t > max_ns {
+            return Err(ServerError::SeekOutOfRange { min_ns, max_ns });
+        }
+        let step_ns = self.step_ns();
+        let target = t / step_ns;
+        let per_gop = self.descriptor.cadence.max_deltas_per_gop().max(1);
+        let first = target.saturating_sub(target % per_gop).max(self.base_index);
+        let outputs: Vec<StepOutput> = (first..=target)
+            .filter_map(|index| self.at(index).cloned())
+            .collect();
+        if outputs.is_empty() {
+            return Err(ServerError::SeekOutOfRange { min_ns, max_ns });
+        }
+        self.cursor = target + 1;
+        for step in &outputs {
+            for row in &step.telemetry {
+                self.last_telemetry.insert(row.node_id, *row);
+            }
+        }
+        if let Some(last) = outputs.last() {
+            self.intern_labels(last);
+        }
+        // §6.6: "seeking a live run pauses it". The stream is now positioned inside
+        // recorded time and the producer would otherwise race forward from it.
+        if self.state == RunState::Running {
+            self.state = RunState::Paused;
+        }
+        Ok(outputs)
+    }
+
+    fn rewind(&mut self) -> Result<bool> {
+        // The same run on a fresh kernel: `restart` with what makes it the *same* run to a
+        // connected page kept — the run descriptor, the strings the page has already
+        // interned, the generation (so no connection is sent a new `Hello`). Everything
+        // the kernel produces is computed again from `t = 0`, which the determinism
+        // contract makes the same steps; the seek history, the metric series and the
+        // projector's stores are refilled as it goes.
+        let scenario = self.scenario.clone();
+        let descriptor = self.descriptor.clone();
+        let strings = (
+            std::mem::take(&mut self.appended_strings),
+            std::mem::take(&mut self.appended_index),
+        );
+        let runs_started = self.runs_started;
+        let speed = (self.speed, self.client_sync);
+        self.restart(scenario)?;
+        self.descriptor = descriptor;
+        (self.appended_strings, self.appended_index) = strings;
+        self.runs_started = runs_started;
+        (self.speed, self.client_sync) = speed;
+        // §6.6: a seek pauses the run; the rewind is the first half of one.
+        self.state = RunState::Paused;
+        Ok(true)
+    }
+
+    fn extend_to(&mut self, t: SimTime, budget: std::time::Duration) -> u64 {
+        let step_ns = self.step_ns();
+        let goal = (t.min(self.descriptor.duration)) / step_ns;
+        if self.has(goal) || self.report.is_some() || self.failure.is_some() {
+            self.pump();
+            return self.seek_range().1;
+        }
+        self.seek_goal = Some(goal);
+        // A transport wait, like `pump_blocking`'s: the kernel's output is the same whenever
+        // it is collected, so how long this waits changes nothing but when the seek lands.
+        // The slice is bounded by steps taken and by one wait of `budget` for the next step,
+        // so this module reads no clock: the transport (`http.rs`) is the one that does.
+        for _ in 0..EXTEND_SLICE_STEPS {
+            self.pump();
+            if self.produced > goal || self.report.is_some() || self.failure.is_some() {
+                break;
+            }
+            match self.host.steps.recv_timeout(budget) {
+                Ok(message) => {
+                    if !self.absorb(message) {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        self.seek_range().1
+    }
+
+    fn seek_range(&self) -> (u64, u64) {
+        let step_ns = self.step_ns();
+        let first = self.base_index.saturating_mul(step_ns);
+        let last = self.produced.saturating_sub(1).saturating_mul(step_ns);
+        (first, last.max(first))
+    }
+
+    fn query(&mut self, query: &Query) -> Result<Value> {
+        crate::introspect::answer(self, query)
+    }
+
+    fn world_json(&self) -> Option<String> {
+        Some(self.world_json.clone())
+    }
+
+    fn current(&self) -> Option<StepOutput> {
+        self.emitted().cloned()
+    }
+
+    fn stage(&mut self, request: StageRequest) -> Result<Staged> {
+        let running = self.descriptor.scenario.clone();
+        let (scenario, errors, document) = match request {
+            StageRequest::Preset(id) => {
+                let s = self.load_preset(&id)?;
+                (Some(s), Vec::new(), None)
+            }
+            StageRequest::Document(doc) => match self.scenario_from_document(&doc) {
+                Ok(s) => (Some(s), Vec::new(), None),
+                Err(errors) => (None, errors, Some(doc)),
+            },
+            StageRequest::City(id) => {
+                let base = self.next_scenario();
+                match base.with_city(&id) {
+                    Ok(s) => (Some(s), Vec::new(), None),
+                    Err(e) => (None, vec![scenario_error(&e)], Some(running.clone())),
+                }
+            }
+            StageRequest::Patch(ops) => {
+                let mut doc = match &self.staged {
+                    Some(s) => {
+                        serde_json::to_value(s).map_err(|e| ServerError::Internal(e.to_string()))?
+                    }
+                    None => running.clone(),
+                };
+                apply_patch(&mut doc, &ops).map_err(|e| ServerError::InvalidParams(vec![e]))?;
+                match self.scenario_from_document(&doc) {
+                    Ok(s) => (Some(s), Vec::new(), None),
+                    Err(errors) => (None, errors, Some(doc)),
+                }
+            }
+        };
+        match scenario {
+            Some(scenario) => {
+                let document = serde_json::to_value(&scenario)
+                    .map_err(|e| ServerError::Internal(e.to_string()))?;
+                let hash = scenario
+                    .content_hash()
+                    .map_err(|e| ServerError::Internal(e.to_string()))?;
+                let changed = changed_pointers(&running, &document);
+                // Staging the scenario that is already running is un-staging: nothing
+                // differs, and the form should say "no pending edits".
+                self.staged = if changed.is_empty() {
+                    None
+                } else {
+                    Some(scenario)
+                };
+                Ok(Staged {
+                    document,
+                    hash,
+                    changed,
+                    errors: Vec::new(),
+                })
+            }
+            None => {
+                // An invalid document is reported and not staged: the next run keeps
+                // whatever was staged before, so a typo never replaces a good scenario.
+                let document = document.unwrap_or(Value::Null);
+                let changed = changed_pointers(&running, &document);
+                Ok(Staged {
+                    hash: String::new(),
+                    document,
+                    changed,
+                    errors,
+                })
+            }
+        }
+    }
+
+    fn staged(&self) -> Option<Staged> {
+        let scenario = self.staged.as_ref()?;
+        let document = serde_json::to_value(scenario).ok()?;
+        let hash = scenario.content_hash().ok()?;
+        let changed = changed_pointers(&self.descriptor.scenario, &document);
+        Some(Staged {
+            document,
+            hash,
+            changed,
+            errors: Vec::new(),
+        })
+    }
+
+    fn validate_document(&self, doc: &Value) -> Option<(Vec<ParamError>, Vec<ParamError>)> {
+        Some(match self.scenario_from_document(doc) {
+            // The loader's warnings for a document it accepts, so the settings window's
+            // Check shows them beside the field they are about (`severity: warning`).
+            Ok(s) => (Vec::new(), scenario_warnings(&s)),
+            Err(errors) => (errors, Vec::new()),
+        })
+    }
+
+    fn presets(&self) -> Vec<Value> {
+        let running = self.descriptor.scenario_hash_hex.clone();
+        self.preset_entries()
+            .iter()
+            .map(|(path, group)| {
+                let id = preset_id(path);
+                match Scenario::load(path) {
+                    Ok(s) => json!({
+                        "id": id,
+                        "kind": "preset",
+                        "name": s.meta.name,
+                        "description": s.meta.description,
+                        "tags": s.meta.tags,
+                        "group": group,
+                        "hash": s.content_hash().unwrap_or_default(),
+                        "running": s.content_hash().is_ok_and(|h| h == running),
+                        // The city it runs on unless another is chosen (the picker's default).
+                        "city": s.current_city().map(|c| c.id.clone()),
+                    }),
+                    // Listed, not hidden: a scenario in the folder that does not load is
+                    // something the user should hear about, with the loader's reason.
+                    Err(e) => json!({
+                        "id": id,
+                        "kind": "preset",
+                        "name": path.file_stem().map(|s| s.to_string_lossy().to_string()),
+                        "description": format!("does not load: {e}"),
+                        "tags": ["invalid"],
+                        "group": group,
+                    }),
+                }
+            })
+            .collect()
+    }
+
+    fn diagnostics(&self) -> Value {
+        json!({
+            "kernel_threads": kernel_threads(),
+            "kernel_threads_started": KERNEL_THREADS_STARTED.load(Ordering::SeqCst),
+            "runs_started": self.runs_started,
+            "produced_ns": self.produced.saturating_mul(self.step_ns()),
+            "output_digest": self.digest_final,
+            "digest_steps": self.digest_steps,
+            "failure": self.failure,
+            "stats": self.stats.to_json(),
+            "finished": self.report.is_some(),
+            // Frames not generated because they fell in a `time.time_dilation` window.
+            "suppressed_frames": self.report.as_ref().map(|r| r.suppressed_frames),
+            "exports": match &self.exports {
+                None => Value::Null,
+                Some(Ok(done)) => json!(done),
+                Some(Err(why)) => json!({"error": why}),
+            },
+            "retained_steps": self.timeline.len(),
+            "retain_limit_steps": self.options.retain_steps,
+            "retained_bytes": self.timeline_bytes,
+            "retain_limit_bytes": self.options.retain_bytes,
+            // The scenario timeline's items that have fired by the stream position, with
+            // what each did (`scenario.event`). The kernel is ahead of the stream, so an
+            // item it has fired but the page has not reached yet is not reported.
+            "timeline": self
+                .fired
+                .iter()
+                .filter(|(t, _)| *t <= self.sim_time())
+                .map(|(_, v)| v.clone())
+                .collect::<Vec<_>>(),
+            "feed_store": {
+                "frames": self.projector.feed.size().0,
+                "receptions": self.projector.feed.size().1,
+            },
+            "stores": self.projector.stores(),
+            "metric_history_points": self.history.values().map(SeriesHistory::len).sum::<usize>(),
+            "last_telemetry_nodes": self.last_telemetry.len(),
+        })
+    }
+
+    fn node_feed(
+        &self,
+        node: u32,
+        after: Option<SimTime>,
+        limits: &crate::feed::FeedLimits,
+        gt: bool,
+    ) -> Option<Value> {
+        let now = self.sim_time();
+        // A backward seek puts the stream before the last push: start over.
+        let reset = after.is_none_or(|a| a > now);
+        let after = if reset { None } else { after };
+        let mut feed = self.projector.feed.feed_json(
+            node,
+            after,
+            now,
+            limits,
+            gt,
+            self.last_telemetry.get(&node),
+        );
+        feed["reset"] = json!(reset);
+        // Where this node signs and verifies, and what each timing figure is (a published
+        // latency, a vendor bound, a figure derived from a rate), so a reader never takes
+        // "sign 9 ms, verify 0.4 ms" for a measurement of one processor.
+        feed["crypto"] = self
+            .node_rows()
+            .into_iter()
+            .find(|f| f.node_id == node)
+            .and_then(|f| v2xw_node::profiles::get(&f.profile_id))
+            .map_or(Value::Null, |p| {
+                let (sign, verify) = v2xw_node::profile::signature_ops(&self.setup.signature);
+                json!(p.crypto_placement(sign, verify))
+            });
+        // How far past the shown instant the kernel has run. A message's record is written
+        // when its journey ends, so one still in a queue at the shown instant is known only if
+        // the kernel has passed the instant it leaves; with a kernel slower than real time the
+        // lead is a step or two and the queue view says so rather than reading as idle.
+        feed["queues"]["kernel_lead_ms"] = json!(
+            (self
+                .produced
+                .saturating_mul(self.step_ns())
+                .saturating_sub(now) as f64)
+                / 1e6
+        );
+        Some(feed)
+    }
+}
+
+impl Introspect for LiveEngine {
+    fn node_list(&self) -> Vec<crate::engine::NodeFacts> {
+        self.node_rows()
+    }
+
+    fn pki(&self) -> Option<&crate::pki::PkiStore> {
+        Some(&self.projector.pki)
+    }
+
+    fn entity_facts(&self, entity: &str, t_ns: u64, limit: usize) -> Option<Value> {
+        let history = &self.projector.backend;
+        let (t, bytes) = history
+            .iter()
+            .rev()
+            .find(|(t, _)| *t <= t_ns)
+            .or_else(|| history.front())?;
+        // It parsed once already, as it arrived (`SnapshotTime`), so this does not fail
+        // for a record the projector kept.
+        let view: Value = serde_json::from_slice(bytes).ok()?;
+        crate::introspect::entity_answer(entity, *t, &view, limit, self.provenance_chain())
+    }
+
+    fn metric_groups(
+        &self,
+        name: &str,
+        dim: &str,
+        filter: &BTreeMap<String, String>,
+        from: u64,
+        to: u64,
+    ) -> Vec<crate::introspect::GroupRow> {
+        // Never past the stream, as for `metric_series`: the projector has already pooled
+        // windows the client's keyframe has not reached.
+        let to = to.min(self.sim_time());
+        self.projector.breakdown_groups(name, dim, filter, from, to)
+    }
+
+    fn telemetry_of(&self, node: u32) -> Option<NodeTelemetry> {
+        self.last_telemetry.get(&node).copied()
+    }
+
+    fn metric_series(
+        &self,
+        name: &str,
+        from: u64,
+        to: u64,
+        bin: u64,
+        limit: usize,
+    ) -> Vec<(u64, Option<f64>)> {
+        let rows: &[(SimTime, f64)] = self.history.get(name).map_or(&[], SeriesHistory::rows);
+        // Never past the stream: the projector has already computed metric bins the
+        // client's `Keyframe` has not reached, and answering from them would tell a live
+        // viewer the future.
+        let to = to.min(self.sim_time());
+        series_bins(rows, from, to, bin, limit)
+    }
+
+    fn metric_points(
+        &self,
+        name: &str,
+        from: u64,
+        to: u64,
+        limit: usize,
+    ) -> Option<Vec<(u64, f64)>> {
+        let rows: &[(SimTime, f64)] = self.history.get(name).map_or(&[], SeriesHistory::rows);
+        // Never past the stream, as `metric_series`.
+        let to = to.min(self.sim_time());
+        let lo = rows.partition_point(|(t, _)| *t < from);
+        let hi = rows.partition_point(|(t, _)| *t <= to);
+        Some(rows[lo..hi.max(lo)].iter().take(limit).copied().collect())
+    }
+
+    fn metric_latest(&self, name: &str, to: u64) -> Option<(u64, f64)> {
+        let rows: &[(SimTime, f64)] = self.history.get(name).map_or(&[], SeriesHistory::rows);
+        let to = to.min(self.sim_time());
+        let hi = rows.partition_point(|(t, _)| *t <= to);
+        hi.checked_sub(1).map(|i| rows[i])
+    }
+
+    fn provenance_chain(&self) -> Vec<Value> {
+        self.setup.prov_chain.clone()
+    }
+
+    fn caveats(&self) -> Vec<String> {
+        let mut out = vec![
+            format!(
+                "produced by v2xw-engine {} (commit {}), scenario {} seed {:#x}",
+                v2xw_engine::manifest::ENGINE_VERSION,
+                v2xw_engine::manifest::GIT_COMMIT,
+                self.scenario.meta.name,
+                self.scenario.seed
+            ),
+            "reception outcomes are link-budget decisions against the noise floor: \
+             concurrent frames do not raise each other's denominator, so SINR is SNR"
+                .to_string(),
+            "no MAC backoff, no CBR measurement and no DCC gate: a frame reaches the air \
+             after the signing latency plus one AIFS"
+                .to_string(),
+            "signal phases are the world's imported fixed-time plans evaluated at t; the \
+             kernel schedules no signal event, so nothing in the run reads them back"
+                .to_string(),
+        ];
+        if !self.projector.over_capacity.is_empty() {
+            out.push(format!(
+                "{} actor(s) hold no slot because the run reached Hello.actor_capacity \
+                 ({}): they exist and their nodes transmit, but no pose for them is on \
+                 the wire (§3.1.1)",
+                self.projector.over_capacity.len(),
+                self.projector.actor_capacity
+            ));
+        }
+        if !self.projector.undecodable_channels.is_empty() {
+            out.push(format!(
+                "records lost because the channel's own reader-side view refused them \
+                 (a producer/reader schema disagreement, not a transport fault): {}",
+                self.projector
+                    .undecodable_channels
+                    .iter()
+                    .map(|(channel, n)| format!("{channel} ({n})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !self.projector.unprojected_channels.is_empty() {
+            out.push(format!(
+                "channels the run emitted and this server has no §3.6 payload for: {}",
+                self.projector
+                    .unprojected_channels
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if !self.projector.mapping_is_consistent() {
+            out.push(format!(
+                "the actor→node reconstruction did not predict node(s) {:?}: node identity \
+                 in this stream is unreliable",
+                self.projector.unmapped_nodes
+            ));
+        }
+        out
+    }
+
+    fn node_section(&self, node: u32, section: &str, limit: usize) -> Option<Value> {
+        // `neighbors` is answered from the link history and not from a telemetry row, so
+        // it is available for a node the telemetry window has not covered yet.
+        if section == "neighbors" {
+            let mut rows: Vec<Value> = Vec::new();
+            for ((tx, rx), history) in &self.projector.links {
+                if *rx != node {
+                    continue;
+                }
+                let Some(last) = history.iter().rev().find(|o| o.t <= self.sim_time()) else {
+                    continue;
+                };
+                rows.push(json!({
+                    "node": tx,
+                    "state": if last.received { "heard" } else { "lost" },
+                    "last_seen_ns": last.t,
+                    "rssi_dbm": last.rssi_dbm,
+                    "distance_m": last.dist_m,
+                }));
+                if rows.len() >= limit {
+                    break;
+                }
+            }
+            return Some(Value::Array(rows));
+        }
+        // `messages`: what this node most recently sent and received, message by message,
+        // each one decoded from its octets. Answered from the feed store, so it needs no
+        // telemetry window.
+        if section == "messages" {
+            return self
+                .projector
+                .feed
+                .messages_json(node, self.sim_time(), limit, true);
+        }
+        // `queues`: the five queues at the stream's instant, reconstructed from the node's
+        // own stamps, with its telemetry window's depth percentiles beside them.
+        if section == "queues" {
+            return Some(self.projector.feed.queues_json(
+                node,
+                self.sim_time(),
+                self.last_telemetry.get(&node),
+                limit,
+            ));
+        }
+        // `certs` and `crl`: the node's own security state, from its `node.security` row
+        // (published with each telemetry window) and its recent pseudonym changes.
+        if section == "certs" || section == "crl" {
+            let (row, changes) = self.projector.security.get(&NodeId::new(node))?;
+            if row.is_null() {
+                return None;
+            }
+            if section == "crl" {
+                return Some(json!({
+                    "entries": row["crl_entries"],
+                    "version": row["crl_version"],
+                    "self_revoked": row["self_revoked"],
+                }));
+            }
+            let now = self.sim_time();
+            let recent: Vec<Value> = changes
+                .iter()
+                .filter(|c| c["t"].as_u64().is_none_or(|t| t <= now))
+                .rev()
+                .take(limit)
+                .cloned()
+                .collect();
+            let mut out = row.clone();
+            if let Some(obj) = out.as_object_mut() {
+                obj.remove("crl_entries");
+                obj.remove("crl_version");
+                obj.remove("self_revoked");
+                obj.insert("changes_log".to_string(), Value::Array(recent));
+            }
+            return Some(out);
+        }
+        let telemetry = self.last_telemetry.get(&node)?;
+        match section {
+            "queues" => {
+                let depth = |p50: u16, p95: u16| {
+                    (p50 != u16::MAX || p95 != u16::MAX).then(|| {
+                        json!({
+                            "p50": (p50 != u16::MAX).then_some(p50),
+                            "p95": (p95 != u16::MAX).then_some(p95),
+                        })
+                    })
+                };
+                let mut out = serde_json::Map::new();
+                for (name, value) in [
+                    ("rx", depth(telemetry.q_rx_p50, telemetry.q_rx_p95)),
+                    (
+                        "verify",
+                        depth(telemetry.q_verify_p50, telemetry.q_verify_p95),
+                    ),
+                    ("tx", depth(telemetry.q_tx_p50, telemetry.q_tx_p95)),
+                ] {
+                    if let Some(value) = value {
+                        out.insert(name.to_string(), value);
+                    }
+                }
+                (!out.is_empty()).then_some(Value::Object(out))
+            }
+            "stores" => {
+                // §3.5.2's sentinels mean *unknown*, and an unknown store is omitted
+                // rather than reported as 18 446 744 073 709 551 615 bytes. A section
+                // with nothing known at all is absent, not empty.
+                let mut out = serde_json::Map::new();
+                if telemetry.cert_stored != u32::MAX {
+                    out.insert("certs".to_string(), json!(telemetry.cert_stored));
+                }
+                if telemetry.crl_bytes != u64::MAX {
+                    out.insert("crl_bytes".to_string(), json!(telemetry.crl_bytes));
+                }
+                if telemetry.storage_used_b != u64::MAX {
+                    out.insert(
+                        "storage_used_b".to_string(),
+                        json!(telemetry.storage_used_b),
+                    );
+                }
+                if telemetry.storage_total_b != u64::MAX {
+                    out.insert(
+                        "storage_total_b".to_string(),
+                        json!(telemetry.storage_total_b),
+                    );
+                }
+                (!out.is_empty()).then_some(Value::Object(out))
+            }
+            _ => None,
+        }
+    }
+
+    fn link_facts(&self, tx: u32, rx: u32, t_ns: u64, window_ns: u64) -> Option<Value> {
+        let history = self.projector.links.get(&(tx, rx))?;
+        let lower = t_ns.saturating_sub(window_ns);
+        let inside: Vec<&LinkObservation> = history
+            .iter()
+            .filter(|o| o.t >= lower && o.t <= t_ns)
+            .collect();
+        if inside.is_empty() {
+            return None;
+        }
+        let n = inside.len() as f64;
+        let mean = |values: Vec<f64>| {
+            if values.is_empty() {
+                f64::NAN
+            } else {
+                let count = values.len() as f64;
+                v2xw_core::math::sum_ordered(values) / count
+            }
+        };
+        let received = inside.iter().filter(|o| o.received).count();
+        Some(json!({
+            "frames": inside.len(),
+            "pdr": v2xw_core::math::quantize((received as f64) / n, 6),
+            "rssi_dbm": v2xw_core::math::quantize(
+                mean(inside.iter().filter_map(|o| o.rssi_dbm.map(f64::from)).collect()), 2),
+            "sinr_db": v2xw_core::math::quantize(
+                mean(inside.iter().filter_map(|o| o.sinr_db.map(f64::from)).collect()), 2),
+            "distance_m": v2xw_core::math::quantize(
+                mean(inside.iter().filter_map(|o| o.dist_m.map(f64::from)).collect()), 3),
+            "los": {"class": "LOS", "walls_crossed": 0, "obstructed_len_m": 0.0},
+        }))
+    }
+
+    fn export(&mut self, query: &Query) -> Result<Value> {
+        match query {
+            Query::ExportRecording { path, profile } => {
+                let Some(source) = self.descriptor.recording_path.clone() else {
+                    return Err(ServerError::ExportFailed {
+                        stage: "open".to_string(),
+                        detail: "this run writes no recording: start the server with \
+                                 --record <path>"
+                            .to_string(),
+                    });
+                };
+                if profile != "full" {
+                    return Err(ServerError::NotSupportedHere(format!(
+                        "the recording is written in the `full` profile; re-encoding it as \
+                         `{profile}` is `v2xw-record`'s NodeProfileStripper on the replay \
+                         path, not an export this server performs"
+                    )));
+                }
+                let target = path.clone().unwrap_or_else(|| source.clone());
+                if target != source {
+                    std::fs::copy(&source, &target).map_err(|e| ServerError::ExportFailed {
+                        stage: "copy".to_string(),
+                        detail: format!("{source} -> {target}: {e}"),
+                    })?;
+                }
+                let bytes = std::fs::metadata(&target)
+                    .map(|m| m.len())
+                    .unwrap_or_default();
+                Ok(json!({
+                    "path": target,
+                    "bytes": bytes,
+                    "profile": profile,
+                    "finished": self.report.is_some(),
+                }))
+            }
+            Query::ExportDataset {
+                exporter,
+                out_dir,
+                visibility,
+            } => Err(ServerError::ExportFailed {
+                stage: "open".to_string(),
+                detail: format!(
+                    "exporter `{exporter}` (visibility `{visibility}`, out_dir {:?}) is a \
+                     `v2xw-record` dataset writer over a finished recording, and this \
+                     server does not host one: run `v2xw run` with `exporters: [{exporter}]` \
+                     in the scenario, or `v2xw export` over {}.",
+                    out_dir.as_deref().unwrap_or("(default)"),
+                    self.descriptor
+                        .recording_path
+                        .as_deref()
+                        .unwrap_or("the recording this run does not write")
+                ),
+            }),
+            _ => Err(ServerError::NotSupportedHere(
+                "not an export query".to_string(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::roadside_node_count;
+    use v2xw_engine::Scenario;
+
+    /// A scenario's path, from the repository root.
+    fn scenario_path(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("scenarios")
+            .join(name)
+    }
+
+    /// The roadside count the node-id reconstruction offsets by is the scenario's own,
+    /// and it is zero exactly when the scenario declares no mast.
+    ///
+    /// Both cases are asserted, because a function that returned zero unconditionally
+    /// would satisfy the grid case on its own and that is the case every other live test
+    /// runs on.
+    #[test]
+    fn the_roadside_offset_is_the_number_of_units_the_scenario_declares() {
+        let grid = Scenario::load(scenario_path("phase1-grid.yaml")).expect("the grid loads");
+        assert!(
+            grid.actors.rsus.is_empty(),
+            "phase1-grid declares no mast, which is what makes it the zero case"
+        );
+        assert_eq!(roadside_node_count(&grid), 0);
+
+        let phase2 =
+            Scenario::load(scenario_path("phase2-manhattan.yaml")).expect("the phase 2 loads");
+        // The Phase 2 scenario places a unit at every signalised intersection of two
+        // avenues (55 of them); what is pinned is that the offset is that count.
+        let units = phase2.actors.rsus.len();
+        assert!(
+            units > 1,
+            "phase2-manhattan declares its roadside deployment, which this offset exists for"
+        );
+        assert_eq!(
+            roadside_node_count(&phase2) as usize,
+            units,
+            "the count is the scenario's {units} masts"
+        );
+    }
+}
+
+#[cfg(test)]
+mod breakdown_store_tests {
+    use std::collections::BTreeMap;
+
+    use v2xw_metrics::stats::ratio_of_sums;
+    use v2xw_metrics::{ConfidenceLevel, Estimate, RatioEstimate, SampleValue};
+
+    use super::BreakdownStore;
+    use crate::introspect::GroupRow;
+
+    const S: u64 = 1_000_000_000;
+    const RUN_S: u64 = 2_000;
+
+    fn dims(node: u64, msg: &str) -> BTreeMap<String, String> {
+        [("node", node.to_string()), ("msg_type", msg.to_string())]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+
+    /// A run of `RUN_S` one-second windows on three nodes, each window of each node under
+    /// one of two message types, in the three kinds a breakdown pools: a proportion, a
+    /// point with a sample count, and a ratio of sums. Fed to a store with tiny caps (it
+    /// merges hundreds of times and coarsens its blocks) and to one that never merges.
+    fn stores(kind: u8) -> (BreakdownStore, BreakdownStore) {
+        let mut small = BreakdownStore::with_caps(100, 400, 10 * S);
+        let mut whole = BreakdownStore::with_caps(usize::MAX / 2, usize::MAX / 2, S);
+        for t in 1..=RUN_S {
+            for node in 1..=3u64 {
+                let msg = if (t + node) % 2 == 0 { "bsm" } else { "cam" };
+                let trials = 10 + node;
+                let successes = (t * 7 + node) % (trials + 1);
+                let value = match kind {
+                    0 => SampleValue::Ratio(RatioEstimate::Proportion {
+                        point: successes as f64 / trials as f64,
+                        ci_lo: 0.0,
+                        ci_hi: 1.0,
+                        level: ConfidenceLevel::P95,
+                        trials,
+                        successes,
+                    }),
+                    1 => SampleValue::Scalar(Estimate::Value {
+                        point: (t % 13) as f64 * 0.25 + node as f64,
+                        n: t % 4,
+                    }),
+                    _ => SampleValue::Ratio(ratio_of_sums(
+                        successes as f64 * 1.5,
+                        trials as f64,
+                        trials,
+                        1,
+                    )),
+                };
+                small.push(t * S, dims(node, msg), &value);
+                whole.push(t * S, dims(node, msg), &value);
+            }
+        }
+        (small, whole)
+    }
+
+    fn node(n: u64) -> BTreeMap<String, String> {
+        [("node".to_string(), n.to_string())].into()
+    }
+
+    fn bsm() -> BTreeMap<String, String> {
+        [("msg_type".to_string(), "bsm".to_string())].into()
+    }
+
+    fn by_key(rows: Vec<GroupRow>) -> BTreeMap<String, GroupRow> {
+        rows.into_iter().map(|r| (r.key.clone(), r)).collect()
+    }
+
+    fn close(a: Option<f64>, b: Option<f64>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    /// Before the store merged, it dropped its oldest samples past 200,000: a breakdown of
+    /// a dense run "over the whole run" pooled only its end. Merged, the whole run pools
+    /// exactly what a store that never merges pools — same groups, same sample counts,
+    /// same values — in bounded memory, and says it used blocks.
+    #[test]
+    fn a_long_run_pools_its_whole_past_in_bounded_memory() {
+        for kind in 0..3u8 {
+            let (small, whole) = stores(kind);
+            assert!(
+                small.recent.len() <= 100,
+                "kind {kind}: recent {}",
+                small.recent.len()
+            );
+            assert!(
+                small.blocks.len() <= 400,
+                "kind {kind}: blocks {}",
+                small.blocks.len()
+            );
+            assert!(small.block_ns > 10 * S, "kind {kind}: the blocks coarsened");
+            // A breakdown matches samples whose *other* dimensions are exactly the filter:
+            // one node's message types, and one message type's nodes.
+            for (dim, filter) in [("msg_type", node(2)), ("node", bsm())] {
+                let got = by_key(small.groups(dim, &filter, 0, u64::MAX));
+                let want = by_key(whole.groups(dim, &filter, 0, u64::MAX));
+                assert_eq!(
+                    got.keys().collect::<Vec<_>>(),
+                    want.keys().collect::<Vec<_>>()
+                );
+                assert!(!got.is_empty(), "kind {kind} by {dim}");
+                for (k, w) in &want {
+                    let g = &got[k];
+                    assert_eq!(g.n, w.n, "kind {kind} by {dim} {k}: every sample pooled");
+                    assert!(
+                        close(g.value, w.value),
+                        "kind {kind} {k}: {:?} vs {:?}",
+                        g.value,
+                        w.value
+                    );
+                    assert!(close(g.lo, w.lo) && close(g.hi, w.hi), "kind {kind} {k}");
+                    assert_eq!(g.span, w.span, "kind {kind} {k}: the span pooled");
+                    assert_eq!(w.block_ns, 0);
+                    assert_eq!(
+                        g.block_ns, small.block_ns,
+                        "kind {kind} {k}: blocks are reported"
+                    );
+                }
+                let first = want.values().filter_map(|r| r.span).map(|s| s.0).min();
+                assert!(
+                    first.is_some_and(|t| t <= 2 * S),
+                    "kind {kind}: from the start"
+                );
+            }
+        }
+    }
+
+    /// A range inside the run: the newest samples are still one by one and pool exactly;
+    /// an older range pools whole blocks, reports the span it covered, and that span is
+    /// within a block of the one asked.
+    #[test]
+    fn a_range_pools_its_blocks_whole_and_says_so() {
+        let (small, whole) = stores(0);
+        let none = node(3);
+        // The other dimensions must match exactly: no filter matches no two-dimension sample.
+        assert!(
+            small
+                .groups("msg_type", &BTreeMap::new(), 0, u64::MAX)
+                .is_empty()
+        );
+        let recent_from = (RUN_S - 10) * S;
+        let got = by_key(small.groups("msg_type", &none, recent_from, u64::MAX));
+        let want = by_key(whole.groups("msg_type", &none, recent_from, u64::MAX));
+        assert_eq!(want.len(), 2);
+        for (k, w) in &want {
+            assert_eq!(
+                (got[k].n, got[k].value, got[k].span),
+                (w.n, w.value, w.span),
+                "{k}"
+            );
+            assert_eq!(got[k].block_ns, 0, "{k}: the newest samples are not merged");
+        }
+        let (from, to) = (500 * S, 1_500 * S);
+        let block = small.block_ns;
+        let rows = small.groups("msg_type", &none, from, to);
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            let (a, b) = row.span.expect("pooled something");
+            assert!(
+                a + block >= from && b <= to + block,
+                "{}: {a}..{b} vs {from}..{to}",
+                row.key
+            );
+            assert_eq!(row.block_ns, block);
+            let w = &by_key(whole.groups("msg_type", &none, a, b))[&row.key];
+            assert!(
+                row.n.abs_diff(w.n) * 10 <= w.n,
+                "{}: {} vs {}",
+                row.key,
+                row.n,
+                w.n
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod series_bin_tests {
+    use super::series_bins;
+
+    /// What `series_bins` replaced: every bin scans every sample.
+    fn by_scanning(
+        rows: &[(u64, f64)],
+        from: u64,
+        to: u64,
+        bin: u64,
+        limit: usize,
+    ) -> Vec<(u64, Option<f64>)> {
+        let mut out = Vec::new();
+        let mut edge = from - (from % bin);
+        while edge <= to && out.len() < limit {
+            let upper = edge + bin;
+            let inside: Vec<f64> = rows
+                .iter()
+                .filter(|(t, _)| *t >= edge && *t < upper)
+                .map(|(_, v)| *v)
+                .collect();
+            let value = (!inside.is_empty()).then(|| {
+                v2xw_core::math::sum_ordered(inside.iter().copied()) / inside.len() as f64
+            });
+            out.push((edge, value));
+            edge = upper;
+        }
+        out
+    }
+
+    /// The single pass answers exactly what the scan answered: samples on a bin's edge go
+    /// to the bin they open, empty bins are `None`, several samples in one bin are averaged,
+    /// an unaligned `from` starts at its bin's edge, and `limit` cuts the answer.
+    #[test]
+    fn binning_in_one_pass_answers_what_the_scan_answered() {
+        // A 1 s metric with a gap (4-6 s), a bin with two samples (7.0 and 7.5 s), a
+        // repeated instant (9 s twice) and a sample at 0.
+        let rows: Vec<(u64, f64)> = vec![
+            (0, 0.5),
+            (1_000_000_000, 0.25),
+            (2_000_000_000, 1.0),
+            (3_000_000_000, 0.75),
+            (7_000_000_000, 0.125),
+            (7_500_000_000, 0.375),
+            (8_000_000_000, 0.0),
+            (9_000_000_000, 2.0),
+            (9_000_000_000, 4.0),
+            (10_000_000_000, 8.0),
+        ];
+        for (from, to, bin, limit) in [
+            (0, 10_000_000_000, 1_000_000_000, 10_000),
+            (0, 10_000_000_000, 2_000_000_000, 10_000),
+            (0, 10_000_000_000, 500_000_000, 10_000),
+            (1_500_000_000, 9_000_000_000, 1_000_000_000, 10_000),
+            (0, 10_000_000_000, 1_000_000_000, 3),
+            (0, 10_000_000_000, 3_000_000_000, 10_000),
+            (11_000_000_000, 20_000_000_000, 1_000_000_000, 10_000),
+        ] {
+            assert_eq!(
+                series_bins(&rows, from, to, bin, limit),
+                by_scanning(&rows, from, to, bin, limit),
+                "from {from} to {to} bin {bin} limit {limit}"
+            );
+        }
+        // Spot values, so the reference itself is pinned too.
+        let one = series_bins(&rows, 0, 10_000_000_000, 1_000_000_000, 10_000);
+        assert_eq!(
+            one[4],
+            (4_000_000_000, None),
+            "the gap is a gap, not a zero"
+        );
+        assert_eq!(
+            one[7],
+            (7_000_000_000, Some(0.25)),
+            "two samples in one bin average"
+        );
+        assert_eq!(one[9], (9_000_000_000, Some(3.0)));
+        assert_eq!(
+            series_bins(&[], 0, 2_000_000_000, 1_000_000_000, 10).len(),
+            3
+        );
+    }
+}
+
+#[cfg(test)]
+mod signal_stream_tests {
+    use super::group_signal_plans;
+    use std::collections::BTreeMap;
+    use v2xw_core::ids::LaneId;
+    use v2xw_mobility::FixedTimeSignals;
+    use v2xw_world::model::SignalState;
+    use v2xw_world::procedural::GridParams;
+
+    fn rank(s: SignalState) -> u8 {
+        match s {
+            SignalState::Green => 6,
+            SignalState::GreenYield => 5,
+            SignalState::FlashingAmber => 4,
+            SignalState::Amber => 3,
+            SignalState::RedAmber => 2,
+            SignalState::Red => 1,
+            SignalState::Off => 0,
+        }
+    }
+
+    /// What the page is shown for every head group equals what the mobility engine's own
+    /// signal model shows that group's movements, at every 0.1 s step of two cycles — and
+    /// in particular at every change.
+    #[test]
+    fn the_streamed_signal_state_is_the_engines_at_every_step() {
+        let world = v2xw_world::procedural::grid(
+            &GridParams {
+                lanes_per_direction: 2,
+                ..GridParams::legacy().with_signals(true)
+            },
+            &v2xw_world::ImportOptions::default(),
+        )
+        .expect("grid");
+        let streamed = group_signal_plans(&world);
+        let engine = FixedTimeSignals::default();
+        let mut approach_of: BTreeMap<LaneId, LaneId> = BTreeMap::new();
+        for c in world.roads.connections() {
+            if let Some(via) = c.via {
+                approach_of.entry(via).or_insert(c.from_lane);
+            }
+        }
+        let mut changes = 0;
+        for plan in &world.signals {
+            let groups: Vec<u16> = {
+                let mut g: Vec<u16> = plan.heads.iter().map(|h| h.group).collect();
+                g.sort_unstable();
+                g.dedup();
+                g
+            };
+            for group in groups {
+                let id = v2xw_world::signal_group_wire_id(plan.id, group);
+                let entry = streamed
+                    .iter()
+                    .find(|e| e.wire_id == id)
+                    .expect("every head group is streamed");
+                let mut last = None;
+                for k in 0..(2.0 * plan.cycle_s * 10.0) as u64 {
+                    let t_s = k as f64 * 0.1;
+                    let engine_state = plan
+                        .controlled
+                        .iter()
+                        .filter(|l| {
+                            approach_of.get(l).is_some_and(|a| {
+                                plan.heads.iter().any(|h| h.lane == *a && h.group == group)
+                            })
+                        })
+                        .filter_map(|l| engine.state_for(plan, *l, t_s))
+                        .max_by_key(|s| rank(*s))
+                        .expect("the group controls a movement");
+                    let (shown, _) = entry.at(t_s).expect("a state");
+                    assert_eq!(
+                        shown, engine_state,
+                        "plan {} group {group} at {t_s} s",
+                        plan.id
+                    );
+                    if last.is_some_and(|l| l != shown) {
+                        changes += 1;
+                    }
+                    last = Some(shown);
+                }
+            }
+        }
+        assert!(changes > 100, "the check saw {changes} changes");
+        // And no two head groups of a crossroads show a green together.
+        let plan = world
+            .signals
+            .iter()
+            .find(|p| world.junction(p.junction).incoming.len() >= 4)
+            .expect("a crossroads");
+        for k in 0..(plan.cycle_s * 10.0) as u64 {
+            let t_s = k as f64 * 0.1;
+            let greens = streamed
+                .iter()
+                .filter(|e| e.wire_id / 65536 == plan.id.index() + 1)
+                .filter(|e| {
+                    matches!(
+                        e.at(t_s),
+                        Some((SignalState::Green | SignalState::GreenYield, _))
+                    )
+                })
+                .count();
+            assert!(greens <= 1, "{greens} groups green at {t_s} s");
+        }
+    }
+}
+
+#[cfg(test)]
+mod body_centre_tests {
+    use super::body_centre;
+    use v2xw_mobility::VehicleClass;
+
+    /// A car heading north-east draws half its length ahead of its reference point, and a
+    /// longer class further ahead, so a car stopped with its bumper on the line is drawn
+    /// short of it by nothing.
+    #[test]
+    fn the_streamed_pose_is_half_a_length_ahead_of_the_reference() {
+        for (i, class) in VehicleClass::ALL.iter().enumerate() {
+            let half = class.spec().length_m * 0.5;
+            let h = core::f64::consts::FRAC_PI_4;
+            let c = body_centre([10.0, 20.0, 1.5], h, u8::try_from(i).unwrap());
+            assert!((c[0] - (10.0 + half * h.cos())).abs() < 1e-9, "{class:?} x");
+            assert!((c[1] - (20.0 + half * h.sin())).abs() < 1e-9, "{class:?} y");
+            assert!((c[2] - 1.5).abs() < 1e-12, "{class:?} keeps its height");
+            assert!(half > 0.0, "{class:?} has a length");
+        }
+    }
+}
+
+#[cfg(test)]
+mod node_tx_payload_tests {
+    use super::node_tx_payload;
+    use v2xw_metrics::channels::NodeTxView;
+
+    /// §3.6.10's `pseudonym_digest` carries the signing certificate's HashedId8 when the
+    /// record names one, and §0's eight zero bytes when it does not.
+    #[test]
+    fn the_pseudonym_digest_reaches_the_wire() {
+        let mut v: NodeTxView = serde_json::from_value(serde_json::json!({
+            "t": 0, "node": 3, "bytes_on_wire": 200, "pseudonym": "0123456789abcdef"
+        }))
+        .expect("a node.tx view");
+        assert_eq!(
+            &node_tx_payload(&v)[28..36],
+            &[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
+        );
+        v.pseudonym = None;
+        assert_eq!(&node_tx_payload(&v)[28..36], &[0u8; 8]);
+    }
+}
+
+#[cfg(test)]
+mod breakdown_total_cap_tests {
+    use super::{BreakdownStore, bound_breakdowns};
+    use std::collections::BTreeMap;
+    use v2xw_metrics::SampleValue;
+
+    /// The stores are bounded as a whole, not only per metric: three metrics of 2,000
+    /// samples each under a 1,500-entry cap end at or under it, and every node still groups.
+    #[test]
+    fn the_stores_are_bounded_across_metrics() {
+        let mut stores: BTreeMap<String, BreakdownStore> = BTreeMap::new();
+        for t in 0..2_000u64 {
+            for metric in ["a", "b", "c"] {
+                stores
+                    .entry(metric.to_string())
+                    .or_insert_with(|| BreakdownStore::with_caps(1_000, 1_000, 10))
+                    .push(
+                        t * 1_000_000,
+                        BTreeMap::from([("node".to_string(), (t % 7).to_string())]),
+                        &SampleValue::count(1),
+                    );
+                bound_breakdowns(&mut stores, 1_500);
+            }
+        }
+        let held: usize = stores.values().map(BreakdownStore::len).sum();
+        assert!(held <= 1_500, "held {held}");
+        let groups = stores["a"].groups("node", &BTreeMap::new(), 0, u64::MAX);
+        assert_eq!(groups.len(), 7, "every node still groups");
+    }
+
+    /// Shedding gives the memory back: the capacity of the store's recent samples follows what
+    /// it holds, so the total cap on entries is also a bound on bytes.
+    ///
+    /// Fault: `shed` leaves the capacity where the high water put it -> red.
+    #[test]
+    fn a_shed_store_gives_its_capacity_back() {
+        let mut store = BreakdownStore::with_caps(100_000, 1_000, 10);
+        let dims = BTreeMap::from([("node".to_string(), "1".to_string())]);
+        for t in 0..60_000u64 {
+            store.push(t * 1_000_000_000, dims.clone(), &SampleValue::count(1));
+        }
+        let high_water = store.recent.capacity();
+        assert!(high_water >= 60_000);
+        store.shed();
+        assert!(store.recent.len() <= 30_000);
+        assert!(
+            store.recent.capacity() <= store.recent.len() * 2,
+            "capacity {} for {} samples held (high water {high_water})",
+            store.recent.capacity(),
+            store.recent.len()
+        );
+        // The samples it kept and the ones it merged still pool under the one series.
+        let groups = store.groups("node", &BTreeMap::new(), 0, u64::MAX);
+        assert_eq!(groups.len(), 1);
+    }
+
+    /// A churning fleet: every node reports for a while and leaves, so the distinct
+    /// dimension sets (one per node that ever ran) outgrow the cap. Coarsening cannot merge
+    /// two nodes, so the stores held one block per node that ever reported and interned
+    /// every node's dimensions for good: memory grew with the fleet that had been, not the
+    /// one alive. Now the series silent longest are
+    /// evicted once nothing else sheds, so the entries and the interned sets stay under the
+    /// cap, and the nodes still reporting keep their series.
+    ///
+    /// Fault: `shed` evicts nothing when coarsening cannot shrink the store -> red.
+    #[test]
+    fn a_churning_fleet_is_held_to_the_cap() {
+        let mut stores: BTreeMap<String, BreakdownStore> = BTreeMap::new();
+        // 20,000 one-second windows; 10 nodes alive at a time, each for 20 s: 10,000 nodes ever.
+        for t in 0..20_000u64 {
+            for k in 0..10u64 {
+                let node = (t / 20) * 10 + k;
+                stores
+                    .entry("a".to_string())
+                    .or_insert_with(|| BreakdownStore::with_caps(1_000, 1_000, 10))
+                    .push(
+                        t * 1_000_000_000,
+                        BTreeMap::from([("node".to_string(), node.to_string())]),
+                        &SampleValue::count(1),
+                    );
+                bound_breakdowns(&mut stores, 1_500);
+            }
+        }
+        let held: usize = stores.values().map(BreakdownStore::len).sum();
+        assert!(held <= 1_500, "held {held} entries");
+        let sets: usize = stores.values().map(BreakdownStore::dim_sets).sum();
+        assert!(
+            sets <= 1_500,
+            "{sets} dimension sets interned for 10 nodes alive"
+        );
+        let groups = stores["a"].groups("node", &BTreeMap::new(), 19_980 * 1_000_000_000, u64::MAX);
+        assert_eq!(groups.len(), 10, "the nodes alive still group");
+    }
+}
+
+#[cfg(test)]
+mod series_history_tests {
+    use super::SeriesHistory;
+
+    /// A long run's metric history is held to its cap, and what it holds still answers
+    /// what the samples answer: 100,000 windows of a series under a 1,000-point cap end
+    /// at or under the cap, in time order, holding every window once (the weights sum to
+    /// 100,000), with the windows' mean to 1e-9 and the newest 250 windows one by one.
+    /// It kept every point, so a served run's footprint grew with elapsed time (S6b).
+    ///
+    /// Fault: `push_capped` never merges -> red.
+    #[test]
+    fn a_long_metric_history_is_held_to_its_cap_like_the_breakdown_store() {
+        let mut h = SeriesHistory::default();
+        let n = 100_000u64;
+        let value = |i: u64| ((i * 7_919) % 1_000) as f64 / 10.0;
+        for i in 0..n {
+            h.push_capped(i * 1_000_000_000, value(i), 1_000);
+        }
+        assert!(h.len() <= 1_000, "{} points held", h.len());
+        assert!(h.rows().windows(2).all(|w| w[0].0 < w[1].0), "time order");
+        let windows: u64 = h.weight.iter().map(|&w| u64::from(w)).sum();
+        assert_eq!(windows, n, "every window held once");
+        let held: f64 = h
+            .rows()
+            .iter()
+            .zip(&h.weight)
+            .map(|(&(_, x), &w)| x * f64::from(w))
+            .sum::<f64>()
+            / n as f64;
+        let raw: f64 = (0..n).map(value).sum::<f64>() / n as f64;
+        assert!((held - raw).abs() < 1e-9, "mean {held} against {raw}");
+        let tail = &h.rows()[h.len() - 250..];
+        for (k, &(t, x)) in tail.iter().enumerate() {
+            let i = n - 250 + k as u64;
+            assert_eq!(
+                (t, x),
+                (i * 1_000_000_000, value(i)),
+                "window {i} one by one"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod breakdown_compact_tests {
+    use super::{BreakdownEntry, BreakdownStore};
+    use std::collections::BTreeMap;
+    use v2xw_metrics::SampleValue;
+    use v2xw_metrics::stats::{
+        ConfidenceLevel, Distribution, Estimate, RatioEstimate, ratio_of_sums,
+    };
+
+    const S: u64 = 1_000_000_000;
+
+    /// An entry holds its kind's pair and no more: 56 bytes. It held every kind's
+    /// pooling fields (a point, a weight, counts, sums and a sum, each an `Option`), 128
+    /// bytes, so the stores' 1,000,000-entry cap was about 120 MB.
+    ///
+    /// Fault: the entry keeps an `Option<f64>` point beside its pair -> red.
+    #[test]
+    fn a_breakdown_entry_holds_only_its_kinds_pair() {
+        let size = std::mem::size_of::<BreakdownEntry>();
+        assert!(size <= 56, "a breakdown entry is {size} bytes");
+    }
+
+    /// What the compact entries pool is what the samples pool. Four nodes, 3,000
+    /// one-second windows of each kind, fed to a store with tiny caps (it merges and
+    /// coarsens its blocks hundreds of times); over the whole run, each node's value equals
+    /// the one computed here from the raw samples: a proportion's Σ successes / Σ trials,
+    /// a ratio's Σ numerator / Σ denominator, a point's Σ p·w / Σ w with w = max(n, 1), a
+    /// distribution's Σ sample sums / Σ n. The sample counts agree too.
+    ///
+    /// Fault: a point's weight is stored as 1 -> red.
+    #[test]
+    fn merged_compact_entries_pool_what_the_samples_pool() {
+        for kind in 0..4u8 {
+            let mut store = BreakdownStore::with_caps(64, 256, 10 * S);
+            // node -> (numerator, denominator, n) of the naive pool.
+            let mut want: BTreeMap<String, (f64, f64, u64)> = BTreeMap::new();
+            for t in 1..=3_000u64 {
+                for node in 1..=4u64 {
+                    let trials = 5 + node + t % 3;
+                    let successes = (t * 7 + node) % (trials + 1);
+                    let (value, num, den, n) = match kind {
+                        0 => (
+                            SampleValue::Ratio(RatioEstimate::Proportion {
+                                point: successes as f64 / trials as f64,
+                                ci_lo: 0.0,
+                                ci_hi: 1.0,
+                                level: ConfidenceLevel::P95,
+                                trials,
+                                successes,
+                            }),
+                            successes as f64,
+                            trials as f64,
+                            trials,
+                        ),
+                        1 => {
+                            let (x, y) = (successes as f64 * 1.5, trials as f64);
+                            (
+                                SampleValue::Ratio(ratio_of_sums(x, y, trials, 1)),
+                                x,
+                                y,
+                                trials,
+                            )
+                        }
+                        2 => {
+                            let point = (t % 13) as f64 * 0.25 + node as f64;
+                            let n = t % 4;
+                            let w = n.max(1);
+                            (
+                                SampleValue::Scalar(Estimate::Value { point, n }),
+                                point * w as f64,
+                                w as f64,
+                                n,
+                            )
+                        }
+                        _ => {
+                            let mut d = Distribution::new();
+                            let count = 1 + (t + node) % 3;
+                            let mut sum = 0.0;
+                            for k in 0..count {
+                                let x = ((t * 3 + node + k) % 17) as f64 * 0.5;
+                                d.observe(x);
+                                sum += x;
+                            }
+                            (
+                                SampleValue::Distribution(d.summary(1)),
+                                sum,
+                                count as f64,
+                                count,
+                            )
+                        }
+                    };
+                    store.push(
+                        t * S,
+                        BTreeMap::from([("node".to_string(), node.to_string())]),
+                        &value,
+                    );
+                    let e = want.entry(node.to_string()).or_insert((0.0, 0.0, 0));
+                    e.0 += num;
+                    e.1 += den;
+                    e.2 += n;
+                }
+            }
+            assert!(store.block_ns > 10 * S, "kind {kind}: the blocks coarsened");
+            let got = store.groups("node", &BTreeMap::new(), 0, u64::MAX);
+            assert_eq!(got.len(), 4, "kind {kind}");
+            for row in got {
+                let (num, den, n) = want[&row.key];
+                let v = row.value.expect("a value");
+                let w = num / den;
+                assert!(
+                    (v - w).abs() <= 1e-9 * w.abs().max(1.0),
+                    "kind {kind} node {}: {v} vs {w}",
+                    row.key
+                );
+                assert_eq!(row.n, n, "kind {kind} node {}", row.key);
+            }
+        }
+    }
+}
+
+/// The loader's warnings about a scenario it accepts, as `severity: warning` rows: the
+/// same lists the run's manifest carries (`v2xw_engine::manifest`), each on the field it
+/// is about.
+fn scenario_warnings(s: &Scenario) -> Vec<ParamError> {
+    let row = |path: &str, message: String| ParamError {
+        path: path.to_string(),
+        message,
+        hint: None,
+        severity: Some("warning".to_string()),
+    };
+    let mut out: Vec<ParamError> = v2xw_engine::scenario::detection_policy_warnings(s)
+        .into_iter()
+        .map(|m| row("/security/verification_policy", m))
+        .collect();
+    out.extend(
+        v2xw_engine::scenario::signature_mtu_warnings(s)
+            .into_iter()
+            .chain(v2xw_engine::scenario::pq_rsu_proxy_warnings(s))
+            .map(|m| row("/security/signature", m)),
+    );
+    out
+}
+
+#[cfg(test)]
+mod vanished_kernel_tests {
+    use super::{Engine, LiveEngine, LiveOptions, RunState};
+
+    /// A kernel thread that ends without `Done` or `Failed` (a panic: every return path
+    /// sends one) aborts the run instead of leaving it `running` with no step to come.
+    /// `Run::tick_wait` and `run.step` wait for the next step while the run has not ended,
+    /// so a run that never ends would hold them forever.
+    ///
+    /// The kernel's channel is swapped for one whose sender is already gone, which is what
+    /// the transport sees after a panic, with no panic needed.
+    ///
+    /// Fault: `kernel_vanished` does nothing -> red (the step answers `Ok(None)` and the run
+    /// stays `paused`).
+    #[test]
+    fn a_kernel_that_ends_without_a_report_aborts_the_run() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenarios/phase1-grid.yaml");
+        let mut engine = LiveEngine::open(
+            &path,
+            LiveOptions {
+                paused: true,
+                speed: 0.0,
+                ..LiveOptions::default()
+            },
+        )
+        .expect("the grid opens");
+        // Take every step the kernel already handed over, so the next one must come from
+        // the channel.
+        engine.pump();
+        engine.cursor = engine.base_index + engine.timeline.len() as u64;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        drop(tx);
+        let _live = std::mem::replace(&mut engine.host.steps, rx);
+        assert_eq!(engine.state(), RunState::Paused);
+        let first = engine.step();
+        assert!(
+            matches!(first, Ok(None) | Err(_)),
+            "no step can come: {first:?}"
+        );
+        assert_eq!(
+            engine.state(),
+            RunState::Error,
+            "a vanished kernel must abort the run"
+        );
+        assert!(
+            engine.step().is_err(),
+            "an aborted run refuses the next step"
+        );
+    }
+}

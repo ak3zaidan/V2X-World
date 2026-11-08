@@ -1,0 +1,115 @@
+/* The Backend view (components/BackendView.tsx), a full-screen shell panel under the header.
+   Uses the page's tokens only, so both themes work. */
+
+.backend-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+
+.backend-empty { max-width: 680px; }
+.backend-empty code { font-family: var(--mono); }
+
+/* The glance strip: the whole system in a few numbers, then its flows. */
+.backend-glance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.backend-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 104px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.backend-tile .v { font-family: var(--mono); font-size: 17px; color: var(--text); line-height: 1.2; }
+.backend-tile .k { font-size: 11px; color: var(--text-dim); }
+.backend-tile.warn { border-color: var(--warn); }
+.backend-tile.warn .v { color: var(--warn); }
+.backend-flows {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  gap: 4px 14px;
+  margin-left: 8px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.backend-flow b { font-family: var(--mono); color: var(--text); font-weight: 500; }
+
+.backend-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+@media (max-width: 900px) {
+  .backend-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 40%; }
+}
+
+.backend-diagram { overflow: auto; padding: 12px 16px; }
+
+.backend-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; font-size: 12px; margin-top: 10px; }
+.backend-key { display: inline-flex; align-items: center; gap: 6px; }
+.backend-key i { display: inline-block; flex: none; }
+.backend-key i.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.backend-key i.line { width: 18px; height: 0; border-top: 2px solid var(--accent); }
+.backend-key i.line.air { border-top-style: dashed; border-top-color: var(--text-dim); }
+.backend-key i.pill { width: 16px; height: 9px; border-radius: 5px; background: var(--warn); }
+.backend-key i.box { width: 14px; height: 10px; border-radius: 3px; border: 1px dashed var(--border-strong); }
+
+.backend-colhead { fill: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.backend-box { cursor: pointer; }
+.backend-box rect:first-of-type { fill: var(--bg-panel); stroke: var(--border-strong); stroke-width: 1; }
+.backend-box:hover rect:first-of-type { stroke: var(--accent-dim); }
+.backend-box.on rect:first-of-type { stroke: var(--accent); stroke-width: 2; }
+.backend-box.offline rect:first-of-type { stroke-dasharray: 4 3; fill: var(--bg); }
+.backend-dot { fill: var(--border-strong); }
+.backend-box.lit .backend-dot { fill: var(--ok); }
+.backend-name { fill: var(--text); font-size: 12px; font-weight: 600; }
+.backend-count { fill: var(--text-dim); font-size: 11px; }
+.backend-count-v { fill: var(--text); font-family: var(--mono); }
+.backend-queue { fill: var(--warn); }
+.backend-queue-t { fill: #000; font-size: 10px; font-family: var(--mono); }
+
+.backend-edge { fill: none; stroke: var(--border-strong); opacity: 0.55; cursor: pointer; transition: opacity 120ms; }
+.backend-edge.live { stroke: var(--accent); opacity: 0.9; }
+.backend-edge.on { stroke: var(--ok); opacity: 1; }
+.backend-edge.dim { opacity: 0.15; }
+.backend-edge.v2x-air { stroke-dasharray: 5 4; }
+.backend-arrowhead { fill: var(--text-faint); }
+
+.backend-side {
+  overflow: auto;
+  padding: 12px 16px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+.backend-side h3 { margin: 0 0 4px; font-size: 14px; }
+.backend-side h4 { margin: 14px 0 4px; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.backend-side .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.backend-side .kv dt { color: var(--text-dim); }
+.backend-side .kv dd { margin: 0; font-family: var(--mono); text-align: right; }
+.backend-side .warn { color: var(--warn); }
+.backend-links, .backend-recent, .backend-rank { margin: 0; padding-left: 0; list-style: none; }
+.backend-links li, .backend-rank li { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+.backend-rank li .mono { margin-left: auto; }
+.backend-recent li { font-family: var(--mono); font-size: 11px; }
+.backend-metrics-link {
+  display: block;
+  width: 100%;
+  margin: 10px 0 2px;
+  text-align: left;
+  color: var(--accent);
+  border-color: var(--border);
+  background: var(--bg);
+}
+.backend-metrics-link:hover:not(:disabled) { border-color: var(--accent); }

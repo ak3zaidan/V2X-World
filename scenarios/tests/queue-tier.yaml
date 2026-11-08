@@ -1,0 +1,14 @@
+# The DSRC sensitivity grid driven by the queue tier (scale.traffic.model:
+# mobility/meso/queue). The queue model has no car-following kinematics (a vehicle joins the
+# next link at its entry time and stops at a queue's tail in one step), so check-traffic's
+# microscopic rows must judge only samples a microscopic tier drove
+# (crates/v2xw-cli/tests/check_traffic_queue_tier.rs).
+schema: v2xw/scenario/1
+meta:
+  base: ../sensitivity/dsrc-grid.yaml
+  name: queue-tier
+time:
+  duration_s: 4.0
+scale:
+  traffic:
+    model: mobility/meso/queue

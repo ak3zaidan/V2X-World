@@ -1,0 +1,60 @@
+# Second RSU profile. The RSU brief publishes radio figures only;
+# every compute and HSM field is not-published and the OBU block is the flagged proxy.
+id: rsu/cohda-mk5-rsu
+kind: rsu
+version: 2026-10-11.1
+purpose: >-
+  Roadside unit (Cohda MK5 RSU). Shares the MK5 OBU radio, but the RSU brief publishes
+  module-level radio specifications only, so every compute and security field here is
+  not-published with obu/cohda-mk5 named as the proxy to inherit from.
+sources:
+  - {kind: product-brief, ref: "Cohda MK5 RSU product brief", accessed: 2026-09-18}
+  - {kind: product-brief, ref: "Cohda MK5 OBU brief (compute/HSM proxy)", accessed: 2026-09-18}
+cpu:
+  cores: {value: null, status: not-published, calibration: "NOT PUBLISHED in the RSU brief, which gives module-level radio specifications only; presumably the MK5 OBU's i.MX6 DL, but the brief does not restate it [Cohda MK5 RSU brief]. Use the obu/cohda-mk5 cpu block as a flagged proxy, or read /proc/cpuinfo on the device"}
+  clock_hz: {value: null, status: not-published, calibration: "NOT PUBLISHED in the RSU brief, as for cpu.cores; the obu/cohda-mk5 proxy does not publish the core clock either, so measure it on the device"}
+  arch: {value: null, status: not-published, calibration: "NOT PUBLISHED in the RSU brief, as for cpu.cores; confirm the core type and ISA from the NXP i.MX6 DualLite datasheet"}
+  dmips: {value: null, status: not-published, calibration: "NOT PUBLISHED in the RSU brief, as for cpu.cores; the obu/cohda-mk5 proxy is 4000 DMIPS [Cohda MK5 OBU brief 2024], to be confirmed on the device"}
+ram_bytes: {value: null, status: not-published, calibration: "NOT PUBLISHED in the RSU brief; obu/cohda-mk5 proxy is 1 GB [Cohda MK5 OBU brief 2024]"}
+flash_bytes: {value: null, status: not-published, calibration: "NOT PUBLISHED in the RSU brief; obu/cohda-mk5 proxy is 4 GB eMMC [Cohda MK5 OBU brief 2024]"}
+hsm:
+  kind: secure-element
+  part: {value: null, status: not-published, calibration: "NOT PUBLISHED in the RSU brief; presumably an SXF17xx like the MK5 OBU [Cohda MK5 RSU brief]. Use the obu/cohda-mk5 hsm block (SAF5400 2000/s verify proxy, sign NOT PUBLISHED) and flag it"}
+  ops:
+    ecdsa-p256-verify:
+      throughput_per_s: {value: null, status: not-published, calibration: "inherit obu/cohda-mk5, whose own figure is the flagged NXP SAF5400 proxy of 2000/s [NXP SAF5400 fact sheet]"}
+      latency_us: {value: null, status: not-published, calibration: "inherit obu/cohda-mk5; measure on device"}
+      runs_on: {value: null, status: not-published, calibration: "inherit obu/cohda-mk5, where verification is in the baseband engine"}
+    ecdsa-p256-sign:
+      throughput_per_s: {value: null, status: not-published, calibration: "inherit obu/cohda-mk5, where it is NOT PUBLISHED [Cohda MK5 OBU brief 2024]"}
+      latency_us: {value: null, status: not-published, calibration: "inherit obu/cohda-mk5, where it is NOT PUBLISHED [Cohda MK5 OBU brief 2024]"}
+      runs_on: hsm
+  queue_depth: {value: null, status: todo-calibrate, calibration: "not published; measure with back-to-back sign requests"}
+  servers: {value: null, status: todo-calibrate, calibration: "not published; inherit obu/cohda-mk5's single-server assumption or measure"}
+# POST-QUANTUM SOFTWARE PROXY — FLAGGED, NOT A MEASUREMENT OF THIS DEVICE. No roadside unit
+# publishes a post-quantum figure, and its secure element runs ECDSA only, so a post-quantum
+# signature is checked in software on the application processor. Until a bench exists the
+# cost is the catalogue figure for the same primitive on the Cohda MK6, a deployed V2X unit,
+# from NDSS 2024 Table V (liboqs first, Botan for ML-DSA-44; other parameter sets scaled by the
+# cited pqm4 cycle ratio, v2xw-sec CostRatio). This RSU's CPU is not published (it proxies the MK5 OBU),
+# an older generation than the MK6, so the proxy is likely optimistic; run liboqs speed_sig on it.
+# Classical operations never use it. A scenario that relies on it gets a validation warning.
+pq_software_proxy: [hw-profile/cohda-mk6-liboqs, hw-profile/cohda-mk6-botan]
+software_crypto:
+  ecdsa-p256-verify: {us: null, status: not-published, calibration: "inherit obu/cohda-mk5: no benchmark on this SoC exists; PROXY = Pi 3B 1290 us [dchest Pi 3B and HimaJyun Pi 4 openssl speed gists]"}
+  ecdsa-p256-sign: {us: null, status: not-published, calibration: "inherit obu/cohda-mk5: PROXY = Pi 3B 613 us [dchest Pi 3B and HimaJyun Pi 4 openssl speed gists]"}
+radio:
+  rat: [dsrc-80211p]
+  chipset: {value: "NXP SAF5100-based RoadLINK, same as the MK5 OBU", source: "[Cohda MK5 RSU brief]"}
+  tx_power_dbm:
+    min: {value: -10.0, source: "module datasheet [Cohda MK5 module datasheet]"}
+    max: {value: 22.0, source: "\"+22 dBm (ETSI Mask C)\" [Cohda MK5 RSU brief]"}
+    default: {value: 20.0, source: "J2945/1 baseline [Rostami et al., SAE J2945/1 scalability, 2016]"}
+  sensitivity_dbm: {value: -99.0, source: "-99 dBm @ 3 Mbps [Cohda MK5 RSU brief]; per-MCS not published, see the obu/cohda-mk5 proxy"}
+  noise_figure_db: {value: 6.0, source: "NXP RoadLINK chip-level 6 dB @ 5.9 GHz [NXP SAF5400 fact sheet]"}
+  antenna:
+    gain_dbi: {value: null, status: not-published, calibration: "not stated; the site antenna's datasheet gives it"}
+    height_m: {value: 5.0, status: evaluation-assumption, source: "no mounting height appears in the USDOT pilot facts [USDOT CV Pilot site pages (its.dot.gov)]; 3GPP TR 36.885 UE-type RSU 5 m. Set per site"}
+    pattern: {value: null, status: not-published, calibration: "site-specific; take from the fitted antenna's datasheet"}
+power_w: {value: null, status: not-published, calibration: "PoE; draw not stated [Cohda MK5 RSU brief]; measure at the injector"}
+storage_model: inherit

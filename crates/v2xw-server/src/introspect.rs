@@ -1,0 +1,912 @@
+//! The JSON bodies of §6.8–§6.12: one copy of every normative shape, filled by whichever
+//! engine is serving.
+//!
+//! The *shapes* here are the specification's and the *numbers* are the engine's, so the
+//! two are separated by a trait rather than by a second module. [`answer`] builds every
+//! result; [`Introspect`] is the eight questions it has to ask the engine to do it. That
+//! split is the reason a live run and the fixture cannot drift into answering `inspect.node`
+//! with differently-shaped JSON — there is one `inspect.node` in this crate.
+//!
+//! # What "not known" looks like
+//!
+//! An engine that cannot answer one of [`Introspect`]'s questions returns `None`, and the
+//! section is then **absent from the result** rather than present and invented. §6.8's
+//! `include` list is a request, not a promise, and a client that asked for `stores` and got
+//! no `stores` key has been told something true. The alternative — a plausible number with
+//! no source — is the failure mode this whole codebase is arranged against.
+
+use std::collections::BTreeMap;
+
+use serde_json::{Value, json};
+use v2xw_core::math;
+use v2xw_record::wire::telemetry::NodeTelemetry;
+
+use crate::engine::{Engine, NodeFacts, Query};
+use crate::error::{Result, ServerError};
+
+/// One metric an engine can answer for: its catalogue row and its wire ids.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricInfo {
+    /// The metric's name, e.g. `pdr`.
+    pub name: String,
+    /// Its unit, e.g. `-`, `s`, `ms`.
+    pub unit: String,
+    /// The aggregation tag, e.g. `ratio`, `p95`.
+    pub agg: String,
+    /// The `#/$defs/Visibility` token.
+    pub visibility: String,
+    /// The definition, in Markdown, including the formula.
+    pub definition_md: String,
+    /// The dimensions it is broken down by.
+    pub dims: Vec<String>,
+    /// What the metric does not account for.
+    pub not_accounted: Vec<String>,
+    /// The symbol-table id of `name`, for `MetricSample.str_metric` (§3.7).
+    pub str_id: u32,
+    /// §3.7's `MetricAgg` code for `agg`.
+    pub agg_code: u16,
+    /// The citation for the definition: a standard, a paper or a design section.
+    pub source: String,
+    /// The metric this series is a view of: `name` itself for the headline series, the
+    /// metric's name for a percentile (`e2e_latency.p95`) or a breakdown
+    /// (`latency_stage[airtime]`).
+    pub base: String,
+    /// The metric's health band (`v2xw_metrics::health::HealthBand`, serialised): whether a
+    /// value is healthy for a real deployment, and why. `None` when none is published.
+    pub health: Option<Value>,
+    /// The series' stable id (U5, `MetricDef::series`): the same in every run that has
+    /// the metric, so a link can name one series. Today it spells as `name`.
+    pub series_id: String,
+    /// `windowed` or `cumulative` (U14, `MetricDef::aggregate`): a cumulative series'
+    /// newest value is its run-wide value.
+    pub aggregate: String,
+    /// The stage transitions a schedule sets, by the stage reached (U14,
+    /// `MetricDef::stage_kinds`): `{"published": "scheduling-window"}`.
+    pub stage_kinds: BTreeMap<String, String>,
+    /// Who observes what the metric counts and how much (U14, `MetricDef::coverage`).
+    pub coverage: Option<Value>,
+    /// What the value is read against (U14, `MetricDef::reference`).
+    pub reference: Option<Value>,
+}
+
+/// Below this many bins over a query's range, a time series is answered with its samples
+/// one by one rather than binned (U15): a fast-forwarded run's overview otherwise has one
+/// to three bins.
+pub const SPARSE_BINS: u64 = 8;
+
+/// One group of a grouped `metrics.query`: the dimension's value and the metric pooled
+/// over the query's window.
+///
+/// Pooled, not averaged: a proportion pools its successes and trials across windows and
+/// carries the Wilson interval of the pooled count; a ratio of sums pools its two sums; a
+/// distribution's mean is weighted by its sample count. So a bin that saw ten trials in one
+/// window and a thousand in another is not given equal say.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupRow {
+    /// The dimension's value, e.g. `0-20` or `airtime`.
+    pub key: String,
+    /// The pooled value, or `None` when nothing in the window measured it.
+    pub value: Option<f64>,
+    /// The 95 % interval's bounds, for a proportion.
+    pub lo: Option<f64>,
+    /// See [`GroupRow::lo`].
+    pub hi: Option<f64>,
+    /// The samples (trials, observations) behind it.
+    pub n: u64,
+    /// The earliest and latest sample instants pooled into it, which on a long run can be
+    /// narrower than the query's window (`None` for an engine that does not say).
+    pub span: Option<(u64, u64)>,
+    /// The size of the time blocks among what was pooled, 0 when every sample was pooled
+    /// on its own. A long, dense run keeps its oldest breakdown samples merged per block.
+    pub block_ns: u64,
+}
+
+/// What [`answer`] needs from the engine that is serving the run.
+///
+/// Every method that can be unanswerable returns `Option`; see the module header.
+pub trait Introspect: Engine {
+    /// Every node the run has, now.
+    fn node_list(&self) -> Vec<NodeFacts>;
+
+    /// One node's most recent telemetry row, if the run has one for it.
+    fn telemetry_of(&self, node: u32) -> Option<NodeTelemetry>;
+
+    /// One metric binned over `[from, to]`, as `(bin start, value)`; `None` for a bin with
+    /// no observation, which is reported as `null` and is not the same as zero.
+    fn metric_series(
+        &self,
+        name: &str,
+        from: u64,
+        to: u64,
+        bin: u64,
+        limit: usize,
+    ) -> Vec<(u64, Option<f64>)>;
+
+    /// One metric's samples over `[from, to]` one by one, `(instant, value)`, at most
+    /// `limit` (U15); `None` from an engine that keeps no per-sample history.
+    fn metric_points(
+        &self,
+        _name: &str,
+        _from: u64,
+        _to: u64,
+        _limit: usize,
+    ) -> Option<Vec<(u64, f64)>> {
+        None
+    }
+
+    /// One metric's newest sample at or before `to` (U13): a cumulative metric's run-wide
+    /// value as of `to`. `None` when it has none, or the engine keeps no history.
+    fn metric_latest(&self, _name: &str, _to: u64) -> Option<(u64, f64)> {
+        None
+    }
+
+    /// One metric's dimensioned samples up to now, pooled over `[from, to]` and grouped by
+    /// the value of `dim`, keeping only samples whose *other* dimensions are exactly
+    /// `filter` — so `latency_stage` grouped by `stage` with `{msg_type: bsm}` is the BSM's
+    /// stages and not every flow's mixed together.
+    ///
+    /// This is how a breakdown a metric does not stream as a series — the delivery ratio
+    /// per distance bin, the latency stage per message type, a per-node figure — reaches a
+    /// client. Empty for an engine that keeps no breakdowns, which is honest: the fixture
+    /// and a replay answer only the headline series.
+    fn metric_groups(
+        &self,
+        _name: &str,
+        _dim: &str,
+        _filter: &std::collections::BTreeMap<String, String>,
+        _from: u64,
+        _to: u64,
+    ) -> Vec<GroupRow> {
+        Vec::new()
+    }
+
+    /// The provenance chain every answer cites (§3.8, §6.9).
+    fn provenance_chain(&self) -> Vec<Value>;
+
+    /// What a reader of these numbers must be told about them.
+    fn caveats(&self) -> Vec<String>;
+
+    /// One `include` section of `inspect.node`, or `None` if the run does not know it.
+    fn node_section(&self, node: u32, section: &str, limit: usize) -> Option<Value>;
+
+    /// Measured facts about one radio link over `[t_ns − window_ns, t_ns]`, or `None` if
+    /// the run has observed no reception on it.
+    fn link_facts(&self, tx: u32, rx: u32, t_ns: u64, window_ns: u64) -> Option<Value>;
+
+    /// Answers [`Query::ExportDataset`] and [`Query::ExportRecording`].
+    ///
+    /// # Errors
+    /// `-32008` when the export cannot be performed, with the stage it failed at.
+    fn export(&mut self, query: &Query) -> Result<Value>;
+
+    /// The backend entity `inspect.entity` names, or `None` if the run has no backend or
+    /// no such entity. A live run answers from its `backend.state` snapshots
+    /// ([`entity_answer`]); the fixture and a replay have none.
+    fn entity_facts(&self, _entity: &str, _t_ns: u64, _limit: usize) -> Option<Value> {
+        None
+    }
+
+    /// The PKI view's record store, or `None` if the run keeps none (the
+    /// fixture, a run with no SCMS).
+    fn pki(&self) -> Option<&crate::pki::PkiStore> {
+        None
+    }
+}
+
+/// Answers one [`Query`].
+///
+/// # Errors
+/// `-32006` for an unknown id, `-32007` for an unknown metric, `-32008` for a failed
+/// export and `-32009` where the query does not apply to this kind of run, as the method
+/// schemas of §6.8–§6.12 list them.
+pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<Value> {
+    let now = engine.sim_time();
+    match query {
+        Query::Node {
+            node,
+            t_ns,
+            include,
+            limit,
+        } => {
+            let id = node.index();
+            let row = engine
+                .node_list()
+                .into_iter()
+                .find(|r| r.node_id == id)
+                .ok_or_else(|| ServerError::UnknownId {
+                    kind: "node",
+                    id: id.to_string(),
+                })?;
+            let mut out = json!({
+                "node": id,
+                "t_ns": t_ns.unwrap_or(now),
+                "kind": node_kind(row.kind),
+                "label": row.label,
+                "profile_id": row.profile_id,
+            });
+            if row.actor_id != v2xw_record::wire::U32_NONE {
+                out["actor"] = json!(row.actor_id);
+            }
+            for section in include {
+                let value = match section.as_str() {
+                    "telemetry" => engine.telemetry_of(id).map(telemetry_json),
+                    "provenance" => Some(Value::Array(engine.provenance_chain())),
+                    other => engine.node_section(id, other, *limit),
+                };
+                if let Some(value) = value {
+                    out[section.as_str()] = value;
+                }
+            }
+            Ok(out)
+        }
+        Query::Link {
+            tx,
+            rx,
+            t_ns,
+            window_ns,
+        } => {
+            let nodes = engine.node_list();
+            for id in [tx, rx] {
+                if !nodes.iter().any(|r| r.node_id == id.index()) {
+                    return Err(ServerError::UnknownId {
+                        kind: "node",
+                        id: id.index().to_string(),
+                    });
+                }
+            }
+            let at = t_ns.unwrap_or(now);
+            let mut out = json!({
+                "kind": "radio",
+                "t_ns": at,
+                "window_ns": window_ns,
+                "provenance": engine.provenance_chain(),
+            });
+            match engine.link_facts(tx.index(), rx.index(), at, *window_ns) {
+                Some(Value::Object(facts)) => {
+                    for (k, v) in facts {
+                        out[k] = v;
+                    }
+                }
+                _ => {
+                    // Not an error: a pair of nodes that has exchanged nothing in the
+                    // window is a real answer, and `frames: 0` is what it looks like. The
+                    // geometry is still reported, because it is known.
+                    let a = nodes.iter().find(|r| r.node_id == tx.index());
+                    let b = nodes.iter().find(|r| r.node_id == rx.index());
+                    let distance = match (a, b) {
+                        (Some(a), Some(b)) => math::hypot(
+                            f64::from(a.pos_m[0] - b.pos_m[0]),
+                            f64::from(a.pos_m[1] - b.pos_m[1]),
+                        ),
+                        _ => f64::NAN,
+                    };
+                    out["frames"] = json!(0);
+                    out["distance_m"] = json!(math::quantize(distance, 3));
+                    out["note"] = json!(
+                        "no reception attempt on this pair inside the window: the \
+                         transmitter was out of the modelled candidate range, or did not \
+                         transmit"
+                    );
+                }
+            }
+            Ok(out)
+        }
+        Query::NamedLink { link, t_ns, .. } => Err(ServerError::UnknownId {
+            kind: "link",
+            id: format!(
+                "{link}: this build schedules no backend or backhaul delivery, so there \
+                 are no named links at t={}",
+                t_ns.unwrap_or(now)
+            ),
+        }),
+        Query::Entity {
+            entity,
+            t_ns,
+            limit,
+        } => {
+            let role = entity.split(':').next().unwrap_or(entity);
+            if !ROLES.contains(&role) {
+                return Err(ServerError::UnknownId {
+                    kind: "entity",
+                    id: entity.clone(),
+                });
+            }
+            let at = t_ns.unwrap_or(now);
+            match engine.entity_facts(entity, at, *limit) {
+                Some(facts) => Ok(facts),
+                None => Err(ServerError::NotSupportedHere(format!(
+                    "`{entity}` is not in this run's backend at t={at}: either the run \
+                     has no credential system (set security.protocol to \
+                     protocol/scms/camp or protocol/etsi/ts102941) and so publishes no \
+                     `backend.state`, or its credential system has no such entity (the \
+                     SCMS has no EA, the CCMS no RA)."
+                ))),
+            }
+        }
+        Query::Pki(q) => {
+            let Some(store) = engine.pki().filter(|s| !s.is_empty()) else {
+                return Err(ServerError::NotSupportedHere(
+                    "this run publishes no PKI view: it has no SCMS \
+                     (security.protocol protocol/scms/camp), or security.scms.pki_view is false"
+                        .to_string(),
+                ));
+            };
+            store.answer(q).ok_or_else(|| ServerError::UnknownId {
+                kind: q.kind(),
+                id: format!(
+                    "{}: not in this run's PKI records ({})",
+                    q.subject(),
+                    store.known(q)
+                ),
+            })
+        }
+        Query::Explain {
+            subject,
+            depth,
+            markdown,
+        } => {
+            let kind = subject.get("kind").and_then(Value::as_str).unwrap_or("");
+            let id = subject.get("id").and_then(Value::as_str).unwrap_or("");
+            let catalogue = engine.metric_catalogue();
+            if kind == "metric" && !catalogue.iter().any(|m| m.name == id) {
+                return Err(ServerError::UnknownMetric {
+                    metric: id.to_string(),
+                    did_you_mean: near_misses(&catalogue, id),
+                });
+            }
+            let chain: Vec<Value> = relevant_chain(engine.provenance_chain(), kind)
+                .into_iter()
+                .take(usize::from(*depth).max(1))
+                .collect();
+            let definition = catalogue
+                .iter()
+                .find(|m| m.name == id)
+                .map(|m| m.definition_md.clone())
+                .unwrap_or_else(|| format!("`{id}` — see the model card linked in the chain."));
+            let mut caveats = engine.caveats();
+            if let Some(metric) = catalogue.iter().find(|m| m.name == id) {
+                caveats.extend(metric.not_accounted.iter().cloned());
+            }
+            let mut out = json!({
+                "subject": subject,
+                "chain": chain,
+                "definition_md": definition,
+                "caveats": caveats,
+            });
+            if *markdown {
+                let chain_md = out["chain"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .map(|r| {
+                                format!(
+                                    "- `{}` {} — {}\n",
+                                    r.get("model_id").and_then(Value::as_str).unwrap_or("?"),
+                                    r.get("model_version")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("?"),
+                                    r.get("card_url").and_then(Value::as_str).unwrap_or("")
+                                )
+                            })
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
+                out["markdown"] = json!(format!(
+                    "## {id}\n\n{}\n\n### Models\n\n{chain_md}",
+                    out["definition_md"].as_str().unwrap_or("")
+                ));
+            }
+            Ok(out)
+        }
+        Query::MetricCatalogue => Ok(json!({
+            "columns": [],
+            "rows": [],
+            "catalogue": engine.metric_catalogue().iter().map(|m| {
+                let mut row = json!({
+                "name": m.name,
+                "unit": m.unit,
+                "dims": m.dims,
+                "agg": m.agg,
+                "visibility": m.visibility,
+                "definition_md": m.definition_md,
+                "not_accounted": m.not_accounted,
+                // The card's `Source` shape (`{"ref": …}`), which is what
+                // `MetricsQueryResult.catalogue[].source` declares.
+                "source": if m.source.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    json!({ "ref": m.source })
+                },
+                "base": m.base,
+                "health": m.health,
+                "series_id": m.series_id,
+                "aggregate": m.aggregate,
+                });
+                // U14: present only where the definition declares them.
+                if !m.stage_kinds.is_empty() {
+                    row["stage_kinds"] = json!(m.stage_kinds);
+                }
+                if let Some(c) = &m.coverage {
+                    row["coverage"] = c.clone();
+                }
+                if let Some(r) = &m.reference {
+                    row["reference"] = r.clone();
+                }
+                row
+            }).collect::<Vec<_>>(),
+        })),
+        Query::Metrics {
+            metrics,
+            t_from_ns,
+            t_to_ns,
+            bin_ns,
+            group_by,
+            filter,
+            limit,
+        } => {
+            let catalogue = engine.metric_catalogue();
+            // A grouped query names the metric itself (`latency_stage`), which is the base
+            // of the catalogue's breakdown series (`latency_stage[airtime]`) and may have
+            // no series of its own name.
+            let grouped = group_by.iter().any(|d| d.as_str() != "t");
+            let known = |row: &MetricInfo, m: &str| row.name == m || (grouped && row.base == m);
+            for m in metrics {
+                if !catalogue.iter().any(|row| known(row, m)) {
+                    return Err(ServerError::UnknownMetric {
+                        metric: m.clone(),
+                        did_you_mean: near_misses(&catalogue, m),
+                    });
+                }
+            }
+            let from = t_from_ns.unwrap_or(0);
+            let to = t_to_ns.unwrap_or(now).max(from);
+            // Grouped by a dimension other than time: one row per value of it, each metric
+            // pooled over the window (`GroupRow`), with its interval and its sample count.
+            if let Some(dim) = group_by.iter().find(|d| d.as_str() != "t") {
+                let mut columns =
+                    vec![json!({"name": dim, "type": "string", "visibility": "META"})];
+                // Keyed, not searched: a per-node breakdown of a dense run has thousands of
+                // groups, and finding each key in a list was keys x groups string compares.
+                let mut keys: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
+                let mut per_metric: Vec<std::collections::BTreeMap<String, GroupRow>> =
+                    Vec::with_capacity(metrics.len());
+                let mut pooled: Option<(u64, u64)> = None;
+                let mut pooled_block = 0u64;
+                for m in metrics {
+                    let row = catalogue
+                        .iter()
+                        .find(|row| known(row, m))
+                        .expect("checked above");
+                    for (suffix, ty, unit) in [
+                        ("", "float", row.unit.as_str()),
+                        (".lo", "float", row.unit.as_str()),
+                        (".hi", "float", row.unit.as_str()),
+                        (".n", "int", "count"),
+                    ] {
+                        columns.push(json!({"name": format!("{m}{suffix}"), "type": ty,
+                                            "unit": unit, "visibility": row.visibility}));
+                    }
+                    let groups = engine.metric_groups(m, dim, filter, from, to);
+                    let mut by_key = std::collections::BTreeMap::new();
+                    for g in groups {
+                        if let Some((a, b)) = g.span {
+                            pooled = Some(pooled.map_or((a, b), |(x, y)| (x.min(a), y.max(b))));
+                        }
+                        pooled_block = pooled_block.max(g.block_ns);
+                        keys.insert(g.key.clone());
+                        by_key.insert(g.key.clone(), g);
+                    }
+                    per_metric.push(by_key);
+                }
+                let mut keys: Vec<String> = keys.into_iter().collect();
+                keys.sort_by(|a, b| group_order(a).cmp(&group_order(b)).then_with(|| a.cmp(b)));
+                let q = |v: Option<f64>| v.map_or(Value::Null, |v| json!(math::quantize(v, 6)));
+                let rows: Vec<Value> = keys
+                    .iter()
+                    .take(*limit)
+                    .map(|k| {
+                        let mut row = vec![json!(k)];
+                        for groups in &per_metric {
+                            match groups.get(k) {
+                                Some(g) => {
+                                    row.push(q(g.value));
+                                    row.push(q(g.lo));
+                                    row.push(q(g.hi));
+                                    row.push(json!(g.n));
+                                }
+                                None => {
+                                    row.extend([Value::Null, Value::Null, Value::Null, json!(0)])
+                                }
+                            }
+                        }
+                        Value::Array(row)
+                    })
+                    .collect();
+                return Ok(json!({
+                    "columns": columns,
+                    "rows": rows,
+                    "truncated": keys.len() > *limit,
+                    "provenance": relevant_chain(engine.provenance_chain(), "metric"),
+                    "group_by": group_by,
+                    "pooled_from_ns": pooled.map(|(a, _)| a),
+                    "pooled_to_ns": pooled.map(|(_, b)| b),
+                    "pooled_block_ns": pooled_block,
+                }));
+            }
+            let bin = (*bin_ns).max(1);
+            let mut columns = vec![json!({"name": "t_ns", "type": "time_ns", "unit": "ns",
+                                          "visibility": "META"})];
+            // U13: a cumulative series' run-wide value as of `to` is its newest sample, not
+            // a mean of its bins.
+            let mut run_wide = serde_json::Map::new();
+            for m in metrics {
+                let row = catalogue
+                    .iter()
+                    .find(|row| &row.name == m)
+                    .expect("checked above");
+                columns.push(json!({"name": m, "type": "float", "unit": row.unit,
+                                    "visibility": row.visibility}));
+                if row.aggregate == "cumulative" {
+                    run_wide.insert(
+                        m.clone(),
+                        engine.metric_latest(m, to).map_or(
+                            Value::Null,
+                            |(t, v)| json!({"t_ns": t, "value": math::quantize(v, 6)}),
+                        ),
+                    );
+                }
+            }
+            // U15: fewer than `SPARSE_BINS` bins over the range (a fast-forwarded run's
+            // overview), and the samples come back one by one at their own instants.
+            let bins = (to - (from - from % bin)) / bin + 1;
+            let points: Option<Vec<Vec<(u64, f64)>>> = (bins < SPARSE_BINS)
+                .then(|| {
+                    metrics
+                        .iter()
+                        .map(|m| engine.metric_points(m, from, to, *limit))
+                        .collect()
+                })
+                .flatten();
+            if let Some(points) = points {
+                let instants: std::collections::BTreeSet<u64> =
+                    points.iter().flatten().map(|(t, _)| *t).collect();
+                let rows: Vec<Value> = instants
+                    .iter()
+                    .take(*limit)
+                    .map(|t| {
+                        let mut row = vec![json!(t)];
+                        for column in &points {
+                            row.push(
+                                column
+                                    .iter()
+                                    .find(|(at, _)| at == t)
+                                    .map_or(Value::Null, |(_, v)| json!(math::quantize(*v, 6))),
+                            );
+                        }
+                        Value::Array(row)
+                    })
+                    .collect();
+                return Ok(json!({
+                    "columns": columns,
+                    "truncated": instants.len() > *limit,
+                    "rows": rows,
+                    "provenance": relevant_chain(engine.provenance_chain(), "metric"),
+                    "group_by": group_by,
+                    "binned": false,
+                    "run_wide": run_wide,
+                }));
+            }
+            let mut series = Vec::with_capacity(metrics.len());
+            for m in metrics {
+                series.push(engine.metric_series(m, from, to, bin, *limit));
+            }
+            let depth = series.iter().map(Vec::len).min().unwrap_or(0);
+            let mut rows = Vec::with_capacity(depth);
+            for i in 0..depth {
+                let mut row = vec![json!(series[0][i].0)];
+                for column in &series {
+                    row.push(match column[i].1 {
+                        Some(v) => json!(math::quantize(v, 6)),
+                        None => Value::Null,
+                    });
+                }
+                rows.push(Value::Array(row));
+            }
+            let truncated = rows.len() >= *limit;
+            Ok(json!({
+                "columns": columns,
+                "rows": rows,
+                "truncated": truncated,
+                "provenance": relevant_chain(engine.provenance_chain(), "metric"),
+                "group_by": group_by,
+                "binned": true,
+                "run_wide": run_wide,
+            }))
+        }
+        Query::Plot { metrics, x, kind } => {
+            let catalogue = engine.metric_catalogue();
+            for m in metrics {
+                if !catalogue.iter().any(|row| &row.name == m) {
+                    return Err(ServerError::UnknownMetric {
+                        metric: m.clone(),
+                        did_you_mean: near_misses(&catalogue, m),
+                    });
+                }
+            }
+            let to = now.max(1);
+            let data: Vec<Value> = metrics
+                .iter()
+                .map(|m| {
+                    let series = engine.metric_series(m, 0, to, 1_000_000_000, 10_000);
+                    let xs: Vec<f64> = series.iter().map(|(t, _)| (*t as f64) * 1e-9).collect();
+                    let ys: Vec<Value> = series
+                        .iter()
+                        .map(|(_, v)| match v {
+                            Some(v) => json!(math::quantize(*v, 6)),
+                            None => Value::Null,
+                        })
+                        .collect();
+                    json!({"type": kind, "name": m, "x": xs, "y": ys})
+                })
+                .collect();
+            Ok(json!({
+                "figure": {"data": data,
+                           "layout": {"xaxis": {"title": x}, "yaxis": {"title": "value"}}},
+                "provenance": relevant_chain(engine.provenance_chain(), "metric"),
+            }))
+        }
+        export @ (Query::ExportDataset { .. } | Query::ExportRecording { .. }) => {
+            engine.export(export)
+        }
+    }
+}
+
+/// The order a group key sorts in: a range label (`20-40`, `1000+`) by its lower bound, a
+/// node index by its number, and anything else after them, by name. A lexical sort would
+/// put `100-120` before `20-40` on a distance axis.
+fn group_order(key: &str) -> (u8, u64) {
+    let lead: String = key.chars().take_while(char::is_ascii_digit).collect();
+    match lead.parse::<u64>() {
+        Ok(n) => (0, n),
+        Err(_) => (1, 0),
+    }
+}
+
+/// The provenance chain with the models that could have produced `kind` first.
+///
+/// A run registers every model it *could* use, and a live run's chain is therefore all of
+/// them — thirty-four for the Phase 1 scenario. §6.9's `depth` truncates the chain, so the
+/// order decides what a caller sees, and the first entry has to be one that plausibly
+/// produced the subject rather than whichever model happened to register first.
+fn relevant_chain(chain: Vec<Value>, kind: &str) -> Vec<Value> {
+    let wanted: &[&str] = match kind {
+        "metric" => &["metric"],
+        "node" => &["hardware-profile", "verification-policy", "clock", "gnss"],
+        "link" => &["propagation", "fading", "obstacle", "phy", "mac", "dcc"],
+        "actor" => &["mobility", "vru"],
+        _ => return chain,
+    };
+    let (mut first, rest): (Vec<Value>, Vec<Value>) = chain.into_iter().partition(|entry| {
+        entry
+            .get("family")
+            .and_then(Value::as_str)
+            .is_some_and(|f| wanted.contains(&f))
+    });
+    first.extend(rest);
+    first
+}
+
+/// Catalogue names sharing a prefix with `wanted`, for `-32007`'s `did_you_mean`.
+fn near_misses(catalogue: &[MetricInfo], wanted: &str) -> Vec<String> {
+    let head: String = wanted.chars().take(3).collect();
+    catalogue
+        .iter()
+        .filter(|m| !head.is_empty() && m.name.starts_with(&head))
+        .map(|m| m.name.clone())
+        .collect()
+}
+
+/// §3.1.3's `kind` as the `#/$defs/NodeKind` token.
+pub fn node_kind(code: u8) -> &'static str {
+    match code {
+        0 => "obu",
+        1 => "vru-device",
+        2 => "rsu",
+        3 => "base-station",
+        4 => "router",
+        5 => "backend-entity",
+        _ => "other",
+    }
+}
+
+/// One telemetry row as §6.8's `telemetry` section.
+///
+/// A field at its §3.5.2 unknown sentinel is omitted, so a client reading this JSON sees
+/// only what the run measured. `f32::NAN` and `u16::MAX`-style sentinels are exactly the
+/// values [`NodeTelemetry::unknown`] writes, so the test for "is it known" is the same one
+/// the wire format uses.
+pub fn telemetry_json(row: NodeTelemetry) -> Value {
+    let mut out = serde_json::Map::new();
+    out.insert("node_id".to_string(), json!(row.node_id));
+    let mut rate = |name: &str, v: f32, unit: &str| {
+        if v.is_finite() {
+            out.insert(
+                name.to_string(),
+                json!({"value": math::quantize(f64::from(v), 3), "unit": unit}),
+            );
+        }
+    };
+    rate("msgs_in_per_s", row.msgs_in_per_s, "1/s");
+    rate("msgs_out_per_s", row.msgs_out_per_s, "1/s");
+    rate("verifications_per_s", row.verifications_per_s, "1/s");
+    rate("verify_wait_p50_ms", row.verify_wait_p50_ms, "ms");
+    rate("verify_wait_p95_ms", row.verify_wait_p95_ms, "ms");
+    rate("airtime_ms_per_s", row.airtime_ms_per_s, "ms/s");
+    rate("pos_error_m", row.pos_error_m, "m");
+    rate("gnss_sigma_m", row.gnss_sigma_m, "m");
+    let mut permille = |name: &str, v: u16| {
+        if v != u16::MAX {
+            out.insert(name.to_string(), json!({"value": v, "unit": "per-mille"}));
+        }
+    };
+    permille("cbr_pm", row.cbr_pm);
+    permille("cpu_util_pm", row.cpu_util_pm);
+    permille("hsm_util_pm", row.hsm_util_pm);
+    if row.full_cert_msgs != u32::MAX {
+        out.insert(
+            "full_cert_msgs".to_string(),
+            json!({"value": row.full_cert_msgs, "unit": "-"}),
+        );
+    }
+    if row.tx_power_cdbm != i16::MIN {
+        out.insert(
+            "tx_power_dbm".to_string(),
+            json!({"value": math::quantize(f64::from(row.tx_power_cdbm) / 100.0, 2),
+                   "unit": "dBm"}),
+        );
+    }
+    Value::Object(out)
+}
+
+/// Every role id `inspect.entity` answers for: `backend` (the whole diagram), the SCMS's
+/// and the CCMS's authorities, the roadside units and the pooled devices.
+pub const ROLES: [&str; 24] = [
+    "backend",
+    "manager",
+    "pg",
+    "electors",
+    "root",
+    "ica",
+    "dcm",
+    "eca",
+    "lop",
+    "ra",
+    "la1",
+    "la2",
+    "pca",
+    "ma",
+    "crlg",
+    "crl-store",
+    "crl-broadcast",
+    "tlm",
+    "cpoc",
+    "rca",
+    "ea",
+    "aa",
+    "rsu",
+    "ee",
+];
+
+/// `inspect.entity`'s answer from one `backend.state` snapshot (`v2xw_proto::view`):
+/// `backend` is the whole view; a role id is that entity, the edges it is on and its recent
+/// messages. `None` when the snapshot has no such entity (a CCMS run asked for the RA).
+#[must_use]
+pub fn entity_answer(
+    entity: &str,
+    t: u64,
+    view: &Value,
+    limit: usize,
+    provenance: Vec<Value>,
+) -> Option<Value> {
+    if entity == "backend" {
+        return Some(json!({
+            "entity": "backend",
+            "t_ns": t,
+            "role": view["system"],
+            "state": view,
+            "provenance": provenance,
+        }));
+    }
+    let e = view["entities"]
+        .as_array()?
+        .iter()
+        .find(|e| e["id"].as_str() == Some(entity))?;
+    let touches =
+        |x: &&Value| x["from"].as_str() == Some(entity) || x["to"].as_str() == Some(entity);
+    let flows: Vec<Value> = view["edges"]
+        .as_array()
+        .map(|a| a.iter().filter(touches).take(limit).cloned().collect())
+        .unwrap_or_default();
+    let recent: Vec<Value> = view["recent"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .rev()
+                .filter(touches)
+                .take(limit)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut out = json!({
+        "entity": entity,
+        "t_ns": t,
+        "role": e["name"],
+        "state": e["state"],
+        "online": e["online"],
+        "traffic": e["traffic"],
+        "ops": e["ops"],
+        "flows": flows,
+        "recent": recent,
+        "provenance": provenance,
+    });
+    if let Some(n) = e["node"].as_u64() {
+        out["node"] = json!(n);
+    }
+    if e["queue"].is_object() {
+        out["queue"] = e["queue"].clone();
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod entity_tests {
+    use super::*;
+
+    fn view() -> Value {
+        json!({
+            "system": "scms",
+            "t": 3_000_000_000u64,
+            "entities": [
+                {"id": "ra", "name": "Registration Authority", "online": true, "node": 7,
+                 "state": {"requests": 4}, "traffic": {}, "ops": {},
+                 "queue": {"depth": 1}},
+                {"id": "pca", "name": "Pseudonym CA", "online": true, "node": null,
+                 "state": {"certs_issued": 12}, "traffic": {}, "ops": {}, "queue": null},
+            ],
+            "edges": [
+                {"from": "lop", "to": "ra", "messages": 3},
+                {"from": "ra", "to": "pca", "messages": 2},
+                {"from": "la1", "to": "la2", "messages": 1},
+            ],
+            "recent": [
+                {"from": "ra", "to": "pca", "step": "a"},
+                {"from": "la1", "to": "la2", "step": "b"},
+            ],
+        })
+    }
+
+    #[test]
+    fn an_entity_answer_carries_its_state_and_only_its_own_flows() {
+        let v = view();
+        let ra = entity_answer("ra", 3, &v, 10, Vec::new()).expect("ra is in the view");
+        assert_eq!(ra["state"]["requests"], 4);
+        assert_eq!(ra["node"], 7);
+        assert_eq!(ra["queue"]["depth"], 1);
+        assert_eq!(ra["flows"].as_array().map(Vec::len), Some(2));
+        assert_eq!(ra["recent"].as_array().map(Vec::len), Some(1));
+        let pca = entity_answer("pca", 3, &v, 10, Vec::new()).expect("pca");
+        assert!(pca.get("node").is_none() && pca.get("queue").is_none());
+        // The whole diagram, and an entity this system does not have.
+        let all = entity_answer("backend", 3, &v, 10, Vec::new()).expect("backend");
+        assert_eq!(all["state"]["entities"].as_array().map(Vec::len), Some(2));
+        assert!(entity_answer("ea", 3, &v, 10, Vec::new()).is_none());
+        // Every role the views publish is one the method accepts.
+        for id in [
+            "ra", "pca", "backend", "ea", "aa", "tlm", "cpoc", "rsu", "ee",
+        ] {
+            assert!(ROLES.contains(&id), "{id}");
+        }
+    }
+}

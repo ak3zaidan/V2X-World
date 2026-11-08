@@ -1,0 +1,7 @@
+# scms-base.yaml with the ML-KEM-768 key encapsulation (the 1609.2.1 PDU layer off).
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: scms-kem
+security:
+  kem: ml-kem-768

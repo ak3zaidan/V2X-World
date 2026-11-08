@@ -1,0 +1,27 @@
+# Mini release run 2 (train): Speed, Inconsistent state and Timing, with the grid's
+# roadside unit compromised (it re-targets reports it relays at an innocent car).
+schema: v2xw/scenario/1
+# Its own seed: no two runs share traffic, so a split by run is a split by traffic.
+seed: "0xD5_0002"
+meta: {base: base.yaml, name: dataset r2 consistency-timing}
+threats:
+  attackers:
+    - {id: threat/attacker/legacy/RandomSpeed, actor_ids: [12], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/StopAndGo, actor_ids: [52], schedule: {from_s: 15.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/PosSpeedInconsistent, actor_ids: [23], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/PosHeadingInconsistent, actor_ids: [35], schedule: {from_s: 20.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/EventualStop, actor_ids: [11], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/DelayedMessages, actor_ids: [57], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/OutOfOrder, actor_ids: [24], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/DataReplay, actor_ids: [42], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ConstSpeedOffset, actor_ids: [44], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SlowDrift, actor_ids: [19], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/AlongRoadOffset, actor_ids: [32], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SineWavePos, actor_ids: [26], schedule: {from_s: 35.0, to_s: 75.0}}
+  compromised_rsus: [0]
+  compromised_rsu_attack:
+    id: threat/attacker/compromised-rsu
+    params: {kind: PoisonForwardedReports, poison_prob: 0.5, from_s: 15.0, to_s: 75.0}
+exporters:
+  - id: dataset
+    opts: {run_id: r02, split: train, tier: mini, instrumented_receivers: 10, heldout_attacks: [ReversedHeading, HeadingOffset]}

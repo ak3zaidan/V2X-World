@@ -1,0 +1,23 @@
+# Edge case 6: a 10,000-entry CRL. The home provider's CRL already carries 10,000
+# revocations of earlier years when the run starts (`crl_background_entries`), signed as
+# one real series-1 linkage SecuredCrl, and the run's own revocations are appended.
+#
+# Expected: every vehicle and roadside unit downloads the RA's encoded CompositeCrlSpdu,
+# about 33 B per linkage entry (F2: 33.08 B at scale) plus the signature, the CRL
+# signer's certificate and the home CTL, so roughly 0.33 MB, not the 40 B/entry estimate
+# (0.40 MB). Receivers check every received pseudonym against 10,000 more entries.
+schema: v2xw/scenario/1
+meta:
+  name: edge-standing-crl-10k
+  description: >-
+    The conformance run with a standing 10,000-entry CRL at t0: CRL downloads must be
+    charged the real encoded composite CRL.
+  authors: [v2xw]
+  tags: [scms, edge-case, crl, scale]
+  created: "2026-10-18"
+  base: ../scms-conformance.yaml
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      crl_background_entries: 10000

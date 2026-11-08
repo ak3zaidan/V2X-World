@@ -1,0 +1,22 @@
+[package]
+name = "v2xw-demand"
+description = "Demand and route choice: dynamic traffic assignment, OD matrices, routes from link counts, GTFS public transport and trip purposes with departure-time profiles."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# Ids, time, deterministic math and keyed RNG streams, model cards.
+v2xw-core = { workspace = true }
+# The lane graph the routes run on, the projection GTFS stops are placed with.
+v2xw-world = { workspace = true }
+# The `Demand` trait, `TripRequest`, the vehicle classes and the native engine the
+# microscopic network loader drives.
+v2xw-mobility = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

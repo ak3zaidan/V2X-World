@@ -1,0 +1,51 @@
+[package]
+name = "v2xw-sec"
+description = "IEEE 1609.2 / TS 103 097 security envelope, cryptographic primitive descriptors and cost tables, real and modelled crypto backends, and the SCMS scientific core (butterfly keys, linkage values)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The contract crate: SimTime/Duration, NodeId/HwProfileId, WallClock and the IEEE 1609.2
+# epoch, SHA-256, the deterministic RNG streams, model cards, the `Model` base trait.
+v2xw-core = { workspace = true }
+# The *only* home of the generated IEEE 1609.2 / TS 103 097 bindings. `v2xw-sec` imports
+# them from `v2xw_msg::sec_types` and never `include!`s the generated file again — two
+# textual includes would define two unrelated sets of identically named types (see that
+# module's own documentation).
+v2xw-msg = { workspace = true }
+# Needed because this crate constructs `rasn` values directly (`OctetString`,
+# `FixedOctetString`, `Integer`). It must be the exact version the workspace pins: a
+# different minor would give a second, incompatible set of trait impls.
+rasn = { workspace = true }
+# Real ECDSA over NIST P-256, and the P-256 scalar/point arithmetic the butterfly-key
+# expansion and the ECQV reconstruction are written in.
+p256 = { workspace = true }
+# The bare AES-128 block permutation the two CAMP SCMS constructions are defined over.
+aes = { workspace = true }
+# SHA-256 / SHA-384 for KDF2, MAC1 and the P-384 elector hash.
+sha2 = { workspace = true }
+# MAC1 = HMAC-SHA-256 truncated to 128 bits, inside ECIES (1609.2a §5.3.5).
+hmac = { workspace = true }
+# AES-128-CCM, the only 1609.2 symmetric cipher in the US profile.
+ccm = { workspace = true }
+# ECDSA over NIST P-384 with SHA-384, for electors.
+p384 = { workspace = true }
+# Crate error type.
+thiserror = { workspace = true }
+# Card payloads and descriptor serialisation.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The golden-vector tests read the pinned reference vectors as JSON.
+serde_json = { workspace = true }
+
+# Host benchmark of the crate's own primitives (ratios that check the cost
+# recipes; never a device cost). `cargo bench -p v2xw-sec --bench primitives`.
+[[bench]]
+name = "primitives"
+harness = false

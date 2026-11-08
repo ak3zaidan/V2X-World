@@ -1,0 +1,24 @@
+# The mini release of the V2X-SCMS-MBD dataset (docs/dataset/schema.md, tier `mini`):
+# the live-atk family (the procedural grid, every US SCMS entity, the compressed SCMS
+# calendar with a 30 s CRL cadence, MA review 0 s, the deployed receiver's smoothed GNSS)
+# held at 60 vehicles from t = 0, with the legacy-window MA rule, report records on, 75 s.
+# Each run file adds its attackers and names the dataset exporter with its split.
+# Every attack runs on three vehicles across the runs, and its three start at different
+# points of their life: one from spawn (0 s), one about a quarter and one about half way
+# into the run, each to the run's end, so how long an attacker's certificate has been
+# heard does not tell it apart. The Heading family is held out of train
+# (heldout_attacks).
+schema: v2xw/scenario/1
+meta: {base: ../live-atk/base.yaml, name: dataset base}
+time: {duration_s: 75.0}
+actors:
+  vehicles:
+    demand: {fleet_size: 60}
+detection:
+  ma:
+    id: threat/ma/legacy-window
+security:
+  scms:
+    report_records: true
+metrics: [detection]
+threats: {attackers: []}

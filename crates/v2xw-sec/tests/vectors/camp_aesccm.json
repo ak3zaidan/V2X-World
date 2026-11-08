@@ -1,0 +1,86 @@
+{
+ "corpus": "camp-aesccm",
+ "source": {
+  "title": "CAMP SCMS crypto test vectors, aesccm.txt",
+  "id": "S6",
+  "url": "https://github.com/conz27/crypto-test-vectors/blob/dd5014e6c3136895744f1fe73734fa3592f37bd4/aesccm.txt",
+  "commit": "dd5014e6c3136895744f1fe73734fa3592f37bd4",
+  "sha256": "66493cbda2dd2f388bd27280ad1476f9b182cbb9c29d9fc181dd157e832fd4bd",
+  "licence": "none (repository has no licence file): values transcribed with citations, files not vendored",
+  "transcribed": "2026-10-16"
+ },
+ "vectors": [
+  {
+   "id": "aesccm.txt#1",
+   "cite": "CAMP aesccm.txt lines 20-39",
+   "in": {
+    "key": "e58d5c8f8c9ed9785679e08abc7c8116",
+    "nonce": "a9f593c09eaeea8bf0c1cf6a",
+    "plaintext": "0653b5714d1357f4995bddacbe10873951a1eba663718d1af35d2f0d52c79de49be622c4a6d90647ba2b004c3e8ae422fd27063afa19ad883dccbd97d98b8b0461b5671e75f19701c24042b8d3af79b9ff62bc448ef9440b1ea3f7e5c0f4bfefe3e326e62d5ee4cb4b4cfff30ad5f49a7981abf71617245b96e522e1add78a"
+   },
+   "out": {
+    "ciphertext_tag": "5f82b9fce34b94835395dd89d71fb758d2a3907fbf2fd58994a2b9cf8725af26f0b23853c27a06e35ee72cad827713c18fa5dda971d9baa7b42a301ff60c6e4ad651c1bb6ed4f25f7d0ff387a11627934cd11f86984ea3ac969dda9a020ad6424b0d393e3fb4b1119adf5cdb012a59753e41d47e5e5a8c3a118ed407049b56d53bf56cb38c0b20a2502d1da70b9761"
+   }
+  },
+  {
+   "id": "aesccm.txt#2",
+   "cite": "CAMP aesccm.txt lines 53-72",
+   "in": {
+    "key": "e58d5c8f8c9ed9785679e08abc7c8116",
+    "nonce": "a9f593c09eaeea8bf0c1cf6a",
+    "plaintext": "aca650ccccda604e16a8b54a3335e0bc2fd9444f33e3d9b82afe6f445357634974f0f1728cf113452321cbe5858304b01d4a14ae7f3b45980ee8033ad2a8599b78c29494c9e5f8945a8cade3eb5a30d156c0d83271626daddb650954093443fbac9701c02e5a973f39c2e1761a4b48c764bf6db215a54b285a06eca3af0a83f7"
+   },
+   "out": {
+    "ciphertext_tag": "f5775c416282a339dc66b56f5a3ad0ddacdb3f96efbd812b4d01f98686b5518b1fa4ebe5e85213e1c7ede704397ef3536fc8cf3df4fb52b7870e8eb2fd2fbcd5cf263231d2c09dcae5c31cdc99e36efbe5737bf067d58a0a535b242bcbca2a5604791e183cb0c2e5e851425e11b4e528237f123b5de8e349dd6d1a4506465f7257001080003872271900d3f39c9661fd"
+   }
+  },
+  {
+   "id": "aesccm.txt#3",
+   "cite": "CAMP aesccm.txt lines 86-106",
+   "in": {
+    "key": "e58d5c8f8c9ed9785679e08abc7c8116",
+    "nonce": "a9f593c09eaeea8bf0c1cf6a",
+    "plaintext": "d1aa8bbc04dfc92ffe2cb7748e70b02f5a91da14781223a712d44c4ba14a1c78eb02387fe73fdcbca8447056acaa9b5f94d5208972b706df9fc4c803eabb2bc58c3d8df4ac496c34cb6bab939478cb417995b2314daf7af3f4c8a8d5d57a03f0eb2b7bbd2d16babbf22c5b1eebff72c7dd4f912d5821f9a6bfa2d063ce6f6648df"
+   },
+   "out": {
+    "ciphertext_tag": "887b8731aa870a5834e2b751e77f804ed993a1cda44c7b34752bda8974a82eba805622e8839cdc184c885cb710576cbce657fb1af97711f01622458bc53cce8b3bd92b51b76c096a74241aace6c1956bca2611f35b189d547cf685aa17846a5d43c564653ffcef6123bff836e000df289a8feea4106c51c738c926856723bacdb3f5d0f87f7e29d94bf1b41de8063e1071"
+   }
+  },
+  {
+   "id": "aesccm.txt#4",
+   "cite": "CAMP aesccm.txt lines 121-140",
+   "in": {
+    "key": "b8453a728060f8d517baceed3829f4d9",
+    "nonce": "cfbce69c884d5babbbaaf9a3",
+    "plaintext": "f7629b73dae85a9bca45c42eb7fc1818dc74a60e13ae65a043e24b5a4d3ae04c273e7d6f42710f2d223d09eb7c1315718a5a1293d482e4c45c3e852e5106aad7b695a02c4854801a5efe937a6540bce8734e8141558c3433b1d4c733dc5ef9c47b5279aa46ee3d8bd33b0950be5c9ebdf18bcf069b6daf82ff1186912f0aba"
+   },
+   "out": {
+    "ciphertext_tag": "dede575b6efe390f2cbb4f368a711f6cdf69abd11af580b2bf4029f85eb835d1abddb30e9e9cf3f13cba3bcc2e918713d218af0d07cc614af69892afa986af2d5e60edb05d09d3b29e2a65b543ad6f26e5d76b660fe9184906a6315cd6b5355fa291a1e90c510df20e46c116e2180009c287659db8d45cc3968049fa29f08de5d156edf7b0dbc84e410f292868c4be"
+   }
+  },
+  {
+   "id": "aesccm.txt#5",
+   "cite": "CAMP aesccm.txt lines 154-173",
+   "in": {
+    "key": "b8453a728060f8d517baceed3829f4d9",
+    "nonce": "cfbce69c884d5babbbaaf9a3",
+    "plaintext": "29b4013f552fbce993544cc6605cb05c62a7894c4c99e6a12c5f9f2ee4dfbebad70cdd0893542240f28bb5fbb9090332ed110abfae6c4c6460d916f8994136575b5a6fd8db605fdf14cb81977aff7f99b5272580bf220133c691b09badc4d1fe7125fd17fdbfc103e3f00a4d8e5a6f1e3d3af2a908535de858e1ccd3db4d1835"
+   },
+   "out": {
+    "ciphertext_tag": "0008cd17e139df7d75aac7de5dd1b72861ba849345c203b3d0fdfd8cf75d6b275bef13694fb9de9cec0c87dceb8b9150b553b7217d22c9eaca7f017961c133adb3af2244ce3d0c77d41f77585c12ac5723becfa7e5472d4971e346f4a72f1d65a8e62554b700f17a3e8dc20bd21ef1aa0e3658322beaaea9317003b8ddb72ffdfa0834974152b95bade2df83d7eec455"
+   }
+  },
+  {
+   "id": "aesccm.txt#6",
+   "cite": "CAMP aesccm.txt lines 187-207",
+   "in": {
+    "key": "b8453a728060f8d517baceed3829f4d9",
+    "nonce": "cfbce69c884d5babbbaaf9a3",
+    "plaintext": "1d76bdf0626a7134beb28a90d54ed7796c4c9535465c090c4b583a8cd40ef0a3864e7c07ccaed140df6b9d73234e652f8ff425fc206f63dfab7dcdbbbe30411a14695e72a2bd8c4bfb1d6991db4f99eea7435e55261e37fdf57ce79df725c810192f5e6e0331ed62eb8a72c5b9da6dfd9748b3d168a69bab33319efd1e84ef2570"
+   },
+   "out": {
+    "ciphertext_tag": "34ca71d8d67c12a0584c0188e8c3d00d6f5198ea4f07ec1eb7fa582ec78c253e0aadb26610432d9cc1ecaf5471ccf74dd7b69862f321e65101dbda3a46b044e0fc9c13eeb7e0dfe33bc99f5efda24a2031dab4727c7b1b87420e11f2fdce048bc0ec862d498edd1b36f7ba83e59ef349a444194a4b1f68ea5aa05196187ed8ed684826c0c356a9b8eda55bd91c2ba1022b"
+   }
+  }
+ ]
+}

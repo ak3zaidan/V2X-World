@@ -1,0 +1,54 @@
+# ============================================================================
+# The hybrid post-quantum run (tests/pq-hybrid.yaml: Falcon-512 + P-256, `fragmenter/generic-sdu`) cut to
+# its first two live minutes, with the backend compressed so a revocation reaches the
+# roadside inside them: the RA's report shuffle closes after 5 s, the MA decides
+# automatically, and each CRL Generator publishes every 10 s. Relay-only vehicles upload
+# their reports through the roadside units and the units broadcast the CRL, both as
+# signed SDUs larger than the 1,400-octet WSMP MTU.
+# `crates/v2xw-engine/tests/pq_relay.rs` runs it to check that such an SDU is fragmented and acted on once
+# reassembled, and with `fragmenter/none` it is refused and never counted as sent.
+#
+# One attacker is added to the base's 3 % (`threats.attackers`, second entry): actor 112,
+# a passenger car that drives past a relay-only vehicle near a roadside unit, so a vehicle
+# report reaches the proxy through a unit. Node ids are those since `f4a0f5cc` (stable
+# vehicle ids, units at 0x4000_0000 + i), read from a `--record-level events` run on the
+# 9d0fbc2c release (see run; re-read them after any change to the draw): actor 112 is
+# node 21, revoked at 51.5 s; relay-only node 32 uploads its report on it through a unit
+# (first at 61.4 s), and relay-only nodes 24, 31 and 56 upload theirs on the base's
+# attacker node 58 the same way (4 relayed reporters, 26 relayed reports). The ids 56 and 82
+# this note named before were the pre-`f4a0f5cc` numbering.
+# The base's selection is unchanged (the first entry draws as before, per node, and wins
+# first): the one change is that this car attacks, and what follows from it.
+# ============================================================================
+schema: v2xw/scenario/1
+meta:
+  name: scms-pq-relay-repro
+  description: >-
+    Hybrid Falcon-512 + P-256 Midtown, 120 s live: relayed reports and roadside CRL frames
+    above the WSMP MTU, for the post-quantum relay tests.
+  authors: [v2xw]
+  tags: [scms, post-quantum, fragmentation, reproduction]
+  created: "2026-10-22"
+  base: tests/pq-hybrid.yaml
+time:
+  duration_s: 120.0
+  fast_forward: []
+security:
+  protocol:
+    id: protocol/scms/camp
+    params:
+      report_shuffle_window_s: 5.0
+      ma_review_s: 0.0
+      crl_cadence_s: 10.0
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.03
+      schedule:
+        from_s: 20.0
+        to_s: 172800.0
+    - id: threat/attacker/legacy/ConstPos
+      actor_ids: [112]
+      schedule:
+        from_s: 20.0
+        to_s: 172800.0

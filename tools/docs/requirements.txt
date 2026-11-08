@@ -1,0 +1,2 @@
+# The documentation site generator (reads mkdocs.yml).
+zensical==0.0.74

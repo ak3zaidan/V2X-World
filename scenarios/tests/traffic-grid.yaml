@@ -1,0 +1,78 @@
+# A Midtown-shaped signalised grid, 4 x 6 blocks of 274 x 80 m, two lanes each way, 25 mph,
+# 60 s fixed-time plans, Poisson demand at 1,500 veh/h, a fifth of the fleet equipped with
+# signed BSMs on DSRC so the network invariants are exercised. Variants override one field.
+schema: v2xw/scenario/1
+meta:
+  name: traffic-grid
+  description: Procedural Midtown-shaped grid, 1500 veh/h, 180 s.
+  authors: [v2xw]
+  tags: [traffic]
+seed: "0xC0FFEE_5EED"
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 180.0
+  warmup_s: 30.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      cols: 4
+      rows: 6
+      block_x_m: 274.0
+      block_y_m: 80.0
+      lanes_per_direction: 2
+      lane_width_m: 3.5
+      sidewalk_m: 2.0
+      speed_limit_mps: 11.176
+      signalised: true
+      cycle_s: 60.0
+      amber_s: 3.0
+      crossings: true
+      block_buildings: false
+      building_height_m: 30.0
+      rsu_at_junctions: false
+      corner_radius_m: 4.5
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: false
+  terrain:
+    dem: null
+actors:
+  vehicles:
+    equipped_fraction: 0.2
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 1500.0
+weather:
+  initial: clear
+  intensity: 0.0
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+net:
+  layer: wsmp
+messages:
+  sets: [bsm]
+  codec_tier: uper
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+metrics: [all]
+exporters: []

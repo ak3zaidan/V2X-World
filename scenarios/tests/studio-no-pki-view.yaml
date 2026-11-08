@@ -1,0 +1,9 @@
+# credential-lifecycle with the PKI view off, so the Certificates button opens the
+# single-provider Backend panel (inspector.spec.ts).
+schema: v2xw/scenario/1
+meta:
+  base: ../credential-lifecycle.yaml
+  name: studio-no-pki-view
+security:
+  scms:
+    pki_view: false

@@ -1,0 +1,30 @@
+# Attacker catalogue group 2 on attack-base.yaml: one attacker of each type from 20 s, on
+# actors present from the start.
+schema: v2xw/scenario/1
+meta: {base: attack-base.yaml, name: attack-catalogue-2}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPosOffset
+      actor_ids: [20]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/SineWavePos
+      actor_ids: [26]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/RandomSpeed
+      actor_ids: [33]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/HeadingOffset
+      actor_ids: [35]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/SlowDrift
+      actor_ids: [23]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/DelayedMessages
+      actor_ids: [15]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/ExpiredCert
+      actor_ids: [17]
+      schedule: {from_s: 20.0, to_s: 150.0}
+    - id: threat/attacker/legacy/PosSpeedInconsistent
+      actor_ids: [0]
+      schedule: {from_s: 20.0, to_s: 150.0}

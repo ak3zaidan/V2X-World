@@ -1,0 +1,80 @@
+[package]
+name = "v2xw-cli"
+description = "The `v2xw` command-line control surface."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# The tool is a library plus a thin binary: every command is a plain function over an
+# options struct, so the tests call them directly rather than shelling out to a binary and
+# parsing its output.
+[lib]
+name = "v2xw_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "v2xw"
+path = "src/main.rs"
+
+# The engine with the agent always on: the same program as `v2xw serve`, with the
+# engine server's own flags. One process, one command; the agent cannot be "offline".
+[[bin]]
+name = "v2xw-server"
+path = "src/bin/v2xw-server.rs"
+
+# The SUMO cross-validation and the city audit report their own wall time, so they live
+# where the workspace's one real clock does (`src/wall.rs`; the conformance firewall).
+[[bin]]
+name = "cross_validate"
+path = "src/bin/cross_validate.rs"
+
+[[bin]]
+name = "city_audit"
+path = "src/bin/city_audit.rs"
+
+[dependencies]
+v2xw-core = { workspace = true }
+v2xw-world = { workspace = true }
+v2xw-mobility = { workspace = true }
+v2xw-radio = { workspace = true }
+v2xw-net = { workspace = true }
+v2xw-msg = { workspace = true }
+v2xw-sec = { workspace = true }
+v2xw-node = { workspace = true }
+v2xw-proto = { workspace = true }
+v2xw-threat = { workspace = true }
+v2xw-metrics = { workspace = true }
+v2xw-record = { workspace = true }
+# `v2xw check-traffic`: the replay scene that resolves a recording's deltas, the same code
+# the Studio replays through.
+v2xw-wasm = { path = "../v2xw-wasm", version = "0.1.0" }
+v2xw-server = { workspace = true }
+# The kernel. Not a `workspace = true` entry because `v2xw-engine` is a workspace member
+# that the root manifest's shared dependency table does not list.
+v2xw-engine = { path = "../v2xw-engine", version = "0.1.0" }
+# `v2xw export-sumo`.
+v2xw-interop = { path = "../v2xw-interop", version = "0.1.0" }
+# `city_audit`'s invariant tables.
+v2xw-trafficval = { path = "../v2xw-trafficval", version = "0.1.0" }
+# The experiment runner behind `v2xw experiment`. Same reason it is a path dependency: the
+# root manifest's shared table does not list it. The dependency goes this way round on
+# purpose — the runner does not know about the command line, it takes a `RunExecutor`, and
+# `src/experiment.rs` is the implementation that calls `v2xw run`.
+v2xw-experiment = { path = "../v2xw-experiment", version = "0.1.0" }
+# `v2xw agent` and `v2xw serve`: the agent harness and its HTTP endpoints.
+v2xw-copilot = { path = "../v2xw-copilot", version = "0.1.0" }
+axum = { workspace = true }
+tokio = { workspace = true }
+
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `proc_pid_rusage`, for the memory footprint a long run reports per slice (`progress.rs`).
+libc = "0.2"
+# `v2xw energy`: scores a recording with the energy models; reads a YAML `--spec`.
+v2xw-energy = { workspace = true }
+serde_yml = { workspace = true }
+thiserror = { workspace = true }

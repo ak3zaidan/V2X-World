@@ -1,0 +1,9 @@
+# Companion to 0006 (one FIND per patch file): the generated FullIeeeTbsCtl::new takes the
+# quorum as Option<Integer> too, so the constructor matches the patched field.
+unit: sec_types.rs
+expect: 1
+@@FIND@@
+            quorum: Integer,
+@@REPLACE@@
+            quorum: Option<Integer>,
+@@END@@

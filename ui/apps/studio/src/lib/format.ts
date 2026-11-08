@@ -1,0 +1,322 @@
+/**
+ * Unit formatting for the HUD and inspector.
+ *
+ * Every function here knows the wire unit of the field it formats, taken from the tables in
+ * docs/protocol/vwp-v1.md §3.5.2 (per-mille, centi-dBm, KiB, ns, …), and it honours the
+ * "unknown/not-modelled" sentinels of §3.5.2: `0xFFFF` for `u16`, `0xFFFF_FFFF` for `u32`,
+ * `u64::MAX` for `u64` times and `NaN` for `f32`. A sentinel renders as `n/a`, never as a number —
+ * showing 65,535 neighbours because the tier does not model a neighbour table would be a lie.
+ */
+
+import { SENTINEL_U8, SENTINEL_U16, SENTINEL_U32, SENTINEL_U64 } from "@vwp/protocol";
+
+/** What the UI prints where the engine said "not modelled at this tier". */
+export const NA = "n/a";
+
+/**
+ * How many radios the run has — the live count, not the one the connection opened on.
+ *
+ * ## The defect this replaces
+ *
+ * This line used to print `hello.nodeCount`, which is the length of the node table in the `Hello`
+ * frame. `Hello` is sent **once, when the socket opens** (vwp-v1 §3.1), and it is a snapshot of the
+ * run at that instant. Start the engine the way its own banner suggests —
+ * `--scenario phase1-manhattan.yaml --paused --speed 0` — and connect: `run.status` answers
+ * `actors: 0, nodes: 0`, because the scenario's vehicle has not spawned yet. The node table is
+ * empty, and **nothing ever revises it**. Press play and the vehicle appears, telemetry starts
+ * flowing and `bytes_air` climbs to 1,468 B/s, while this line still reads `0`.
+ *
+ * Measured in the browser, on that exact command line: `helloNodes 0`, `poses 1`, `live 1`,
+ * `bytes_air 1468.000`, `radios 0`. A count that contradicts the panel next to it is worse than a
+ * blank, because a blank is not a claim.
+ *
+ * It was counting the right *kind* of thing at the wrong *time*. `run.status` reports `nodes` on
+ * every poll and is the run's own live answer, so that is what this reads; `Hello`'s table is the
+ * fallback for the moment before the first poll lands. And `0` on a run that has not started is
+ * not a number worth printing at all — "none yet" says the same thing without looking like a
+ * measurement of a running system.
+ */
+export function radioCount(liveNodes: number, helloNodes: number, runState: string): string {
+  const n = liveNodes > 0 ? liveNodes : helloNodes;
+  if (n > 0) return int(n);
+  return runState === "idle" || runState === "paused" ? "none yet" : int(0);
+}
+
+/** The radios in the node table, by what they are mounted on. */
+export interface RadioBreakdown {
+  readonly total: number;
+  /** On-board units: a radio on a vehicle. */
+  readonly vehicles: number;
+  /** A pedestrian's or a cyclist's device. */
+  readonly vru: number;
+  readonly roadside: number;
+}
+
+/**
+ * Count the node table's radios by kind (`NodeKind`: 0 on-board, 1 VRU device, 2 roadside).
+ *
+ * The inspector used to print "radios 82" beside "Select any of the 106 vehicles or roadside
+ * units": two numbers from two sources (the stream's node table and the engine's polled actor
+ * count) under words that made them sound like the same thing. Not every road user carries a radio
+ * — the equipped fraction, pedestrians without a device — and a roadside unit is a radio that is
+ * not a road user. The two are now named for what they count, and the radios are broken down.
+ */
+export function radioBreakdown(nodes: Iterable<{ readonly kind: number }>): RadioBreakdown {
+  let total = 0;
+  let vehicles = 0;
+  let vru = 0;
+  let roadside = 0;
+  for (const n of nodes) {
+    total++;
+    if (n.kind === 2) roadside++;
+    else if (n.kind === 1) vru++;
+    else vehicles++;
+  }
+  return { total, vehicles, vru, roadside };
+}
+
+/** "82 radios: 80 on vehicles, 2 roadside units" — only the parts that are there. */
+export function radioSentence(b: RadioBreakdown): string {
+  const parts: string[] = [];
+  if (b.vehicles > 0) parts.push(`${int(b.vehicles)} on vehicles`);
+  if (b.vru > 0) parts.push(`${int(b.vru)} carried by pedestrians or cyclists`);
+  if (b.roadside > 0) parts.push(`${int(b.roadside)} roadside unit${b.roadside === 1 ? "" : "s"}`);
+  const head = `${int(b.total)} radio${b.total === 1 ? "" : "s"}`;
+  return parts.length > 1 ? `${head}: ${parts.join(", ")}` : head;
+}
+
+/** §3.5.2 — `u16` at `0xFFFF` means unknown; at `0xFFFE`… it is a real value. */
+export function isU16Sentinel(v: number): boolean {
+  return v === SENTINEL_U16;
+}
+
+/** §3.5.2 — `u32` at `0xFFFF_FFFF` means unknown. */
+export function isU32Sentinel(v: number): boolean {
+  return v === SENTINEL_U32;
+}
+
+/** §3.5.2 — `u64` at `u64::MAX` means "none"/unknown (e.g. `next_topup_ns`). */
+export function isU64Sentinel(v: bigint): boolean {
+  return v === SENTINEL_U64;
+}
+
+/** §3.5.2 — `u8` at `0xFF`. */
+export function isU8Sentinel(v: number): boolean {
+  return v === SENTINEL_U8;
+}
+
+/** §3.5.2 — "any `u16` counter at its maximum means ≥ 65535", which is a value, not a sentinel. */
+function u16(v: number, render: (n: number) => string): string {
+  return isU16Sentinel(v) ? NA : render(v);
+}
+
+/** Group digits with thin separators: 1040 → "1,040". */
+export function int(v: number): string {
+  if (!Number.isFinite(v)) return NA;
+  return Math.round(v).toLocaleString("en-US");
+}
+
+/** A `u32` count, honouring the §3.5.2 sentinel. */
+export function countU32(v: number): string {
+  return isU32Sentinel(v) ? NA : int(v);
+}
+
+/** A `u16` count, honouring the §3.5.2 sentinel. */
+export function countU16(v: number): string {
+  return u16(v, int);
+}
+
+/** Fixed-precision number; `NaN` (the §3.5.2 f32 sentinel) renders as `n/a`. */
+export function num(v: number, digits = 1): string {
+  return Number.isFinite(v) ? v.toFixed(digits) : NA;
+}
+
+/** Per-mille (`*_pm`) as a percentage: 612 → "61.2 %". */
+export function permillePct(v: number, digits = 1): string {
+  return u16(v, (n) => `${(n / 10).toFixed(digits)} %`);
+}
+
+/** Per-mille as a 0–1 ratio: 420 → "0.420". */
+export function permilleRatio(v: number, digits = 3): string {
+  return u16(v, (n) => (n / 1000).toFixed(digits));
+}
+
+/** Per-mille as a number in `[0, 1]`, or `null` at the sentinel — for plotting. */
+export function permilleValue(v: number): number | null {
+  return isU16Sentinel(v) ? null : v / 1000;
+}
+
+/** centi-dBm (`tx_power_cdbm`) → dBm: 1700 → "17.0 dBm". */
+export function cdbm(v: number): string {
+  return v === -32768 ? NA : `${(v / 100).toFixed(1)} dBm`;
+}
+
+/** KiB (`ram_used_kib`) rendered in the largest sensible binary unit. */
+export function kib(v: number): string {
+  return isU32Sentinel(v) ? NA : bytes(v * 1024);
+}
+
+/** Bytes in binary units. Accepts the `u64` fields as `bigint`. */
+export function bytes(v: number | bigint): string {
+  if (typeof v === "bigint") {
+    if (isU64Sentinel(v)) return NA;
+    return bytes(Number(v));
+  }
+  if (!Number.isFinite(v)) return NA;
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let n = v;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n.toFixed(i === 0 ? 0 : n >= 100 ? 0 : 1)} ${units[i]}`;
+}
+
+/** A duration in nanoseconds as `1d 03h`, `4m 12s`, `840 ms`. */
+export function durationNs(ns: number | bigint): string {
+  const n = typeof ns === "bigint" ? (isU64Sentinel(ns) ? Number.NaN : Number(ns)) : ns;
+  if (!Number.isFinite(n)) return NA;
+  const seconds = n / 1e9;
+  if (Math.abs(seconds) < 1) return `${(n / 1e6).toFixed(0)} ms`;
+  const abs = Math.abs(seconds);
+  const sign = seconds < 0 ? "−" : "";
+  if (abs < 60) return `${sign}${abs.toFixed(1)} s`;
+  const d = Math.floor(abs / 86400);
+  const h = Math.floor((abs % 86400) / 3600);
+  const m = Math.floor((abs % 3600) / 60);
+  const s = Math.floor(abs % 60);
+  if (d > 0) return `${sign}${d}d ${String(h).padStart(2, "0")}h`;
+  if (h > 0) return `${sign}${h}h ${String(m).padStart(2, "0")}m`;
+  return `${sign}${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+/**
+ * Simulated time as `hh:mm:ss.mmm`, the form the scrub bar and event markers use; from a day on,
+ * `1d 02:03:04` — a run of days counts its days, and the milliseconds stop meaning anything there.
+ */
+export function simClock(ns: number | bigint): string {
+  const n = typeof ns === "bigint" ? Number(ns) : ns;
+  if (!Number.isFinite(n)) return NA;
+  const total = n / 1e9;
+  if (total >= 86400) {
+    const d = Math.floor(total / 86400);
+    const rem = total % 86400;
+    const hh = String(Math.floor(rem / 3600)).padStart(2, "0");
+    const mm = String(Math.floor((rem % 3600) / 60)).padStart(2, "0");
+    const ss = String(Math.floor(rem % 60)).padStart(2, "0");
+    return `${d}d ${hh}:${mm}:${ss}`;
+  }
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = Math.floor(total % 60);
+  const ms = Math.floor((total % 1) * 1000);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * The run's own clock at a simulated instant, as `Thu 08:15`: the scenario's `time.t0` (`Hello`'s
+ * `t0_wall_ns`) plus the simulated time, in local mean time at the world's origin (longitude / 15°
+ * an hour) — the clock the scene's sun and the engine's headlamp rule read, so the label and the
+ * light agree. Empty when the run has no `t0`.
+ */
+export function localClock(t0UnixS: number | undefined, originLonDeg: number, simNs: number): string {
+  const t0 = t0UnixS ?? 0;
+  if (!Number.isFinite(t0) || t0 === 0 || !Number.isFinite(simNs)) return "";
+  const local = t0 + simNs / 1e9 + (Number.isFinite(originLonDeg) ? originLonDeg / 15 : 0) * 3600;
+  const date = new Date(Math.floor(local) * 1000);
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const mm = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${WEEKDAYS[date.getUTCDay()]} ${hh}:${mm}`;
+}
+
+/**
+ * A simulated-time axis tick, in the unit the visible span reads in: seconds for a few minutes,
+ * `h:mm` for hours, `1d 06h` for days.
+ */
+export function axisTime(seconds: number, spanS: number): string {
+  if (!Number.isFinite(seconds)) return "—";
+  if (spanS < 900) return `${Math.round(seconds)}`;
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (spanS >= 2 * 86400) return d > 0 ? `${d}d ${String(h).padStart(2, "0")}h` : `${h}h`;
+  const hm = `${d * 24 + h}:${String(m).padStart(2, "0")}`;
+  return hm;
+}
+
+/**
+ * Where a simulated-time axis puts its ticks: on round minutes, hours or days, about `count` of
+ * them across `[from, to]` seconds. uPlot's own splits are decimal (every 20,000 s), which on a day
+ * puts no tick on any hour a reader would look for.
+ */
+export function axisTimeSplits(from: number, to: number, count = 6): number[] {
+  const span = to - from;
+  if (!(span > 0)) return [from];
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800];
+  const step = steps.find((s) => span / s <= count) ?? steps[steps.length - 1];
+  const out: number[] = [];
+  for (let t = Math.ceil(from / step) * step; t <= to; t += step) out.push(t);
+  return out;
+}
+
+/** A signed nanosecond offset (`clock_offset_ns`) in the largest readable unit. */
+export function signedNs(ns: bigint): string {
+  if (isU64Sentinel(ns)) return NA;
+  const n = Number(ns);
+  const sign = n < 0 ? "−" : "+";
+  const a = Math.abs(n);
+  if (a < 1000) return `${sign}${a} ns`;
+  if (a < 1e6) return `${sign}${(a / 1000).toFixed(1)} µs`;
+  if (a < 1e9) return `${sign}${(a / 1e6).toFixed(2)} ms`;
+  return `${sign}${(a / 1e9).toFixed(3)} s`;
+}
+
+/** First 4 and last 2 bytes of a digest, the form the HUD shows: `7f3a…9c`. */
+export function shortDigest(hex: string): string {
+  if (hex.length <= 8) return hex;
+  return `${hex.slice(0, 4)}…${hex.slice(-2)}`;
+}
+
+/** Lower-case hex of a byte array. */
+export function hex(bytesIn: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < bytesIn.length; i++) out += bytesIn[i].toString(16).padStart(2, "0");
+  return out;
+}
+
+/** §3.5.2 — `dcc_state`: 0 RELAXED … 5 C-V2X congestion control, `0xFFFF` n/a. */
+export const DCC_STATES = ["RELAXED", "ACTIVE_1", "ACTIVE_2", "ACTIVE_3", "RESTRICTIVE", "CV2X_CC"] as const;
+export function dccState(v: number): string {
+  if (isU16Sentinel(v)) return NA;
+  return DCC_STATES[v] ?? `state ${v}`;
+}
+
+/** §3.5.2 — `gnss_fix`: 0 none … 6 dead-reckoning. */
+export const GNSS_FIXES = ["none", "2D", "3D", "DGNSS", "RTK-float", "RTK-fix", "dead-reckoning"] as const;
+export function gnssFix(v: number): string {
+  if (isU8Sentinel(v)) return NA;
+  return GNSS_FIXES[v] ?? `fix ${v}`;
+}
+
+/** §3.5.2 — `node_state`: 0 off … 6 compromised (6 is ground truth). */
+export const NODE_STATES = ["off", "booting", "active", "parked", "degraded", "down", "compromised"] as const;
+export function nodeState(v: number): string {
+  if (isU8Sentinel(v)) return NA;
+  return NODE_STATES[v] ?? `state ${v}`;
+}
+
+/** §3.5.2 — `verify_policy`: 0 verify-all, 1 on-demand, 2 prioritized. */
+export const VERIFY_POLICIES = ["verify-all", "on-demand", "prioritized"] as const;
+export function verifyPolicy(v: number): string {
+  if (isU8Sentinel(v)) return NA;
+  return VERIFY_POLICIES[v] ?? `policy ${v}`;
+}
+
+/** §3.1.3 — node `kind`. */
+export const NODE_KINDS = ["obu", "vru-device", "rsu", "base-station", "router", "backend-entity", "other"] as const;
+
+/** §3.8 — `subject_kind` of a provenance entry. */
+export const PROV_SUBJECT_KINDS = ["value", "node", "link", "actor", "metric", "channel", "world"] as const;

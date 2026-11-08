@@ -1,0 +1,23 @@
+# Edge case 12 and mass revocation: three liars in ten (ConstPos) instead of one, so the
+# MA works many cases at once.
+#
+# Expected: more reports and more cases, each through the CV-pilot manual review (8 h),
+# all decided cases on the next business-day CRL, one CRL entry per revoked device's
+# chain pair, refused receptions of every revoked liar in the windows after the CRL, and
+# the CRL a vehicle downloads grows by about 33 B per entry.
+schema: v2xw/scenario/1
+meta:
+  name: edge-many-cases
+  description: >-
+    The conformance run with 30 % ConstPos liars: many concurrent MA cases, a longer CRL.
+  authors: [v2xw]
+  tags: [scms, edge-case, misbehaviour, revocation]
+  created: "2026-10-18"
+  base: ../scms-conformance.yaml
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.3
+      schedule:
+        from_s: 60.0
+        to_s: 433200.0

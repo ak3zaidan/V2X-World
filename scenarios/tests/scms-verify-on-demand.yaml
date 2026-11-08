@@ -1,0 +1,7 @@
+# scms-base.yaml with verification_policy on-demand.
+schema: v2xw/scenario/1
+meta:
+  base: scms-base.yaml
+  name: scms-verify-on-demand
+security:
+  verification_policy: on-demand

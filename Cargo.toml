@@ -1,0 +1,146 @@
+# V2X World Simulator — Cargo workspace root. The crate layering is described in
+# docs/crates.md.
+
+[workspace]
+resolver = "3"
+# `tests/conformance` is the conformance kit. It is a member rather
+# than a loose directory because a suite that no `cargo test` reaches is documentation, not
+# a test; it is outside `crates/` because it is not part of the engine.
+members = ["crates/*", "tests/conformance"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.86"
+repository = "https://github.com/ak3zaidan/V2X-World"
+homepage = "https://ak3zaidan.github.io/V2X-World/"
+authors = ["Ahmed Zaidan"]
+
+# Shared third-party dependencies, all build-checked against the pinned toolchain.
+# Member crates opt in with `dep = { workspace = true }`.
+[workspace.dependencies]
+# --- serialization / config -------------------------------------------------
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+# --- errors -----------------------------------------------------------------
+thiserror = "2"
+anyhow = "1"
+# --- determinism: RNG and hashing ------------------------------------------
+rand = "0.9"
+rand_chacha = "0.9"
+sha2 = "0.10"
+# --- numerics / containers --------------------------------------------------
+libm = "0.2"
+ordered-float = "5"
+smallvec = "1"
+hashbrown = "0.15"
+indexmap = "2"
+# --- observability ----------------------------------------------------------
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# --- CLI / server -----------------------------------------------------------
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+parking_lot = "0.12"
+rayon = "1"
+# --- recording / export ----------------------------------------------------
+arrow = "56"
+parquet = "56"
+mcap = "0.25"
+flatbuffers = "25"
+# --- security / messages ----------------------------------------------------
+p256 = "0.13"
+# Raw AES-128 block permutation. Needed by `v2xw-sec` for the two CAMP SCMS
+# constructions, which are defined in terms of the bare block cipher and not of any
+# mode: butterfly-key expansion f(k, i, j) evaluates AES three times over consecutive
+# 128-bit blocks (CAMP SCP1), and a pre-linkage value is an AES Davies-Meyer
+# compression truncated to 72 bits (CAMP SCP2). `default-features = false` drops the
+# `zeroize` hookup this simulator has no use for. AES is a fixed permutation, so the
+# hardware-accelerated and software paths agree bit for bit and the choice cannot
+# affect determinism.
+aes = { version = "0.8", default-features = false }
+# The rest of the IEEE 1609.2 primitive set, from the RustCrypto crates. `hmac` is MAC1 (HMAC-SHA-256 truncated to 128 bits) inside
+# ECIES; `ccm` is AES-128-CCM (12-byte nonce, 16-byte tag) for every 1609.2
+# `EncryptedData`; `p384` is ECDSA over NIST P-384 with SHA-384, the elector curve.
+# All three are deterministic functions of their inputs (signing uses RFC 6979), so none
+# can affect run determinism.
+hmac = "0.12"
+ccm = { version = "0.5", default-features = false }
+p384 = "0.13"
+rasn = "0.28"
+# ASN.1 -> Rust code generator, used only from `v2xw-msg`'s build script. Emits `rasn`-annotated types from the ETSI forge modules. 0.16 is the
+# version verified end to end on the pinned 1.98.1 toolchain: it
+# generates Rust that compiles for the ETSI stack (and does not for SAE J2735, which
+# is why the BSM codec is hand-written).
+rasn-compiler = "0.16"
+# --- geometry / spatial indices ---------------------------------------------
+geo = "0.31"
+rstar = "0.12"
+# --- importers ---------------------------------------------------------------
+# Streaming XML pull parser for the OSM importer. Chosen over a
+# DOM parser because a city extract is tens of megabytes and the importer needs one
+# pass over it; `default-features = false` drops the `encoding` feature, so the reader
+# accepts UTF-8 only, which is what the OSM XML schema mandates.
+quick-xml = { version = "0.42", default-features = false }
+
+# --- internal crates --------------------------------------------------------
+v2xw-core = { path = "crates/v2xw-core", version = "0.1.0" }
+v2xw-world = { path = "crates/v2xw-world", version = "0.1.0" }
+v2xw-mobility = { path = "crates/v2xw-mobility", version = "0.1.0" }
+v2xw-radio = { path = "crates/v2xw-radio", version = "0.1.0" }
+v2xw-net = { path = "crates/v2xw-net", version = "0.1.0" }
+v2xw-msg = { path = "crates/v2xw-msg", version = "0.1.0" }
+v2xw-sec = { path = "crates/v2xw-sec", version = "0.1.0" }
+v2xw-node = { path = "crates/v2xw-node", version = "0.1.0" }
+v2xw-proto = { path = "crates/v2xw-proto", version = "0.1.0" }
+v2xw-threat = { path = "crates/v2xw-threat", version = "0.1.0" }
+v2xw-metrics = { path = "crates/v2xw-metrics", version = "0.1.0" }
+v2xw-energy = { path = "crates/v2xw-energy", version = "0.1.0" }
+v2xw-record = { path = "crates/v2xw-record", version = "0.1.0" }
+v2xw-server = { path = "crates/v2xw-server", version = "0.1.0" }
+
+# Third-party dependencies are optimised in dev and test builds. The engine's suites run the
+# real cryptography of the SCMS (P-256/P-384 arithmetic, ChaCha, SHA-2, COER) and an unoptimised
+# RustCrypto field multiply is tens of times slower (the SCMS suite took about 25 minutes).
+# opt-level changes no result: Rust never contracts or reorders floating point, and overflow
+# checks and debug assertions follow `debug-assertions`, which stays on. The workspace's own
+# crates stay at opt-level 0 so an edit rebuilds as fast as before.
+[profile.dev.package."*"]
+opt-level = 2
+
+# In test builds the workspace crates on a run's hot path are optimised too: RustCrypto's
+# field arithmetic is `#[inline]`, so it is compiled into `v2xw-sec` at `v2xw-sec`'s level, and
+# the per-reception work (obstacle ray tests, RNG streams, metric views) is the workspace's own.
+# `cargo build`/`check` keep opt-level 0 for them, and the engine crate (whose many test
+# binaries would each pay the optimiser) stays at 0 in tests.
+[profile.test.package.v2xw-core]
+opt-level = 1
+[profile.test.package.v2xw-msg]
+opt-level = 1
+[profile.test.package.v2xw-sec]
+opt-level = 1
+[profile.test.package.v2xw-world]
+opt-level = 1
+[profile.test.package.v2xw-radio]
+opt-level = 1
+[profile.test.package.v2xw-metrics]
+opt-level = 1
+[profile.test.package.v2xw-mobility]
+opt-level = 1
+[profile.test.package.v2xw-node]
+opt-level = 1
+[profile.test.package.v2xw-proto]
+opt-level = 1
+[profile.test.package.v2xw-record]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+debug = true

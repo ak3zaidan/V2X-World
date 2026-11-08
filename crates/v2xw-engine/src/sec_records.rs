@@ -1,0 +1,339 @@
+//! The records the security lifecycle and the backend put in a recording.
+//!
+//! Three of them are the catalogue's own channels with a reader already in
+//! `v2xw-metrics` — `proto.revocation` (the revocation decomposition, PUBLIC), `sec.cert`
+//! (credential lifecycle events) and `net.bytes` via [`crate::records::NetBytes`] — and are
+//! written through the reader's view, so writer and reader cannot disagree about a field.
+//! Two are new and have no reader outside this crate yet:
+//!
+//! * `sec.pseudonym` — one row per pseudonym change, naming every identifier that changed
+//!   together (certificate digest, the BSM temporary ID or CAM station ID, and the
+//!   link-layer source address) and what the pool looked like afterwards;
+//! * `node.security` — one row per node per telemetry window: its certificate pool, its
+//!   current pseudonym, its backend link and its revocation state. This is what a chase
+//!   view's security panel reads.
+//!
+//! `privacy.link` is `v2xw-threat`'s own record, written by the passive observer.
+
+use v2xw_core::ctx::{Record, Visibility};
+use v2xw_core::ids::NodeId;
+use v2xw_core::time::SimTime;
+use v2xw_metrics::channels::{ProtoRevocationView, SecCertView};
+
+/// `proto.revocation` — one stage of one revocation.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct ProtoRevocation(pub ProtoRevocationView);
+
+impl Record for ProtoRevocation {
+    const CHANNEL: &'static str = "proto.revocation";
+    const VISIBILITY: Visibility = Visibility::Public;
+}
+
+impl ProtoRevocation {
+    /// One stage.
+    #[must_use]
+    pub fn stage(
+        t: SimTime,
+        stage: &str,
+        id: &str,
+        size_bytes: Option<u64>,
+        entries: Option<u64>,
+        node: Option<NodeId>,
+    ) -> Self {
+        ProtoRevocation(ProtoRevocationView {
+            t,
+            stage: stage.to_string(),
+            id: id.to_string(),
+            size_bytes,
+            entries,
+            node,
+        })
+    }
+}
+
+/// `sec.cert` — a credential lifecycle event: `change`, `expire`, `top-up`, `revoked`,
+/// `topup-refused`, `reenrolled`, `reenrol-refused` and, under the CCMS,
+/// `trust-list-installed` (a newer ECTL or CA-CRL from the Distribution Centre).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct SecCert(pub SecCertView);
+
+impl Record for SecCert {
+    const CHANNEL: &'static str = "sec.cert";
+    const VISIBILITY: Visibility = Visibility::Node;
+}
+
+impl SecCert {
+    /// One event.
+    #[must_use]
+    pub fn new(
+        t: SimTime,
+        node: NodeId,
+        event: &str,
+        digest: Option<String>,
+        bytes: Option<u64>,
+    ) -> Self {
+        SecCert(SecCertView {
+            t,
+            node,
+            event: event.to_string(),
+            digest,
+            bytes,
+        })
+    }
+}
+
+/// `sec.pseudonym` — one pseudonym change.
+///
+/// A change is only a change if **every** identifier a passive observer can read moves
+/// together: the certificate (its `HashedId8`), the application-layer temporary identity
+/// (the BSM `id`, SAE J2735 DE_TemporaryID, which SAE J2945/1 changes together with the
+/// certificate; the CAM `stationID`, which ETSI TR 103 415 requires to change with the
+/// authorization ticket), and the link-layer source address (the 802.11 MAC address, which
+/// IEEE 1609.4 lets a device change for privacy, or the PC5 Layer-2 ID, which
+/// 3GPP TS 23.285 changes with the application-layer ID). Leaving any one behind lets an
+/// observer link the old pseudonym to the new one through it [TR 103 415 §5; Wiedersheim
+/// et al. WONS 2010]. The record carries all three before and after, so a test can check
+/// that none stayed behind. Clause numbers are not given here because the cited sources
+/// does not pin them; the requirement itself is uncontroversial across the three.
+///
+/// The frame model carries no link-layer address field, so the address is modelled as a
+/// function of the pseudonym ([`crate::phase2::l2_address`]): it changes exactly when the
+/// certificate does, which is the property the record exists to show.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SecPseudonymView {
+    /// The instant of the change.
+    pub t: SimTime,
+    /// The node.
+    pub node: NodeId,
+    /// Why: `age`, `distance`, `expired`, `revoked`, `startup`.
+    pub reason: String,
+    /// The previous certificate digest, hex.
+    pub old_digest: Option<String>,
+    /// The new certificate digest, hex.
+    pub new_digest: Option<String>,
+    /// The previous temporary ID (BSM `id` / CAM `stationID`), hex.
+    pub old_temp_id: Option<String>,
+    /// The new one.
+    pub new_temp_id: Option<String>,
+    /// The previous link-layer source address, hex.
+    pub old_l2: Option<String>,
+    /// The new one.
+    pub new_l2: Option<String>,
+    /// The new certificate's i-period and index.
+    pub i: u32,
+    /// Its `j`.
+    pub j: u32,
+    /// Certificates in the pool valid at `t`, after the change.
+    pub pool_valid: u32,
+    /// How many changes this node has made.
+    pub changes: u32,
+}
+
+/// The `sec.pseudonym` record.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct SecPseudonym(pub SecPseudonymView);
+
+impl Record for SecPseudonym {
+    const CHANNEL: &'static str = "sec.pseudonym";
+    const VISIBILITY: Visibility = Visibility::Node;
+}
+
+/// `node.security` — what a chase view's security panel shows for one node.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NodeSecurityView {
+    /// The instant.
+    pub t: SimTime,
+    /// The node.
+    pub node: NodeId,
+    /// The credential protocol (`protocol/scms/camp`, `protocol/etsi/ts102941`).
+    pub protocol: String,
+    /// The current pseudonym's certificate digest, hex; `None` when the node holds no
+    /// usable certificate and therefore cannot sign.
+    pub pseudonym: Option<String>,
+    /// Its temporary ID (BSM `id` / CAM `stationID`), hex.
+    pub temp_id: Option<String>,
+    /// Its i-period and index.
+    pub cert_i: Option<u32>,
+    /// Its `j`.
+    pub cert_j: Option<u32>,
+    /// When it stops being valid, ns.
+    pub cert_valid_until: Option<SimTime>,
+    /// Certificates valid now.
+    pub pool_valid: u32,
+    /// Certificates held for later periods.
+    pub pool_preloaded: u32,
+    /// Certificates stored at all.
+    pub pool_stored: u32,
+    /// The last i-period the pool reaches.
+    pub pool_last_period: Option<u32>,
+    /// Pseudonym changes so far.
+    pub changes: u32,
+    /// When the rotation rule next changes the pseudonym, ns (U8,
+    /// `CertStore::next_change_at`): the earliest instant, the rule's distance aside. `None`
+    /// with no rotation policy or no active credential.
+    #[serde(default)]
+    pub next_change: Option<SimTime>,
+    /// Why it changes then: `age`, `distance` or `expired`.
+    #[serde(default)]
+    pub next_change_reason: Option<String>,
+    /// The change also waits for the distance, which the route decides (J2945/1).
+    #[serde(default)]
+    pub next_change_needs_distance: bool,
+    /// Whether a top-up is in flight.
+    pub topup_in_flight: bool,
+    /// When the device next asks for a batch, ns: the start of the i-period at which its
+    /// pool would reach `topup_below_periods` periods ahead. `None` while one is in flight,
+    /// for a device that is revoked or blocklisted, or with top-ups turned off.
+    #[serde(default)]
+    pub next_topup: Option<SimTime>,
+    /// The backend access: `cellular`, `rsu-relay`, `offline`.
+    pub link: String,
+    /// Whether that access is usable now (a serving cell, a relay in range).
+    pub link_up: bool,
+    /// Misbehaviour reports waiting in the outbox for connectivity.
+    pub outbox_reports: u32,
+    /// Reports this node has uploaded.
+    pub reports_uploaded: u32,
+    /// CRL entries installed.
+    pub crl_entries: u32,
+    /// The version of the composite CRL this node holds whole: the publication count of
+    /// its providers' lists, summed (a re-issue at `nextCrl` is a new version), as
+    /// `pki.state`'s CRL heads count them. It was the list's entry count.
+    pub crl_version: u32,
+    /// Whether this node found itself on the CRL and stopped transmitting.
+    pub self_revoked: bool,
+    /// The signed CRLs this node holds, one per `(crlCraca, crlSeries)`, as its own
+    /// receiver verified and installed them (OF-3: an empty list still has a CRACA, a
+    /// series and a `nextCrl`, which the overdue rule reads). Empty and omitted for a node
+    /// that holds none (the PDU layer off).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub crls: Vec<HeldCrlView>,
+}
+
+/// One signed CRL a node holds (`node.security.crls`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HeldCrlView {
+    /// `crlCraca`, HashedId8, hex.
+    pub craca: String,
+    /// `crlSeries`.
+    pub series: u16,
+    /// Its place in the series: `crlSerial` (a hash CRL) or `iRev · 256 + indexWithinI`
+    /// (a linkage CRL).
+    pub counter: u32,
+    /// `issueDate`, Time32 (seconds since 2004-01-01 TAI).
+    pub issue_date: u32,
+    /// `nextCrl`, Time32.
+    pub next_crl: u32,
+}
+
+impl HeldCrlView {
+    /// The record's view of a held CRL.
+    #[must_use]
+    pub fn of(c: &v2xw_node::rxval::HeldCrl) -> Self {
+        Self {
+            craca: v2xw_core::hash::hex_encode(&c.craca),
+            series: c.series,
+            counter: c.counter,
+            issue_date: c.issue_date,
+            next_crl: c.next_crl,
+        }
+    }
+}
+
+/// The `node.security` record.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct NodeSecurity(pub NodeSecurityView);
+
+impl Record for NodeSecurity {
+    const CHANNEL: &'static str = "node.security";
+    const VISIBILITY: Visibility = Visibility::Node;
+}
+
+/// `backend.state` — every credential-system entity, the roadside units and the vehicles,
+/// with the traffic between them, as the Backend view draws it
+/// (`v2xw_proto::view::BackendView`). Published once a simulated second while a
+/// credential system runs.
+///
+/// PUBLIC: it carries counts and role ids, never a vehicle's identity or a ground-truth
+/// label (which vehicles were attackers is not in it).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct BackendState(pub v2xw_proto::view::BackendView);
+
+impl Record for BackendState {
+    const CHANNEL: &'static str = "backend.state";
+    const VISIBILITY: Visibility = Visibility::Public;
+}
+
+/// `pki.state` — every provider, its components with their roles, regions and state,
+/// the CTL and every CRL head (`v2xw_proto::scms::pki_view::PkiState`). Once a
+/// view interval while an SCMS runs.
+///
+/// PUBLIC: what the trust domain publishes (certificates, the CTL, CRL heads) and each
+/// component's own counts; no device identity.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PkiStateRecord(pub v2xw_proto::scms::pki_view::PkiState);
+
+impl Record for PkiStateRecord {
+    const CHANNEL: &'static str = "pki.state";
+    const VISIBILITY: Visibility = Visibility::Public;
+}
+
+/// `pki.flow` — one backend message with the real SPDUs it carried (bytes, and the
+/// plaintext its recipient opened), one stage stamp, or one PDU no message carried.
+///
+/// NODE: what the sender and the receiver of each message saw; the opened plaintext is
+/// the recipient's own knowledge and an inspector shows it only as that recipient or in
+/// ground truth.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PkiFlowRecord(pub v2xw_proto::scms::pki_view::PkiFlow);
+
+impl Record for PkiFlowRecord {
+    const CHANNEL: &'static str = "pki.flow";
+    const VISIBILITY: Visibility = Visibility::Node;
+}
+
+/// `pki.case` — one misbehaviour case entering one stage of the case board.
+///
+/// NODE: the MA's own case table.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PkiCaseRecord(pub v2xw_proto::scms::pki_view::PkiCase);
+
+impl Record for PkiCaseRecord {
+    const CHANNEL: &'static str = "pki.case";
+    const VISIBILITY: Visibility = Visibility::Node;
+}
+
+/// `pki.knowledge` — what one SCMS entity holds, with the ground-truth join of its rows
+/// onto devices beside it.
+///
+/// NODE_AND_GT: the `truth` section names the devices behind the entity's identifiers,
+/// which no entity knows; an inspector strips it outside ground truth.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct PkiKnowledgeRecord(pub v2xw_proto::scms::pki_view::Knowledge);
+
+impl Record for PkiKnowledgeRecord {
+    const CHANNEL: &'static str = "pki.knowledge";
+    const VISIBILITY: Visibility = Visibility::NodeAndGt;
+}
+
+/// `node.credentials` — one vehicle's i × j certificate pool, its pseudonym history and
+/// the certificates it newly holds; written when it changes.
+///
+/// NODE: the vehicle's own store.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct NodeCredentialsRecord(pub v2xw_proto::scms::pki_view::NodeCredentials);
+
+impl Record for NodeCredentialsRecord {
+    const CHANNEL: &'static str = "node.credentials";
+    const VISIBILITY: Visibility = Visibility::Node;
+}

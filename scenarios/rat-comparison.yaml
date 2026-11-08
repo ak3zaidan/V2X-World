@@ -1,0 +1,164 @@
+# ============================================================================
+# RQ5: DSRC versus LTE-V2X versus NR-V2X, same traffic, same security.
+# ============================================================================
+#
+# ## What the technology axis runs
+#
+# `radio.rat` selects the whole access layer (`v2xw_engine::run::sidelink` and the
+# 802.11p path in `v2xw_engine::run`):
+#
+# * `dsrc-80211p` — CSMA/CA (EDCA AC_VO) at 6 Mbit/s on channel 172, SAE J2945/1 rate and
+#   power control, the NIST error model and the EN 302 663 sensitivity table.
+# * `lte-v2x-pc5` — Mode 4 sensing-based semi-persistent scheduling on channel 183: a
+#   10 MHz pool of four 12-PRB sub-channels at QPSK r0.7 (Molina-Masegosa 2017), 1 ms
+#   subframes, a 1,000-subframe sensing window, RSRP exclusion at −110 dBm with the 3 dB
+#   step-up, 20 % candidates, RRI 100 ms, the TS 36.321 §5.14.1.1 size and latency
+#   reselection triggers, 23 dBm, half duplex, in-band emission, SCI-before-TB decoding
+#   at the high tier, and the R1-160284 BLER table.
+# * `nr-v2x-pc5` — Mode 2 at 30 kHz (0.5 ms slots, two 10-PRB sub-channels, NR MCS 9),
+#   the Ali/Todisco profile (100 ms sensing window, T2 = 33 slots, Rel-16 re-evaluation
+#   and pre-emption), and an SE-gap BLER fit.
+#
+# Everything else is held identical across cells — world, demand, seed per slot (common
+# random numbers), message set, security stack — which is the whole methodological
+# requirement of a technology comparison. `metrics: [all]` records PDR by distance, CBR
+# and air time for each.
+#
+# ## What to expect, and what it is checked against
+#
+# Measured on the Manhattan extract with 96 vehicles, 6 s, buildings off (every link
+# line of sight; about 51 receivers within 1 km per frame), PDR by 100 m bin from 0 m:
+#
+#   dsrc-80211p  1.000 0.998 0.992 0.981 0.960 0.924 0.881 0.824 0.768 0.675
+#   lte-v2x-pc5  0.981 0.973 0.942 0.928 0.901 0.878 0.848 0.817 0.798 0.769
+#   nr-v2x-pc5   0.999 0.999 0.997 0.991 0.983 0.965 0.944 0.918 0.894 0.856
+#
+# LTE-V2X loses at short range to half duplex and to resource collisions, most of them
+# after the reselection a certificate-bearing BSM forces, and wins beyond about 750 m on
+# its 8 dB better link budget (23 dBm and −90.4 dBm against 20 dBm and 802.11p's
+# −85 dBm EN 302 663 minimum). That is the shape Molina-Masegosa, Gozalvez and Sepulcre
+# report for variable-size messages (IEEE Access 8, 2020, "Comparison of IEEE 802.11p and
+# LTE-V2X: an evaluation with periodic and aperiodic messages of constant and variable
+# size"), and the near-range level matches Molina-Masegosa 2017 Fig. 3 (0.97 at 0 m). With buildings on, every technology collapses beyond the street a
+# vehicle is on; the sidelinks still reach further for the same link-budget reason.
+#
+# ## What a RAT comparison still does not measure
+#
+# * **No hybrid arbitration.** `hybrid` is refused at load: it needs a per-message policy
+#   no key states.
+# * **No sidelink congestion control.** The CBR-dependent CR limit of TS 36.213
+#   §14.1.1.4C is measured and not enforced; 802.11p's J2945/1 control is. At densities
+#   where it would act, the comparison favours 802.11p's channel and LTE's delivery.
+# * **The C-V2X error curves are the R1-160284 / WiLabV2Xsim tables and an SE-gap fit**
+#   so a C-V2X curve is only as good as that calibration.
+# * **Channel models.** The published curves used WINNER+ B1, which this workspace does
+#   not ship; `radio.models.propagation: propagation/tr37885` is the closest cited law.
+schema: v2xw/scenario/1
+
+meta:
+  name: rat-comparison
+  description: >-
+    The radio-technology comparison of RQ5: 802.11p, LTE-V2X Mode 4 and NR-V2X Mode 2 on
+    the same world, traffic and security stack, compared by packet delivery against
+    distance, channel busy ratio and air time.
+  authors: [v2xw]
+  tags: [study, rq5, rat, dsrc, cv2x]
+  created: "2026-09-22"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 60.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  # The procedural grid, not the import: a technology comparison is about the radio, and a
+  # world with no external input means a difference between two cells cannot be explained
+  # by which extract was on disk. Midtown-shaped, so the link lengths and the building
+  # occlusion are a city's.
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      cols: 13
+      rows: 34
+      block_x_m: 274.0
+      block_y_m: 80.0
+      lanes_per_direction: 2
+      lane_width_m: 3.5
+      sidewalk_m: 2.0
+      speed_limit_mps: 11.176
+      signalised: true
+      cycle_s: 60.0
+      amber_s: 3.0
+      crossings: true
+      block_buildings: true
+      building_height_m: 30.0
+      rsu_at_junctions: false
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      # Held fixed. In a technology comparison the offered load must be identical across
+      # cells or the comparison is between two loads and not two radios; this is the one
+      # field it would be most tempting and most wrong to vary.
+      rate_veh_per_h: 15000.0
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  # The base value; the sweep below replaces it in each cell.
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+
+messages:
+  # One set, identical across cells: a comparison of two radios carrying different message
+  # mixes is not a comparison of two radios.
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  # Identical across cells, so the frame sizes are identical and a delivery difference is
+  # the radio's. This is the "same security" half of RQ5's "same traffic, same security".
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: verify-all
+  signer_id_policy:
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+metrics: [all]
+exporters: []
+
+experiment:
+  sweep:
+    # The axis this file is named after.
+    radio.rat: ["dsrc-80211p", "lte-v2x-pc5", "nr-v2x-pc5"]
+  seeds: [1, 2, 3, 4, 5]
+  replications: 1

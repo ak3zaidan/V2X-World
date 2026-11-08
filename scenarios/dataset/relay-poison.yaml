@@ -1,0 +1,30 @@
+# The relay path of the dataset, short: the dataset base (base.yaml) for 50 s with 20 % of
+# the vehicles carrying no cellular modem (net.uu penetration 0.8), so their misbehaviour
+# reports go over the air to the grid's roadside unit and on over its backhaul. The unit is
+# compromised and re-targets half of the reports it relays at innocent cars from 10 s
+# (PoisonForwardedReports), and one vehicle is an insider that files false reports of its
+# own against vehicles it hears (ReportPoisoning). Two position attackers give the honest
+# reporters something true to report. It is the check that a relayed, a poisoned and a
+# forged report each leave the rows the schema promises: the bytes of every uploaded
+# report, one local/ego row per transmission, and the poisoned reports and the falsely
+# accused marked in truth.
+schema: v2xw/scenario/1
+seed: "0xD5_2201"
+meta: {base: base.yaml, name: dataset relay and poisoning check}
+time: {duration_s: 50.0}
+net:
+  uu:
+    params: {preset: 4g-east-coast, penetration: 0.8}
+threats:
+  attackers:
+    - {id: threat/attacker/legacy/ConstPos, actor_ids: [23], schedule: {from_s: 0.0, to_s: 50.0}}
+    - {id: threat/attacker/legacy/RandomPos, actor_ids: [28], schedule: {from_s: 5.0, to_s: 50.0}}
+    - {id: threat/attacker/insider/ReportPoisoning, actor_ids: [40],
+       params: {victim_pct: 0.2, report_prob: 0.9}, schedule: {from_s: 5.0, to_s: 50.0}}
+  compromised_rsus: [0]
+  compromised_rsu_attack:
+    id: threat/attacker/compromised-rsu
+    params: {kind: PoisonForwardedReports, poison_prob: 0.5, from_s: 10.0, to_s: 50.0}
+exporters:
+  - id: dataset
+    opts: {run_id: relay, split: train, tier: mini, instrumented_receivers: 20, heldout_attacks: []}

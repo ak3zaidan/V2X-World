@@ -1,0 +1,26 @@
+{
+  "description": "worlds/cache/portland.osm.xml (preset urban-us-portland, bbox 45.5120,-122.6860,45.5250,-122.6700), OsmOptions::default()",
+  "max": {
+    "bus-lanes-mismatch": 1,
+    "crossing-node-without-crosswalk": 161,
+    "cycle-crosses-roadway": 28,
+    "cycle-lane-missing": 0,
+    "cycle-on-roadway": 13,
+    "dead-end-uturn": 0,
+    "lanes-mismatch": 0,
+    "oneway-mismatch": 0,
+    "parking-lane-missing": 0,
+    "path-turns-faster-than-a-car": 62,
+    "roadway-overlap": 13,
+    "sidewalk-crosses-roadway": 120,
+    "sidewalk-in-vehicle-envelope": 8,
+    "sidewalk-on-cycle-lane": 27,
+    "sidewalk-on-roadway": 47,
+    "speed-mismatch": 0,
+    "stub-driving-lane": 25,
+    "turn-lanes-violated": 19,
+    "uturn-tighter-than-a-car": 1,
+    "vehicle-envelope-in-building": 4,
+    "width-mismatch": 0
+  }
+}

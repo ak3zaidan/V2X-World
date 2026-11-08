@@ -1,0 +1,52 @@
+# Honest faulty devices for the dataset release (docs/dataset/schema.md §8: the `faulty`
+# label). NOT a fit: the two in-specification classes are the built-in provisional ones
+# (BsmTimingCalibration::provisional, CV-pilot sample statistics), and two out-of-
+# specification classes are added, each with the `fault_kind` the dataset's ground truth
+# labels its devices with. Nothing in a device's own messages names its class.
+#
+# - faulty-stale-fix (timestamp_lag): the position a BSM carries is usually 3 to 5 fix
+#   epochs (300-500 ms) older than its secMark says, and the 1609.2 generationTime jitters
+#   by 150 ms: a receiver whose GNSS-to-stack pipeline stalls.
+# - faulty-gnss-walk (gnss_error): the reported position wanders on a slow random walk of
+#   metres per second around the truth: a receiver that lost its corrections and its
+#   smoothing.
+#
+# Shares: 15 % faulty in all, which is far above what a deployment would see; it is set
+# so a 40-vehicle run has a handful of faulty devices to label.
+schema: v2xw.bsm_timing.v3
+provenance:
+  note: "dataset fault classes (docs/dataset/schema.md section 8); hand-set, not fitted"
+provisional: true
+fix_interval_ms: 100
+classes:
+  - name: locked
+    share: 0.25
+    secmark_phase_ms: {dist: normal, mean: 0.0, sd: 0.5}
+    epoch_slip_prob: 0.0002
+    slip_epochs: {"-1": 0.005, "1": 0.957, "2": 0.038}
+    frozen_repeat_prob: 0.0
+    header_jitter_ms: {sd: 27.0}
+  - name: free
+    share: 0.60
+    secmark_phase_ms: {dist: uniform, lo: 0.0, hi: 100.0}
+    epoch_slip_prob: 0.022
+    slip_epochs: {"-1": 0.005, "1": 0.957, "2": 0.038}
+    frozen_repeat_prob: 0.005
+    header_jitter_ms: {sd: 27.0}
+  - name: faulty-stale-fix
+    share: 0.075
+    secmark_phase_ms: {dist: uniform, lo: 0.0, hi: 100.0}
+    epoch_slip_prob: 0.6
+    slip_epochs: {"3": 0.5, "5": 0.5}
+    frozen_repeat_prob: 0.05
+    header_jitter_ms: {sd: 150.0}
+    fault_kind: timestamp_lag
+  - name: faulty-gnss-walk
+    share: 0.075
+    secmark_phase_ms: {dist: uniform, lo: 0.0, hi: 100.0}
+    epoch_slip_prob: 0.022
+    slip_epochs: {"-1": 0.005, "1": 0.957, "2": 0.038}
+    frozen_repeat_prob: 0.005
+    header_jitter_ms: {sd: 27.0}
+    position_noise: {dist: normal_mixture, tau_s: 30.0, p: [0.7, 0.3], along_m: [0.3, 1.0], cross_m: [0.3, 1.0]}
+    fault_kind: gnss_error

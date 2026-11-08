@@ -1,0 +1,76 @@
+{
+ "corpus": "ieee1609dot2-2022-hashedid-examples",
+ "source": {
+  "title": "IEEE 1609.2-2022 ASN.1 module Ieee1609Dot2BaseTypes v2.4, comments on HashedId3/8/10/32/48",
+  "url": "https://forge.etsi.org/rep/ITS/asn1/ieee1609.2/-/raw/2022-published/Ieee1609Dot2BaseTypes.asn",
+  "sha256": "cc0fe455d56e33692907325e8c927db8fd1d7d927ce03a2c43f4580098bb7191",
+  "transcribed": "2026-10-16"
+ },
+ "vectors": [
+  {
+   "id": "HashedId3-empty",
+   "cite": "tools/oracle/asn1/ieee1609.2-2022/Ieee1609Dot2BaseTypes.asn lines 88-95",
+   "hash": "SHA-256",
+   "in": {
+    "data": ""
+   },
+   "out": {
+    "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hashed_id": "52b855",
+    "type": "HashedId3"
+   }
+  },
+  {
+   "id": "HashedId8-empty",
+   "cite": "tools/oracle/asn1/ieee1609.2-2022/Ieee1609Dot2BaseTypes.asn lines 118-125",
+   "hash": "SHA-256",
+   "in": {
+    "data": ""
+   },
+   "out": {
+    "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hashed_id": "a495991b7852b855",
+    "type": "HashedId8"
+   }
+  },
+  {
+   "id": "HashedId10-empty",
+   "cite": "tools/oracle/asn1/ieee1609.2-2022/Ieee1609Dot2BaseTypes.asn lines 143-150",
+   "hash": "SHA-256",
+   "in": {
+    "data": ""
+   },
+   "out": {
+    "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hashed_id": "934ca495991b7852b855",
+    "type": "HashedId10"
+   }
+  },
+  {
+   "id": "HashedId32-empty",
+   "cite": "tools/oracle/asn1/ieee1609.2-2022/Ieee1609Dot2BaseTypes.asn lines 168-176",
+   "hash": "SHA-256",
+   "in": {
+    "data": ""
+   },
+   "out": {
+    "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hashed_id": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "type": "HashedId32"
+   }
+  },
+  {
+   "id": "HashedId48-empty",
+   "cite": "tools/oracle/asn1/ieee1609.2-2022/Ieee1609Dot2BaseTypes.asn lines 194-202",
+   "hash": "SHA-384",
+   "in": {
+    "data": ""
+   },
+   "out": {
+    "digest": "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b",
+    "hashed_id": "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b",
+    "type": "HashedId48"
+   }
+  }
+ ]
+}

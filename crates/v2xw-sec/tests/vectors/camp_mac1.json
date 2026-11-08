@@ -1,0 +1,91 @@
+{
+ "corpus": "camp-mac1",
+ "source": {
+  "title": "CAMP SCMS crypto test vectors, mac1.txt",
+  "id": "S6",
+  "url": "https://github.com/conz27/crypto-test-vectors/blob/dd5014e6c3136895744f1fe73734fa3592f37bd4/mac1.txt",
+  "commit": "dd5014e6c3136895744f1fe73734fa3592f37bd4",
+  "sha256": "0ad212224f97949da91a15354122dbdee473ca3c2f5869acafc43e4ba60bba08",
+  "licence": "none (repository has no licence file): values transcribed with citations, files not vendored",
+  "transcribed": "2026-10-16"
+ },
+ "vectors": [
+  {
+   "id": "mac1.txt#1",
+   "cite": "CAMP mac1.txt lines 9-18",
+   "in": {
+    "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+    "message": "4869205468657265"
+   },
+   "out": {
+    "tag": "b0344c61d8db38535ca8afceaf0bf12b"
+   }
+  },
+  {
+   "id": "mac1.txt#2",
+   "cite": "CAMP mac1.txt lines 24-33",
+   "in": {
+    "key": "4a656665",
+    "message": "7768617420646f2079612077616e7420666f72206e6f7468696e673f"
+   },
+   "out": {
+    "tag": "5bdcc146bf60754e6a042426089575c7"
+   }
+  },
+  {
+   "id": "mac1.txt#3",
+   "cite": "CAMP mac1.txt lines 39-51",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "message": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+   },
+   "out": {
+    "tag": "773ea91e36800e46854db8ebd09181a7"
+   }
+  },
+  {
+   "id": "mac1.txt#4",
+   "cite": "CAMP mac1.txt lines 57-69",
+   "in": {
+    "key": "0102030405060708090a0b0c0d0e0f10111213141516171819",
+    "message": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+   },
+   "out": {
+    "tag": "82558a389a443c0ea4cc819899f2083a"
+   }
+  },
+  {
+   "id": "mac1.txt#5",
+   "cite": "CAMP mac1.txt lines 75-85",
+   "in": {
+    "key": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+    "message": "546573742057697468205472756e636174696f6e"
+   },
+   "out": {
+    "tag": "a3b6167473100ee06e0c796c2955552b"
+   }
+  },
+  {
+   "id": "mac1.txt#6",
+   "cite": "CAMP mac1.txt lines 91-110",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "message": "54657374205573696e67204c6172676572205468616e20426c6f636b2d53697a65204b6579202d2048617368204b6579204669727374"
+   },
+   "out": {
+    "tag": "60e431591ee0b67f0d8a26aacbf5b77f"
+   }
+  },
+  {
+   "id": "mac1.txt#7",
+   "cite": "CAMP mac1.txt lines 116-141",
+   "in": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "message": "5468697320697320612074657374207573696e672061206c6172676572207468616e20626c6f636b2d73697a65206b657920616e642061206c6172676572207468616e20626c6f636b2d73697a6520646174612e20546865206b6579206e6565647320746f20626520686173686564206265666f7265206265696e6720757365642062792074686520484d414320616c676f726974686d2e"
+   },
+   "out": {
+    "tag": "9b09ffa71b942fcb27635fbcd5b0e944"
+   }
+  }
+ ]
+}

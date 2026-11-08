@@ -1,0 +1,1217 @@
+//! Every credential-system entity wired into a run, as a researcher sees it: the backend's
+//! state on `backend.state`, the enrolment certificate's renewal and expiry, the ETSI
+//! butterfly authorization, compromised roadside units, and the time a post-quantum
+//! signature costs.
+//!
+//! Each check is paired with the same scenario with the thing under test removed, and
+//! asserts the difference.
+
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+use v2xw_engine::scenario::ModelChoice;
+use v2xw_engine::{Engine, MemoryRecorder, RunReport, Scenario};
+
+fn scenarios() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("scenarios")
+}
+
+/// The Phase 1 grid, five avenues by eight streets, with the SCMS on.
+fn grid(duration_s: f64, rate: f64) -> Scenario {
+    let mut s =
+        Scenario::load(scenarios().join("phase1-grid.yaml")).expect("the shipped grid loads");
+    s.time.duration_s = duration_s;
+    s.actors.vehicles.demand.rate_veh_per_h = Some(rate);
+    if let v2xw_world::WorldSourceSpec::Procedural { params, .. } = &mut s.world.source {
+        params["cols"] = json!(5);
+        params["rows"] = json!(8);
+    }
+    s.metrics = vec!["all".to_string()];
+    s.actors.backend.protocol = Some(v2xw_engine::phase2::CAMP_SCMS.to_string());
+    s
+}
+
+fn lifecycle(s: &mut Scenario, protocol: &str, params: Value) {
+    s.actors.backend.protocol = Some(protocol.to_string());
+    s.security.protocol = Some(ModelChoice {
+        id: protocol.to_string(),
+        params,
+    });
+    // A shorter i-period is a compressed calendar, which a scenario must declare.
+    if s.security
+        .protocol
+        .as_ref()
+        .is_some_and(|p| p.params.get("i_period_s").is_some())
+    {
+        s.time.calendar = v2xw_engine::scenario::Calendar::Compressed;
+    }
+    if protocol == v2xw_engine::phase2::ETSI_PKI {
+        s.security.envelope = "etsi103097".to_string();
+    }
+}
+
+fn cellular(s: &mut Scenario) {
+    s.net.uu = Some(ModelChoice {
+        id: "cellular/uu/fixed-latency".to_string(),
+        params: json!({"preset": "4g-east-coast"}),
+    });
+}
+
+fn run(s: Scenario) -> (RunReport, MemoryRecorder) {
+    let errors = v2xw_engine::scenario::validate::validate(&s);
+    assert!(errors.is_empty(), "the test scenario must load: {errors:?}");
+    let mut engine = Engine::build(s, "").expect("builds");
+    let mut recorder = MemoryRecorder::new();
+    let report = engine.run(&mut recorder).expect("runs");
+    (report, recorder)
+}
+
+fn records(r: &MemoryRecorder, channel: &str) -> Vec<Value> {
+    r.records()
+        .iter()
+        .filter(|(_, rec)| rec.channel == channel)
+        .map(|(_, rec)| serde_json::from_slice(&rec.json).expect("json"))
+        .collect()
+}
+
+/// A 20 s i-period, three certificates a period, two held, a top-up when one is left.
+fn compressed() -> Value {
+    json!({
+        "i_period_s": 20,
+        "cert_lifetime_s": 21,
+        "certs_per_period": 3,
+        "pool_periods": 2,
+        "topup_below_periods": 1,
+        "cert_shuffle_window_s": 1,
+        "first_batch_delay_s": 1,
+        "download_poll_interval_s": 1,
+        // The successor's download wait (5 min, download-minWait) compressed with the rest.
+        "reenrol_download_delay_s": 1
+    })
+}
+
+fn entity<'a>(view: &'a Value, id: &str) -> &'a Value {
+    view["entities"]
+        .as_array()
+        .and_then(|a| a.iter().find(|e| e["id"] == id))
+        .unwrap_or_else(|| panic!("no {id} in the view"))
+}
+
+fn edge(view: &Value, from: &str, to: &str) -> bool {
+    view["edges"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|e| e["from"] == from && e["to"] == to))
+}
+
+#[test]
+fn the_backend_state_names_every_scms_entity_once_a_second() {
+    let mut s = grid(30.0, 400.0);
+    lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, compressed());
+    cellular(&mut s);
+    let (report, rec) = run(s);
+    let views = records(&rec, "backend.state");
+    println!(
+        "{} snapshots; {} top-ups completed",
+        views.len(),
+        report.phase2.topups_completed
+    );
+    // The view is taken once a simulated second, and a snapshot equal to the last one
+    // written (time aside) is not written again before `VIEW_KEYFRAME_S`: at most 31 over 30 s, each one a
+    // change.
+    assert!(
+        (2..=32).contains(&views.len()),
+        "at most one snapshot a simulated second over 30 s, got {}",
+        views.len()
+    );
+    const { assert!(v2xw_engine::phase2::VIEW_KEYFRAME_S > 30) };
+    for w in views.windows(2) {
+        let (mut a, mut b) = (w[0].clone(), w[1].clone());
+        a["t"] = Value::Null;
+        b["t"] = Value::Null;
+        assert_ne!(
+            a, b,
+            "an unchanged snapshot written again at t {}",
+            w[1]["t"]
+        );
+    }
+    let ts: Vec<u64> = views.iter().filter_map(|v| v["t"].as_u64()).collect();
+    assert!(ts.windows(2).all(|w| w[0] < w[1]), "snapshots go forward");
+    let last = views.last().expect("one");
+    assert_eq!(last["system"], "scms");
+    for id in [
+        "manager",
+        "pg",
+        "electors",
+        "root",
+        "ica",
+        "dcm",
+        "eca",
+        "ra",
+        "la1",
+        "la2",
+        "pca",
+        "ma",
+        "crlg",
+        "crl-store",
+        "crl-broadcast",
+        "ee",
+    ] {
+        let e = entity(last, id);
+        assert!(
+            e["name"].as_str().is_some_and(|n| !n.is_empty()),
+            "{id} unnamed"
+        );
+    }
+    // The US deployment (the engine's default for an SCMS run) runs no LOP: the view
+    // draws no LOP box and the transparent hop's traffic as the device-RA edge it is.
+    assert!(
+        last["entities"]
+            .as_array()
+            .is_some_and(|a| a.iter().all(|e| e["id"] != "lop")),
+        "a LOP entity in a deployment without one"
+    );
+    assert!(entity(last, "root")["state"]["certs_issued"].as_u64() >= Some(5));
+    assert_eq!(entity(last, "root")["online"], false);
+    assert!(entity(last, "ee")["state"]["vehicles"].as_u64() > Some(0));
+    // Every vehicle was bootstrapped and provisioned before the run: the PCA and the LAs
+    // hold their state even though the scratch kernel's messages are not in the log.
+    assert!(entity(last, "pca")["state"]["certs_issued"].as_u64() > Some(0));
+    assert!(entity(last, "la1")["state"]["chains"].as_u64() > Some(0));
+    assert!(entity(last, "dcm")["state"]["devices_bootstrapped"].as_u64() > Some(0));
+    assert!(entity(last, "ee")["state"]["trust_installed"].as_u64() > Some(0));
+    // The in-run top-ups: device -> RA -> LAs/PCA and back to the device.
+    assert!(report.phase2.topups_completed > 0, "no top-up to draw");
+    for (a, b) in [
+        ("ee", "ra"),
+        ("ra", "la1"),
+        ("ra", "la2"),
+        ("ra", "pca"),
+        ("ra", "ee"),
+    ] {
+        assert!(edge(last, a, b), "no {a} -> {b} edge");
+    }
+    // No LOP is deployed, so no edge may name one (its transparent hop is folded into the
+    // device-RA edges above).
+    assert!(
+        last["edges"]
+            .as_array()
+            .is_some_and(|a| a.iter().all(|e| e["from"] != "lop" && e["to"] != "lop")),
+        "an edge names the undeployed LOP"
+    );
+    let ra = entity(last, "ra");
+    assert!(ra["queue"]["served"].as_u64() > Some(0));
+    assert!(ra["traffic"]["received"].as_u64() > Some(0));
+
+    // The control: no credential system, no snapshots.
+    let mut plain = grid(10.0, 400.0);
+    plain.actors.backend.protocol = None;
+    plain.security.protocol = None;
+    let (_, rec) = run(plain);
+    assert!(records(&rec, "backend.state").is_empty());
+}
+
+#[test]
+fn an_expiring_enrolment_is_renewed_and_an_expired_one_cannot_top_up() {
+    // Enrolment certificates that last 40 s, so most of a fleet's run out inside a minute.
+    let base = |lead: f64| {
+        let mut s = grid(60.0, 1_800.0);
+        let mut p = compressed();
+        p["enrolment_lifetime_s"] = json!(40);
+        p["reenrol_lead_s"] = json!(lead);
+        lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, p);
+        cellular(&mut s);
+        s
+    };
+    let (renewing, rec) = run(base(20.0));
+    let p = &renewing.phase2;
+    println!(
+        "renewing: {} started, {} completed, {} refused; {} top-ups refused",
+        p.reenrolments_started, p.reenrolments_completed, p.reenrolments_refused, p.topups_refused
+    );
+    assert!(
+        p.reenrolments_started > 0,
+        "no certificate came within its lead"
+    );
+    assert!(p.reenrolments_completed > 0, "no successor was installed");
+    assert!(
+        records(&rec, "sec.cert")
+            .iter()
+            .any(|r| r["event"] == "reenrolled")
+    );
+    assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
+
+    // The control: no renewal lead. A certificate is renewed only once it has already run
+    // out, the ECA will not renew an expired one, and a vehicle whose enrolment lapsed can
+    // sign no request: it asks for no more pseudonyms and its pool runs dry. (A request
+    // signed with an expired certificate is refused by the RA as well; the protocol test
+    // `governance.rs` drives that one.)
+    let (lapsing, rec) = run(base(0.0));
+    let q = &lapsing.phase2;
+    println!(
+        "lapsing: {} renewals refused, {} completed, {} top-ups completed, {} starved \
+         (renewing: {} top-ups completed, {} starved)",
+        q.reenrolments_refused,
+        q.reenrolments_completed,
+        q.topups_completed,
+        q.vehicles_starved,
+        p.topups_completed,
+        p.vehicles_starved
+    );
+    assert!(
+        q.reenrolments_refused > 0,
+        "an expired certificate was renewed"
+    );
+    assert_eq!(q.reenrolments_completed, 0);
+    assert_eq!(q.topups_refused_blocklisted, 0);
+    assert!(
+        q.topups_completed < p.topups_completed,
+        "vehicles whose enrolment lapsed kept topping up"
+    );
+    assert!(
+        records(&rec, "sec.cert")
+            .iter()
+            .any(|r| r["event"] == "reenrol-refused")
+    );
+}
+
+#[test]
+fn the_etsi_butterfly_authorization_tops_up_and_the_aa_sees_counts_only() {
+    let base = |butterfly: bool| {
+        let mut s = grid(45.0, 400.0);
+        let mut p = compressed();
+        p["etsi_butterfly"] = json!(u8::from(butterfly));
+        lifecycle(&mut s, v2xw_engine::phase2::ETSI_PKI, p);
+        cellular(&mut s);
+        s
+    };
+    let (bf, rec) = run(base(true));
+    let p = &bf.phase2;
+    let views = records(&rec, "backend.state");
+    let last = views.last().expect("snapshots");
+    assert_eq!(last["system"], "ccms");
+    let aa = entity(last, "aa");
+    println!(
+        "butterfly: {} top-ups completed, AA {} batches, {} tickets, {} validations",
+        p.topups_completed,
+        aa["state"]["butterfly_batches"],
+        aa["state"]["tickets_issued"],
+        aa["state"]["validations_requested"]
+    );
+    assert!(p.topups_completed > 0, "no butterfly batch was installed");
+    assert!(aa["state"]["butterfly_batches"].as_u64() > Some(0));
+    assert_eq!(aa["state"]["validations_requested"], 0);
+    assert!(edge(last, "ea", "aa") && edge(last, "aa", "ea"));
+    assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
+    // The trust lists: the TLM and the Root CA signed one list each, and every station
+    // that joined fetched both from the Distribution Centre over its own access.
+    let cpoc = entity(last, "cpoc");
+    println!(
+        "trust lists: {} fetches, {} installed; DC answered {}, {} current; ECTL {}",
+        p.trust_fetches,
+        p.trust_lists_installed,
+        cpoc["state"]["fetches_answered"],
+        cpoc["state"]["answered_current"],
+        entity(last, "tlm")["state"]["ectl_sequence"]
+    );
+    assert!(p.trust_lists_installed > 0, "no station installed the ECTL");
+    assert!(cpoc["state"]["fetches_answered"].as_u64() >= Some(p.trust_fetches));
+    assert_eq!(entity(last, "tlm")["state"]["ectl_sequence"], 1);
+    assert_eq!(entity(last, "rca")["state"]["ca_crl_sequence"], 1);
+    assert!(edge(last, "ee", "cpoc") && edge(last, "cpoc", "ee"));
+    assert!(edge(last, "tlm", "cpoc") && edge(last, "rca", "cpoc"));
+    assert!(
+        records(&rec, "sec.cert")
+            .iter()
+            .any(|r| r["event"] == "trust-list-installed")
+    );
+
+    let (standard, rec) = run(base(false));
+    let views = records(&rec, "backend.state");
+    let aa = entity(views.last().expect("snapshots"), "aa");
+    assert!(standard.phase2.topups_completed > 0);
+    assert_eq!(aa["state"]["butterfly_batches"], 0);
+    assert!(aa["state"]["validations_requested"].as_u64() > Some(0));
+}
+
+/// Eight report-forwarding units over the grid, a ConstPos attacker and no modems: every
+/// report reaches the authority through a unit.
+fn relayed(compromised: Option<&str>) -> Scenario {
+    let mut s = grid(60.0, 900.0);
+    s.security.verification_policy = "verify-all".to_string();
+    s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+    s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+        id: "threat/attacker/legacy/ConstPos".to_string(),
+        count: Some(1),
+        schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+            from_s: 5.0,
+            to_s: 60.0,
+        }),
+        ..Default::default()
+    }];
+    lifecycle(
+        &mut s,
+        v2xw_engine::phase2::CAMP_SCMS,
+        json!({"report_shuffle_window_s": 1}),
+    );
+    for x in [150.0, 450.0, 750.0, 1050.0] {
+        for y in [150.0, 450.0] {
+            s.actors.rsus.push(v2xw_engine::scenario::Rsu {
+                site: None,
+                position_m: Some([x, y, 0.0]),
+                roles: vec!["report-forward".to_string()],
+                profile: None,
+                backhaul: None,
+                backhaul_params: None,
+            });
+        }
+    }
+    if let Some(kind) = compromised {
+        s.threats.compromised_rsus = (0..8).collect();
+        s.threats.compromised_rsu_attack = Some(ModelChoice {
+            id: v2xw_threat::attack_rsu::MODEL_ID.to_string(),
+            params: json!({"kind": kind}),
+        });
+    }
+    s
+}
+
+/// The poisoning case runs on the research suite's modelled reports
+/// (`modelled_reports: 1`): under the US profile a unit holds no pseudonym certificate to
+/// sign an SM-MBR with, so its forgery is not filed at all, and that is checked
+/// on its own run. Before relayed uploads were confirmed (FB3's lost uploads) the US-profile
+/// run passed the "authority ingested" check on one report a poisoner happened to leave
+/// alone; with every relayed report delivered, every one is forged.
+#[test]
+fn a_compromised_unit_drops_or_poisons_the_reports_it_forwards() {
+    let (honest, _) = run(relayed(None));
+    let (suppressing, _) = run(relayed(Some("SuppressForwardedReports")));
+    let mut modelled = relayed(Some("PoisonForwardedReports"));
+    if let Some(p) = modelled.security.protocol.as_mut() {
+        p.params["modelled_reports"] = json!(1);
+    }
+    let (poisoning, rec) = run(modelled);
+    let (us_poison, _) = run(relayed(Some("PoisonForwardedReports")));
+    let unsec = us_poison
+        .phase2
+        .reports_not_filed_by
+        .get("a roadside unit holds no pseudonym certificate to sign an SM-MBR with")
+        .copied()
+        .unwrap_or(0);
+    println!(
+        "US profile: {} forged, {unsec} not filed for want of a unit pseudonym, {} at the MAs",
+        us_poison.phase2.rsu_reports_poisoned, us_poison.phase2.reports_at_ma
+    );
+    assert!(
+        us_poison.phase2.rsu_reports_poisoned > 0 && unsec > 0,
+        "under the US profile a unit's forgery is not filed"
+    );
+    let (h, s, p) = (&honest.phase2, &suppressing.phase2, &poisoning.phase2);
+    println!(
+        "honest: {} relayed, {} at the proxy, {} revoked honest | suppress: {} dropped, {} \
+         at the proxy | poison: {} forged, {} at the proxy, {} decisions, {} honest revoked",
+        h.reports_uploaded_relay,
+        h.reports_received,
+        h.revoked_honest,
+        s.rsu_reports_suppressed,
+        s.reports_received,
+        p.rsu_reports_poisoned,
+        p.reports_received,
+        p.ma_revoke_decisions,
+        p.revoked_honest
+    );
+    assert!(
+        h.reports_uploaded_relay > 0,
+        "nothing was relayed, so this proves nothing"
+    );
+    assert_eq!(h.compromised_rsus, 0);
+    assert_eq!(h.rsu_reports_suppressed + h.rsu_reports_poisoned, 0);
+    assert_eq!(s.compromised_rsus, 8);
+    assert!(
+        s.rsu_reports_suppressed > 0,
+        "no relayed report was dropped"
+    );
+    assert!(
+        s.reports_received < h.reports_received,
+        "suppression let as many reports through as honest units"
+    );
+    assert!(p.rsu_reports_poisoned > 0, "no forwarded report was forged");
+    // The forgeries reach the authority as the units' own, trusted reports.
+    assert!(p.reports_received > 0);
+    let ma = records(&rec, "ma.report");
+    assert!(!ma.is_empty(), "the authority ingested nothing");
+}
+
+#[test]
+fn a_compromised_unit_cannot_forge_the_crl() {
+    let base = |compromised: bool| {
+        let mut s = grid(90.0, 900.0);
+        s.security.verification_policy = "verify-all".to_string();
+        s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+        s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+            id: "threat/attacker/legacy/ConstPos".to_string(),
+            count: Some(1),
+            schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+                from_s: 5.0,
+                to_s: 90.0,
+            }),
+            ..Default::default()
+        }];
+        cellular(&mut s);
+        lifecycle(
+            &mut s,
+            v2xw_engine::phase2::CAMP_SCMS,
+            json!({
+                "i_period_s": 30, "cert_lifetime_s": 31, "certs_per_period": 3,
+                "cert_shuffle_window_s": 1, "first_batch_delay_s": 1,
+                "download_poll_interval_s": 1, "report_shuffle_window_s": 2,
+                "crl_cadence_s": 0, "crl_fetch_interval_s": 600,
+                "crl_broadcast_interval_s": 2
+            }),
+        );
+        for x in [150.0, 450.0, 750.0, 1050.0] {
+            for y in [150.0, 450.0] {
+                s.actors.rsus.push(v2xw_engine::scenario::Rsu {
+                    site: None,
+                    position_m: Some([x, y, 0.0]),
+                    roles: vec!["crl".to_string()],
+                    profile: None,
+                    backhaul: None,
+                    backhaul_params: None,
+                });
+            }
+        }
+        if compromised {
+            s.threats.compromised_rsus = (0..8).collect();
+            s.threats.compromised_rsu_attack = Some(ModelChoice {
+                id: v2xw_threat::attack_rsu::MODEL_ID.to_string(),
+                params: json!({"kind": "FalseCrl", "fabricated_entries": 2}),
+            });
+        }
+        s
+    };
+    let (honest, _) = run(base(false));
+    let (forging, _) = run(base(true));
+    let (h, f) = (&honest.phase2, &forging.phase2);
+    println!(
+        "honest: {} revoked attackers, {} top-ups refused as blocklisted",
+        h.revoked_attackers, h.topups_refused_blocklisted
+    );
+    println!(
+        "honest: {} issued, {} RSU frames, {} installs, {} rejected | forging: {} frames \
+         forged, {} rejected, {} installs",
+        h.crls_issued,
+        h.crl_broadcasts,
+        h.crls_installed,
+        h.crl_frames_rejected,
+        f.rsu_crl_frames_forged,
+        f.crl_frames_rejected,
+        f.crls_installed
+    );
+    // The revoked attacker's next top-up is refused at the RA: its enrolment certificate
+    // is on the blocklist (the passive half of revocation).
+    assert!(h.revoked_attackers >= 1, "the attacker was not revoked");
+    assert!(
+        h.topups_refused_blocklisted >= 1,
+        "a revoked enrolment got a top-up"
+    );
+    assert!(
+        h.crls_issued > 0 && h.crl_broadcasts > 0,
+        "no list was broadcast"
+    );
+    assert!(
+        h.crls_installed > 0,
+        "honest units' lists must be installed"
+    );
+    assert_eq!(h.crl_frames_rejected, 0, "an honest list was rejected");
+    assert!(f.rsu_crl_frames_forged > 0, "no frame was forged");
+    assert!(f.crl_frames_rejected > 0, "a forged frame was accepted");
+    assert!(
+        f.crls_installed < h.crls_installed,
+        "the forged frames installed as much as the honest ones"
+    );
+}
+
+#[test]
+fn a_hybrid_signature_costs_its_post_quantum_time() {
+    let base = |signature: &str| {
+        let mut s = grid(20.0, 1_800.0);
+        s.actors.backend.protocol = None;
+        s.nodes.default_obu = "obu/generic-automotive-soc-no-hsm".to_string();
+        s.security.signature = signature.to_string();
+        s.security.verification_policy = "verify-all".to_string();
+        // A hybrid SPDU is above the MTU with a full certificate; fragment it.
+        s.net.fragmenter = Some(ModelChoice::new("fragmenter/generic-sdu"));
+        s
+    };
+    let costs = |rec: &MemoryRecorder| {
+        // A verification's service time: when its server started it to when it finished.
+        // A task for a signer the receiver cannot verify runs no signature check and is
+        // charged none (reason `unknown-signer`), so it is not one.
+        let verify: Vec<u64> = records(rec, "node.verify")
+            .iter()
+            .filter(|r| r["reason"].as_str() != Some(v2xw_node::policy::VERIFY_UNKNOWN_SIGNER))
+            .filter_map(|r| Some((r["t_done"].as_u64()? - r["t_start"].as_u64()?) / 1_000))
+            .collect();
+        let sign: Vec<u64> = records(rec, "node.tx")
+            .iter()
+            .filter_map(|r| {
+                Some(
+                    r["t_signed"]
+                        .as_u64()?
+                        .saturating_sub(r["t_sign_start"].as_u64()?),
+                )
+            })
+            .collect();
+        (verify, sign)
+    };
+    let (classical_report, classical) = run(base("ecdsa-p256"));
+    let (hybrid_report, hybrid) = run(base("hybrid-falcon512-ecdsa-p256"));
+    let v = records(&classical, "node.verify");
+    println!("{} node.verify records; first: {:?}", v.len(), v.first());
+    let (cv, cs) = costs(&classical);
+    let (hv, hs) = costs(&hybrid);
+    let mean = |v: &[u64]| v.iter().sum::<u64>() as f64 / v.len().max(1) as f64;
+    println!(
+        "verify: P-256 {:?} us, hybrid {:?} us; sign (start to signed): P-256 {:.0} ns, \
+         hybrid {:.0} ns",
+        cv.first(),
+        hv.first(),
+        mean(&cs),
+        mean(&hs)
+    );
+    assert!(!cv.is_empty() && !hv.is_empty(), "nothing was verified");
+    // The generic automotive SoC: ECDSA P-256 verify 645 us, Falcon-512 verify 127 us.
+    // A frame whose signer (or CA path) the receiver has not validated yet also
+    // pays for that validation, once (`v2xw_node::rxval::charge`); every other frame costs
+    // the signature alone. The excess over the signature is exactly the validation time
+    // the run reports (each record truncates to whole microseconds).
+    let signature_only = |v: &[u64], base: u64, r: &RunReport, what: &str| {
+        assert!(
+            v.iter().all(|&c| c >= base),
+            "{what}: a frame cost less than its signature: {:?}",
+            &v[..v.len().min(5)]
+        );
+        assert_eq!(v.iter().copied().min(), Some(base), "{what}");
+        let rx = &r.receiver_validation;
+        let misses = v.iter().filter(|&&c| c > base).count() as u64;
+        assert!(
+            misses <= rx.ca_validations + rx.ee_validations,
+            "{what}: {misses} frames paid extra, {} validations",
+            rx.ca_validations + rx.ee_validations
+        );
+        let extra: u64 = v.iter().map(|&c| c - base).sum();
+        assert!(
+            extra.abs_diff(rx.charged_ns / 1_000) <= v.len() as u64,
+            "{what}: {extra} us over the signature, {} ns of validation charged",
+            rx.charged_ns
+        );
+    };
+    signature_only(&cv, 645, &classical_report, "P-256");
+    signature_only(&hv, 645 + 127, &hybrid_report, "hybrid");
+    // Signing: 244 us against 244 + 1,625 us. The stamp includes the J2945/1 hand-off
+    // jitter, which only adds, so the shortest frame bounds the service time from above
+    // and a hybrid frame can never be shorter than its two signatures.
+    let min = |v: &[u64]| v.iter().copied().min().unwrap_or(0);
+    assert!(
+        min(&hs) >= 1_869_000,
+        "a hybrid frame signed in {} ns",
+        min(&hs)
+    );
+    assert!(min(&cs) < 1_869_000, "a P-256 frame took {} ns", min(&cs));
+    assert!(
+        mean(&hs) - mean(&cs) > 1_200_000.0,
+        "the hybrid's signing time is not charged: {} vs {}",
+        mean(&hs),
+        mean(&cs)
+    );
+
+    // The reference OBU publishes no post-quantum figure, and a hybrid on it is refused.
+    let mut refused = base("hybrid-mldsa44-ecdsa-p256");
+    refused.nodes.default_obu = "obu/unex-obu-301-craton2".to_string();
+    let errors = v2xw_engine::scenario::validate::validate(&refused);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("does not publish both halves")),
+        "{errors:?}"
+    );
+}
+
+/// A hybrid `security.signature` is the credential system's scheme too: the same top-ups
+/// run, but every certificate the PCA issues carries the post-quantum key and signature,
+/// the PCA signs each one twice, and the device generates a post-quantum key per
+/// certificate because there is no post-quantum butterfly (`v2xw_proto::hybrid`).
+#[test]
+fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
+    let base = |signature: &str| {
+        let mut s = grid(30.0, 400.0);
+        lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, compressed());
+        cellular(&mut s);
+        s.nodes.default_obu = "obu/generic-automotive-soc-no-hsm".to_string();
+        s.security.signature = signature.to_string();
+        s.net.fragmenter = Some(ModelChoice::new("fragmenter/generic-sdu"));
+        s
+    };
+    let (classic, crec) = run(base("ecdsa-p256"));
+    let (hybrid, hrec) = run(base("hybrid-falcon512-ecdsa-p256"));
+    let last = |rec: &MemoryRecorder| records(rec, "backend.state").pop().expect("a view");
+    let (cv, hv) = (last(&crec), last(&hrec));
+    assert_eq!(cv["signature"], "ecdsa-p256");
+    assert_eq!(hv["signature"], "hybrid-falcon512-ecdsa-p256");
+    let op = |v: &Value, id: &str, key: &str| entity(v, id)["ops"][key].as_u64().unwrap_or(0);
+    let edge_bytes = |v: &Value, from: &str, to: &str| {
+        v["edges"]
+            .as_array()
+            .and_then(|a| a.iter().find(|e| e["from"] == from && e["to"] == to))
+            .and_then(|e| e["bytes"].as_u64())
+            .unwrap_or(0)
+    };
+    println!(
+        "top-ups: classic {} hybrid {}; RA->device bytes classic {} hybrid {}; device->RA \
+         classic {} hybrid {}; PCA falcon signs {}",
+        classic.phase2.topups_completed,
+        hybrid.phase2.topups_completed,
+        edge_bytes(&cv, "ra", "ee"),
+        edge_bytes(&hv, "ra", "ee"),
+        edge_bytes(&cv, "ee", "ra"),
+        edge_bytes(&hv, "ee", "ra"),
+        op(&hv, "pca", "falcon-512 sign"),
+    );
+    assert!(classic.phase2.topups_completed > 0 && hybrid.phase2.topups_completed > 0);
+    // Classical: no post-quantum operation anywhere in the backend.
+    assert_eq!(op(&cv, "pca", "falcon-512 sign"), 0);
+    // Hybrid: the PCA signed each certificate's post-quantum half, the device made a key
+    // for each and checked each signature.
+    assert!(op(&hv, "pca", "falcon-512 sign") >= hybrid.phase2.certs_topped_up);
+    assert!(op(&hv, "ee", "falcon-512 keygen") >= hybrid.phase2.certs_topped_up);
+    assert!(op(&hv, "ee", "falcon-512 verify") >= hybrid.phase2.certs_topped_up);
+    // Per top-up, the downloads and uploads over the device's cellular link grew by at
+    // least the post-quantum key and signature of each certificate.
+    let per = |bytes: u64, n: u64| bytes as f64 / n.max(1) as f64;
+    let extra = f64::from(897 + 666) * 3.0;
+    let down = |v: &Value, r: &v2xw_engine::RunReport| {
+        per(edge_bytes(v, "ra", "ee"), r.phase2.topups_completed)
+    };
+    assert!(
+        down(&hv, &hybrid) - down(&cv, &classic) >= extra,
+        "download per top-up {} vs {}",
+        down(&hv, &hybrid),
+        down(&cv, &classic)
+    );
+    let up = |v: &Value, r: &v2xw_engine::RunReport| {
+        per(edge_bytes(v, "ee", "ra"), r.phase2.topups_started)
+    };
+    assert!(up(&hv, &hybrid) > up(&cv, &classic) + 3.0 * 897.0);
+    assert_eq!(
+        hybrid.phase2.backend_errors, 0,
+        "{}",
+        hybrid.phase2.first_backend_error
+    );
+}
+
+/// The shipped `scenarios/credential-lifecycle.yaml` — what a researcher opens to watch the
+/// SCMS work — loads, validates and, in its first three minutes, does what its header says:
+/// top-ups through the LOP, enrolment renewals at the ECA, and misbehaviour reports
+/// reaching the MA.
+#[test]
+fn the_credential_lifecycle_scenario_shows_every_stage() {
+    let mut s = Scenario::load(scenarios().join("credential-lifecycle.yaml"))
+        .expect("the shipped scenario loads");
+    // The shipped file validates as it is; three minutes are enough to see every stage, and
+    // the attack window is cut to the shorter run.
+    assert!(v2xw_engine::scenario::validate::validate(&s).is_empty());
+    s.time.duration_s = 180.0;
+    if let Some(w) = s.threats.attackers[0].schedule.as_mut() {
+        w.to_s = 180.0;
+    }
+    let (report, rec) = run(s);
+    let p = &report.phase2;
+    println!(
+        "top-ups {}/{} ({} certs), renewals {}/{}, reports {} sent {} at the MA, {} \
+         decisions, {} CRL versions, {} installs, {} RSU CRL frames",
+        p.topups_completed,
+        p.topups_started,
+        p.certs_topped_up,
+        p.reenrolments_completed,
+        p.reenrolments_started,
+        p.reports_sent,
+        p.reports_at_ma,
+        p.ma_revoke_decisions,
+        p.crl_versions_published,
+        p.crls_installed,
+        p.crl_broadcasts
+    );
+    assert!(p.topups_completed > 0, "no top-up completed");
+    assert!(p.reenrolments_completed > 0, "no enrolment was renewed");
+    assert!(p.reports_at_ma > 0, "no report reached the MA");
+    assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
+    let last = records(&rec, "backend.state").pop().expect("a view");
+    // The US deployment runs no LOP; the device's top-ups are drawn device-RA.
+    for (a, b) in [("ee", "ra"), ("ra", "pca"), ("ra", "la1"), ("ra", "ee")] {
+        assert!(edge(&last, a, b), "no {a} -> {b} edge");
+    }
+    assert!(
+        last["edges"]
+            .as_array()
+            .is_some_and(|a| a.iter().all(|e| e["from"] != "lop" && e["to"] != "lop")),
+        "an edge names the undeployed LOP"
+    );
+}
+
+/// The shipped `scenarios/ccms-lifecycle.yaml`, the European counterpart: CAMs over
+/// GeoNetworking, butterfly tickets, the Distribution Centre's trust lists and TS 103 759
+/// reports, in its first three minutes.
+#[test]
+fn the_ccms_lifecycle_scenario_shows_every_stage() {
+    let mut s = Scenario::load(scenarios().join("ccms-lifecycle.yaml"))
+        .expect("the shipped scenario loads");
+    assert!(v2xw_engine::scenario::validate::validate(&s).is_empty());
+    s.time.duration_s = 180.0;
+    if let Some(w) = s.threats.attackers[0].schedule.as_mut() {
+        w.to_s = 180.0;
+    }
+    let (report, rec) = run(s);
+    let p = &report.phase2;
+    let last = records(&rec, "backend.state").pop().expect("a view");
+    let aa = entity(&last, "aa");
+    println!(
+        "top-ups {}/{} ({} tickets), trust fetches {} ({} installed), reports {} sent {} at \
+         the MA, {} decisions, {} refused as blocklisted; AA {} batches, {} validations",
+        p.topups_completed,
+        p.topups_started,
+        p.certs_topped_up,
+        p.trust_fetches,
+        p.trust_lists_installed,
+        p.reports_sent,
+        p.reports_at_ma,
+        p.ma_revoke_decisions,
+        p.topups_refused_blocklisted,
+        aa["state"]["butterfly_batches"],
+        aa["state"]["validations_requested"]
+    );
+    assert_eq!(last["system"], "ccms");
+    assert!(p.topups_completed > 0, "no ticket batch was installed");
+    assert!(aa["state"]["butterfly_batches"].as_u64() > Some(0));
+    assert!(p.trust_lists_installed > 0, "no station installed the ECTL");
+    assert!(p.reports_at_ma > 0, "no report reached the MA");
+    assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
+    for (a, b) in [
+        ("ee", "ea"),
+        ("ea", "aa"),
+        ("aa", "ea"),
+        ("ee", "cpoc"),
+        ("cpoc", "ee"),
+    ] {
+        assert!(edge(&last, a, b), "no {a} -> {b} edge");
+    }
+}
+
+/// A vehicle switched off by a
+/// timeline `outage` installs no list a roadside unit broadcasts. Its radio still decodes
+/// the frame (the node refuses it as `receiver-off`), but the CRL beside the frame was
+/// installed regardless: in the multi-week run a car parked and off from 645 s recorded
+/// three CRLs downloaded, processed and enforced at the first live step after a
+/// fast-forward. Fault that turns it red: the off-receiver return at the top of
+/// `Engine::on_app_message` removed.
+#[test]
+fn a_switched_off_vehicle_installs_no_list_a_unit_broadcasts() {
+    use v2xw_engine::scenario::schema::{TimelineItem, TimelineKind};
+    const END: f64 = 90.0;
+    let build = || {
+        let mut s = grid(END, 900.0);
+        s.security.verification_policy = "verify-all".to_string();
+        s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+        s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+            id: "threat/attacker/legacy/ConstPos".to_string(),
+            count: Some(1),
+            schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+                from_s: 5.0,
+                to_s: END,
+            }),
+            ..Default::default()
+        }];
+        cellular(&mut s);
+        lifecycle(
+            &mut s,
+            v2xw_engine::phase2::CAMP_SCMS,
+            json!({
+                "i_period_s": 30, "cert_lifetime_s": 31, "certs_per_period": 3,
+                "cert_shuffle_window_s": 1, "first_batch_delay_s": 1,
+                "download_poll_interval_s": 1, "report_shuffle_window_s": 2,
+                "crl_cadence_s": 0, "crl_fetch_interval_s": 600,
+                "crl_broadcast_interval_s": 2
+            }),
+        );
+        for x in [150.0, 450.0, 750.0, 1050.0] {
+            for y in [150.0, 450.0] {
+                s.actors.rsus.push(v2xw_engine::scenario::Rsu {
+                    site: None,
+                    position_m: Some([x, y, 0.0]),
+                    roles: vec!["crl".to_string()],
+                    profile: None,
+                    backhaul: None,
+                    backhaul_params: None,
+                });
+            }
+        }
+        s
+    };
+    let installs = |r: &MemoryRecorder, node: u64| -> Vec<u64> {
+        records(r, "proto.revocation")
+            .iter()
+            .filter(|c| c["stage"] == "downloaded" && c["node"].as_u64() == Some(node))
+            .filter_map(|c| c["t"].as_u64())
+            .collect()
+    };
+    let downloads = |r: &MemoryRecorder, node: u64| {
+        records(r, "msg.latency")
+            .iter()
+            .filter(|c| c["flow"] == "crl-download" && c["dest"].as_u64() == Some(node))
+            .count()
+    };
+    let (_, base) = run(build());
+    let tx = records(&base, "node.tx");
+    // A vehicle that installed the list from a unit's broadcast (it downloaded none) and
+    // was transmitting in the second before it did.
+    let mut candidates: Vec<(u64, u64)> = records(&base, "proto.revocation")
+        .iter()
+        .filter(|c| c["stage"] == "downloaded")
+        .filter_map(|c| Some((c["node"].as_u64()?, c["t"].as_u64()?)))
+        .filter(|(n, _)| downloads(&base, *n) == 0)
+        .collect();
+    candidates.sort_unstable();
+    candidates.dedup_by_key(|(n, _)| *n);
+    let (node, at) = candidates
+        .into_iter()
+        .find(|(n, t)| {
+            tx.iter().any(|x| {
+                x["node"].as_u64() == Some(*n)
+                    && x["t"]
+                        .as_u64()
+                        .is_some_and(|u| u + 1_000_000_000 >= *t && u + 100_000_000 <= *t)
+            })
+        })
+        .expect("a vehicle on the air installed a list from a unit's broadcast");
+    let from = (at - 100_000_000) as f64 * 1e-9;
+    let mut off = build();
+    off.events.push(TimelineItem {
+        t: from,
+        until: Some(END),
+        kind: TimelineKind::Outage,
+        when: None,
+        max_fires: None,
+        cooldown_s: None,
+        params: [("target".to_string(), json!(node))].into_iter().collect(),
+    });
+    let (_, off_rec) = run(off);
+    let while_off: Vec<u64> = installs(&off_rec, node)
+        .into_iter()
+        .filter(|t| *t as f64 * 1e-9 >= from)
+        .collect();
+    println!(
+        "node {node}: installed from a unit at {:.1} s; switched off from {from:.1} s, \
+         installs while off {while_off:?}",
+        at as f64 * 1e-9
+    );
+    assert!(
+        while_off.is_empty(),
+        "a switched-off vehicle installed a broadcast list at {while_off:?}"
+    );
+}
+
+/// FB3's 27 incomplete top-ups: a
+/// vehicle that drives out of the simulated area with its top-up in flight. The device's
+/// flow carries on in the backend, but the vehicle is retired, so its install is never
+/// seen, and the run report counted the top-up as started and nothing else. Reproduced on
+/// the quarter Midtown benchmark with the week's top-up moved into the live window (6 of
+/// 343 in the first minute). The books now close: every top-up started is completed,
+/// refused, still in flight, or left the area with its vehicle. Fault that turns it red:
+/// the `topups_left_area` count in `Phase2::retire` removed.
+#[test]
+fn a_top_up_whose_vehicle_leaves_the_area_is_counted_as_leaving() {
+    const END: f64 = 150.0;
+    let mut s = grid(END, 1800.0);
+    cellular(&mut s);
+    let mut params = compressed();
+    // The batch must be late for a top-up to be in flight when its vehicle leaves. A week
+    // the RA holds never is: on the 3-year horizon every week a device asks for is held
+    // since its request ([PRIMER] p.6) and the top-off is .info + download at once (228
+    // of 228 completed, 3c40282a); on ra-maxPreloadTime's 2-week minimum ([SMP] Table 3)
+    // the weekly job makes the week at its boundary, and with an ACA on time it has filed
+    // it (20.01 s) before the device asks (20.02 s): 228 of 228 again, every one in 330
+    // ms, whatever first_batch_delay. What delays a real top-off
+    // is a backend that is slow: here the home ACA takes 4 s more per message for the
+    // whole run, so its weekly batches queue for tens of seconds and some vehicles drive
+    // out of the grid first (6 of 162 in a 300 s Midtown run, 29 still in flight at the
+    // end, the books closed).
+    params["max_periods_ahead"] = json!(2);
+    lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, params);
+    s.actors.backend.failures = vec![v2xw_engine::scenario::schema::BackendFailureSpec {
+        node: "pca".to_string(),
+        mode: "slow".to_string(),
+        from_s: 0.0,
+        to_s: Some(END),
+        extra_ms: Some(4000.0),
+    }];
+    let (report, rec) = run(s);
+    let p = &report.phase2;
+    let last = records(&rec, "backend.state").pop().expect("a view");
+    let ee = &entity(&last, "ee")["state"];
+    let in_flight = ee["topups_in_flight"].as_u64().expect("in flight");
+    println!(
+        "top-ups started {}, completed {}, refused {}, left the area {}, in flight {in_flight}; \
+         view says left {}",
+        p.topups_started,
+        p.topups_completed,
+        p.topups_refused,
+        p.topups_left_area,
+        ee["topups_left_area"]
+    );
+    assert!(
+        p.topups_completed > 0,
+        "no top-up completed, so this proves nothing"
+    );
+    assert!(
+        p.topups_left_area > 0,
+        "no vehicle left with a top-up in flight, so this proves nothing"
+    );
+    // One snapshot: the view's own counters at its last publication.
+    let n = |k: &str| ee[k].as_u64().unwrap_or(0);
+    assert_eq!(
+        n("topups_started"),
+        n("topups_completed") + n("topups_refused") + n("topups_left_area") + in_flight,
+        "a top-up was started and neither completed, refused, in flight nor left the area"
+    );
+    assert!(
+        n("topups_left_area") > 0,
+        "the view does not show the vehicles that left"
+    );
+}
+
+/// The offline windows the two-state model drew for each provider's RA, from that
+/// provider's fault plan, as `(from, until)` ns.
+fn ra_windows(engine: &Engine) -> Vec<Vec<(u64, u64)>> {
+    engine
+        .phase2()
+        .expect("an SCMS run")
+        .scms_runs()
+        .iter()
+        .enumerate()
+        .map(|(k, run)| {
+            let ra = if k == 0 {
+                run.state.nodes.ra
+            } else {
+                run.state.deployment.nodes(k).online.ra
+            };
+            run.state
+                .faults
+                .faults
+                .iter()
+                .filter(|f| f.node == ra && f.kind == v2xw_proto::FaultKind::Offline)
+                .map(|f| (f.from, f.until))
+                .collect()
+        })
+        .collect()
+}
+
+/// Acceptance test 3: `actors.backend.entities.ra.availability: two-state` gives each
+/// provider's RA random outages (here on the compressed calendar: a mean 36 s up and 15 s
+/// down). They are drawn at build from keyed hashes (the same scenario draws the same
+/// windows), counted per server in the report, and act as `offline` failure windows:
+/// requests reach a down RA and are dropped, the devices retry them (SCMS-522),
+/// and every top-up begun before the RA's last return completes. The only top-ups still
+/// open at the end began in the last 30 s, or since just before an outage still running.
+///
+/// Fault: the models are not applied (`crypto_config::apply_service_models` re-hosts
+/// nothing). No window is drawn, `backend_outages` is empty, and the test goes red.
+#[test]
+fn random_ra_outages_are_offline_windows_and_every_top_up_completes_after_its_retry() {
+    use v2xw_engine::NullRecorder;
+    let duration_s = 120.0;
+    let mut s = grid(duration_s, 900.0);
+    lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, compressed());
+    cellular(&mut s);
+    let mut doc = serde_json::to_value(&s).expect("serialises");
+    doc["actors"]["backend"]["entities"] = json!({
+        "ra": {"availability": {"model": "two-state", "mtbf_h": 0.01, "mttr_min": 0.25}}
+    });
+    let s = Scenario::from_document(doc).expect("deserialises");
+    let errors = v2xw_engine::scenario::validate::validate(&s);
+    assert!(errors.is_empty(), "the test scenario must load: {errors:?}");
+    let again = ra_windows(&Engine::build(s.clone(), "").expect("builds"));
+    let mut engine = Engine::build(s, "").expect("builds");
+    let windows = ra_windows(&engine);
+    assert_eq!(windows, again, "the same scenario draws the same outages");
+    assert!(
+        windows.iter().any(|w| !w.is_empty()),
+        "the two-state model drew no outage for any RA"
+    );
+    let r = engine.run(&mut NullRecorder::new()).expect("runs");
+    let p = &r.phase2;
+    println!(
+        "windows {windows:?} outages {:?} downtime {:?} dropped {} held {} retries {} \
+         capped {} top-ups started {} completed {} refused {} left {}",
+        p.backend_outages,
+        p.backend_downtime_ms,
+        p.backend_deliveries_dropped,
+        p.backend_deliveries_held,
+        p.ee_retries,
+        p.ee_retries_capped,
+        p.topups_started,
+        p.topups_completed,
+        p.topups_refused,
+        p.topups_left_area
+    );
+    assert!(
+        !p.backend_outages.is_empty()
+            && p.backend_outages
+                .keys()
+                .all(|k| k == "ra" || k.ends_with("/ra")),
+        "the RAs, and only they, are counted: {:?}",
+        p.backend_outages
+    );
+    assert!(p.backend_downtime_ms.values().all(|d| *d > 0));
+    assert!(
+        p.backend_deliveries_dropped > 0,
+        "no request reached a down RA"
+    );
+    assert!(p.ee_retries > 0, "no device retried an unanswered request");
+    assert_eq!(p.topups_refused, 0);
+    assert!(p.topups_completed > 0);
+    let horizon = (duration_s * 1e9) as u64;
+    let grace = 30_000_000_000u64;
+    let p2 = engine.phase2().expect("an SCMS run");
+    let open = p2.open_topups();
+    println!("open at the end: {open:?}");
+    for (k, run, began) in open {
+        // The latest a top-up may have begun and still be open: 30 s before the end, or
+        // 30 s before an outage of its provider's RA that is still on in the last 30 s.
+        let cutoff = windows[k]
+            .iter()
+            .filter(|(_, until)| *until + grace > horizon)
+            .map(|(from, _)| from.saturating_sub(grace))
+            .min()
+            .unwrap_or(horizon - grace)
+            .min(horizon - grace);
+        assert!(
+            began >= cutoff,
+            "provider {k}'s top-up {run} began at {began} ns and is still open at the end \
+             (cutoff {cutoff} ns): a request the outage dropped was never answered"
+        );
+    }
+}
+
+/// The availability and service-time keys to the model, without a run: the backend-wide
+/// `service_time` and
+/// `availability` reach every hosted server of every provider, an entity's own fields
+/// are written over them (the MA kept fixed and always up), unset numbers take the
+/// defaults (720 h, 30 min, cv 0.25 -> `cv_milli` 250), and the loader refuses a value
+/// outside its menu or range (the real calendar keeps MTBF at 1 h or more; a compressed
+/// one admits less). Off by default: a scenario without the keys hosts nothing new.
+///
+/// Fault: `crypto_config::service_time_for` always `Deterministic`. The RA's queue keeps
+/// fixed times and the test goes red.
+#[test]
+fn the_service_time_and_availability_keys_reach_every_hosted_server() {
+    use v2xw_proto::{AvailabilityModel, ServiceTimeModel};
+    let with = |backend: Value, calendar_compressed: bool| {
+        let mut s = grid(5.0, 600.0);
+        if calendar_compressed {
+            lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, compressed());
+        }
+        let mut doc = serde_json::to_value(&s).expect("serialises");
+        for (k, v) in backend.as_object().expect("an object") {
+            doc["actors"]["backend"][k] = v.clone();
+        }
+        Scenario::from_document(doc).expect("deserialises")
+    };
+    let errors = |s: &Scenario| -> Vec<String> {
+        v2xw_engine::scenario::validate::validate(s)
+            .into_iter()
+            .map(|e| e.to_string())
+            .collect()
+    };
+    let s = with(
+        json!({
+            "availability": {"model": "two-state"},
+            "service_time": {"model": "log-normal"},
+            "entities": {"ma": {
+                "availability": {"model": "always-up"},
+                "service_time": {"model": "deterministic"}
+            }}
+        }),
+        false,
+    );
+    assert_eq!(errors(&s), Vec::<String>::new());
+    let engine = Engine::build(s, "").expect("builds");
+    let runs = engine.phase2().expect("an SCMS run").scms_runs();
+    assert!(runs.len() > 1, "the US deployment runs two providers");
+    for (k, run) in runs.iter().enumerate() {
+        let nodes = if k == 0 {
+            run.state.nodes
+        } else {
+            run.state.deployment.nodes(k).online
+        };
+        let spec = |n| run.kernel.queue(n).expect("hosted").spec();
+        let ra = spec(nodes.ra);
+        assert_eq!(
+            ra.service_time,
+            ServiceTimeModel::LogNormal { cv_milli: 250 },
+            "provider {k}'s RA"
+        );
+        assert_eq!(
+            ra.availability,
+            Some(AvailabilityModel {
+                mtbf: v2xw_core::time::Duration::from_secs(720 * 3_600),
+                mttr: v2xw_core::time::Duration::from_secs(30 * 60),
+            }),
+            "provider {k}'s RA"
+        );
+        assert_eq!(spec(nodes.pca).service_time, ra.service_time);
+        let ma = spec(nodes.ma);
+        assert_eq!(ma.service_time, ServiceTimeModel::Deterministic);
+        assert_eq!(ma.availability, None);
+    }
+    // Off by default.
+    let plain = Engine::build(with(json!({}), false), "").expect("builds");
+    let run = &plain.phase2().expect("an SCMS run").scms_runs()[0];
+    let ra = run.kernel.queue(run.state.nodes.ra).expect("hosted").spec();
+    assert_eq!(
+        (ra.service_time, ra.availability),
+        (ServiceTimeModel::Deterministic, None)
+    );
+    // The loader's menus and ranges.
+    let refused = |b: Value, compressed: bool, field: &str| {
+        errors(&with(b, compressed))
+            .iter()
+            .any(|m| m.contains(field))
+    };
+    assert!(refused(
+        json!({"availability": {"model": "sometimes"}}),
+        false,
+        "actors.backend.availability.model"
+    ));
+    assert!(refused(
+        json!({"service_time": {"model": "log-normal", "cv": 4}}),
+        false,
+        "actors.backend.service_time.cv"
+    ));
+    assert!(refused(
+        json!({"entities": {"ra": {"availability": {"model": "two-state", "mtbf_h": 0.5}}}}),
+        false,
+        "actors.backend.entities.ra.availability.mtbf_h"
+    ));
+    assert!(!refused(
+        json!({"entities": {"ra": {"availability": {"model": "two-state", "mtbf_h": 0.5}}}}),
+        true,
+        "mtbf_h"
+    ));
+    assert!(refused(
+        json!({"availability": {"model": "two-state", "mttr_min": 20_000}}),
+        true,
+        "actors.backend.availability.mttr_min"
+    ));
+}

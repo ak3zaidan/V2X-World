@@ -1,0 +1,341 @@
+# Families for the catalogue-wide sensitivity sweep (`v2xw sensitivity --catalogue`,
+# crates/v2xw-engine/src/sensitivity/sweep.rs). Every published numeric or choice setting is
+# moved one at a time on the first family its route names; a setting the family's loader
+# refuses is retried on the next. Keep the families short: the whole sweep runs in about
+# 40 minutes on two threads. docs/reference/sensitivity-catalogue.md is the result.
+families:
+  # 40 vehicles bulk-spawned on a 1.2 km open grid, 802.11p, BSMs (dsrc-grid.yaml).
+  - name: dsrc
+    base: dsrc-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # The same fleet on the LTE-V2X PC5 sidelink, mode 4.
+  - name: cv2x
+    base: lte-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # The same fleet on NR-V2X mode 2.
+  - name: nr
+    base: nr-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # ETSI stack, a breakdown's DENM forwarded hop by hop.
+  - name: gn
+    base: gn-grid.yaml
+    set: {metrics: [all]}  # 24 s, breakdown at 8 s (gn-grid.yaml)
+  # The CAMP SCMS lifecycle with a roadside unit, short periods.
+  - name: security
+    base: ../credential-lifecycle.yaml
+    set: {time.duration_s: 30.0, threats.attackers: []}
+  # The same lifecycle whole (300 s, i-period 60 s, 5 % ConstPos attackers from 60 s):
+  # the base of tests/scms_knobs_runs.rs and tests/expectations/scms-knobs.yaml.
+  - name: scms
+    base: ../credential-lifecycle.yaml
+    set: {}
+  # A signalised Midtown-shaped grid (4 x 6 blocks, two lanes each way, 60 s cycle) with
+  # Poisson demand, traffic and network: the base of tests/sensitivity_traffic.rs.
+  - name: traffic
+    base: ../phase1-grid.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 1500.0,
+          world.source.params.cols: 4, world.source.params.rows: 6, metrics: [all]}
+  # The same grid filled with 250 vehicles at once: queues, spillback, gridlock.
+  - name: saturated
+    base: ../phase1-grid.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: null,
+          actors.vehicles.demand.fleet_size: 250,
+          world.source.params.cols: 4, world.source.params.rows: 6, metrics: [all]}
+  # Downtown Portland (OSM): synthesised signal plans, jurisdiction presets, service roads.
+  # Needs worlds/cache/portland.osm.xml (a symlink to the main checkout's cache).
+  - name: osm
+    base: ../portland-downtown.yaml
+    set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1500.0}
+  # The same Portland at the medium tier, whose log-distance law leaves a building-blocked
+  # link to the Sommer term: where radio.channel_model.reflection adds a wall bounce.
+  - name: canyon
+    base: ../portland-downtown.yaml
+    set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1500.0,
+          radio.tiers.propagation: medium, metrics: [all]}
+  # The same grid with pedestrians and crossings.
+  - name: pedestrians
+    base: ../vru-grid.yaml
+    set: {time.duration_s: 40.0, metrics: [all]}
+  # A truck-heavy freeway: the six-lane highway (highway-congestion.yaml) at 65 mph with
+  # 30 % trucks, the share of rural Interstates (FHWA Highway Statistics 2019, VM-1:
+  # combination and single-unit trucks are 25-35 % of rural Interstate VMT). On the Midtown
+  # grid a truck's own gap was below the headway metric's resolution: trucks there mostly
+  # queue at signals. On a free-flowing freeway they follow at their desired time gap, so
+  # the truck time headway shows in the fleet's mean.
+  - name: freeway
+    base: ../highway-congestion.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 12000.0,
+          actors.vehicles.classes: {passenger: {fraction: 0.7}, truck: {fraction: 0.3}},
+          metrics: [all]}
+  # Six signalised junctions with SPaT/MAP roadside units and every application on
+  # (connected-intersections.yaml): where RLVW, GLOSA, IMA and LTA have signals and
+  # crossing traffic to act on. 3000 veh/h, every vehicle equipped.
+  # The freeway family's road with 30 % tractor-trailers (the Green Book design truck,
+  # 120 kg/kW): where traffic.vehicle_dynamics' power limit binds on the way up to
+  # speed (above about 15 m/s; in a 35 mph city it never does). The road is flat, so the
+  # grade alone must move nothing.
+  - name: freight
+    base: ../highway-congestion.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 6000.0,
+          actors.vehicles.classes: {passenger: {fraction: 0.7}, trailer: {fraction: 0.3}},
+          metrics: [all]}
+  # The freight family on a hill: the same road laid on grade-5pct.asc (a synthetic
+  # constant 5 % ramp, provenance in grade-5pct.md) with world.terrain.drape, and the
+  # grade term on in both runs, so a power limit has a climb to lose speed on (the
+  # AASHTO Green Book's long 5 % upgrade for its 120 kg/kW design truck). At the
+  # freight family's 6,000 veh/h the road is congested (9.7 m/s mean) and the climb hardly
+  # matters (-0.2 %); at 2,400 veh/h it is -0.3 % (10.56 -> 10.53 m/s): in 90 s few
+  # vehicles reach the about 13 m/s the power limit holds a design truck to on the climb
+  # (eta P / m = g (sin theta + c_rr) v, air neglected).
+  - name: grade-truck
+    base: ../highway-congestion.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 2400.0,
+          actors.vehicles.classes: {passenger: {fraction: 0.7}, trailer: {fraction: 0.3}},
+          world.terrain: {dem: scenarios/sensitivity/grade-5pct.asc, drape: true},
+          traffic.vehicle_dynamics: {grade: true}, metrics: [all]}
+  # Downtown Portland on its measured ground (real-world/portland-hills.yaml:
+  # a 1 arc-second DEM, worlds/dem/portland-downtown.md, 19.6 % of the road length above
+  # 4 %). The base is undraped and the grade and power-limit terms are on in both runs,
+  # so moving world.terrain.drape gives the lanes their measured slopes (and lifts the
+  # vehicles' antennas from z = 0 onto the ground the radio's terrain term already sees).
+  - name: hills
+    base: ../real-world/portland-hills.yaml
+    set: {time.duration_s: 120.0, world.terrain.drape: false, metrics: [all]}
+  # A two-lane road through a 110 m wood (forest-road.osm.xml, self-written), its trees
+  # imported as vegetation: where radio.channel_model.foliage has trees to charge.
+  - name: forest
+    base: ../phase1-grid.yaml
+    set: {time.duration_s: 40.0, actors.vehicles.demand.rate_veh_per_h: 1800.0,
+          world.source: {kind: osm-xml, path: scenarios/sensitivity/forest-road.osm.xml},
+          world.highway_preset: urban-us-portland, world.buildings.enabled: false,
+          world.vegetation: true, metrics: [all]}
+  - name: intersections
+    base: ../connected-intersections.yaml
+    set: {time.duration_s: 60.0, metrics: [all]}
+  # The base of emergency-priority.yaml (one vehicle in ten an emergency vehicle
+  # with beacons, signalised procedural grid, 3000 veh/h) for 120 s, with the yielding
+  # block named (off) so both runs report the emergency vehicles' distance
+  # (report.emergency_distance_m). emergency-priority.yaml itself runs on Manhattan; its
+  # procedural base is the same traffic at a fraction of the cost.
+  - name: emergency
+    base: ../connected-intersections.yaml
+    set: {time.duration_s: 120.0, traffic.emergency_yield: {enabled: false}, metrics: [all]}
+
+routes:
+  # Red runners matter where signals and SPaT are: RLVW warns of exactly their entries.
+  - {prefix: actors.vehicles.drivers.red_runner_share, families: [intersections]}
+  - {prefix: actors.vehicles.drivers.truck.time_headway_s, families: [freeway, traffic]}
+  # The restriction acts only on a motorway with three or more lanes (drivers.rs
+  # is_restricted_left_lane): the Midtown grid's two lanes never trigger it.
+  - {prefix: actors.vehicles.drivers.truck_lane_restriction, families: [freeway, traffic]}
+  # HCM ch. 20 gaps act at stop- and yield-controlled junctions. Every Midtown grid
+  # junction is signalised, and on Portland the run was bit-identical (its downtown is
+  # signalised too), so the row runs on the grid with its signals off: every junction
+  # is then a priority junction whose minor arm gives way (context below).
+  - {prefix: traffic.critical_gap_factor, families: [traffic]}
+  # The power limit is judged on the hill (the plan's upgrade row; a setting runs on
+  # the first family that accepts it); its flat-road effect is pinned by
+  # tests/vehicle_dynamics.rs. The grade alone stays on the flat road, where it must change
+  # nothing.
+  - {prefix: traffic.vehicle_dynamics.power_limit, families: [grade-truck, freight]}
+  - {prefix: traffic.vehicle_dynamics, families: [freight]}
+  - {prefix: traffic.emergency_yield, families: [emergency]}
+  # A drape needs a DEM: the measured Portland hill.
+  - {prefix: world.terrain.drape, families: [hills]}
+  - {prefix: radio.sidelink, families: [cv2x, nr]}
+  - {prefix: net.geonet, families: [gn]}
+  - {prefix: net, families: [gn, dsrc, security]}
+  # The certificate system's knobs need the whole lifecycle: top-ups at the 60 s period
+  # starts, the attackers' reports, the MA's decisions and the CRL's enforcement.
+  - {prefix: security.scms, families: [scms]}
+  - {prefix: security, families: [security, dsrc]}
+  - {prefix: actors.backend, families: [security]}
+  - {prefix: actors.rsus, families: [security]}
+  - {prefix: actors.vru, families: [pedestrians]}
+  # PCW acts on pedestrians and cyclists; the other applications on signals and crossing
+  # traffic.
+  - {prefix: apps.pcw_ttc_s, families: [pedestrians]}
+  - {prefix: apps, families: [intersections, pedestrians]}
+  # GNSS error is judged by what misbehaviour detection makes of it: the lifecycle family
+  # runs legacy-12 plausibility checks.
+  - {prefix: actors.vehicles.gnss, families: [security, traffic]}
+  - {prefix: world.signals, families: [osm]}
+  - {prefix: world.highway_preset, families: [osm]}
+  - {prefix: world.service_roads, families: [osm]}
+  - {prefix: radio.channel_model.building_wall_loss_db, families: [traffic]}
+  # NLOSv needs a vehicle within 8 m of a same-street path: 40 vehicles on the DSRC
+  # family's 17 km of open street almost never line up in 2 s, the Midtown queues do.
+  - {prefix: radio.channel_model.vehicle_blockage, families: [traffic, dsrc]}
+  - {prefix: radio.channel_model.foliage, families: [forest]}
+  - {prefix: radio.channel_model.density_sigma, families: [traffic]}
+  # A wall reflection needs building-blocked links whose bounce is clear: real footprints
+  # (on the procedural grid's kerb-to-kerb blocks no single bounce turns a corner) under
+  # a law that leaves buildings to the Sommer term.
+  - {prefix: radio.channel_model.reflection, families: [canyon]}
+  - {prefix: radio.channel_model.building_loss_db_per_m, families: [traffic]}
+  - {prefix: traffic.right_turn_on_red, families: [osm, traffic]}
+  - {prefix: actors.vehicles.drivers.bicycle, families: [pedestrians]}
+  - {prefix: traffic.gridlock_timeout_s, families: [saturated]}
+  - {prefix: traffic.keep_junctions_clear, families: [saturated]}
+  - {prefix: traffic.reroute_period_s, families: [saturated]}
+  - {prefix: traffic.dynamic_rerouting, families: [saturated]}
+  # Rain's headway effect on the light grid is hidden by the headway metric's 6 s cut
+  # (Vogel 2003): slower free-flowing pairs cross 6 s and drop out, so the mean fell 4.7 %
+  # while every driver's T rose. On the near-capacity freeway the fleet follows, so the
+  # FHWA capacity cut shows as a longer headway.
+  - {prefix: weather.intensity, families: [freeway, traffic]}
+  - {prefix: weather, families: [traffic, dsrc]}
+  - {prefix: threats, families: [security, dsrc]}
+  - {prefix: detection, families: [security]}
+  - {prefix: actors, families: [traffic, dsrc]}
+  - {prefix: traffic, families: [traffic, pedestrians]}
+  - {prefix: world, families: [traffic, dsrc]}
+  - {prefix: radio, families: [dsrc, cv2x]}
+  - {prefix: messages, families: [dsrc, gn]}
+  - {prefix: nodes, families: [dsrc, security]}
+  - {prefix: "", families: [dsrc, traffic, security]}
+
+skip:
+  - {prefix: meta, reason: descriptive}
+  - {prefix: schema, reason: the document version}
+  - {prefix: seed, reason: "the master seed: moves everything by construction"}
+  - {prefix: time.duration_s, reason: "the run length: moves every count by construction"}
+  - {prefix: output, reason: "output plumbing: what is written, not what is simulated"}
+  - {prefix: time.des_resolution, reason: "the clock grain: 1 us is the only value the radio tiers accept"}
+  - {prefix: radio.tiers.focus, reason: "needs a focus region (a polygon), which a scalar sweep cannot supply"}
+  - {prefix: scale.traffic.model, reason: "the tiered model needs a microscopic region box; tests/scale.rs covers it"}
+  - {prefix: messages.spat_interval_ms, reason: "needs a roadside unit with the spat role at a signalised junction (tests/network_audit_config.rs covers it)"}
+  - {prefix: messages.map_interval_ms, reason: "needs a roadside unit with the map role at a signalised junction (tests/network_audit_config.rs covers it)"}
+  - {prefix: detection.perception_tier, reason: "no perception model in this build: the loader refuses every value"}
+
+# Values that replace the computed ends where the guide's range would make the run too
+# large for the 8 GB sweep machine or names no usable range.
+values:
+  # Off by default; 0.2 runs reds often enough in 60 s for RLVW to warn (guide.rs).
+  actors.vehicles.drivers.red_runner_share: [0.2]
+  # 900 veh/h base: half and double (SUMO randomTrips-style Poisson demand).
+  actors.vehicles.demand.rate_veh_per_h: [450.0, 1800.0]
+  # An arrival rate per lane-km per hour (city.rs adapt_to_world multiplies it by the
+  # world's driving lane-km), not a density: [5, 30] read as a density put the "high" end
+  # below the family's own 1500 veh/h (about 53 per lane-km on its ~28 lane-km), so more
+  # "density" spawned half the vehicles. Half and double the base instead.
+  actors.vehicles.demand.rate_veh_per_h_per_lane_km: [25.0, 100.0]
+  actors.vehicles.demand.fleet_size: [10, 80]
+  # The 3GPP TR 36.885 drop fills every lane of the grid at a 2.5 s headway (thousands of
+  # vehicles on the Midtown grid: over the 4.5 GB cap), so the sweep turns demand off
+  # instead; the drop is exercised by scenarios/sensitivity/radio-cv2x.yaml.
+  actors.vehicles.demand.kind: [mobility/demand/none]
+  actors.vru.pedestrians: [50, 300]
+  radio.range.max_m: [200.0, 2000.0]
+  # Clean, and one jump per 10 s (urban
+  # multipath outliers: Groves, Principles of GNSS, Inertial and Multisensor Navigation 2e, 9.4).
+  actors.vehicles.gnss.outlier_rate_hz: [0.0, 0.1]
+  # Unset is per message type (a BSM every 450 ms, SAE J2945/1 6.5.2; a CAM once a
+  # second), so the field publishes no default. Half and double the BSM's J2945/1
+  # cadence, each set for every message type.
+  security.signer_id_policy.full_cert_every_ms: [225, 900]
+  # CWmin is 15 under a US region (SAE J2945/1 Table 18) and 7 elsewhere, and must be
+  # 2^k - 1. The EN 302 663 value and twice-plus the J2945/1 one for each.
+  radio.mac.cw_min_vi: [7, 63]
+  radio.mac.aifsn_vi: [3, 9]
+
+# The most values a choice is swept at (spread over its options).
+max_choices: 6
+
+# Prerequisites both runs of a setting share, so it is measured where it acts instead of
+# being refused (the loader refuses a field that would do nothing).
+context:
+  - {prefix: radio.channel_model.nakagami_shape, set: {radio.channel_model.fading: nakagami}}
+  - {prefix: radio.channel_model.nakagami_shape_far, set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_breakpoint_m: 90.0, radio.channel_model.nakagami_shape_far: 0.9}}
+  - {prefix: radio.channel_model.nakagami_breakpoint_m, set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape_far: 0.75, radio.channel_model.nakagami_breakpoint_m: 90.0}}
+  - {prefix: radio.channel_model.rice_k_db, set: {radio.channel_model.fading: rice}}
+  - {prefix: radio.dcc.cbr_target, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.adaptive_alpha, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.adaptive_beta, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.reactive_table, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.reactive_hold_ms, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
+  - {prefix: radio.tiers.phy, set: {radio.tiers.mac: high}}
+  # The noise figure acts at the noise-limited edge, and the rows read PRR at 600-1,000 m.
+  # At the family's 20 dBm the sidelink edge is past 1 km (PRR 0.96 in the band), so 3 dB
+  # of NF moves it 0.02 %. At 5 dBm the edge is inside the band,
+  # the setup of radio-cv2x.yaml's noise-figure rows.
+  - {prefix: radio.sidelink.noise_figure_db, set: {radio.devices.obu.tx_power_dbm: 5.0}}
+  # Sensing acts at reselections; in the family's 2 s every UE's first, blind pick (empty
+  # sensing window at power-on) dominates, and one persistent pair can decide the row.
+  # 8 s is the steady state radio-cv2x.yaml's sensing rows measure.
+  - {prefix: radio.sidelink.sensing, set: {time.duration_s: 8.0}}
+  - {prefix: messages.rate_hz, set: {time.mobility_step_ms: 50}}
+  - {prefix: messages.cpm_interval_ms, set: {messages.sets: [bsm, cpm]}}
+  # The other CP-service keys need the service too: without it the loader refuses each of
+  # them on every family.
+  # (a context prefix matches on a dotted boundary, so each key is named)
+  - {prefix: messages.cpm_dcc_limited, set: {messages.sets: [bsm, cpm]}}
+  - {prefix: messages.cpm_quality_threshold, set: {messages.sets: [bsm, cpm]}}
+  - {prefix: messages.cpm_max_objects, set: {messages.sets: [bsm, cpm]}}
+  # The post-quantum signatures need an OBU that publishes a figure for them
+  # (pq-signatures.yaml uses the same one).
+  # and a fragmenter: without one an ML-DSA SPDU (over the 1,400-octet WSMP MTU) is
+  # refused at the network layer (net_mtu_refusals), every frame, and the run sends
+  # nothing.
+  - {prefix: security.signature, set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm, net.fragmenter: {id: fragmenter/generic-sdu}}}
+  # Per-class driver settings act only on a fleet with that class (truck.*, bus.* and
+  # motorcycle.* do nothing on the car-only families), and TR 37.885
+  # NLOSv only blocks when the blocker is taller than an antenna: cars under roof
+  # antennas are case 1 (0 dB), so blockage needs trucks too. 20 % heavy vehicles is
+  # an urban-arterial share (HCM 7th ed. 19: default 2-3 % HV; FHWA 2019 urban truck
+  # VMT about 10 %): enough for the effect to show in a 90 s run.
+  - {prefix: actors.vehicles.drivers.truck, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  - {prefix: actors.vehicles.drivers.truck_lane_restriction, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  - {prefix: actors.vehicles.drivers.bus, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, bus: {fraction: 0.2}}}}
+  - {prefix: actors.vehicles.drivers.motorcycle, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, motorcycle: {fraction: 0.2}}}}
+  - {prefix: actors.vehicles.drivers.motorcycle_filtering, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, motorcycle: {fraction: 0.2}}}}
+  - {prefix: radio.channel_model.vehicle_blockage, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  # The freeway family's own 30 % trucks, not the 20 % urban context above.
+  - {prefix: actors.vehicles.drivers.truck.time_headway_s, set: {actors.vehicles.classes: {passenger: {fraction: 0.7}, truck: {fraction: 0.3}}}}
+  # Kerbside stops on a car-only fleet come from taxis alone, and only the New York preset
+  # has taxis (v2xw-mobility kerbside.rs). taxi_share with enabled: false is refused by the
+  # loader (it would do nothing), so the context is the jurisdiction instead.
+  - {prefix: traffic.kerbside.enabled, set: {world.highway_preset: urban-us-nyc}}
+  - {prefix: security.on_demand_threshold, set: {security.verification_policy: on-demand}}
+  - {prefix: security.prioritized_horizon_m, set: {security.verification_policy: prioritized}}
+  # distance_m is read only by the distance strategy and mix_zone_* only by mix-zone
+  # (pseudonym_policy.rs, v2xw-proto pseudonym.rs); on the family's time strategy both do
+  # nothing.
+  - {prefix: security.pseudonym_change.distance_m, set: {security.pseudonym_change.strategy: distance}}
+  - {prefix: security.pseudonym_change.mix_zone, set: {security.pseudonym_change.strategy: mix-zone}}
+  - {prefix: actors.vehicles.drivers.bicycle, set: {actors.vru.cyclists: 60}}
+  # The gap margin is read only by a pedestrian crossing against the signal or mid-block;
+  # at the observed defaults few do in 40 s and the run is bit-identical at 0.5 and 6 s.
+  - {prefix: actors.vru.crossing_gap_margin_s, set: {actors.vru.red_crossing_share: 0.5, actors.vru.midblock_rate_per_100m: 20.0}}
+  - {prefix: actors.rsu_placement, set: {actors.rsu_placement.count: 4}}
+  - {prefix: weather.intensity, set: {weather.initial: rain}}
+  - {prefix: traffic.signals.min_green_s, set: {traffic.signals.control: actuated}}
+  - {prefix: traffic.signals.max_green_s, set: {traffic.signals.control: actuated}}
+  - {prefix: traffic.signals.passage_s, set: {traffic.signals.control: actuated}}
+  - {prefix: traffic.signals.detector_m, set: {traffic.signals.control: actuated}}
+  # The dual ring's own settings act only under it.
+  - {prefix: traffic.signals.nema, set: {traffic.signals.control: nema}}
+  - {prefix: scale.traffic.meso, set: {scale.traffic.model: mobility/meso/queue}}
+  - {prefix: scale.radio, set: {scale.traffic.model: mobility/meso/queue}}
+  # Each traffic-flow setting is measured where it acts. The heading only orients a wave
+  # that has a speed (the loader refuses it alone); the grid limit (25 mph) is the wave
+  # speed. Taxi dwells need taxis, bus settings buses, delivery settings vans or trucks
+  # (kerbside.rs candidate_role): all of them do nothing on the car-only family with no
+  # taxi share.
+  - {prefix: traffic.signals.green_wave_heading_deg, set: {traffic.signals.green_wave_speed_mps: 11.176}}
+  - {prefix: traffic.kerbside.taxi_dwell_median_s, set: {traffic.kerbside.taxi_share: 0.3}}
+  - {prefix: traffic.critical_gap_factor, set: {world.source.params.signalised: false}}
+  # Jammed counts vehicles standing still for a whole gridlock timeout; at SUMO's 300 s
+  # default none can within 90 s, so the row uses 30 s in both runs.
+  - {prefix: traffic.keep_junctions_clear, set: {traffic.gridlock_timeout_s: 30.0}}
+  # Setting any lc_* field switches lane changing from MOBIL to LC2013 (wiring.rs), so
+  # against a MOBIL base each one only measured the model switch. LC2013 runs in both
+  # runs here (another factor at SUMO's default), so the row measures the factor itself.
+  - {prefix: traffic.lc_strategic, set: {traffic.lc_keep_right: 1.0}}
+  - {prefix: traffic.lc_cooperative, set: {traffic.lc_strategic: 1.0}}
+  - {prefix: traffic.lc_speed_gain, set: {traffic.lc_strategic: 1.0}}
+  - {prefix: traffic.lc_keep_right, set: {traffic.lc_strategic: 1.0}}
+  - {prefix: traffic.kerbside.bus_dwell_mean_s, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, bus: {fraction: 0.2}}}}
+  - {prefix: traffic.kerbside.bus_stop_spacing_m, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, bus: {fraction: 0.2}}}}
+  - {prefix: traffic.kerbside.delivery_stop_share, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  - {prefix: traffic.kerbside.delivery_dwell_median_s, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}

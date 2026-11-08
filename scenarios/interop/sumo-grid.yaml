@@ -1,0 +1,57 @@
+# SUMO drives the traffic; this engine runs radio, security, backend and UI.
+#
+# Needs SUMO: `pip install eclipse-sumo` into a virtualenv and set V2XW_SUMO_VENV to it (or
+# SUMO_HOME to an installation). The world is the SUMO network itself, so every SUMO lane is
+# a world lane (crates/v2xw-interop). Kept out of scenarios/*.yaml because the shipped-scenario
+# suites run without SUMO installed.
+#
+# worlds/sumo/grid3.net.xml was made with SUMO 1.27.1:
+#   netgenerate --grid --grid.number 3 --grid.length 200 --default.lanenumber 2 \
+#     --default.speed 13.89 --default-junction-type traffic_light --no-turnarounds true --seed 1
+schema: v2xw/scenario/1
+
+meta:
+  name: SUMO-driven grid
+  description: >-
+    A 3 x 3 signalised grid whose vehicles are driven by SUMO over TraCI: SUMO decides every
+    vehicle's motion, this engine sends and signs the BSMs, runs the radio and draws the city.
+    Demand comes from worlds/sumo/grid3.rou.xml (SUMO routes it) and from the scenario's own
+    Poisson demand (routed here, inserted into SUMO).
+  tags: [interop, sumo, traci]
+  created: "2026-10-07"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T12:00:00Z"
+  duration_s: 60.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: sumo-net
+    path: worlds/sumo/grid3.net.xml
+  imported_at: "2026-10-07T00:00:00Z"
+
+mobility:
+  provider: sumo
+  route_files: [worlds/sumo/grid3.rou.xml]
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h_per_lane_km: 20.0
+
+radio:
+  rat: dsrc-80211p
+
+messages:
+  sets: [bsm]
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled

@@ -1,0 +1,65 @@
+{
+ "corpus": "camp-linkage-values",
+ "source": {
+  "title": "CAMP SCMS crypto test vectors, lv.txt",
+  "id": "S6",
+  "url": "https://github.com/conz27/crypto-test-vectors/blob/dd5014e6c3136895744f1fe73734fa3592f37bd4/lv.txt",
+  "commit": "dd5014e6c3136895744f1fe73734fa3592f37bd4",
+  "sha256": "cae86133d652fbfc8f52e98bf2c96aa8e12a85461a1372937cc8529818a96155",
+  "licence": "none (repository has no licence file): values transcribed with citations, files not vendored",
+  "transcribed": "2026-10-16"
+ },
+ "parameters": "ls(i) = first 16 bytes of SHA-256(la_id || ls(i-1) || 0^112); plv(i,j) = first 9 bytes of AES_ls(i)(la_id || j || 0^80) XOR (la_id || j || 0^80); lv = plv1 XOR plv2; la_id 16 bits, j 32 bits",
+ "vectors": [
+  {
+   "id": "lv.txt i=0",
+   "cite": "CAMP lv.txt lines 7-10 (LA ids), xt lines 18-67",
+   "in": {
+    "la_id1": "8e09",
+    "la_id2": "59ce",
+    "ls1_0": "4840ed221502d9ab6786bf68fba9f210",
+    "ls2_0": "6b71a7eb5755f16e89981d2189a6daea",
+    "i": 0,
+    "j": 8
+   },
+   "out": {
+    "aes_in1": "8e090000000800000000000000000000",
+    "aes_out1": "effa91b5d938e103ede781fc119fc096",
+    "plv1": "61f391b5d930e103ed",
+    "aes_in2": "59ce0000000800000000000000000000",
+    "aes_out2": "50b75ec53b66211cdf5a4f070e3bc867",
+    "plv2": "09795ec53b6e211cdf",
+    "lv": "688acf70e25ec01f32",
+    "ls1_i": "4840ed221502d9ab6786bf68fba9f210",
+    "ls2_i": "6b71a7eb5755f16e89981d2189a6daea"
+   }
+  },
+  {
+   "id": "lv.txt i=1",
+   "cite": "CAMP lv.txt lines 7-10 (LA ids), xt lines 77-150",
+   "in": {
+    "la_id1": "8e09",
+    "la_id2": "59ce",
+    "ls1_0": "4840ed221502d9ab6786bf68fba9f210",
+    "ls2_0": "6b71a7eb5755f16e89981d2189a6daea",
+    "i": 1,
+    "j": 6
+   },
+   "out": {
+    "sha_in1": "8e094840ed221502d9ab6786bf68fba9f2100000000000000000000000000000",
+    "sha_out1": "bd8f57949b4b60800cc97dbc6cd73edf4e9030c415080553a8859fe9d1fef740",
+    "aes_in1": "8e090000000600000000000000000000",
+    "aes_out1": "dc2144a7e47d958fa1ba756da353239a",
+    "plv1": "522844a7e47b958fa1",
+    "sha_in2": "59ce6b71a7eb5755f16e89981d2189a6daea0000000000000000000000000000",
+    "sha_out2": "228c371780f1e0ec424659bbaebc54a19d1393f465f1bc857fbb26fb48c49195",
+    "aes_in2": "59ce0000000600000000000000000000",
+    "aes_out2": "33a1db7def6b8fdcf69b784757230f64",
+    "plv2": "6a6fdb7def6d8fdcf6",
+    "lv": "38479fda0b161a5357",
+    "ls1_i": "bd8f57949b4b60800cc97dbc6cd73edf",
+    "ls2_i": "228c371780f1e0ec424659bbaebc54a1"
+   }
+  }
+ ]
+}

@@ -1,0 +1,1614 @@
+//! The LTE-V2X and NR-V2X sidelink access layer, driven by the engine's event loop.
+//!
+//! `radio.rat: lte-v2x-pc5` and `nr-v2x-pc5` select it, and `radio.models.sidelink`
+//! configures it (profile, MCS, blind retransmissions, congestion control). What it
+//! composes is `v2xw-radio`'s own sidelink stack:
+//!
+//! * [`v2xw_radio::SpsEngine`] — sensing-based semi-persistent scheduling: the sensing
+//!   window, RSRP exclusion with the 3 dB step-up, S-RSSI ranking, the random pick, the
+//!   reservation with `C_resel` and `probResourceKeep`, blind-retransmission resources,
+//!   the CBR/CR congestion control, and for NR the Rel-16 re-evaluation and pre-emption
+//!   (TS 36.213 §14.1.1.6 for LTE, TS 38.214 §8.1.4 for NR);
+//! * [`v2xw_radio::SidelinkPhy`] — half duplex, the SCI drawn against the control
+//!   channel's BLER, the sensitivity floor, per-sub-channel SINR with in-band emission from
+//!   co-slot transmitters on other sub-channels, and the BLER lookup with chase combining
+//!   of blind retransmissions.
+//!
+//! # How the event loop drives a slotted MAC
+//!
+//! A frame whose signature has finished waits in the engine's `pending_tx` exactly as an
+//! 802.11p frame does, and a [`crate::event::Event::MacTimer`] at the ready instant hands
+//! it to the SPS engine. A timer that does not fall on a slot boundary only enqueues and
+//! re-arms at the next boundary, because a transport block can only start at one. At a
+//! boundary the engine polls: a UE with no reservation (or one the MAC triggers of
+//! TS 36.321 §5.14.1.1 invalidate) selects a resource `T1..T2` slots ahead, and a UE whose
+//! reservation — or owed blind retransmission — is this slot is granted and goes on the
+//! air at once, unless congestion control drops it. The next timer is the MAC's own
+//! [`v2xw_radio::SpsEngine::next_grant_at`].
+//!
+//! Every co-slot transmission starts at the same instant, so when a frame starts, every
+//! frame already started in its slot is exactly its interferer set; the two cross-declare
+//! at each shared receiver, as the 802.11p path does. The outcome is decided at the slot's
+//! end (`PhyEnd`, priority 3), which the kernel dispatches before any `MacTimer` of the
+//! next slot (priority 4) — so by then the slot's transmitter set is complete.
+//!
+//! # What each receiver senses
+//!
+//! Each transmission puts its received power, split over its sub-channels, into every
+//! in-range UE's S-RSSI history as it starts; a jammer's energy goes in the same way
+//! ([`v2xw_radio::SpsEngine::note_jammer`]). The S-RSSI is what the CBR counts against
+//! −94 dBm (ETSI TS 103 574 §5.2) and what step 5 ranks by. A UE learns a neighbour's
+//! *reservation* only from an SCI it decoded: at the slot's end the PHY draws each
+//! receiver's SCI against the control channel's BLER at the control channel's SINR —
+//! interference included — and only a decoded SCI puts the announced resources, at their
+//! PSSCH-RSRP (per resource element, TS 36.214 §5.1.29), into the sensing window.
+//!
+//! # Blind retransmissions
+//!
+//! With `max_transmissions` above one, each transport block is sent on up to three
+//! resources the SPS engine reserved together (inside ±15 subframes for LTE, 32 slots for
+//! NR). A receiver decodes each copy; a copy whose SCI it decoded goes into its soft
+//! buffer, and the next copy is decoded at the combined SINR. The reception is recorded
+//! once per transport block and receiver: when a copy first decodes (so the latency is
+//! that copy's), or when the last copy fails. A copy that arrives after the receiver has
+//! decoded is a duplicate the MAC discards, and is not a second reception.
+//!
+//! # What is not here
+//!
+//! * **Mode 3 / Mode 1** (base-station scheduled): out of coverage is the V2V case the
+//!   J3161/1 deployment profile specifies, and nothing schedules from a gNB here.
+//! * **MCS and sub-channel adaptation** under congestion: the UE gives up its blind
+//!   retransmissions and then the transport block, which ETSI TS 103 574 §5.3 allows; it
+//!   does not raise its MCS, which J3161/1's per-CBR MCS ranges would also allow.
+//! * **SAE J3161/1 §7.3.3's SPS + one-shot interleaving.**
+//!
+//! # BSM generation aligned to the reservation
+//!
+//! Off by default (`radio.sidelink.align_generation`). On, after each BSM's initial
+//! transmission the sender's next periodic BSM is aligned to its next reserved subframe
+//! (`SpsEngine::next_reserved_at`): it is generated `lead` before it, where `lead` is the
+//! device's longest signing time (`ObuRuntime::sign_time_bound`), the generation timing's
+//! largest hand-off jitter, and `align_margin_ms` (unset: the pool's `T1`). The node's
+//! step phase moves to that instant, so the next step generates it, and a reselection —
+//! counter expiry, a size or latency trigger, NR re-evaluation or pre-emption — moves the
+//! phase to the new reservation at the next grant. A BSM whose reservation was released
+//! (counter expiry without keep) is generated on the old phase and selects at arrival, as
+//! TS 36.321 §5.14.1.1 has it. The interval a realignment changes stays inside J2945/1's
+//! `vMinITT`..`vMaxITT` (`MessageSchedule::align_to`).
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use v2xw_core::card::Tier;
+use v2xw_core::ids::{FrameSeq, NodeId};
+use v2xw_core::time::{Duration, SimTime};
+use v2xw_radio::sidelink::{CrLimitTable, SlMcsSpec};
+use v2xw_radio::{
+    AccessCategory, ChannelId, Mac, MacSdu, PoolConfig, RxOutcome, SidelinkPhy, SlArrival,
+    SlInterferer, SlResource, SpsEngine, SpsParams,
+};
+
+use super::{Engine, FrameState, LinkOutcome};
+use crate::ctx::{EngineCtx, RunRecorder};
+use crate::error::Result;
+use crate::scenario::Scenario;
+use crate::scenario::schema::Rat;
+use crate::wiring::{CongestionChoice, SidelinkChoice, SidelinkProfile};
+
+/// The US C-V2X channel: 5.905-5.925 GHz, channel 183, the 20 MHz the FCC's 2020 5.9 GHz
+/// order (FCC 20-164) reserved for C-V2X and SAE J3161/1 deploys LTE-V2X on.
+pub const CV2X_CHANNEL: ChannelId = ChannelId(183);
+/// The carrier the sidelink link budget is evaluated at, hertz: the centre of channel 183.
+pub const CV2X_FREQ_HZ: f64 = 5.915e9;
+/// The sidelink UE transmit power, dBm: the 23 dBm power class of 3GPP TR 36.885
+/// Table A.1.2-1 and TR 37.885 Table 6.1.1-1, which SAE J3161/1
+/// also specifies; it is [`v2xw_radio::SIDELINK_TX_POWER_DBM`].
+pub const CV2X_TX_POWER_DBM: f64 = v2xw_radio::SIDELINK_TX_POWER_DBM;
+
+/// What the sidelink access layer did over a run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct SidelinkReport {
+    /// Which sidelink: `lte-v2x-mode4` or `nr-v2x-mode2`.
+    pub rat: String,
+    /// The configuration the pool and the scheduler come from.
+    pub profile: String,
+    /// The regulatory region the run transmits under (`radio.region`).
+    pub region: String,
+    /// The channel number, and its width in MHz.
+    pub channel: u16,
+    /// The channel's width, MHz.
+    pub channel_mhz: u16,
+    /// The MCS, by name.
+    pub mcs: String,
+    /// The resource pool's sub-channel count.
+    pub subchannels: u32,
+    /// The slot duration, nanoseconds.
+    pub slot_ns: u64,
+    /// Transmissions per transport block the scheduler reserves for.
+    pub max_transmissions: u32,
+    /// The congestion-control table enforced, or `off`.
+    pub congestion_control: String,
+    /// Resource selections, by the trigger that caused them.
+    pub selections: BTreeMap<String, u64>,
+    /// Transport blocks granted a resource (initial transmissions).
+    pub grants: u64,
+    /// Blind retransmissions sent.
+    pub retransmissions: u64,
+    /// Transport blocks dropped because their latency budget passed before a grant.
+    pub expired: u64,
+    /// Transport blocks refused by a full per-UE queue or as larger than the whole pool.
+    pub refused: u64,
+    /// Transport blocks congestion control dropped (their CR limit could not be met).
+    pub cc_dropped: u64,
+    /// Blind retransmissions congestion control dropped.
+    pub cc_dropped_retx: u64,
+    /// Transmissions that shared at least one sub-channel of their slot with another
+    /// transmission: the resource collisions sensing-based SPS is meant to avoid.
+    pub overlapping_transmissions: u64,
+    /// Sub-channel-slots used by transmissions, over all transmissions.
+    pub subchannel_slots_used: u64,
+    /// SCIs in-range UEs decoded, and so could schedule around.
+    pub sci_decoded: u64,
+    /// SCIs in-range UEs missed (control-channel BLER, half duplex).
+    pub sci_missed: u64,
+    /// Receptions that decoded only because a blind retransmission was combined with an
+    /// earlier copy.
+    pub combined_decodes: u64,
+    /// Receptions first decoded on a blind retransmission, by combining or because the
+    /// retransmission's own fade and interference were better.
+    pub retx_decodes: u64,
+    /// Duplicate copies discarded by receivers that had already decoded the block.
+    pub duplicates: u64,
+    /// Mean CBR congestion control read at its grants, per mille.
+    pub mean_cbr_at_grant_pm: u64,
+    /// Largest CBR congestion control read at a grant, per mille.
+    pub max_cbr_at_grant_pm: u64,
+    /// Under `radio.sidelink.align_generation`: BSMs granted that were generated at the
+    /// instant aligned to their sender's reservation.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bsm_aligned: u64,
+    /// BSMs granted that were not (the first, one after its reservation was
+    /// released, one whose step came late). The engine generates no event-driven BSM
+    /// (hard braking is a DENM), so none of these is an event BSM.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bsm_unaligned: u64,
+    /// Alignments that moved to a new reservation after a reselection.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub bsm_realigned_on_reselection: u64,
+    #[serde(skip)]
+    cbr_sum_pm: u64,
+    #[serde(skip)]
+    cbr_n: u64,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+/// A UE's BSM alignment: the reservation it was aligned to, by the selection that
+/// made it, and the instant its next BSM is due, `None` once the reservation is released.
+#[derive(Debug, Clone, Copy)]
+struct AlignState {
+    selection: u64,
+    due: Option<SimTime>,
+}
+
+/// A transport block's sidelink state across its transmissions.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SlFrame {
+    /// The grant of the transmission now on the air.
+    pub(crate) grant: Option<v2xw_radio::sps::SlGrantInfo>,
+    /// Which transmission of the block is on the air (1-based) and how many there are.
+    pub(crate) attempt: u32,
+    pub(crate) total: u32,
+    /// Each receiver's soft buffer: the linear SINR of the copies it could combine.
+    pub(crate) soft: BTreeMap<NodeId, f64>,
+    /// How many copies each receiver combined.
+    pub(crate) copies: BTreeMap<NodeId, u32>,
+    /// Receivers that have decoded the block.
+    pub(crate) done: BTreeSet<NodeId>,
+    /// Receivers that have not decoded it yet, with the outcome of their latest copy —
+    /// what is recorded if no later copy decodes.
+    pub(crate) held: BTreeMap<NodeId, LinkOutcome>,
+    /// Each receiver's link condition at the block's latest transmission: environment,
+    /// LOS / NLOSv / NLOS and relative speed — what an NR link-level curve is indexed by.
+    pub(crate) cond: BTreeMap<NodeId, v2xw_radio::NrLinkCondition>,
+    /// The reception census of the block's first copy, receiver by receiver: the 20 m bin
+    /// each equipped node in range was counted in. With blind retransmissions the census
+    /// (`phy.prr`) is one per transport block, not one per copy — TR 36.885 §A.2.1.4
+    /// counts a packet once, and a copy a receiver discards as a duplicate is not a
+    /// failed reception. Empty for a block sent once.
+    pub(crate) prr_bins: BTreeMap<NodeId, u32>,
+    /// The receivers that decoded some copy, counted in their first-copy census bin.
+    pub(crate) prr_decoded: BTreeMap<u32, u32>,
+    /// Set on the copy (or the finalisation) that resolves the block: its census is due.
+    pub(crate) prr_due: bool,
+}
+
+impl SlFrame {
+    /// Records a receiver's link condition from the link budget's line-of-sight answer
+    /// and the two ends' velocities.
+    ///
+    /// A building-blocked (or terrain-blocked) path is TR 37.885's NLOS, a path blocked
+    /// only by vehicles its NLOSv, anything else LOS; the relative speed is the magnitude
+    /// of the velocity difference, which is what sets the Doppler spread of a V2V link
+    /// (0 km/h for two cars in one platoon, 280 km/h for two at 140 km/h head-on).
+    pub(crate) fn note_condition(
+        &mut self,
+        environment: v2xw_radio::NrEnvironment,
+        rx: NodeId,
+        los: v2xw_radio::LosClass,
+        tx_vel: v2xw_core::geom::Vec3,
+        rx_vel: v2xw_core::geom::Vec3,
+    ) {
+        use v2xw_radio::{LosClass, NrLinkState};
+        let state = match los {
+            LosClass::NlosB | LosClass::NlosBv | LosClass::NlosT => NrLinkState::Nlos,
+            LosClass::NlosV => NrLinkState::NlosV,
+            LosClass::Los => NrLinkState::Los,
+        };
+        let dv = tx_vel - rx_vel;
+        let speed_mps = v2xw_core::math::sqrt(dv.x * dv.x + dv.y * dv.y + dv.z * dv.z);
+        self.cond.insert(
+            rx,
+            v2xw_radio::NrLinkCondition {
+                environment,
+                state,
+                relative_speed_kmh: speed_mps * 3.6,
+            },
+        );
+    }
+}
+
+/// The sidelink stack of one run.
+pub(crate) struct SidelinkAccess {
+    pub(crate) phy: SidelinkPhy,
+    /// The same PHY at the high tier, for receivers inside a high focus region.
+    pub(crate) phy_high: Option<SidelinkPhy>,
+    pub(crate) mac: SpsEngine,
+    pub(crate) channel: ChannelId,
+    pub(crate) freq_hz: f64,
+    /// TR 36.885's UE transmit power. A frame's power is now its node's
+    /// `radio.devices` power (default the same 23 dBm), so this is the coupling card's
+    /// reference value only.
+    #[allow(dead_code)]
+    pub(crate) tx_power_dbm: f64,
+    /// Which nodes transmit in each recent slot, for the half-duplex test at the slot's
+    /// end. Pruned to the last few slots as the run advances.
+    slot_tx: BTreeMap<u64, BTreeSet<NodeId>>,
+    /// The transport blocks on the air in each recent slot — frame, transmitter and
+    /// resource — for the co-slot interferer walk and the overlap count.
+    slot_frames: BTreeMap<u64, Vec<(FrameSeq, NodeId, SlResource)>>,
+    /// Frames whose remaining retransmissions were abandoned, to be resolved when a
+    /// recorder is at hand.
+    pub(crate) finalize: Vec<FrameSeq>,
+    pub(crate) report: SidelinkReport,
+    /// The alignment margin when `radio.sidelink.align_generation` is on.
+    align_margin: Option<Duration>,
+    /// Each UE's alignment.
+    align: BTreeMap<NodeId, AlignState>,
+}
+
+/// The transmission bandwidth, PRB, of a sidelink carrier `width_mhz` wide: TS 36.101
+/// Table 5.6-1 (LTE at 15 kHz) and TS 38.101-1 Table 5.3.2-1 (NR at 30 kHz).
+fn prb_in(rat: v2xw_radio::SlRat, width_mhz: f64) -> Option<u32> {
+    let w = width_mhz.round() as u32;
+    match (rat, w) {
+        (v2xw_radio::SlRat::LteMode4, 10) => Some(50),
+        (v2xw_radio::SlRat::LteMode4, 20) => Some(100),
+        (v2xw_radio::SlRat::NrMode2, 10) => Some(24),
+        (v2xw_radio::SlRat::NrMode2, 20) => Some(51),
+        (v2xw_radio::SlRat::NrMode2, 30) => Some(78),
+        _ => None,
+    }
+}
+
+/// A TS 38.214 Table 5.1.3.1-2 row, falling back to MCS 7 for an index the loader has
+/// already refused.
+fn nr_table2(index: u8) -> SlMcsSpec {
+    v2xw_radio::nr_mcs_table2(index)
+        .unwrap_or_else(|| v2xw_radio::nr_mcs_table2(7).expect("MCS 7 is in Table 5.1.3.1-2"))
+}
+
+/// The pool and the scheduler parameters a scenario's sidelink runs.
+fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsParams, String)> {
+    use v2xw_radio::sidelink as sl;
+    let (mut pool, mut params, profile) = match (rat, choice.profile) {
+        (Rat::LteV2xPc5, Some(SidelinkProfile::MolinaMasegosa2017)) => (
+            PoolConfig::molina_masegosa_highway(),
+            SpsParams::molina_masegosa(10),
+            "molina-masegosa-2017",
+        ),
+        (Rat::LteV2xPc5, Some(SidelinkProfile::EtsiEn303613)) => {
+            let mcs: SlMcsSpec = match choice.mcs {
+                Some(5) => sl::LTE_MCS5_J3161,
+                Some(11) => sl::LTE_MCS11_J3161,
+                _ => sl::LTE_MCS7_J3161,
+            };
+            // EN 303 613 V1.1.1 Table B.2: ten-PRB sub-channels with an adjacent PSCCH,
+            // and `minMCS-PSSCH` "0 for the transmission using one sub-channel" — so one
+            // sub-channel is allowed, unlike J3161/1's two. The width is the channel's
+            // (`for_scenario`). The keep probability and the sensing parameters are not
+            // in Annex B; they stay Rel-14's study values (Molina-Masegosa).
+            (
+                PoolConfig {
+                    min_subchannels: 1,
+                    ..PoolConfig::sae_j3161(mcs)
+                },
+                SpsParams {
+                    cc: Some(CrLimitTable::ETSI_TS_103_574),
+                    ..SpsParams::molina_masegosa(10)
+                },
+                "etsi-en303613",
+            )
+        }
+        (Rat::LteV2xPc5, _) => {
+            let mcs: SlMcsSpec = match choice.mcs {
+                Some(5) => sl::LTE_MCS5_J3161,
+                Some(11) => sl::LTE_MCS11_J3161,
+                _ => sl::LTE_MCS7_J3161,
+            };
+            (
+                PoolConfig::sae_j3161(mcs),
+                SpsParams::sae_j3161(),
+                "sae-j3161",
+            )
+        }
+        (Rat::NrV2xPc5, None | Some(SidelinkProfile::EtsiEn303798)) => {
+            // TS 38.214 Table 5.1.3.1-2 MCS 7, 16QAM-490: one of the four MCS the source
+            // prints in every speed and channel state (so no link condition reads a
+            // shifted or interpolated curve), and it carries a 300 B signed BSM in two of
+            // the four sub-channels, like J3161/1's LTE profile carries it in three of ten.
+            let mcs = nr_table2(choice.mcs.unwrap_or(7));
+            (
+                PoolConfig::etsi_en303798_nr(mcs),
+                SpsParams {
+                    cc: Some(CrLimitTable::ETSI_TS_103_574),
+                    ..SpsParams::ali_todisco(sl::Numerology::Mu1, true)
+                },
+                "etsi-en303798",
+            )
+        }
+        (Rat::NrV2xPc5, _) => {
+            let mu = sl::Numerology::Mu1;
+            let mcs = sl::nr_mcs(choice.mcs.unwrap_or(9))
+                .unwrap_or_else(|| sl::nr_mcs(9).expect("MCS 9 is in TS 38.214 Table 5.1.3.1-1"));
+            (
+                PoolConfig::todisco_nr(mu, mcs),
+                // The ETSI TS 103 574 table by default: TS 38.214 §8.1.6 runs the same
+                // Σ CR ≤ CR_Limit procedure and no NR value set was found published.
+                SpsParams {
+                    cc: Some(CrLimitTable::ETSI_TS_103_574),
+                    ..SpsParams::ali_todisco(mu, true)
+                },
+                "todisco-2021",
+            )
+        }
+        _ => return None,
+    };
+    match choice.congestion {
+        CongestionChoice::ProfileDefault => {
+            if params.cc.is_none() {
+                params.cc = Some(CrLimitTable::ETSI_TS_103_574);
+            }
+        }
+        CongestionChoice::Off => params.cc = None,
+        CongestionChoice::Table(id) => params.cc = CrLimitTable::by_id(id),
+    }
+    if let Some(n) = choice.max_transmissions {
+        params = params.with_max_transmissions(n);
+    }
+    // `sizing: ts-36-213`: the transport block takes TS 36.213 Table 7.1.7.2.1-1's size
+    // at the MCS's I_TBS (Table 8.6.1-1). The loader admits it on the LTE profiles with
+    // an MCS index only; MCS 7 is their default.
+    if choice.tbs_sizing && matches!(rat, Rat::LteV2xPc5) {
+        pool.lte_itbs = v2xw_radio::lte_itbs_for_mcs(choice.mcs.unwrap_or(7));
+    }
+    Some((pool, params, profile.to_string()))
+}
+
+/// Applies `radio.sidelink` over a profile's scheduler parameters. The loader has
+/// refused every value outside its legal set, so each conversion here succeeds.
+fn apply_tuning(
+    params: &mut SpsParams,
+    pool: &PoolConfig,
+    t: &crate::scenario::schema::SidelinkSettings,
+) {
+    if let Some(ms) = t.reservation_interval_ms {
+        params.rri = v2xw_radio::Rri(ms);
+    }
+    if let Some(on) = t.sensing {
+        params.sensing = on;
+        // Only LTE's procedure ranks by S-RSSI (TS 36.213 §14.1.1.6 step 8); NR mode 2
+        // reports S_A unranked (TS 38.214 §8.1.4), so sensing on does not add a ranking.
+        params.srssi_ranking = on && params.rat == v2xw_radio::SlRat::LteMode4;
+    }
+    if let Some(dbm) = t.rsrp_threshold_dbm {
+        params.rsrp_threshold_dbm = dbm;
+    }
+    // network audit
+    if let Some(dbm) = t.cbr_threshold_dbm {
+        params.cbr_threshold_dbm = dbm;
+    }
+    if let Some(p) = t.candidate_percent {
+        params.tx_percentage = match p {
+            35 => v2xw_radio::TxPercentage::P35,
+            50 => v2xw_radio::TxPercentage::P50,
+            _ => v2xw_radio::TxPercentage::P20,
+        };
+    }
+    if let Some(k) = t.resource_keep_probability
+        && let Some(keep) = v2xw_radio::ProbResourceKeep::from_probability(k)
+    {
+        params.prob_keep = keep;
+    }
+    if let Some(ms) = t.selection_window_ms {
+        // T2 in slots: one per millisecond on LTE, 2^µ per millisecond on NR.
+        let slot_ns = pool.slot().as_nanos().max(1);
+        let slots = (u64::from(ms) * 1_000_000).div_ceil(slot_ns);
+        params.t2_slots = slots.max(params.t1_slots);
+    }
+}
+
+impl SidelinkAccess {
+    /// The access layer `radio.rat` selects, or `None` for 802.11p.
+    ///
+    /// **LTE-V2X PC5 Mode 4** defaults to the SAE J3161/1 deployment profile (US channel
+    /// 183, 20 MHz, ten 10-PRB sub-channels with at least two per transport block, MCS 7,
+    /// `probResourceKeep` 0.8, J3161/1's CR limits), with the Molina-Masegosa 2017 study
+    /// pool selectable (`profile: molina-masegosa-2017`).
+    ///
+    /// **NR-V2X PC5 Mode 2** defaults to the ETSI EN 303 798 configuration the
+    /// Lusvarghi 2024 link-level curves were generated in: µ = 1 (30 kHz, 0.5 ms slots),
+    /// 20 MHz = 51 PRB, four 12-PRB sub-channels, a 3-symbol 12-PRB PSCCH, 10 data
+    /// symbols, TS 38.214 Table 5.1.3.1-2 MCS 7 (16QAM-490) by default, every block error
+    /// read from a transcribed curve for the link's environment, state and relative
+    /// speed. Todisco's 10 MHz study pool stays selectable (`profile: todisco-2021`,
+    /// Table 5.1.3.1-1). Both run the Ali/Todisco Mode 2 scheduler — sensing window
+    /// 100 ms, `T1` 2, `T2` 33 slots, RSRP −128 dBm, RRI 100 ms, Rel-16 re-evaluation
+    /// and pre-emption on — and ETSI TS 103 574's CR limits. No US
+    /// NR-V2X deployment profile exists.
+    ///
+    /// `Rat::Hybrid` is refused by the loader, so it never reaches here.
+    pub(crate) fn for_scenario(scenario: &Scenario) -> Option<Self> {
+        let tier = match scenario.radio.tiers.phy {
+            // The sidelink PHY has medium and high tiers; an abstract
+            // request runs the medium one, which is what the key-status note says.
+            Tier::Abstract => Tier::Medium,
+            t => t,
+        };
+        let mut choice = crate::wiring::radio_models(scenario)
+            .ok()
+            .and_then(|m| m.sidelink)
+            .unwrap_or_default();
+        // No `radio.models.sidelink`: the RAT's default profile in the run's region.
+        if choice.profile.is_none() {
+            choice.profile = crate::wiring::sidelink_profile(scenario);
+        }
+        let refsens_cutoff = choice.refsens_cutoff;
+        let (pool, mut params, profile) = configuration(scenario.radio.rat, choice)?;
+        // The margin, unset the pool's processing time T1 (an ASSUMPTION until
+        // J3161/1's own figure is read).
+        let align_margin = (scenario.radio.sidelink.align_generation == Some(true)).then(|| {
+            scenario.radio.sidelink.align_margin_ms.map_or_else(
+                || Duration::from_nanos(pool.slot().as_nanos() * params.t1_slots),
+                |ms| Duration::from_nanos((ms * 1e6).round() as u64),
+            )
+        });
+        // `radio.sidelink`: a researcher's numbers over the profile's.
+        apply_tuning(&mut params, &pool, &scenario.radio.sidelink);
+        // The channel the region's rules put this technology on (`radio.region`,
+        // `radio.channel`); the loader has already refused a scenario with none.
+        let regulation = crate::wiring::radio_regulation(scenario).ok()?;
+        let width = regulation.rule.channel.bandwidth_mhz();
+        // A profile that sizes itself to its channel takes the channel's transmission
+        // bandwidth: TS 36.101 Table 5.6-1 for LTE (50 PRB in 10 MHz, 100 in 20 MHz), TS
+        // 38.101-1 Table 5.3.2-1 at 30 kHz for NR (24, 51 and 78 PRB in 10, 20, 30 MHz).
+        let adapts = matches!(profile.as_str(), "etsi-en303613" | "etsi-en303798");
+        let bandwidth_prb = if adapts {
+            prb_in(pool.rat, width).unwrap_or(pool.bandwidth_prb)
+        } else {
+            pool.bandwidth_prb
+        };
+        let pool = PoolConfig {
+            centre_hz: regulation.centre_hz(),
+            bandwidth_prb,
+            ..pool
+        };
+        let report = SidelinkReport {
+            rat: pool.rat.label().to_string(),
+            profile,
+            region: regulation.region.id().to_string(),
+            channel: regulation.rule.channel.number,
+            channel_mhz: width.round() as u16,
+            mcs: pool.mcs.label.to_string(),
+            subchannels: pool.subchannels(),
+            slot_ns: pool.slot().as_nanos(),
+            max_transmissions: 1 + SpsEngine::new(tier, pool.clone(), params.clone()).retx_budget(),
+            congestion_control: params
+                .cc
+                .as_ref()
+                .map_or_else(|| "off".to_string(), |t| t.id.to_string()),
+            ..SidelinkReport::default()
+        };
+        // A fielded receiver decodes far below TS 36.101's conformance sensitivity, so
+        // the block-error curve alone decides (`SidelinkPhy::with_sensitivity_dbm`),
+        // unless the scenario asks for the conformance receiver (`sensitivity: ts-36-101`).
+        let phy = SidelinkPhy::new(tier, pool.clone()).with_sensitivity_dbm(
+            refsens_cutoff.then_some(v2xw_radio::cv2x::SIDELINK_SENSITIVITY_DBM),
+        );
+        // network audit: `radio.sidelink.noise_figure_db` over TR 36.885's 9 dB.
+        let phy = phy.with_noise_figure_db(crate::wiring::sidelink_noise_figure_db(scenario));
+        let phy_high = scenario
+            .radio
+            .tiers
+            .focus
+            .as_ref()
+            .filter(|f| f.tier == Tier::High && tier != Tier::High)
+            .map(|_| phy.at_tier(Tier::High));
+        Some(Self {
+            phy,
+            phy_high,
+            mac: SpsEngine::new(tier, pool, params),
+            channel: regulation.channel(),
+            freq_hz: regulation.centre_hz(),
+            tx_power_dbm: CV2X_TX_POWER_DBM,
+            slot_tx: BTreeMap::new(),
+            slot_frames: BTreeMap::new(),
+            finalize: Vec::new(),
+            report,
+            align_margin,
+            align: BTreeMap::new(),
+        })
+    }
+
+    /// The slot a transport block occupies.
+    pub(crate) fn slot(&self) -> Duration {
+        self.mac.pool().slot()
+    }
+
+    /// Registers the PHY's and the MAC's cards, and the card of the coupling this module
+    /// adds between them, so the manifest pins all three.
+    pub(crate) fn register(&self, registry: &mut v2xw_core::registry::Registry) -> Result<()> {
+        use v2xw_core::model::Model;
+        let mut cards = vec![
+            self.phy.card().clone(),
+            self.mac.card().clone(),
+            self.phy.error_model().card().clone(),
+            coupling_card(self.mac.pool(), self.mac.params(), &self.report),
+        ];
+        if let Some(h) = self.phy_high.as_ref() {
+            cards.push(h.card().clone());
+        }
+        for card in cards {
+            if !registry.contains(&card.id) {
+                registry.register(card)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Forgets the per-slot bookkeeping older than a few slots.
+    fn prune(&mut self, now_slot: u64) {
+        let keep_from = now_slot.saturating_sub(4);
+        self.slot_tx = self.slot_tx.split_off(&keep_from);
+        self.slot_frames = self.slot_frames.split_off(&keep_from);
+    }
+
+    /// The node-level view of how a transmission went out, for `node.tx`.
+    pub(crate) fn radio_view(
+        &self,
+        grant: Option<&v2xw_radio::sps::SlGrantInfo>,
+    ) -> (Option<u8>, v2xw_metrics::channels::TxRadioView) {
+        let pool = self.mac.pool();
+        let mcs = pool.mcs;
+        let index = match pool.rat {
+            v2xw_radio::SlRat::LteMode4 => v2xw_radio::sidelink::lte_mcs_index(mcs),
+            // The index in the pool's own MCS table: Table 5.1.3.1-2's rows are labelled
+            // `nr-t2-mcsN`, Table 5.1.3.1-1's `nr-mcsN`; the label says which.
+            v2xw_radio::SlRat::NrMode2 => mcs
+                .label
+                .strip_prefix("nr-t2-mcs")
+                .or_else(|| mcs.label.strip_prefix("nr-mcs"))
+                .and_then(|d| d.parse().ok()),
+        };
+        let q = |x: f64| (x * 1e4).round() / 1e4;
+        let view = v2xw_metrics::channels::TxRadioView {
+            rat: pool.rat.label().to_string(),
+            mcs: mcs.label.to_string(),
+            qm: Some(mcs.qm),
+            code_rate: Some(q(mcs.code_rate())),
+            slot: grant.map(|g| g.resource.slot),
+            subch: grant.map(|g| g.resource.subch),
+            subch_len: grant.map(|g| g.resource.len),
+            subchannels: Some(pool.subchannels()),
+            attempt: grant.map(|g| g.attempt),
+            attempts: grant.map(|g| g.total),
+            priority: grant.map(|g| g.pppp.0),
+            cbr: grant.map(|g| q(g.cbr)),
+            cr: grant.map(|g| q(g.cr)),
+            cr_limit: grant.and_then(|g| g.cr_limit),
+        };
+        (index, view)
+    }
+}
+
+/// The sidelink priority class a message is queued at: awareness messages (BSM, CAM)
+/// at AC_VI, which [`v2xw_radio::sidelink::Pppp::of_access_category`] maps to J3161/1's
+/// PPPP 5 for the BSM; everything else — event messages, reports, CRLs — at AC_VO.
+fn sidelink_ac(msg: v2xw_msg::MsgType) -> AccessCategory {
+    match msg {
+        v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam => AccessCategory::Vi,
+        _ => AccessCategory::Vo,
+    }
+}
+
+impl Engine {
+    /// One sidelink MAC timer: enqueue what has finished signing, and at a slot boundary
+    /// poll the SPS engine for this UE's grant.
+    pub(super) fn on_sidelink_timer(&mut self, node: NodeId, horizon: SimTime) {
+        let now = self.scheduler.now();
+        let (slot_ns, now_slot) = {
+            let sl = self.sidelink.as_ref().expect("checked by the caller");
+            let pool = sl.mac.pool();
+            (pool.slot().as_nanos(), pool.slot_of(now))
+        };
+
+        // 1. Everything whose signature has finished, in ready order.
+        let mut ready: Vec<(SimTime, FrameSeq)> = Vec::new();
+        if let Some(pending) = self.pending_tx.get_mut(&node) {
+            pending.sort_unstable();
+            let split = pending.partition_point(|(t, _)| *t <= now);
+            ready.extend(pending.drain(..split));
+            if pending.is_empty() {
+                self.pending_tx.remove(&node);
+            }
+        }
+        for (_, frame) in ready {
+            let Some((descriptor, msg_type, air)) = self
+                .frames
+                .get(&frame)
+                .map(|f| (f.descriptor, f.msg_type, f.air))
+            else {
+                continue;
+            };
+            // What was offered to the MAC in this metric window, as the 802.11p path
+            // counts it, so `mac.cbr` carries the same load figures on a sidelink.
+            let window = self.mac_window.entry(node).or_default();
+            window.frames += 1;
+            window.bytes += u64::from(descriptor.bytes);
+            window.airtime_us += air.as_nanos() / 1_000;
+            let refused = {
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    sidelink,
+                    ..
+                } = self;
+                let mut null = crate::ctx::NullRecorder::new();
+                let mut ctx = EngineCtx::new(
+                    scheduler, rng, world, snapshot, provenance, params, &mut null,
+                );
+                let sl = sidelink.as_mut().expect("checked by the caller");
+                Mac::enqueue(
+                    &mut sl.mac,
+                    &mut ctx,
+                    node,
+                    MacSdu {
+                        frame: descriptor,
+                        enqueued_at: now,
+                    },
+                    sidelink_ac(msg_type),
+                )
+                .is_err()
+            };
+            if refused {
+                self.frames.remove(&frame);
+                self.report.mac_drops += 1;
+                self.mac_window.entry(node).or_default().drops += 1;
+                if let Some(sl) = self.sidelink.as_mut() {
+                    sl.report.refused += 1;
+                }
+            }
+        }
+
+        // 2. A transport block can only start on a slot boundary: off one, wait for it.
+        if now % slot_ns != 0 {
+            let next = (now_slot + 1) * slot_ns;
+            if next <= horizon {
+                self.schedule_sidelink_timer(node, next);
+            }
+            return;
+        }
+
+        // 3. Poll: selection, reselection triggers, congestion control, and this slot's
+        //    grant if it has one.
+        let (grant, info, expired, cc_dropped, abandoned, next) = {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                sidelink,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            let sl = sidelink.as_mut().expect("checked by the caller");
+            sl.mac.prune(node, now_slot);
+            let grant = Mac::poll(&mut sl.mac, &mut ctx, node, sl.channel);
+            let info = grant
+                .as_ref()
+                .and_then(|_| sl.mac.last_grant(node).cloned());
+            let expired = sl.mac.take_expired(node);
+            let cc_dropped = sl.mac.take_cc_dropped(node);
+            let abandoned = sl.mac.take_abandoned(node);
+            let next = sl.mac.next_grant_at(node);
+            (grant, info, expired, cc_dropped, abandoned, next)
+        };
+        for sdu in expired {
+            self.frames.remove(&sdu.frame.sdu_ref.seq);
+            self.report.mac_drops += 1;
+            self.mac_window.entry(node).or_default().drops += 1;
+            if let Some(sl) = self.sidelink.as_mut() {
+                sl.report.expired += 1;
+            }
+        }
+        for sdu in cc_dropped {
+            self.frames.remove(&sdu.frame.sdu_ref.seq);
+            self.report.mac_drops += 1;
+            self.mac_window.entry(node).or_default().drops += 1;
+            if let Some(sl) = self.sidelink.as_mut() {
+                sl.report.cc_dropped += 1;
+            }
+        }
+        for sdu in abandoned {
+            if let Some(sl) = self.sidelink.as_mut() {
+                sl.finalize.push(sdu.frame.sdu_ref.seq);
+            }
+        }
+        if let (Some(grant), Some(info)) = (grant, info) {
+            let frame = grant.sdu.frame.sdu_ref.seq;
+            let first = info.attempt == 1;
+            if let Some(sl) = self.sidelink.as_mut() {
+                if first {
+                    sl.report.grants += 1;
+                } else {
+                    sl.report.retransmissions += 1;
+                }
+                let pm = (info.cbr * 1000.0).round() as u64;
+                sl.report.cbr_n += 1;
+                sl.report.cbr_sum_pm += pm;
+                sl.report.max_cbr_at_grant_pm = sl.report.max_cbr_at_grant_pm.max(pm);
+            }
+            if first {
+                self.report.mac_grants += 1;
+            }
+            let air_ok = self
+                .frames
+                .get(&frame)
+                .is_some_and(|f| f.air.after(now) <= horizon);
+            // The BSM just granted, for the alignment of the sender's next one.
+            let aligned_bsm = (first
+                && self
+                    .sidelink
+                    .as_ref()
+                    .is_some_and(|sl| sl.align_margin.is_some()))
+            .then(|| self.frames.get(&frame))
+            .flatten()
+            .filter(|f| f.msg_type == v2xw_msg::MsgType::Bsm)
+            .map(|f| f.t_generated);
+            if let Some(state) = self.frames.get_mut(&frame) {
+                state.start = now;
+                state.end = state.air.after(now);
+                state.sl_resource = Some(info.resource);
+                if first {
+                    self.report.mac_access_delay_ns += now.saturating_sub(state.ready_at);
+                }
+                // A sidelink has no AIFS and no backoff: the whole wait for the reserved
+                // resource is the access delay's remainder, `mac_defer`.
+                state.mac_aifs_ns = 0;
+                state.mac_backoff_ns = 0;
+                state.sl.attempt = info.attempt;
+                state.sl.total = info.total;
+                state.sl.grant = Some(info);
+            }
+            if air_ok {
+                self.start_frame(frame, horizon);
+            } else if let Some(sl) = self.sidelink.as_mut() {
+                // The copy would end after the run: whoever still waits on it is resolved
+                // at the end of the run.
+                if first {
+                    self.frames.remove(&frame);
+                } else {
+                    sl.finalize.push(frame);
+                }
+            }
+            if let Some(t_generated) = aligned_bsm {
+                self.sidelink_align_bsm(node, t_generated, now, horizon);
+            }
+        }
+
+        // 4. The next time this UE has anything to do.
+        if let Some(at) = next {
+            let at = at.max(now + slot_ns);
+            if at <= horizon {
+                self.schedule_sidelink_timer(node, at);
+            }
+        }
+    }
+
+    /// A BSM of `node`'s, generated at `t_generated`, has just had its initial
+    /// transmission: count it as aligned or not, and align the node's next BSM to its
+    /// next reserved subframe.
+    fn sidelink_align_bsm(
+        &mut self,
+        node: NodeId,
+        t_generated: SimTime,
+        now: SimTime,
+        horizon: SimTime,
+    ) {
+        if self.gen_timing.is_synchronised() {
+            // The loader refuses this; every node steps at one instant, with no phase.
+            return;
+        }
+        let tol = v2xw_node::generate::ALIGN_TOLERANCE.as_nanos();
+        let Some(sl) = self.sidelink.as_mut() else {
+            return;
+        };
+        let Some(margin) = sl.align_margin else {
+            return;
+        };
+        let prev = sl.align.get(&node).copied();
+        let was_aligned = prev
+            .and_then(|p| p.due)
+            .is_some_and(|due| t_generated + tol >= due && t_generated <= due + tol);
+        if was_aligned {
+            sl.report.bsm_aligned += 1;
+        } else {
+            sl.report.bsm_unaligned += 1;
+        }
+        let now_slot = sl.mac.pool().slot_of(now);
+        let Some(occ) = sl.mac.next_reserved_at(node, now_slot) else {
+            // Released at counter expiry: the next BSM comes on the old phase and selects
+            // when it arrives.
+            if let Some(p) = sl.align.get_mut(&node) {
+                p.due = None;
+            }
+            return;
+        };
+        let reselected = prev.is_some_and(|p| p.selection != occ.selection);
+        let jitter = self.gen_timing.max_jitter;
+        let Some(rt) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) else {
+            return;
+        };
+        let lead = rt
+            .sign_time_bound()
+            .unwrap_or(Duration::ZERO)
+            .as_nanos()
+            .saturating_add(jitter.as_nanos())
+            .saturating_add(margin.as_nanos());
+        let at = occ.at.saturating_sub(lead);
+        let Some(due) = rt.align_bsm(now, at, occ.period) else {
+            return;
+        };
+        let Some(sl) = self.sidelink.as_mut() else {
+            return;
+        };
+        if reselected {
+            sl.report.bsm_realigned_on_reselection += 1;
+        }
+        sl.align.insert(
+            node,
+            AlignState {
+                selection: occ.selection,
+                due: Some(due),
+            },
+        );
+        // The node steps at its phase in every mobility step, and the phase is where its
+        // generator sits: move it to the aligned instant. The step of the window `due`
+        // falls in is already scheduled when that window has begun; if it is on another
+        // phase, the node is also stepped at `due` itself.
+        let step_ns = self.scenario.time.mobility_step().as_nanos().max(1);
+        let phase = due % step_ns;
+        let old = self
+            .node_phase
+            .get(&node)
+            .map_or(0, |d| d.as_nanos() % step_ns);
+        self.node_phase.insert(node, Duration::from_nanos(phase));
+        let window_started = due - phase <= now - now % step_ns;
+        if window_started && phase != old && due > now && due <= horizon {
+            self.scheduler.schedule(
+                due,
+                v2xw_core::event::EventClass::NodeTask,
+                crate::event::Event::NodeTask {
+                    node,
+                    task: crate::event::NodeTask::Step,
+                },
+            );
+        }
+    }
+
+    fn schedule_sidelink_timer(&mut self, node: NodeId, at: SimTime) {
+        let channel = self
+            .sidelink
+            .as_ref()
+            .map_or(self.dsrc_channel, |sl| sl.channel);
+        self.schedule_mac_timer(at, node, channel.0);
+    }
+
+    /// A transport block goes on the air: the receivers measure its energy, and it and
+    /// every transport block already on the air in its slot become each other's
+    /// interferers at every receiver they share.
+    pub(super) fn sidelink_register(&mut self, frame: FrameSeq, state: &mut FrameState) {
+        let Some(sl) = self.sidelink.as_mut() else {
+            return;
+        };
+        let pool = sl.mac.pool().clone();
+        let slot = pool.slot_of(state.start);
+        // The transport block carries the network PDU: the SPDU and its WSMP or
+        // GeoNetworking header (`FrameState::layers`, with no 802.11 framing on a sidelink).
+        let len = pool.subchannels_for(state.layers.psdu_bytes()).unwrap_or(1);
+        let resource = state
+            .sl_resource
+            .unwrap_or_else(|| SlResource::new(slot, 0, len));
+        state.sl_resource = Some(resource);
+        sl.prune(slot);
+
+        // The transmitter's own bookkeeping: it sensed nothing in this slot (half duplex)
+        // and the sub-channels count towards its channel-occupancy ratio.
+        sl.mac.note_transmitted(state.tx, resource);
+        sl.slot_tx.entry(slot).or_default().insert(state.tx);
+        sl.report.subchannel_slots_used += u64::from(resource.len);
+
+        // The energy every receiver in range measures: the S-RSSI each sub-channel of the
+        // allocation carries, the received power split over them. A faint arrival — under
+        // the noise floor less the `radio.range` margin — is energy in the receiver's
+        // S-RSSI window too, split the same way, but carries no SCI it could decode, so it
+        // is measured and not sensed.
+        // Its in-band emission is energy in every other sub-channel's S-RSSI too (TS
+        // 36.214's S-RSSI is the total power there), which the busy ratio counts.
+        let share_db = 10.0 * v2xw_core::math::log10(f64::from(resource.len.max(1)));
+        let pool = sl.mac.pool().clone();
+        for (&rx, &(power, _)) in &state.arrivals {
+            for sc in resource.range() {
+                sl.mac.note_energy(rx, slot, sc, power - share_db);
+            }
+            for (sc, leak) in pool.emission_into(resource, power) {
+                sl.mac.note_energy(rx, slot, sc, leak);
+            }
+        }
+        for (&rx, &power) in &state.faint {
+            for sc in resource.range() {
+                sl.mac.note_energy(rx, slot, sc, power - share_db);
+            }
+        }
+
+        // Co-slot interference, both ways, at each shared receiver, whether the other
+        // transport block is a reception attempt there or only energy.
+        let co_slot = sl.slot_frames.get(&slot).cloned().unwrap_or_default();
+        sl.slot_frames
+            .entry(slot)
+            .or_default()
+            .push((frame, state.tx, resource));
+        for (other_id, _, other_res) in co_slot {
+            let Some(other) = self.frames.get_mut(&other_id) else {
+                continue;
+            };
+            let receivers: std::collections::BTreeSet<NodeId> = state
+                .arrivals
+                .keys()
+                .chain(state.faint.keys())
+                .copied()
+                .collect();
+            for rx in receivers {
+                if rx == other.tx {
+                    continue;
+                }
+                let mine = state
+                    .arrivals
+                    .get(&rx)
+                    .map(|&(p, _)| (p, true))
+                    .or_else(|| state.faint.get(&rx).map(|&p| (p, false)));
+                let theirs = other
+                    .arrivals
+                    .get(&rx)
+                    .map(|&(p, _)| (p, true))
+                    .or_else(|| other.faint.get(&rx).map(|&p| (p, false)));
+                let (Some((power, mine_attempt)), Some((other_power, theirs_attempt))) =
+                    (mine, theirs)
+                else {
+                    continue;
+                };
+                if mine_attempt {
+                    state
+                        .sl_interferers
+                        .entry(rx)
+                        .or_default()
+                        .push(SlInterferer {
+                            node: other.tx,
+                            power_dbm: other_power,
+                            resource: other_res,
+                        });
+                }
+                if theirs_attempt {
+                    other
+                        .sl_interferers
+                        .entry(rx)
+                        .or_default()
+                        .push(SlInterferer {
+                            node: state.tx,
+                            power_dbm: power,
+                            resource,
+                        });
+                }
+            }
+        }
+    }
+
+    /// The sidelink reception decisions for one copy of a transport block, per receiver,
+    /// and the sensing each receiver's SCI allows.
+    ///
+    /// Sequential, because [`SidelinkPhy::decode`] draws through a context; each draw is
+    /// keyed by `(link, slot)`, so the order does not reach an outcome.
+    fn sidelink_outcomes(&mut self, state: &mut FrameState) -> Vec<LinkOutcome> {
+        let Some(resource) = state.sl_resource else {
+            return Vec::new();
+        };
+        let slot = resource.slot;
+        let tx_id = state.tx_id();
+        let mut out = Vec::with_capacity(state.arrivals.len());
+        let Engine {
+            scheduler,
+            rng,
+            world,
+            snapshot,
+            provenance,
+            params,
+            sidelink,
+            phy,
+            ..
+        } = self;
+        let Some(sl) = sidelink.as_mut() else {
+            return out;
+        };
+        // Whether any other transport block of this slot shared a sub-channel with this
+        // one — counted once per transmission, when its slot ends.
+        if sl.slot_frames.get(&slot).is_some_and(|v| {
+            v.iter()
+                .any(|(_, tx, r)| *tx != state.tx && r.overlaps(&resource))
+        }) {
+            sl.report.overlapping_transmissions += 1;
+        }
+        let SidelinkAccess {
+            phy: sl_phy,
+            phy_high,
+            mac,
+            slot_tx,
+            report,
+            channel,
+            ..
+        } = sl;
+        let sl_phy: &SidelinkPhy = sl_phy;
+        let transmitting = slot_tx.get(&slot);
+        let pool = mac.pool().clone();
+        let whole_pool = pool.subchannels();
+        let rri_slots = mac.params().rri.slots(pool.mu);
+        let channel = *channel;
+        let announced: Vec<SlResource> = state
+            .sl
+            .grant
+            .as_ref()
+            .map_or_else(|| vec![resource], |g| g.announced.clone());
+        let jam_field = phy.jamming();
+        let mut null = crate::ctx::NullRecorder::new();
+        let mut ctx = EngineCtx::new(
+            scheduler, rng, world, snapshot, provenance, params, &mut null,
+        );
+        for (&rx, &(power_dbm, distance_m)) in &state.arrivals {
+            let rx_transmitting = transmitting.is_some_and(|t| t.contains(&rx));
+            let mut arrival = SlArrival {
+                tx_id,
+                tx: state.tx,
+                rx,
+                power_dbm,
+                resource,
+                bytes: state.layers.psdu_bytes(),
+                rx_transmitting,
+                interferers: state.sl_interferers.get(&rx).cloned().unwrap_or_default(),
+                condition: state.sl.cond.get(&rx).copied(),
+            };
+            // A wideband jammer lands across the whole pool, so its power in the victim's
+            // allocation is its share of the band (`SidelinkPhy::interference_split`).
+            let jam: Vec<SlInterferer> = jam_field
+                .at(rx)
+                .iter()
+                .filter(|a| a.channel == channel && a.window.overlaps(state.start, state.end))
+                .map(|a| SlInterferer {
+                    node: a.jammer,
+                    power_dbm: a.power_dbm,
+                    resource: SlResource::new(slot, 0, whole_pool),
+                })
+                .collect();
+            let jammed = !jam.is_empty();
+            let clean = jammed.then(|| arrival.clone());
+            arrival.interferers.extend(jam);
+            let rx_phy = if state.focus_high.contains(&rx) {
+                phy_high.as_ref().unwrap_or(sl_phy)
+            } else {
+                sl_phy
+            };
+            let prior = state.sl.soft.get(&rx).copied().unwrap_or(0.0);
+            let dec = rx_phy.decode(&mut ctx, &arrival, prior);
+
+            // Sensing: a decoded SCI tells the receiver every resource this block holds
+            // in the period, which it projects forward by the announced period. A
+            // resource later in the period is recorded one period back, so that the
+            // forward projection lands on it too.
+            if !rx_transmitting {
+                if dec.sci_decoded {
+                    report.sci_decoded += 1;
+                    let rsrp = pool.rsrp_dbm(power_dbm, resource.len);
+                    for r in &announced {
+                        let at = if r.slot > slot && rri_slots > 0 {
+                            SlResource::new(r.slot.saturating_sub(rri_slots), r.subch, r.len)
+                        } else {
+                            *r
+                        };
+                        mac.note_sensed(rx, at, rsrp, rri_slots as u32);
+                    }
+                } else {
+                    report.sci_missed += 1;
+                }
+            } else {
+                report.sci_missed += 1;
+            }
+
+            if dec.soft_sinr_lin > 0.0 {
+                *state.sl.soft.entry(rx).or_insert(0.0) += dec.soft_sinr_lin;
+                *state.sl.copies.entry(rx).or_insert(0) += 1;
+            }
+            let (received, mut cause) = match dec.outcome {
+                RxOutcome::Received { .. } => (true, None),
+                RxOutcome::Lost(c) => (false, Some(c)),
+            };
+            if received && state.sl.attempt > 1 && !state.sl.done.contains(&rx) {
+                report.retx_decodes += 1;
+            }
+            if received && prior > 0.0 && dec.data_sinr_db.is_finite() {
+                // Would this copy alone have decoded? The same keyed draws without the
+                // soft buffer answer it; if not, the retransmission's combining did.
+                let alone = rx_phy.decode(&mut ctx, &arrival, 0.0);
+                if !matches!(alone.outcome, RxOutcome::Received { .. }) {
+                    report.combined_decodes += 1;
+                }
+            }
+            // The jamming counterfactual: the same keyed draws, without the jammer. A
+            // transport block it would have delivered is the jammer's loss.
+            if let (false, Some(clean)) = (received, clean.as_ref())
+                && matches!(
+                    rx_phy.decode(&mut ctx, clean, prior).outcome,
+                    RxOutcome::Received { .. }
+                )
+            {
+                cause = Some(jam_field.loss_cause(rx, channel, state.start, state.end));
+            }
+            out.push(LinkOutcome {
+                rx,
+                rssi_dbm: v2xw_radio::numeric::q_db(power_dbm),
+                sinr_db: v2xw_radio::numeric::q_db(dec.effective_sinr_db),
+                distance_m,
+                received,
+                cause,
+                copies: (state.sl.total > 1)
+                    .then(|| state.sl.copies.get(&rx).copied().unwrap_or(0)),
+                psr: None,
+            });
+        }
+        out
+    }
+
+    /// One copy of a sidelink transport block ends.
+    ///
+    /// Receivers that decode it are recorded and delivered now; those that do not wait
+    /// for the next copy, unless this was the last, when their loss is recorded. A
+    /// receiver that had already decoded the block discards the copy as a duplicate.
+    pub(super) fn sidelink_phy_end(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        frame: FrameSeq,
+        mut state: FrameState,
+        now: SimTime,
+    ) {
+        let frame_index = u64::from(frame.index());
+        let tx_id = state.tx_id();
+        let last = state.sl.attempt >= state.sl.total.max(1);
+        let outcomes = self.sidelink_outcomes(&mut state);
+        let mut record: Vec<LinkOutcome> = Vec::new();
+        let mut duplicates = 0u64;
+        for o in outcomes {
+            if state.sl.done.contains(&o.rx) {
+                duplicates += 1;
+                continue;
+            }
+            if o.received {
+                state.sl.held.remove(&o.rx);
+                state.sl.done.insert(o.rx);
+                record.push(o);
+            } else if last {
+                state.sl.held.remove(&o.rx);
+                record.push(o);
+            } else {
+                state.sl.held.insert(o.rx, o);
+            }
+        }
+        if last {
+            // Receivers that heard an earlier copy and are out of this one's range.
+            record.extend(core::mem::take(&mut state.sl.held).into_values());
+        }
+        if let Some(sl) = self.sidelink.as_mut() {
+            sl.report.duplicates += duplicates;
+        }
+        record.sort_by_key(|o| o.rx);
+        if state.sl.total > 1 {
+            for o in record.iter().filter(|o| o.received) {
+                if let Some(&bin) = state.sl.prr_bins.get(&o.rx) {
+                    *state.sl.prr_decoded.entry(bin).or_insert(0) += 1;
+                }
+            }
+            state.sl.prr_due = last;
+        }
+        self.finish_phy_end(recorder, frame, &state, now, frame_index, tx_id, record);
+        if !last {
+            // The block waits for its next copy: its geometry is the next copy's, and
+            // what it keeps is the receivers' soft buffers and who has decoded it.
+            state.arrivals.clear();
+            state.sl_interferers.clear();
+            state.focus_high.clear();
+            state.focus_placement.clear();
+            state.tx_handle = None;
+            self.frames.insert(frame, state);
+        }
+    }
+
+    /// Resolves the frames whose remaining blind retransmissions will not be sent: every
+    /// receiver still waiting on one is recorded with its latest copy's loss.
+    pub(super) fn sidelink_finalize(&mut self, recorder: &mut dyn RunRecorder) {
+        let Some(frames) = self
+            .sidelink
+            .as_mut()
+            .map(|sl| core::mem::take(&mut sl.finalize))
+        else {
+            return;
+        };
+        let now = self.scheduler.now();
+        for frame in frames {
+            let Some(mut state) = self.frames.remove(&frame) else {
+                continue;
+            };
+            // A block with a copy on the air right now is resolved at that copy's end.
+            if state.tx_handle.is_some() && state.end > now {
+                state.sl.total = state.sl.attempt;
+                self.frames.insert(frame, state);
+                continue;
+            }
+            let held: Vec<LinkOutcome> =
+                core::mem::take(&mut state.sl.held).into_values().collect();
+            if held.is_empty() && state.sl.prr_bins.is_empty() {
+                continue;
+            }
+            // The block's census is resolved with it (nothing more can decode).
+            state.sl.prr_due = !state.sl.prr_bins.is_empty();
+            let tx_id = state.tx_id();
+            self.finish_rx_only(recorder, frame, &state, now, tx_id, held);
+        }
+    }
+
+    /// At the end of the run: every sidelink block still waiting for a copy is resolved.
+    pub(super) fn sidelink_resolve_all(&mut self, recorder: &mut dyn RunRecorder) {
+        if self.sidelink.is_none() {
+            return;
+        }
+        let waiting: Vec<FrameSeq> = self
+            .frames
+            .iter()
+            .filter(|(_, s)| !s.sl.held.is_empty() || !s.sl.prr_bins.is_empty())
+            .map(|(f, _)| *f)
+            .collect();
+        if let Some(sl) = self.sidelink.as_mut() {
+            sl.finalize.extend(waiting);
+        }
+        self.sidelink_finalize(recorder);
+    }
+
+    /// The access layer's run summary, when the run is a sidelink one.
+    pub(super) fn sidelink_report(&self) -> Option<SidelinkReport> {
+        let sl = self.sidelink.as_ref()?;
+        let mut report = sl.report.clone();
+        report.mean_cbr_at_grant_pm = report.cbr_sum_pm.checked_div(report.cbr_n).unwrap_or(0);
+        report.cc_dropped_retx = sl.mac.cc_drops_total().1;
+        report.selections = sl
+            .mac
+            .selections_by_reason()
+            .into_iter()
+            .map(|(reason, n)| {
+                let name = serde_json::to_value(reason)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_else(|| format!("{reason:?}"));
+                (name, n)
+            })
+            .collect();
+        Some(report)
+    }
+
+    /// A jammer's emission windows, as a sidelink UE's energy measurement sees them.
+    pub(super) fn sidelink_note_jam(
+        &mut self,
+        rx: NodeId,
+        power_dbm: f64,
+        windows: &[v2xw_radio::JamWindow],
+    ) {
+        let Some(sl) = self.sidelink.as_mut() else {
+            return;
+        };
+        let slot_ns = sl.mac.pool().slot().as_nanos();
+        for w in windows {
+            let from = w.from / slot_ns;
+            // A slot any part of which the jammer covers is measured with it.
+            let to = w.to.div_ceil(slot_ns);
+            sl.mac.note_jammer(rx, from, to, power_dbm);
+        }
+    }
+}
+
+/// Model id of the engine's coupling between the sidelink PHY, the SPS engine and the run.
+pub const SIDELINK_ACCESS_ID: &str = "access/sidelink/engine-coupling";
+
+/// The card of what this module adds on top of the radio crate's sidelink models: the
+/// pool and profile a scenario gets, and the approximations the coupling makes.
+fn coupling_card(
+    pool: &PoolConfig,
+    params: &SpsParams,
+    report: &SidelinkReport,
+) -> v2xw_core::card::ModelCard {
+    use v2xw_core::card::{
+        Family, ModelCard, Parameter, Source, SourceKind, Validation, ValidationStatus,
+    };
+    let std_src = |r: &str| Source::new(SourceKind::Standard, r);
+    let j3161 = report.profile == "sae-j3161";
+    let mut card = ModelCard::new(
+        SIDELINK_ACCESS_ID,
+        Family::Mac,
+        "2.0.0",
+        "How a run drives the sidelink: slot-aligned SPS grants from the event loop, \
+         CBR/CR congestion control before each transmission, blind retransmissions with \
+         chase combining, sensing from decoded SCIs only, co-slot interference and in-band \
+         emission at every shared receiver, and the resource pool and SPS profile \
+         radio.rat and radio.models.sidelink select.",
+    );
+    card.tier = vec![Tier::Medium, Tier::High];
+    let profile_src = if j3161 {
+        Source::new(
+            SourceKind::Standard,
+            "SAE J3161/1 (2022, rev. 2024) via Abrar et al. 2026 (arXiv 2608.05087); the \
+             standard's text is paywalled and was not read",
+        )
+    } else {
+        Source::new(
+            SourceKind::Paper,
+            "a study configuration: Molina-Masegosa 2017 (LTE) or Todisco 2021 (NR)",
+        )
+    };
+    let profile_src = if report.profile == "etsi-en303798" {
+        Source::new(
+            SourceKind::Standard,
+            "ETSI EN 303 798 V1.1.8 NR-V2X access layer configuration, as Lusvarghi et al. \
+             2024 (IEEE IoT Journal, DOI 10.1109/JIOT.2024.3402551) Table I.C-D state it: \
+             20 MHz, 30 kHz, 12-PRB sub-channels, 12-PRB 3-symbol PSCCH, DMRS {2}, \
+             TS 38.214 Table 5.1.3.1-2",
+        )
+    } else {
+        profile_src
+    };
+    card.parameters = vec![
+        Parameter::new(
+            "profile",
+            "-",
+            serde_json::json!(report.profile),
+            profile_src.clone(),
+        ),
+        Parameter::new(
+            "channel",
+            "-",
+            serde_json::json!(report.channel),
+            std_src(match report.region.as_str() {
+                "eu" => {
+                    "ETSI EN 302 571 V2.1.1 Table 2 (10 MHz carriers); the 5GAA European \
+                     deployment band configurations (2021, 2024) for which technology sits \
+                     on which (radio/regulation)"
+                }
+                _ => {
+                    "47 CFR §90.390(a) as adopted by FCC 24-123 (2024): C-V2X in \
+                     5.895-5.925 GHz; SAE J3161/1's 20 MHz channel 5.905-5.925 GHz \
+                     (radio/regulation)"
+                }
+            }),
+        ),
+        Parameter::new(
+            "tx_power_dbm",
+            "dBm",
+            serde_json::json!(CV2X_TX_POWER_DBM),
+            std_src(
+                "3GPP TR 36.885 Table A.1.2-1 / TR 37.885 Table 6.1.1-1: 23 dBm UE; \
+                     SAE J3161/1 23 dBm",
+            ),
+        ),
+        Parameter::new(
+            "bandwidth_prb",
+            "PRB",
+            serde_json::json!(pool.bandwidth_prb),
+            profile_src.clone(),
+        ),
+        Parameter::new(
+            "subchannels",
+            "count",
+            serde_json::json!(pool.subchannels()),
+            profile_src.clone(),
+        ),
+        Parameter::new(
+            "min_subchannels",
+            "count",
+            serde_json::json!(pool.min_subchannels),
+            profile_src.clone(),
+        ),
+        Parameter::new(
+            "mcs",
+            "-",
+            serde_json::json!(pool.mcs.label),
+            profile_src.clone(),
+        ),
+        Parameter::new(
+            "prob_resource_keep",
+            "-",
+            serde_json::json!(params.prob_keep.probability()),
+            profile_src.clone(),
+        ),
+        Parameter::new(
+            "rsrp_threshold_dbm",
+            "dBm",
+            serde_json::json!(params.rsrp_threshold_dbm),
+            Source::new(
+                SourceKind::Paper,
+                "a study value: J3161/1's threshold is not quoted \
+                 by the source read; compared against PSSCH-RSRP per resource element \
+                 (TS 36.214 §5.1.29)",
+            ),
+        ),
+        Parameter::new(
+            "congestion_control",
+            "-",
+            serde_json::json!(report.congestion_control),
+            params
+                .cc
+                .as_ref()
+                .map_or_else(|| std_src("off"), |t| std_src(t.source)),
+        ),
+        Parameter::new(
+            "cbr_srssi_threshold_dbm",
+            "dBm",
+            serde_json::json!(params.cbr_threshold_dbm),
+            std_src("ETSI TS 103 574 V1.1.1 §5.2: S-RSSI above −94 dBm, window [n−100, n−1]"),
+        ),
+        Parameter::new(
+            "max_transmissions",
+            "-",
+            serde_json::json!(report.max_transmissions),
+            std_src(
+                "TS 36.213 §14.1.1.4C / TS 36.212 §5.4.3.1.2 (LTE: one blind \
+                 retransmission within 15 subframes); TS 38.214 §8.1.5 (NR: up to 3 \
+                 resources within 32 slots)",
+            ),
+        ),
+        Parameter::new(
+            "latency_budget_ms",
+            "ms",
+            serde_json::json!(params.rri.0),
+            std_src("3GPP TR 37.885 Table 5.1-1: 100 ms for periodic 10 Hz safety traffic"),
+        ),
+    ];
+    card.assumptions = vec![
+        "A UE records a neighbour's reservation only from an SCI it decoded, drawn at the \
+         control channel's SINR against a PSCCH curve that is the shared channel's shifted \
+         by 6 dB (todo-calibrate on the error model's card)."
+            .to_string(),
+        "Awareness messages (BSM, CAM) are PPPP 5, SAE J3161/1's priority for the BSM; \
+         every other message is PPPP 2. The mapping from message to priority is not \
+         published in a source read, beyond the BSM."
+            .to_string(),
+        "Blind retransmissions combine by chase combining; incremental redundancy's extra \
+         gain is not credited."
+            .to_string(),
+        "A wideband jammer's power lands across the whole pool, so its share in a \
+         transport block's allocation, and in each sub-channel's S-RSSI, is that share of \
+         the channel."
+            .to_string(),
+        "NR-V2X enforces ETSI TS 103 574 Table 1 by default: TS 38.214 §8.1.6 runs the \
+         same Σ CR ≤ CR_Limit procedure, and no published NR value set was found."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "Under congestion the UE drops its blind retransmissions and then the transport \
+         block; it does not raise its MCS or narrow its allocation, which J3161/1's \
+         per-CBR MCS ranges and ETSI TS 103 574 §5.3 would also allow."
+            .to_string(),
+        "SAE J3161/1 §7.3.3's SPS + one-shot interleaving is not modelled.".to_string(),
+        "J3161/1 publishes CR limits for PPPP 5 only (as quoted); every priority gets that \
+         row under the sae-j3161 table."
+            .to_string(),
+        "Links beyond the engine's 1 km candidate range are neither received nor counted \
+         as interference or sensed energy."
+            .to_string(),
+    ];
+    card.sources = vec![
+        std_src("3GPP TS 36.213 §14.1.1.4C, §14.1.1.6, TS 36.321 §5.14.1.1 (Rel-14 Mode 4)"),
+        std_src("3GPP TS 38.214 §8.1.4-8.1.6, TS 38.321 §5.22.1 (Rel-16 Mode 2)"),
+        std_src("ETSI TS 103 574 V1.1.1 (2018-11): CR limits and the CBR measurement"),
+        profile_src,
+    ];
+    card.validation = Validation {
+        status: ValidationStatus::UnitTested,
+        references: Vec::new(),
+        tests: vec![
+            "radio_access::each_radio_technology_runs_its_own_access_layer".to_string(),
+            "radio_access::congestion_control_holds_the_cr_limit_under_load".to_string(),
+            "radio_access::blind_retransmissions_raise_delivery_at_range".to_string(),
+        ],
+    };
+    card
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use v2xw_core::geom::Vec3;
+    use v2xw_radio::{LosClass, NrEnvironment, NrLinkState};
+
+    /// The link condition a receiver's NR curve is read in: TR 37.885's NLOS for a
+    /// building- or terrain-blocked path, NLOSv for a path only vehicles block, LOS
+    /// otherwise; the relative speed is the magnitude of the velocity difference.
+    #[test]
+    fn a_link_condition_comes_from_the_obstruction_and_the_velocity_difference() {
+        let mut f = SlFrame::default();
+        let east = Vec3::new(70.0 / 3.6, 0.0, 0.0);
+        let west = Vec3::new(-70.0 / 3.6, 0.0, 0.0);
+        let cases = [
+            (LosClass::Los, east, east, NrLinkState::Los, 0.0),
+            (LosClass::NlosV, east, Vec3::ZERO, NrLinkState::NlosV, 70.0),
+            (LosClass::NlosB, east, west, NrLinkState::Nlos, 140.0),
+            (LosClass::NlosBv, east, west, NrLinkState::Nlos, 140.0),
+            (
+                LosClass::NlosT,
+                Vec3::ZERO,
+                Vec3::ZERO,
+                NrLinkState::Nlos,
+                0.0,
+            ),
+        ];
+        for (i, (los, a, b, state, kmh)) in cases.into_iter().enumerate() {
+            let rx = NodeId::new(i as u32);
+            f.note_condition(NrEnvironment::Highway, rx, los, a, b);
+            let c = f.cond[&rx];
+            assert_eq!(c.state, state, "{los:?}");
+            assert!((c.relative_speed_kmh - kmh).abs() < 0.01, "{los:?}: {c:?}");
+            assert_eq!(c.environment, NrEnvironment::Highway);
+        }
+    }
+}

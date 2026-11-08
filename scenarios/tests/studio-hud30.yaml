@@ -1,0 +1,12 @@
+# credential-lifecycle cut to 30 s for the finished-run HUD spec. Its attacker starts at
+# 60 s, which the loader refuses on a 30 s run, so the cut has none (the HUD's pseudonym
+# line does not depend on it). Nothing else differs.
+schema: v2xw/scenario/1
+meta:
+  base: ../credential-lifecycle.yaml
+  name: studio-hud30
+  description: "US SCMS credential lifecycle, cut to 30 s for the HUD on a finished run."
+time:
+  duration_s: 30.0
+threats:
+  attackers: []

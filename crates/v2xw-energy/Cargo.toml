@@ -1,0 +1,22 @@
+[package]
+name = "v2xw-energy"
+description = "Vehicle emission, fuel and battery-electric energy models, and the metrics and health bands over them."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The contract crate: model cards, the Model base trait, deterministic math, keyed RNG
+# streams, ids and time.
+v2xw-core = { workspace = true }
+# The MetricProvider seam, metric definitions, samples, honest statistics and the
+# reader-side view of `gt.kinematics` the energy provider integrates over.
+v2xw-metrics = { workspace = true }
+# The scenario's `energy:` section is (de)serialised with the scenario.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Crate error type.
+thiserror = { workspace = true }

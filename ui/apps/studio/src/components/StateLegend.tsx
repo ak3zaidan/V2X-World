@@ -1,0 +1,107 @@
+/**
+ * The actor-state legend: a colour-blind-safe palette with shape redundancy.
+ *
+ * Both the colour and the shape come from `@vwp/viewer` — the colours are its Okabe–Ito
+ * `theme.actorState` entries and the shapes are the marker geometries `StateMarkerOverlay` draws —
+ * so the key in the DOM is the key to the scene, not an approximation of it.
+ */
+
+import { VRU_MARK_SCALE } from "@vwp/viewer";
+
+import { useStudio } from "../state/store.js";
+import { actorStatePalette } from "../lib/theme.js";
+import { LegendIcon } from "../shell/Icons.js";
+
+/**
+ * The aerial mark's outline (`pointerGeometry` in `@vwp/viewer`): a disc of radius `r` whose nose
+ * runs to 1.75 r along the heading, here pointing right.
+ */
+function pointerPath(r: number): string {
+  const tip = 1.75 * r;
+  const t0 = Math.acos(1 / 1.75);
+  const x = (r * Math.cos(t0)).toFixed(2);
+  const y = (r * Math.sin(t0)).toFixed(2);
+  return `M${tip.toFixed(2)},0 L${x},${y} A${r},${r} 0 1 1 ${x},-${y} Z`;
+}
+
+/**
+ * The road-user key: at map altitude every actor is a pointer in its state colour, its nose along
+ * the way it is heading, and a pedestrian's or a cyclist's is {@link VRU_MARK_SCALE} the size of a
+ * vehicle's (`ActorLocatorOverlay`). Up close each is drawn as itself — a car, a person, a rider on
+ * a bicycle.
+ */
+function RoadUserKey({ color }: { color: string }): React.JSX.Element {
+  const r = 3.6;
+  return (
+    <>
+      <span className="item" data-testid="legend-vehicle">
+        <svg width="14" height="12" viewBox="-5 -6 14 12" aria-hidden="true" focusable="false">
+          <path d={pointerPath(r)} fill={color} />
+        </svg>
+        Vehicle, pointing the way it is heading
+      </span>
+      <span className="item" data-testid="legend-vru">
+        <svg width="14" height="12" viewBox="-5 -6 14 12" aria-hidden="true" focusable="false">
+          <path d={pointerPath(r * VRU_MARK_SCALE)} fill={color} />
+        </svg>
+        Pedestrian or cyclist
+      </span>
+    </>
+  );
+}
+
+function Glyph({ shape, color }: { shape: string; color: string }): React.JSX.Element {
+  const common = { fill: color, stroke: color, strokeWidth: 1.4 } as const;
+  return (
+    <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true" focusable="false">
+      {shape === "circle" ? <circle r="4" {...common} /> : null}
+      {shape === "triangle" ? <polygon points="0,-5 4.5,4 -4.5,4" {...common} /> : null}
+      {shape === "diamond" ? <polygon points="0,-5 5,0 0,5 -5,0" {...common} /> : null}
+      {shape === "cross" ? (
+        <path d="M-4.5,-4.5 L4.5,4.5 M4.5,-4.5 L-4.5,4.5" fill="none" stroke={color} strokeWidth="2.2" />
+      ) : null}
+      {shape === "ring" ? <circle r="4" fill="none" stroke={color} strokeWidth="2" /> : null}
+    </svg>
+  );
+}
+
+/**
+ * The legend, folded to one button at the viewport's top right until it is asked for, and remembered
+ * open or shut across a reload. It used to be a column of eight rows over the picture at all times;
+ * a researcher needs it the first few minutes and then not at all.
+ */
+export function StateLegend(): React.JSX.Element {
+  const theme = useStudio((s) => s.theme);
+  const open = useStudio((s) => s.legendOpen);
+  const setOpen = useStudio((s) => s.setLegendOpen);
+  const palette = actorStatePalette(theme);
+  return (
+    <div className="vp-legend">
+      <button
+        type="button"
+        className={open ? "vp-button vp-legend-toggle on" : "vp-button vp-legend-toggle"}
+        aria-expanded={open}
+        aria-controls="vp-legend-body"
+        onClick={() => setOpen(!open)}
+        data-testid="legend-toggle"
+        title={open ? "Hide the legend" : "What the colours and shapes on the map mean"}
+      >
+        <LegendIcon />
+        <span>Legend</span>
+      </button>
+      {open ? (
+        <div className="legend vp-legend-body" id="vp-legend-body" data-testid="state-legend">
+          <div className="vp-legend-title">Vehicle colours</div>
+          {palette.map((p) => (
+            <span className="item" key={p.key}>
+              <Glyph shape={p.shape} color={p.color} />
+              {p.label}
+            </span>
+          ))}
+          <div className="vp-legend-title">Seen from above</div>
+          <RoadUserKey color={palette[0]?.color ?? "currentColor"} />
+        </div>
+      ) : null}
+    </div>
+  );
+}

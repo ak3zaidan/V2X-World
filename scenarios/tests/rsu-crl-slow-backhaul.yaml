@@ -1,0 +1,8 @@
+# rsu-crl-base.yaml on fibre with 2,000 ms one way (a satellite-class link).
+schema: v2xw/scenario/1
+meta:
+  base: rsu-crl-base.yaml
+  name: rsu-crl-slow-backhaul
+actors:
+  rsu_placement:
+    backhaul_params: {latency_ms: 2000.0}

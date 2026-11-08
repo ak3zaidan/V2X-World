@@ -1,0 +1,89 @@
+# Radio sensitivity rows for 802.11p on the dense base (about a hundred vehicles in a 300 m
+# square, every one in range of every other): EDCA, the MAC queue and congestion control,
+# where contention decides the outcome. Run with `v2xw sensitivity`; the same rows are tests
+# in crates/v2xw-engine/tests/sensitivity_radio.rs.
+base: dsrc-dense.yaml
+rows:
+  # The base is a US 802.11p run, so its BSMs contend at AC_VI (SAE J2945/1 6.3.4 Table 18,
+  # UPEDCA-001/003: CWmin 15, AIFSN 4). The rows widen that queue.
+  - name: CWmin 15->63 (AC_VI)
+    base_set: {radio.dcc.enabled: false}
+    set: {radio.mac.cw_min_vi: 63}
+    metric: backoff_us
+    expect: up
+    source: mean backoff is CW/2 slots of 13 us (IEEE 802.11-2020 10.3.2.3; SAE J2945/1 Table 18)
+  - name: CWmin 15->63 (AC_VI)
+    base_set: {radio.dcc.enabled: false}
+    set: {radio.mac.cw_min_vi: 63}
+    metric: access_ms
+    expect: up
+  - name: AIFSN 4->9 (AC_VI)
+    base_set: {radio.dcc.enabled: false}
+    set: {radio.mac.aifsn_vi: 9}
+    metric: aifs_us
+    expect: up
+    band: [1.5, 2.1]
+    source: AIFS = SIFS + AIFSN x slot = 32 + 13 AIFSN us at 10 MHz, 84 -> 149 us (x1.77)
+  - name: AIFSN 4->9 (AC_VI)
+    base_set: {radio.dcc.enabled: false}
+    set: {radio.mac.aifsn_vi: 9}
+    metric: access_ms
+    expect: up
+  - name: queue 64->1, saturated
+    base_set: {time.duration_s: 1.0, actors.vehicles.demand.params.max_total_vehicles: 60, radio.dcc.enabled: false, messages.rate_hz: 40.0, time.mobility_step_ms: 25, security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    set: {radio.mac.queue_length: 1}
+    metric: mac_drops
+    expect: same
+    source: >-
+      A node's queue fills only when its channel access takes longer than its own message
+      interval (25 ms at 40 Hz). With the 80 B pseudonym certificate (CAMP Table 3) a
+      certified BSM is 263 B (0.40 ms): 49 vehicles reach CBR 0.66, mean access 0.38 ms, and
+      a one-frame queue never holds a second arrival (0 -> 0 drops; 3 s runs: 0 -> 0, and
+      with 500 B of padding, CBR 0.93, 0 -> 1). So the row pins that the queue length does
+      not bind at this load; the drop itself is v2xw-radio's
+      `a_full_queue_drops_and_says_which_queue`
+  - name: reactive DCC off->on
+    base_set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687}, radio.dcc.enabled: false, messages.rate_hz: 20.0, time.mobility_step_ms: 50}
+    set: {radio.dcc.enabled: true}
+    metric: cbr_mean
+    expect: down
+    source: the reactive states cap the rate as CBR crosses 30/40/50/60 % (TS 102 687 V1.2.1 Table A.1)
+  - name: reactive DCC off->on
+    base_set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687}, radio.dcc.enabled: false, messages.rate_hz: 20.0, time.mobility_step_ms: 50}
+    set: {radio.dcc.enabled: true}
+    metric: tx_rate_hz
+    expect: down
+  - name: reactive DCC off->on
+    base_set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687}, radio.dcc.enabled: false, messages.rate_hz: 20.0, time.mobility_step_ms: 50}
+    set: {radio.dcc.enabled: true}
+    metric: aoi_ms
+    expect: up
+  - name: J2945/1 B 25->5
+    set: {radio.dcc.density_coefficient: 5.0}
+    metric: tx_rate_hz
+    expect: down
+    source: ITT = 100 ms x N/B above B, capped at vMax_ITT 600 ms (SAE J2945/1 6.3.6)
+  - name: J2945/1 B 25->5
+    set: {radio.dcc.density_coefficient: 5.0}
+    metric: cbr_mean
+    expect: down
+  - name: J2945/1 B 25->5
+    set: {radio.dcc.density_coefficient: 5.0}
+    metric: ipg_ms_mean
+    expect: up
+  # LIMERIC moves its duty-cycle limit delta by at most 0.00025 per 200 ms step from 0.03
+  # (TS 102 687 V1.2.1 Table 3, g_max_minus), so it binds only after seconds: here 40
+  # vehicles at 20 Hz with a certificate (0.45 ms, 0.9 % duty each, CBR about 0.35) for
+  # 12 s. With the target at 0.68 the CBR is below it and delta rises to its maximum; at
+  # 0.15 delta falls below 0.009 after about 8 s and the gate spaces the frames out.
+  - name: ETSI adaptive target 0.68->0.15
+    base_set: &limeric {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687}, time.duration_s: 12.0, actors.vehicles.demand.params.max_total_vehicles: 40, messages.rate_hz: 20.0, time.mobility_step_ms: 50, security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    set: {radio.dcc.cbr_target: 0.15}
+    metric: cbr_mean
+    expect: down
+    source: LIMERIC steers each station's duty cycle towards beta (target - CBR) / alpha (TS 102 687 V1.2.1 5.4, Table 3)
+  - name: ETSI adaptive target 0.68->0.15
+    base_set: *limeric
+    set: {radio.dcc.cbr_target: 0.15}
+    metric: tx_rate_hz
+    expect: down

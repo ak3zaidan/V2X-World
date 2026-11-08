@@ -1,0 +1,107 @@
+{
+ "files": [
+  {
+   "bytes": 104950577,
+   "count_star": 10533,
+   "dataset": "vxmm-9bi5",
+   "file": "nyc.csv",
+   "name": "nyc",
+   "query": "https://data.transportation.gov/resource/vxmm-9bi5.csv?%24select=:id,eventheader_eventtype,roadtypebin,bsmlist&%24order=:id",
+   "rows": 600,
+   "sha256": "8d1b5c53dde782e20c0da12b0dca3ac767b3c1f1f39cd41815e389684d3b3910"
+  },
+  {
+   "bytes": 30227221,
+   "count_star": 295906,
+   "dataset": "ev64-jn8c",
+   "file": "orem_2025-02-02.csv",
+   "name": "orem_2025-02-02",
+   "query": "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-02T00:00:00.000'",
+   "rows": 295906,
+   "sha256": "15c259e2e4918e3858e0ef1af42756bb27e9889f861da0699ae224814c93b3d1"
+  },
+  {
+   "bytes": 65951439,
+   "count_star": 655514,
+   "dataset": "ev64-jn8c",
+   "file": "orem_2025-02-03.csv",
+   "name": "orem_2025-02-03",
+   "query": "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-03T00:00:00.000'",
+   "rows": 655514,
+   "sha256": "316a07c5cc50f891af606613a2809917509213323e3a57f227bc84174f08a5f3"
+  },
+  {
+   "bytes": 60333527,
+   "count_star": 598592,
+   "dataset": "ev64-jn8c",
+   "file": "orem_2025-02-04.csv",
+   "name": "orem_2025-02-04",
+   "query": "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-04T00:00:00.000'",
+   "rows": 598592,
+   "sha256": "7d8a792625f0ca83a45058e6473d5aedc76603c504375d7e07ee24ee620924bc"
+  },
+  {
+   "bytes": 62751553,
+   "count_star": 621138,
+   "dataset": "ev64-jn8c",
+   "file": "orem_2025-02-05.csv",
+   "name": "orem_2025-02-05",
+   "query": "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-05T00:00:00.000'",
+   "rows": 621138,
+   "sha256": "941a49013f72e0c8c394690509623ed7ef0ea44c4a50c3b019085f33aa160e89"
+  },
+  {
+   "bytes": 71699088,
+   "count_star": 706683,
+   "dataset": "ev64-jn8c",
+   "file": "orem_2025-02-06.csv",
+   "name": "orem_2025-02-06",
+   "query": "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-06T00:00:00.000'",
+   "rows": 706683,
+   "sha256": "c5c69bebf8800cd5e520b8602df170afce8132b29e81430f27d0809d54fec38b"
+  },
+  {
+   "bytes": 85846147,
+   "count_star": 846126,
+   "dataset": "ev64-jn8c",
+   "file": "orem_2025-02-07.csv",
+   "name": "orem_2025-02-07",
+   "query": "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-07T00:00:00.000'",
+   "rows": 846126,
+   "sha256": "c5a3ecb6d301c7e45fdabb7362cec24fb544ec97a337f4ce1df4efcf5bcd9c21"
+  },
+  {
+   "bytes": 41981772,
+   "count_star": 413725,
+   "dataset": "ev64-jn8c",
+   "file": "orem_2025-02-08.csv",
+   "name": "orem_2025-02-08",
+   "query": "https://data.transportation.gov/resource/ev64-jn8c.csv?%24select=tmstp_epoch,temp_id,msg_count,sec_mark,latitude,longitude,speed,heading,longitudinal_acceleration,semi_major_axis_accuracy,semi_minor_axis_accuracy,wheel_brakes_flags&%24order=temp_id,tmstp_epoch,:id&%24where=date_utc+%3D+'2025-02-08T00:00:00.000'",
+   "rows": 413725,
+   "sha256": "b582ccfd9b5e7d650055df1d5ce8e6b59e36d5bc4c4397058b30eb98c13df8ea"
+  },
+  {
+   "bytes": 4062150,
+   "count_star": 34464,
+   "dataset": "nm7w-nvbm",
+   "file": "tampa.csv",
+   "name": "tampa",
+   "query": "https://data.transportation.gov/resource/nm7w-nvbm.csv?%24select=metadata_recordgeneratedat,coredata_id,coredata_secmark,coredata_msgcnt,coredata_lat,coredata_long,coredata_speed,coredata_heading,coredata_accelset_long,coredata_accuracy_semimajor,coredata_accuracy_semiminor,coredata_wheelbrakes&%24order=coredata_id,metadata_recordgeneratedat,:id",
+   "rows": 34464,
+   "sha256": "9900a1d2b43f28131a0c2aee64a2a06432ada4b493f4a1260195ef1412c4cda2"
+  },
+  {
+   "bytes": 867447,
+   "count_star": 6597,
+   "dataset": "7qu7-j8rx",
+   "file": "wyoming.csv",
+   "name": "wyoming",
+   "query": "https://data.transportation.gov/resource/7qu7-j8rx.csv?%24select=metadata_generatedat,metadata_recordtype,coredata_id,coredata_secmark,coredata_msgcnt,coredata_position_lat,coredata_position_long,coredata_speed,coredata_heading,coredata_accuracy_semimajor,coredata_accuracy_semiminor&%24order=coredata_id,metadata_generatedat,:id",
+   "rows": 6597,
+   "sha256": "75e32a40a251bfb5e19f99c8c844db4da5e63ec7cfcde9dd1df43f983fff0671"
+  }
+ ],
+ "note": "Raw rows are not in the repository (CC BY-SA / unstated licences). Rebuild with: python3 tools/realdata/rdtool.py fetch --raw <dir>",
+ "schema": "v2xw.realdata_manifest.v1",
+ "tool": "tools/realdata 1.0.0"
+}

@@ -1,0 +1,41 @@
+[package]
+name = "v2xw-proto"
+description = "Protocol host: entity state machines, flows, revocation and reporting formats."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The contract crate: SimTime/Duration, NodeId, the deterministic RNG streams, model cards,
+# the `Model` base trait and SHA-256.
+v2xw-core = { workspace = true }
+# The SCMS scientific core this crate orchestrates rather than reimplements: butterfly key
+# expansion, linkage values and linked-CRL matching, certificate construction and the real
+# COER encoder that sizes every certificate on every flow.
+v2xw-sec = { workspace = true }
+# The single home of the generated IEEE 1609.2 bindings; needed to name `Certificate` when
+# asking the real encoder for its length.
+v2xw-msg = { workspace = true }
+# The P-256 scalar type the butterfly construction's `c` randomiser is.
+p256 = { workspace = true }
+# The 1609.2.1 SPDU layer (`scms::pdu`) builds generated ASN.1 values directly
+# (`Integer`, `OctetString`, `FixedOctetString`) and COER-encodes them; governance
+# (`scms::governance`) builds real CTLs, certificates and signed policy SPDUs the same way.
+rasn = { workspace = true }
+# Card payloads, message records and size provenance.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Crate error type.
+thiserror = { workspace = true }
+# The weekly pre-generation's per-certificate cryptography, spread over the cores and
+# merged in certificate order (`scms::pdu::par_map_drbg`): byte-identical at any thread count.
+rayon = { workspace = true }
+
+[dev-dependencies]
+# Records are serialised through `v2xw_core::ctx::ErasedRecord`, which this crate already
+# depends on, so the channel-and-shape test needs nothing further. Writing an MCAP would
+# need `v2xw-record`, and a protocol plug-in does not write recordings — it emits `Record`s
+# and the engine's recorder writes them.

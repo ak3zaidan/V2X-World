@@ -1,0 +1,9 @@
+{
+  "version": "1.1",
+  "version_note": "v1.1 replaces v1.0 (seven 40-vehicle runs, still available under the Hub tag `v1.0`): every attack now runs on 3 vehicles with staggered start times, so how long a sender has been heard no longer gives an attacker away, and the DoSDisruptive and FeignedBraking attacks are new.",
+  "limitations": [
+    "**Hard cases, not label errors.** The OBU checks never flag the FeignedBraking or Sybil attackers (none detected or revoked). One RandomSpeed attacker left the run at 21.2 s, before its window opened at 25 s: `truth/devices` labels it malicious, but every message it sent is benign.",
+    "**Rate attacks are visible from metadata by design.** Sybil and DoSDisruptive send extra pseudonyms or extra messages; that rate is the attack, so the shortcut audit exempts them from its 0.7 limit.",
+    "**PoisonForwardedReports has no effect in this run.** Every vehicle uploads its reports over cellular, so the compromised RSU forwards nothing to poison, and every report is a true accusation."
+  ]
+}

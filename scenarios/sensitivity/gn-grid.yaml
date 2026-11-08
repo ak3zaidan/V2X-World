@@ -1,0 +1,22 @@
+# The sensitivity base for GeoNetworking: dsrc-grid.yaml on the ETSI stack (GN/BTP, CAMs and
+# DENMs, ETSI TS 103 097 envelope) with a breakdown at 8 s. The stationary-vehicle DENM is
+# raised once its 10 s triggering timer runs out (C2C-CC RS 2006) and repeated every second,
+# so the run lasts 24 s; the warning area (1 000 m) is wider than one hop on this grid.
+schema: v2xw/scenario/1
+meta:
+  name: sensitivity-gn-grid
+  base: dsrc-grid.yaml
+  description: >-
+    Open-air 1.2 km procedural grid with forty vehicles on 802.11p and GeoNetworking, a
+    breakdown's warning forwarded hop by hop, for the forwarding sensitivity rows.
+time:
+  duration_s: 24.0
+net:
+  layer: gn-btp
+  geonet: {}
+messages:
+  sets: [cam, denm]
+security:
+  envelope: etsi103097
+events:
+  - {t: 8.0, until: 23.0, type: safety.breakdown}

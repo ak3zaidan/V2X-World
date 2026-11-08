@@ -1,0 +1,10 @@
+# Pinned toolchain: contributors, CI and release builds all use this exact compiler, so the
+# golden determinism tests compare output from the same compiler everywhere.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+# The replay reader is also built for WebAssembly (`crates/v2xw-wasm`), so the target is
+# pinned here too. Building that crate also needs a C toolchain that targets WebAssembly;
+# see `crates/v2xw-wasm/README.md`.
+targets = ["wasm32-unknown-unknown"]

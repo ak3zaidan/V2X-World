@@ -1,0 +1,70 @@
+# The v1.1 sample of the mini release: one run on the dataset base (base.yaml) as it is,
+# 75 s and 60 vehicles (a 90 s, 90-vehicle version went over the 2.5 GB recording memory
+# budget while writing the dataset). It holds the ten main attacks, each on three
+# vehicles whose attacks start at different points of their life (one from spawn at
+# 0 s, one at 15-25 s and one at 35-40 s, each to the run's end), honest faulty devices,
+# and every SCMS entity. Three of the ten are not put on the air by this engine under their legacy names,
+# so the nearest runnable behaviour stands in:
+#   DoS            -> F2MD DoSDisruptive (the beacon rate multiplied, each copy a
+#                     neighbour's claim): the legacy flood needs extra frames per
+#                     generation interval, which the host does not send;
+#   FakeHazard     -> VeReMi NextGen FeignedBraking (a false hard-braking claim in the
+#                     BSM): the host sends no attacker event messages;
+#   ReportPoisoning-> the grid's roadside unit compromised, re-targeting half of the
+#                     reports it relays at innocent cars from 15 s (an insider poisoning
+#                     the MA's reports; the base has one roadside unit, so one unit, not
+#                     three vehicles). In this base every car has a cellular modem, so no
+#                     report travels through the unit and it poisons none: the threat is
+#                     present but inert. A 20 % relay-only share (net.uu penetration 0.8)
+#                     makes it act (63 of 131 relayed reports poisoned), but the v1.1
+#                     writer lost the poisoned reports' bytes in local/reports and wrote
+#                     a second local/ego row for the relaying car on that path, so it is
+#                     left out (both fixed since: relay-poison.yaml). The insider report
+#                     filer now runs under its own name too
+#                     (threat/attacker/insider/ReportPoisoning).
+# The honest faulty devices are the per-device BSM timing model with 15 % of devices out
+# of specification (data/calibration/dataset-faulty-devices.yaml: a stale-fix timestamp
+# lag and a GNSS random walk), labelled `faulty` in truth. One run is one split (train);
+# nothing is held out. The full release, r1-r11, is in the files beside this one.
+schema: v2xw/scenario/1
+seed: "0xD5_1101"
+meta: {base: base.yaml, name: dataset v1.1 sample}
+actors:
+  vehicles:
+    bsm_timing: {enabled: true, calibration: data/calibration/dataset-faulty-devices.yaml}
+threats:
+  attackers:
+    - {id: threat/attacker/legacy/ConstPos, actor_ids: [23], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ConstPos, actor_ids: [50], schedule: {from_s: 15.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ConstPos, actor_ids: [27], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomPos, actor_ids: [28], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomPos, actor_ids: [52], schedule: {from_s: 15.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomPos, actor_ids: [6], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SlowDrift, actor_ids: [25], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SlowDrift, actor_ids: [37], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SlowDrift, actor_ids: [56], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomSpeed, actor_ids: [21], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomSpeed, actor_ids: [26], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomSpeed, actor_ids: [55], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/EventualStop, actor_ids: [15], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/EventualStop, actor_ids: [49], schedule: {from_s: 20.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/EventualStop, actor_ids: [58], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/DataReplay, actor_ids: [2], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/DataReplay, actor_ids: [17], schedule: {from_s: 15.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/DataReplay, actor_ids: [0], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/Sybil, actor_ids: [51], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/Sybil, actor_ids: [44], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/Sybil, actor_ids: [18], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/f2md/DoSDisruptive, actor_ids: [31], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/f2md/DoSDisruptive, actor_ids: [48], schedule: {from_s: 20.0, to_s: 75.0}}
+    - {id: threat/attacker/f2md/DoSDisruptive, actor_ids: [42], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/f2md/FeignedBraking, actor_ids: [22], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/f2md/FeignedBraking, actor_ids: [47], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/f2md/FeignedBraking, actor_ids: [12], schedule: {from_s: 40.0, to_s: 75.0}}
+  compromised_rsus: [0]
+  compromised_rsu_attack:
+    id: threat/attacker/compromised-rsu
+    params: {kind: PoisonForwardedReports, poison_prob: 0.5, from_s: 15.0, to_s: 75.0}
+exporters:
+  - id: dataset
+    opts: {run_id: s01, split: train, tier: mini, instrumented_receivers: 10, heldout_attacks: []}

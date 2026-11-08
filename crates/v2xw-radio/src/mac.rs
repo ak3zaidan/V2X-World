@@ -1,0 +1,2850 @@
+//! Medium access: `mac/80211p/edca-ocb` and
+//! `mac/80211p/slotted-abstraction` (§4.9), with the CBR measurement of §4.5.
+//!
+//! # OCB is why this state machine is small
+//!
+//! In outside-the-context-of-a-BSS mode there is no association, no ACK for a
+//! group-addressed frame, and therefore **no retransmission and no contention-window
+//! doubling**: EN 302 663 Annex C.4.2's note says it outright — "in broadcast mode the
+//! backoff procedure is only invoked once during the initial listening (AIFS) ... due to
+//! the lack of ACKs in broadcast transmissions. Therefore CW is always CWmin and never
+//! doubled." A CAM, a BSM and a DENM are all group-addressed, so for the traffic this
+//! simulator exists to study the retry logic is dead code. [`EdcaOcbMac`] implements that
+//! literally: a broadcast frame is granted once, and
+//! `a_broadcast_frame_is_never_retransmitted` asserts that no path re-enqueues it and that
+//! `CW` never leaves `CWmin`.
+//!
+//! # Being driven rather than driving
+//!
+//! The published `Mac` has the MAC schedule its own `MacTimer` events, which needs the
+//! engine's payload enum. [`crate::traits::Mac::poll`] is the seam
+//! instead: the engine calls it from the timer handler it owns, and a test calls it
+//! directly with a clock it sets by hand — which is what makes the backoff freeze, the
+//! AIFS wait and the internal-collision rule testable without a kernel.
+//!
+//! Being driven does not mean the engine decides *when*. [`crate::traits::Mac::next_poll_at`]
+//! reports the instant the earliest backoff expires, so the engine schedules its timer
+//! for the slot boundary the MAC computed and [`crate::types::TxGrant::at`] is that
+//! instant rather than whenever the poll happened. Without it the poll cadence sets the
+//! collision structure instead of the 13 µs slot.
+//!
+//! # A queue drains
+//!
+//! `enqueue` arms an access category's backoff when none is pending; a grant re-arms it
+//! whenever the queue is still non-empty, one AIFS after the granted frame's air time.
+//! That is what makes the queue drain. It is also the only re-arm: there is still no
+//! retransmission and no contention-window doubling, because there is still no ACK.
+//!
+//! # The CBR window
+//!
+//! [`CbrMeter`] accumulates busy intervals and reports `T_busy / T_CBR` over the last
+//! 100 ms [EN 302 571 §4.2.10.1]. Busy means the received signal strength exceeded
+//! −85 dBm, which is the PHY's [`crate::phy::CcaConfig::busy_dbm`]; the node's own
+//! transmissions count as busy too, because the medium is occupied and because every
+//! simulator this is compared against counts them (recorded on the card, since the
+//! standard defines the measurement on receive).
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use serde::{Deserialize, Serialize};
+use v2xw_core::card::{
+    Determinism, Equation, Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation,
+    ValidationStatus,
+};
+use v2xw_core::ctx::Ctx;
+use v2xw_core::ids::NodeId;
+use v2xw_core::model::Model;
+use v2xw_core::rng::{EntityRef, RngDomain};
+use v2xw_core::time::{Duration, SimTime};
+
+use crate::phy::air_time;
+use crate::traits::Mac;
+use crate::types::{
+    AccessCategory, CcaState, ChannelId, DropCause, MacSdu, ResourceModel, TxGrant, TxHandle,
+    timing,
+};
+use crate::wave_schedule::{
+    CCH_INTERVAL_MS, ChannelAccess, ChannelSchedule, GUARD_INTERVAL_MS, Interval,
+};
+
+/// The default queue depth per access category.
+///
+/// Nothing in the cited standards fixes a queue depth — it is an implementation choice of
+/// the radio — so this is a `todo-calibrate` parameter with a plan, and the value is large
+/// enough that a 10 Hz CAM generator cannot fill it inside a CBR window.
+pub const DEFAULT_QUEUE_DEPTH: usize = 64;
+
+/// The channel-busy-ratio meter of one node and channel.
+///
+/// `CBR = T_busy / T_CBR` over the last `T_CBR` = 100 ms. Intervals older than the window
+/// are pruned as they fall out of it, so the meter's memory is bounded by the number of
+/// busy periods in 100 ms.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CbrMeter {
+    window: Duration,
+    /// Closed busy intervals, in start order.
+    busy: VecDeque<(SimTime, SimTime)>,
+    /// The instant the medium became busy, while it still is.
+    open: Option<SimTime>,
+    /// Merged busy time before [`Self::settled_to`], ns: what the window has forgotten,
+    /// kept as one running sum so [`Self::busy_total_ns`] can answer for any span.
+    #[serde(default)]
+    settled_ns: u64,
+    /// The instant up to which busy time has been folded into [`Self::settled_ns`].
+    #[serde(default)]
+    settled_to: SimTime,
+}
+
+impl CbrMeter {
+    /// A meter over the standard 100 ms window.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_window(timing::T_CBR)
+    }
+
+    /// A meter over a caller-chosen window.
+    #[must_use]
+    pub fn with_window(window: Duration) -> Self {
+        Self {
+            window,
+            busy: VecDeque::new(),
+            open: None,
+            settled_ns: 0,
+            settled_to: 0,
+        }
+    }
+
+    /// The measurement window.
+    #[must_use]
+    pub const fn window(&self) -> Duration {
+        self.window
+    }
+
+    /// Records that the medium became busy at `t`. Idempotent while it stays busy.
+    pub fn busy_from(&mut self, t: SimTime) {
+        if self.open.is_none() {
+            self.open = Some(t);
+        }
+    }
+
+    /// Records that the medium became idle at `t`.
+    pub fn idle_at(&mut self, t: SimTime) {
+        if let Some(from) = self.open.take()
+            && t > from
+        {
+            self.busy.push_back((from, t));
+            self.prune(t);
+        }
+    }
+
+    /// Records a complete busy interval, for a caller that knows both ends at once — an
+    /// own transmission, or a frame whose arrival window the PHY has already computed.
+    pub fn note_busy(&mut self, from: SimTime, to: SimTime) {
+        if to > from {
+            self.busy.push_back((from, to));
+            // Intervals may be appended out of order (an own transmission recorded after
+            // a received frame that started later); one sort of a bounded deque keeps the
+            // window arithmetic simple and the answer order-independent.
+            let mut v: Vec<(SimTime, SimTime)> = self.busy.iter().copied().collect();
+            v.sort_unstable();
+            self.busy = v.into();
+            self.prune(to);
+        }
+    }
+
+    /// [`CbrMeter::note_busy`] for an interval recorded ahead of time, at `now`: a
+    /// jammer's windows are declared for the whole coming step. The meter is pruned at
+    /// `now`, not at the interval's end.
+    ///
+    /// `note_busy` prunes at `to`, which is right for a frame noted as it starts (its end
+    /// is under a frame's air time ahead), but a window ending up to a step (100 ms) ahead
+    /// folded away everything that ended before `now`, so the 100 ms reading at `now` held
+    /// only what was still on the air: a 90 %-duty jammer read as CBR 0 by every DCC, while
+    /// the one-second `mac.cbr` reports (from the running sum) read 0.91.
+    pub fn note_busy_at(&mut self, now: SimTime, from: SimTime, to: SimTime) {
+        if to > from {
+            self.busy.push_back((from, to));
+            let mut v: Vec<(SimTime, SimTime)> = self.busy.iter().copied().collect();
+            v.sort_unstable();
+            self.busy = v.into();
+            self.prune(now);
+        }
+    }
+
+    fn prune(&mut self, now: SimTime) {
+        let cutoff = now.saturating_sub(self.window.as_nanos());
+        // What is about to leave the window is folded into the running sum first, merged
+        // with everything still held, so the sum never counts an overlap twice.
+        if cutoff > self.settled_to {
+            self.settled_ns += self.busy_between(self.settled_to, cutoff);
+            self.settled_to = cutoff;
+        }
+        while let Some(&(_, to)) = self.busy.front() {
+            if to <= cutoff {
+                self.busy.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// The busy time inside the window ending at `now`, nanoseconds.
+    ///
+    /// Overlapping intervals are merged before they are counted, so two receptions that
+    /// overlap in time make the medium busy once and the ratio can never exceed one.
+    #[must_use]
+    pub fn busy_ns(&self, now: SimTime) -> u64 {
+        self.busy_between(now.saturating_sub(self.window.as_nanos()), now)
+    }
+
+    /// Merged busy time since the meter began, up to `now`, ns: monotone in `now`, so the
+    /// busy time of any span `[a, b]` is `busy_total_ns(b) - busy_total_ns(a)`.
+    ///
+    /// This is what a report over a window longer than `T_CBR` divides by its length: the
+    /// mean of the 100 ms CBR readings that tile the window, which a single reading at the
+    /// window's end is not (it aliases with any traffic period other than 100 ms).
+    #[must_use]
+    pub fn busy_total_ns(&self, now: SimTime) -> u64 {
+        self.settled_ns + self.busy_between(self.settled_to, now)
+    }
+
+    /// Merged busy time inside `[from, now]`, open interval included, ns.
+    fn busy_between(&self, from: SimTime, now: SimTime) -> u64 {
+        if now <= from {
+            return 0;
+        }
+        let mut spans: Vec<(SimTime, SimTime)> = self
+            .busy
+            .iter()
+            .copied()
+            .chain(self.open.map(|o| (o, now)))
+            .filter_map(|(a, b)| {
+                let lo = a.max(from);
+                let hi = b.min(now);
+                (hi > lo).then_some((lo, hi))
+            })
+            .collect();
+        spans.sort_unstable();
+        let mut total = 0u64;
+        let mut current: Option<(SimTime, SimTime)> = None;
+        for (lo, hi) in spans {
+            match current {
+                None => current = Some((lo, hi)),
+                Some((c_lo, c_hi)) => {
+                    if lo <= c_hi {
+                        current = Some((c_lo, c_hi.max(hi)));
+                    } else {
+                        total += c_hi - c_lo;
+                        current = Some((lo, hi));
+                    }
+                }
+            }
+        }
+        if let Some((c_lo, c_hi)) = current {
+            total += c_hi - c_lo;
+        }
+        total
+    }
+
+    /// The channel busy ratio over the window ending at `now`, `0.0..=1.0`.
+    ///
+    /// Before the first full window has elapsed the denominator is the time that has
+    /// actually passed, so a run does not start with an artificially low CBR; at `now`
+    /// zero it is zero.
+    #[must_use]
+    pub fn cbr(&self, now: SimTime) -> f64 {
+        let denominator = self.window.as_nanos().min(now);
+        if denominator == 0 {
+            return 0.0;
+        }
+        (self.busy_ns(now) as f64 / denominator as f64).clamp(0.0, 1.0)
+    }
+}
+
+impl Default for CbrMeter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One access category's backoff state.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Backoff {
+    /// Slots still to count down.
+    pub remaining: u32,
+    /// Slots originally drawn, for the record.
+    pub drawn: u32,
+    /// The instant the countdown may resume. `None` while it is frozen on a busy medium.
+    pub resume_at: Option<SimTime>,
+    /// The initial AIFS this frame waits, ns (see [`TxGrant::aifs_ns`]).
+    #[serde(default)]
+    pub aifs_ns: u64,
+}
+
+/// The per-node, per-channel state of the EDCA MAC.
+#[derive(Debug, Clone, Default)]
+struct NodeState {
+    /// One queue per access category, indexed by [`AccessCategory`] order.
+    queues: [VecDeque<MacSdu>; 4],
+    backoff: [Option<Backoff>; 4],
+    busy: bool,
+    /// When the medium last became idle. `None` before the first idle report, which is
+    /// treated as "idle since time zero": a run starts on a quiet channel.
+    idle_since: Option<SimTime>,
+    cbr: CbrMeter,
+    /// Frames granted, per access category.
+    granted: [u64; 4],
+    /// Internal collisions: a lower-priority category that was eligible in the same slot
+    /// as the winner.
+    internal_collisions: u64,
+    /// Air time granted at this node, nanoseconds — the MAC side of invariant I-R3.
+    granted_airtime_ns: u64,
+    /// Frames dropped because a queue was full.
+    dropped: u64,
+    /// Retransmissions. Zero for a run that only sends group-addressed frames, which is
+    /// what `a_broadcast_frame_is_never_retransmitted` asserts.
+    retransmissions: u64,
+    /// IEEE 1609.4 alternating access: countdowns held because the radio was on
+    /// the other channel's interval, or its countdown ran into the interval end.
+    gate_deferrals: u64,
+    /// IEEE 1609.4 alternating access: frames held because they would start in a
+    /// guard interval or cross the end of their channel's interval.
+    guard_deferrals: u64,
+}
+
+/// The IEEE 1609.4 alternating-access gate on EDCA grants [IEEE 1609.4-2016
+/// §6.2.5; constants UNVERIFIED].
+///
+/// A single-radio unit is on the control channel `cch` only in CCH intervals and on a
+/// service channel only in SCH intervals. A grant at `due` on a channel needs both
+/// (a) `due` inside that channel's interval, never a guard, and (b) `due + air` at or
+/// before the interval's end, Veins' `timeLeftInSlot` rule (behaviour reference only).
+/// When either fails the countdown is frozen, as on a busy medium, until the next start
+/// of that channel's interval, and AIFS is re-run from that instant. A frame is never
+/// dropped for this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlternatingGate {
+    /// The schedule; a `Continuous` one gates nothing.
+    pub sched: ChannelSchedule,
+    /// The channel that owns the CCH interval (the run's primary channel). Every other
+    /// channel owns the SCH interval.
+    pub cch: ChannelId,
+    /// The service channel a single radio tunes to in the SCH interval, if the run has one.
+    pub sch: Option<ChannelId>,
+}
+
+/// What the gate did to one countdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Deferral {
+    /// The radio was on the other channel, or the countdown ran into the interval end.
+    Gate,
+    /// The frame would have started in a guard or crossed the interval end.
+    Guard,
+}
+
+/// One gate step on an armed, running countdown whose head frame lasts `air` ns, or
+/// `None` when the countdown stands as it is.
+///
+/// With `now = Some(t)` a countdown that would run into the interval end is only moved
+/// once `t` has reached that point, so a busy medium in between still freezes it where
+/// it would have been. With `now = None` the step is taken regardless, which is how
+/// [`Mac::next_poll_at`] looks ahead on an idle medium.
+fn gate_step(
+    sched: &ChannelSchedule,
+    cch: bool,
+    b: &Backoff,
+    air: u64,
+    aifs: u64,
+    now: Option<SimTime>,
+) -> Option<(Backoff, Deferral)> {
+    let r = b.resume_at?;
+    let want = if cch { Interval::Cch } else { Interval::Sch };
+    let iv = sched.interval(r);
+    if iv != want {
+        // Tuned away (or in the guard): the countdown resumes one AIFS after the radio is
+        // back on this channel.
+        let next = sched.next_opportunity_ns(r, cch);
+        let kind = if iv == Interval::Guard {
+            Deferral::Guard
+        } else {
+            Deferral::Gate
+        };
+        return Some((
+            Backoff {
+                resume_at: Some(next + aifs),
+                ..*b
+            },
+            kind,
+        ));
+    }
+    let end = sched.interval_end_ns(r);
+    let start = end - (CCH_INTERVAL_MS - GUARD_INTERVAL_MS) * 1_000_000;
+    if r < start + aifs {
+        // The radio has been on this channel for less than an AIFS: it senses the medium
+        // for a whole AIFS from the switch before counting [EN 302 663 Annex C.4.2].
+        return Some((
+            Backoff {
+                resume_at: Some(start + aifs),
+                ..*b
+            },
+            Deferral::Gate,
+        ));
+    }
+    let slot = timing::SLOT_TIME.as_nanos();
+    let due = r + u64::from(b.remaining) * slot;
+    if due <= end && sched.fits(due, air, cch).is_ok() {
+        return None;
+    }
+    let reach = due.min(end);
+    if now.is_some_and(|t| t < reach) {
+        return None;
+    }
+    // Count the idle slots that elapsed inside the interval; the rest is owed after the
+    // next switch back, one AIFS after it.
+    let counted = if due <= end {
+        u64::from(b.remaining)
+    } else {
+        ((end - r) / slot).min(u64::from(b.remaining))
+    };
+    let next = sched.next_opportunity_ns(end, cch);
+    let kind = if due <= end {
+        Deferral::Guard
+    } else {
+        Deferral::Gate
+    };
+    Some((
+        Backoff {
+            remaining: b.remaining - counted as u32,
+            resume_at: Some(next + aifs),
+            ..*b
+        },
+        kind,
+    ))
+}
+
+/// The instant an armed backoff's countdown reaches zero, if it is running.
+///
+/// `None` while the countdown is frozen on a busy medium, which is what `resume_at`
+/// being `None` means.
+fn due_at(b: &Backoff) -> Option<SimTime> {
+    b.resume_at
+        .map(|r| r + u64::from(b.remaining) * timing::SLOT_TIME.as_nanos())
+}
+
+fn ac_index(ac: AccessCategory) -> usize {
+    match ac {
+        AccessCategory::Bk => 0,
+        AccessCategory::Be => 1,
+        AccessCategory::Vi => 2,
+        AccessCategory::Vo => 3,
+    }
+}
+
+/// `mac/80211p/edca-ocb` — the full EDCA state machine in OCB mode.
+#[derive(Debug)]
+pub struct EdcaOcbMac {
+    card: ModelCard,
+    queue_depth: usize,
+    /// `CWmin` per access category, in internal (BK, BE, VI, VO) order.
+    cw_min: [u32; 4],
+    /// `CWmax` per access category, in the same order: carried, never used, because OCB
+    /// never doubles the window (see [`EdcaParams::cw_max`]).
+    cw_max: [u32; 4],
+    /// `AIFS` per access category, in the same order.
+    aifs: [Duration; 4],
+    /// The table the four rows came from, before any per-category override.
+    profile: EdcaProfile,
+    nodes: BTreeMap<(u32, u16), NodeState>,
+    /// [`Self::total_gate_deferrals`]' share of the nodes [`Self::forget_node`] dropped.
+    forgotten_deferrals: (u64, u64),
+    /// IEEE 1609.4 alternating access, when the run asks for it.
+    gate: Option<AlternatingGate>,
+    /// Units with two radios: each radio stays on its channel, so the gate passes them.
+    two_radio: BTreeSet<u32>,
+}
+
+/// The EDCA parameter set of one access category (EN 302 663 Table C.4; SAE J2945/1
+/// Table 18): one row of an [`EdcaProfile`], and what `radio.mac` overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdcaParams {
+    /// `CWmin`, slots.
+    pub cw_min: u32,
+    /// `CWmax`, slots. OCB never doubles the window for a group-addressed frame
+    /// (EN 302 663 Annex C.4.2), so it has no effect on a BSM or a CAM; it is carried so
+    /// that a profile and the model card state the whole table row.
+    pub cw_max: u32,
+    /// `AIFSN`, slots after SIFS.
+    pub aifsn: u32,
+}
+
+impl EdcaParams {
+    /// The EN 302 663 set for a category: the [`EdcaProfile::En302663`] row.
+    #[must_use]
+    pub const fn standard(ac: AccessCategory) -> Self {
+        Self {
+            cw_min: ac.cw_min(),
+            cw_max: ac.cw_max(),
+            aifsn: ac.aifsn(),
+        }
+    }
+
+    /// `AIFS = AIFSN × aSlotTime + aSIFSTime` [EN 302 663 Annex C.4.4].
+    #[must_use]
+    pub const fn aifs(&self) -> Duration {
+        Duration::from_nanos(
+            timing::SLOT_TIME.as_nanos() * self.aifsn as u64 + timing::SIFS.as_nanos(),
+        )
+    }
+}
+
+/// A whole EDCA parameter table: which standard's four rows the MAC contends with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EdcaProfile {
+    /// ETSI EN 302 663 V1.3.1 Table C.5, the 802.11 OCB defaults (AC_VI 7/15/3).
+    En302663,
+    /// SAE J2945/1 (2020) 6.3.4, Table 18 (`UPEDCA-003`): AC_VI 15/1023/4, so that a BSM
+    /// at UP 5 defers to a critical BSM at AC_VO and goes ahead of best-effort and
+    /// background traffic. Its AC_VO, AC_BE and AC_BK rows are the OCB defaults.
+    SaeJ2945_1,
+}
+
+impl EdcaProfile {
+    /// Both profiles, in a fixed order.
+    pub const ALL: [EdcaProfile; 2] = [EdcaProfile::En302663, EdcaProfile::SaeJ2945_1];
+
+    /// The scenario's name for it.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            EdcaProfile::En302663 => "en-302-663",
+            EdcaProfile::SaeJ2945_1 => "sae-j2945-1",
+        }
+    }
+
+    /// The profile a scenario name spells, if any.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.id() == id)
+    }
+
+    /// The table the profile is.
+    #[must_use]
+    pub const fn citation(self) -> &'static str {
+        match self {
+            EdcaProfile::En302663 => "ETSI EN 302 663 V1.3.1 Table C.5",
+            EdcaProfile::SaeJ2945_1 => "SAE J2945/1 (2020) 6.3.4, Table 18 (UPEDCA-003)",
+        }
+    }
+
+    /// One access category's row under this profile.
+    #[must_use]
+    pub const fn params(self, ac: AccessCategory) -> EdcaParams {
+        match (self, ac) {
+            (EdcaProfile::SaeJ2945_1, AccessCategory::Vi) => EdcaParams {
+                cw_min: 15,
+                cw_max: 1023,
+                aifsn: 4,
+            },
+            // Table 18's AC_VO, AC_BE and AC_BK rows are the OCB defaults.
+            _ => EdcaParams::standard(ac),
+        }
+    }
+}
+
+impl EdcaOcbMac {
+    /// The model's id.
+    pub const ID: &'static str = "mac/80211p/edca-ocb";
+
+    /// The MAC with the default queue depth.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            card: edca_card(),
+            queue_depth: DEFAULT_QUEUE_DEPTH,
+            cw_min: [0, 1, 2, 3].map(|i| ac_of_index(i).cw_min()),
+            cw_max: [0, 1, 2, 3].map(|i| ac_of_index(i).cw_max()),
+            aifs: [0, 1, 2, 3].map(|i| ac_of_index(i).aifs()),
+            profile: EdcaProfile::En302663,
+            nodes: BTreeMap::new(),
+            forgotten_deferrals: (0, 0),
+            gate: None,
+            two_radio: BTreeSet::new(),
+        }
+    }
+
+    /// The MAC with IEEE 1609.4 alternating access gating its grants: see
+    /// [`AlternatingGate`]. A `Continuous` schedule leaves every grant as it was.
+    #[must_use]
+    pub fn with_alternating(
+        mut self,
+        sched: ChannelSchedule,
+        cch: ChannelId,
+        sch: Option<ChannelId>,
+    ) -> Self {
+        self.gate = Some(AlternatingGate { sched, cch, sch });
+        self
+    }
+
+    /// The gate in force, if any.
+    #[must_use]
+    pub fn alternating_gate(&self) -> Option<AlternatingGate> {
+        self.gate
+    }
+
+    /// Marks a unit as carrying two radios: radio 1 stays on the control channel and
+    /// radio 2 on the service channel, so the alternating gate does not hold its frames.
+    pub fn set_two_radios(&mut self, node: NodeId) {
+        self.two_radio.insert(node.index());
+    }
+
+    /// The schedule that gates `node`'s grants on `ch`, and whether `ch` owns the CCH
+    /// interval; `None` for continuous access or a two-radio unit.
+    fn gate_for(&self, node: NodeId, ch: ChannelId) -> Option<(ChannelSchedule, bool)> {
+        let g = self.gate?;
+        if g.sched.access == ChannelAccess::Continuous || self.two_radio.contains(&node.index()) {
+            return None;
+        }
+        Some((g.sched, ch == g.cch))
+    }
+
+    /// Takes every gate step due by `now` on `node`'s countdowns on `ch`, counting them.
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "the index addresses several parallel sequences at once"
+    )]
+    fn gate_settle(&mut self, node: NodeId, ch: ChannelId, now: SimTime) {
+        let Some((sched, cch)) = self.gate_for(node, ch) else {
+            return;
+        };
+        let aifs = self.aifs;
+        let Some(state) = self.nodes.get_mut(&(node.index(), ch.0)) else {
+            return;
+        };
+        for (i, aifs_i) in aifs.iter().enumerate() {
+            let air = state.queues[i]
+                .front()
+                .map_or(0, |s| air_time(s.frame.bytes, s.frame.mcs).as_nanos());
+            // Each step moves the countdown to a later interval, so a handful suffice;
+            // the bound only guards against a schedule that could never be met.
+            for _ in 0..8 {
+                let Some(b) = state.backoff[i] else { break };
+                let Some((nb, kind)) =
+                    gate_step(&sched, cch, &b, air, aifs_i.as_nanos(), Some(now))
+                else {
+                    break;
+                };
+                state.backoff[i] = Some(nb);
+                match kind {
+                    Deferral::Gate => state.gate_deferrals += 1,
+                    Deferral::Guard => state.guard_deferrals += 1,
+                }
+            }
+        }
+    }
+
+    /// Countdowns the alternating gate held on `ch` at `node`: the radio was on
+    /// the other channel's interval, or the countdown ran into the interval end.
+    #[must_use]
+    pub fn gate_deferrals(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.state_ref(node, ch).map_or(0, |s| s.gate_deferrals)
+    }
+
+    /// Frames the alternating gate held on `ch` at `node` because they would start in a
+    /// guard interval or cross the end of their interval.
+    #[must_use]
+    pub fn guard_deferrals(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.state_ref(node, ch).map_or(0, |s| s.guard_deferrals)
+    }
+
+    /// Both gate counters summed over every node and channel: `(gate, guard)`.
+    #[must_use]
+    pub fn total_gate_deferrals(&self) -> (u64, u64) {
+        self.nodes
+            .values()
+            .fold(self.forgotten_deferrals, |(g, d), s| {
+                (g + s.gate_deferrals, d + s.guard_deferrals)
+            })
+    }
+
+    /// Drops the state of a node that has left the run: its queues, its backoff and its CBR
+    /// window. A node id is never reused and nothing transmits for it after its grace, so
+    /// only the totals above go on reading it.
+    pub fn forget_node(&mut self, node: NodeId) {
+        let i = node.index();
+        let keys: Vec<(u32, u16)> = self
+            .nodes
+            .range((i, 0)..=(i, u16::MAX))
+            .map(|(k, _)| *k)
+            .collect();
+        for k in keys {
+            if let Some(s) = self.nodes.remove(&k) {
+                self.forgotten_deferrals.0 += s.gate_deferrals;
+                self.forgotten_deferrals.1 += s.guard_deferrals;
+            }
+        }
+    }
+
+    /// How many (node, channel) states it holds, for a run's census.
+    #[must_use]
+    pub fn node_states(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// The MAC with one access category's EDCA parameters replaced.
+    #[must_use]
+    pub fn with_edca(mut self, ac: AccessCategory, params: EdcaParams) -> Self {
+        let i = ac_index(ac);
+        self.cw_min[i] = params.cw_min;
+        self.cw_max[i] = params.cw_max;
+        self.aifs[i] = params.aifs();
+        self
+    }
+
+    /// The MAC with all four access categories set from one table, and the card's EDCA
+    /// rows restated from it. Apply it before any [`Self::with_edca`] override.
+    #[must_use]
+    pub fn with_profile(mut self, profile: EdcaProfile) -> Self {
+        for ac in AccessCategory::ALL {
+            self = self.with_edca(ac, profile.params(ac));
+        }
+        self.profile = profile;
+        restate_edca_card(&mut self.card, profile);
+        self
+    }
+
+    /// The table the MAC's four rows came from, before any per-category override.
+    #[must_use]
+    pub fn edca_profile(&self) -> EdcaProfile {
+        self.profile
+    }
+
+    /// The `CWmax` in force for an access category. It never bounds a broadcast frame's
+    /// window, which stays at `CWmin` (see [`Self::contention_window`]).
+    #[must_use]
+    pub fn cw_max(&self, ac: AccessCategory) -> u32 {
+        self.cw_max[ac_index(ac)]
+    }
+
+    /// The `AIFS` in force for an access category.
+    #[must_use]
+    pub fn aifs(&self, ac: AccessCategory) -> Duration {
+        self.aifs[ac_index(ac)]
+    }
+
+    /// The MAC with a caller-chosen queue depth.
+    #[must_use]
+    pub fn with_queue_depth(mut self, depth: usize) -> Self {
+        self.queue_depth = depth;
+        self
+    }
+
+    fn state(&mut self, node: NodeId, ch: ChannelId) -> &mut NodeState {
+        self.nodes.entry((node.index(), ch.0)).or_default()
+    }
+
+    fn state_ref(&self, node: NodeId, ch: ChannelId) -> Option<&NodeState> {
+        self.nodes.get(&(node.index(), ch.0))
+    }
+
+    /// The contention window in force for an access category.
+    ///
+    /// Always `CWmin`, for every category, for every frame: OCB never doubles it
+    /// (EN 302 663 Annex C.4.2). The method exists so that a test can assert it, and so
+    /// that a reader looking for the doubling finds this comment instead of a bug.
+    #[must_use]
+    pub fn contention_window(&self, ac: AccessCategory) -> u32 {
+        self.cw_min[ac_index(ac)]
+    }
+
+    /// How many frames this node has been granted in one access category.
+    #[must_use]
+    pub fn granted(&self, node: NodeId, ch: ChannelId, ac: AccessCategory) -> u64 {
+        self.state_ref(node, ch)
+            .map_or(0, |s| s.granted[ac_index(ac)])
+    }
+
+    /// How many retransmissions this node has made. Zero unless individually addressed
+    /// frames are used.
+    #[must_use]
+    pub fn retransmissions(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.state_ref(node, ch).map_or(0, |s| s.retransmissions)
+    }
+
+    /// How many internal collisions this node has resolved.
+    #[must_use]
+    pub fn internal_collisions(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.state_ref(node, ch)
+            .map_or(0, |s| s.internal_collisions)
+    }
+
+    /// The air time this node has been granted, nanoseconds (invariant I-R3).
+    #[must_use]
+    pub fn granted_airtime_ns(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.state_ref(node, ch).map_or(0, |s| s.granted_airtime_ns)
+    }
+
+    /// How many frames this node dropped for a full queue.
+    #[must_use]
+    pub fn dropped(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.state_ref(node, ch).map_or(0, |s| s.dropped)
+    }
+
+    /// The backoff state of one access category, for inspection and for tests.
+    #[must_use]
+    pub fn backoff(&self, node: NodeId, ch: ChannelId, ac: AccessCategory) -> Option<Backoff> {
+        self.state_ref(node, ch)
+            .and_then(|s| s.backoff[ac_index(ac)])
+    }
+
+    /// How many frames are queued in one access category.
+    #[must_use]
+    pub fn queue_len(&self, node: NodeId, ch: ChannelId, ac: AccessCategory) -> usize {
+        self.state_ref(node, ch)
+            .map_or(0, |s| s.queues[ac_index(ac)].len())
+    }
+
+    /// Records a busy interval on a node's channel, for the CBR measurement.
+    ///
+    /// The engine calls this for every frame whose received power exceeded the CBR
+    /// threshold; [`Mac::on_cca`] covers the same ground for a MAC driven by CCA
+    /// transitions instead.
+    pub fn note_busy(&mut self, node: NodeId, ch: ChannelId, from: SimTime, to: SimTime) {
+        self.state(node, ch).cbr.note_busy(from, to);
+    }
+
+    /// [`Mac::note_busy`] for an interval declared ahead of `now` ([`CbrMeter::note_busy_at`]).
+    pub fn note_busy_at(
+        &mut self,
+        node: NodeId,
+        ch: ChannelId,
+        now: SimTime,
+        from: SimTime,
+        to: SimTime,
+    ) {
+        self.state(node, ch).cbr.note_busy_at(now, from, to);
+    }
+
+    /// A node's merged busy time on a channel since its meter began, up to `now`, ns
+    /// ([`CbrMeter::busy_total_ns`]); zero for a node that has heard nothing.
+    #[must_use]
+    pub fn busy_total_ns(&self, node: NodeId, ch: ChannelId, now: SimTime) -> u64 {
+        self.state_ref(node, ch)
+            .map_or(0, |s| s.cbr.busy_total_ns(now))
+    }
+
+    /// Suspends every running countdown as of `since`, the instant the medium actually
+    /// went busy, keeping the slots counted down before it.
+    ///
+    /// For a caller that samples the medium rather than reporting each transition: the
+    /// engine's medium tier learns that the channel is busy when the node's own timer
+    /// fires, which can be several slots after another frame began. Reporting the busy
+    /// medium at the sampling instant alone would credit the node with slots that were
+    /// never idle; this credits exactly the idle slots before `since` (EN 302 663
+    /// Annex C.4.2: the node "has to suspend the countdown until the channel becomes free
+    /// again"). The caller follows it with [`Mac::on_cca`]`(Busy)` as usual, which finds
+    /// every countdown already frozen. A node already frozen is left alone.
+    pub fn freeze_at(&mut self, node: NodeId, ch: ChannelId, since: SimTime) {
+        self.gate_settle(node, ch, since);
+        let Some(state) = self.nodes.get_mut(&(node.index(), ch.0)) else {
+            return;
+        };
+        if state.busy {
+            return;
+        }
+        for b in state.backoff.iter_mut().flatten() {
+            count_down_to(b, since);
+            b.resume_at = None;
+        }
+    }
+}
+
+/// Counts down the whole idle slots of a running countdown up to `t`.
+///
+/// A slot that the busy medium interrupts part-way is not counted: the decrement happens
+/// at the end of an idle slot (IEEE 802.11-2016 §10.3.4.3).
+fn count_down_to(b: &mut Backoff, t: SimTime) {
+    let Some(resume) = b.resume_at else {
+        return;
+    };
+    if t <= resume {
+        return;
+    }
+    let slot = timing::SLOT_TIME.as_nanos();
+    let ticks = (t - resume) / slot;
+    let counted = ticks.min(u64::from(b.remaining));
+    b.remaining -= counted as u32;
+    b.resume_at = Some(resume + counted * slot);
+}
+
+impl Default for EdcaOcbMac {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Model for EdcaOcbMac {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
+    fn tier(&self) -> Tier {
+        Tier::High
+    }
+
+    fn enqueue(
+        &mut self,
+        ctx: &mut C,
+        node: NodeId,
+        sdu: MacSdu,
+        ac: AccessCategory,
+    ) -> core::result::Result<(), DropCause> {
+        if sdu.frame.bytes > timing::MAX_MSDU_BYTES {
+            return Err(DropCause::TooLarge {
+                bytes: sdu.frame.bytes,
+                cap: timing::MAX_MSDU_BYTES,
+            });
+        }
+        let now = ctx.now();
+        let depth = self.queue_depth;
+        let cw_min = self.cw_min[ac_index(ac)];
+        let ac_aifs = self.aifs[ac_index(ac)];
+        // The backoff draw needs the RNG before the node state is borrowed mutably, and
+        // it must happen unconditionally so that the draw count does not depend on the
+        // medium state: a model whose stream position depended on the channel would
+        // replay differently after any timing change. The draw is used only when the
+        // medium is not already idle for AIFS.
+        let slots = ctx
+            .rng(RngDomain::MacBackoff, EntityRef::Node(node))
+            .below(u64::from(cw_min) + 1) as u32;
+        let state = self.state(node, ch_of(&sdu));
+        let index = ac_index(ac);
+        if state.queues[index].len() >= depth {
+            state.dropped += 1;
+            return Err(DropCause::QueueFull {
+                ac: ac.label(),
+                depth,
+            });
+        }
+        state.queues[index].push_back(sdu);
+        if state.backoff[index].is_none() {
+            let idle_for = match (state.busy, state.idle_since) {
+                (true, _) => None,
+                (false, Some(since)) => Some(Duration::between(since, now)),
+                // No CCA report yet: the channel has been idle since time zero.
+                (false, None) => Some(Duration::from_nanos(now)),
+            };
+            let aifs_met = idle_for.is_some_and(|d| d.as_nanos() >= ac_aifs.as_nanos());
+            state.backoff[index] = Some(if aifs_met {
+                // "On enqueue with idle medium for AIFS, transmit immediately."
+                Backoff {
+                    remaining: 0,
+                    drawn: 0,
+                    resume_at: Some(now),
+                    aifs_ns: 0,
+                }
+            } else {
+                let resume_at = if state.busy {
+                    None
+                } else {
+                    Some(
+                        state
+                            .idle_since
+                            .unwrap_or(0)
+                            .max(now.saturating_sub(ac_aifs.as_nanos()))
+                            + ac_aifs.as_nanos(),
+                    )
+                };
+                Backoff {
+                    remaining: slots,
+                    drawn: slots,
+                    // Idle for less than an AIFS: the rest of it. Busy: a whole one after
+                    // the medium clears; any further AIFS repeated after later busy
+                    // periods is deferral, not this.
+                    aifs_ns: resume_at.map_or(ac_aifs.as_nanos(), |r| r.saturating_sub(now)),
+                    resume_at,
+                }
+            });
+        }
+        Ok(())
+    }
+
+    fn on_cca(&mut self, ctx: &mut C, node: NodeId, ch: ChannelId, cca: CcaState) {
+        let now = ctx.now();
+        if matches!(cca, CcaState::Busy { .. }) {
+            // A countdown the interval end has already stopped keeps only the slots it
+            // counted inside the interval (a no-op without the gate).
+            self.gate_settle(node, ch, now);
+        }
+        let aifs = self.aifs;
+        let state = self.state(node, ch);
+        match cca {
+            CcaState::Busy { .. } => {
+                if !state.busy {
+                    state.busy = true;
+                    state.idle_since = None;
+                    state.cbr.busy_from(now);
+                    // Freeze every countdown: the medium is occupied. The idle slots
+                    // already counted are kept, so the countdown resumes from what is
+                    // still owed after the next AIFS rather than starting over
+                    // (EN 302 663 Annex C.4.2: "suspend the countdown").
+                    for b in state.backoff.iter_mut().flatten() {
+                        count_down_to(b, now);
+                        b.resume_at = None;
+                    }
+                }
+            }
+            CcaState::Idle => {
+                if state.busy {
+                    state.busy = false;
+                    state.idle_since = Some(now);
+                    state.cbr.idle_at(now);
+                    // Resume each countdown one AIFS after the medium went idle.
+                    for (i, slot) in state.backoff.iter_mut().enumerate() {
+                        if let Some(b) = slot {
+                            b.resume_at = Some(now + aifs[i].as_nanos());
+                        }
+                    }
+                } else if state.idle_since.is_none() {
+                    state.idle_since = Some(now);
+                }
+            }
+        }
+    }
+
+    fn on_tx_done(&mut self, _ctx: &mut C, node: NodeId, h: TxHandle) {
+        let state = self.state(node, h.channel);
+        // A node's own transmission occupied the medium: it belongs in the CBR window.
+        state.cbr.note_busy(h.start, h.end);
+        // And that is the whole of it. There is no ACK to wait for, so nothing is
+        // re-queued, no retry counter moves, and CW stays at CWmin
+        // (EN 302 663 Annex C.4.2).
+    }
+
+    fn cbr(&self, node: NodeId, ch: ChannelId, now: SimTime) -> f64 {
+        // The window ends at `now`, not at whenever this meter last heard anything: a
+        // channel that has fallen quiet decays to zero, which is what the DCC loop on the
+        // other end of `Dcc::on_cbr` is entitled to be told.
+        self.state_ref(node, ch).map_or(0.0, |s| s.cbr.cbr(now))
+    }
+
+    fn resource_model(&self) -> ResourceModel {
+        ResourceModel::Csma { edca: true }
+    }
+
+    fn next_poll_at(&self, node: NodeId, ch: ChannelId) -> Option<SimTime> {
+        let state = self.state_ref(node, ch)?;
+        if state.busy {
+            // Every countdown is frozen; the next thing that happens is a CCA report.
+            return None;
+        }
+        let gate = self.gate_for(node, ch);
+        (0..4)
+            .filter(|&i| !state.queues[i].is_empty())
+            .filter_map(|i| {
+                let mut b = state.backoff[i]?;
+                if let Some((sched, cch)) = gate {
+                    // Look ahead on an idle medium: where the gate puts the grant.
+                    let air = state.queues[i]
+                        .front()
+                        .map_or(0, |s| air_time(s.frame.bytes, s.frame.mcs).as_nanos());
+                    for _ in 0..8 {
+                        match gate_step(&sched, cch, &b, air, self.aifs[i].as_nanos(), None) {
+                            Some((nb, _)) => b = nb,
+                            None => break,
+                        }
+                    }
+                }
+                due_at(&b)
+            })
+            .min()
+    }
+
+    fn poll(&mut self, ctx: &mut C, node: NodeId, ch: ChannelId) -> Option<TxGrant> {
+        let now = ctx.now();
+        // IEEE 1609.4: move every countdown the schedule holds to where it may
+        // run; what is left eligible below starts in its interval and ends by its end.
+        self.gate_settle(node, ch, now);
+        let state = self.nodes.get_mut(&(node.index(), ch.0))?;
+        if state.busy {
+            return None;
+        }
+        // Highest access category first: an internal collision resolves to the higher AC.
+        let mut winner: Option<(usize, SimTime)> = None;
+        let mut eligible = 0u32;
+        for index in (0..4).rev() {
+            if state.queues[index].is_empty() {
+                continue;
+            }
+            let Some(mut b) = state.backoff[index] else {
+                continue;
+            };
+            let Some(resume) = b.resume_at else {
+                continue;
+            };
+            if now < resume {
+                continue;
+            }
+            // The instant this AC's countdown reaches zero. `now >= due` is exactly the
+            // old `ticks >= remaining` test, written so the instant itself is available
+            // for the grant.
+            let due = resume + u64::from(b.remaining) * timing::SLOT_TIME.as_nanos();
+            let ticks = (now - resume) / timing::SLOT_TIME.as_nanos();
+            if now >= due {
+                b.remaining = 0;
+                state.backoff[index] = Some(b);
+                eligible += 1;
+                if winner.is_none() {
+                    winner = Some((index, due));
+                }
+            } else {
+                b.remaining -= ticks as u32;
+                b.resume_at = Some(resume + ticks * timing::SLOT_TIME.as_nanos());
+                state.backoff[index] = Some(b);
+            }
+        }
+        let (index, due) = winner?;
+        if eligible > 1 {
+            state.internal_collisions += u64::from(eligible - 1);
+        }
+        let sdu = state.queues[index].pop_front()?;
+        let drawn = state.backoff[index].map_or(0, |b| b.drawn);
+        let aifs_ns = state.backoff[index].map_or(0, |b| b.aifs_ns);
+        state.backoff[index] = None;
+        state.granted[index] += 1;
+        let air = air_time(sdu.frame.bytes, sdu.frame.mcs);
+        state.granted_airtime_ns += air.as_nanos();
+        // A frame still queued in this AC starts its own backoff procedure now. Without
+        // this the queue never re-armed — `enqueue` arms only when no backoff is pending
+        // and `poll` cleared it here — so every frame queued behind another in the same
+        // access category was stranded for ever, and the MAC delivered one frame per
+        // enqueue instead of draining. That bites under exactly the congestion this
+        // simulator exists to study: a busy medium or a DCC delay makes frames
+        // accumulate, and from then on the MAC runs one frame behind.
+        let more_queued = !state.queues[index].is_empty();
+        let grant = TxGrant {
+            sdu,
+            ac: ac_of_index(index),
+            // The slot boundary the backoff computed, not the instant the engine happened
+            // to poll at. An engine that schedules its MacTimer from `next_poll_at` sees
+            // `at == now`; a coarse poll sees an instant in the past, which is the honest
+            // report that the frame is overdue.
+            at: due,
+            backoff_slots: drawn,
+            aifs_ns,
+            // One attempt, always: OCB has no ACK, so there is never a second one for a
+            // group-addressed frame.
+            attempt: 1,
+        };
+        if more_queued {
+            let ac_cw = self.cw_min[index];
+            let ac_aifs = self.aifs[index];
+            // Drawn here rather than at the top of `poll` on purpose: a grant is a causal
+            // event, so the stream position follows the sequence of grants, while a draw
+            // per poll would make it follow the engine's poll cadence.
+            let slots = ctx
+                .rng(RngDomain::MacBackoff, EntityRef::Node(node))
+                .below(u64::from(ac_cw) + 1) as u32;
+            let state = self.state(node, ch);
+            state.backoff[index] = Some(Backoff {
+                remaining: slots,
+                drawn: slots,
+                // The medium is occupied by the frame just granted; the next contention
+                // starts one AIFS after it ends. A `on_cca(Busy)` report for our own
+                // transmission freezes this again and the matching `Idle` re-computes the
+                // same instant, so a MAC driven by CCA and one driven by `poll` alone
+                // agree (EN 302 663 Annex C.4.2: the procedure runs once per frame).
+                resume_at: Some(air.after(due) + ac_aifs.as_nanos()),
+                aifs_ns: ac_aifs.as_nanos(),
+            });
+        }
+        Some(grant)
+    }
+}
+
+impl CbrMeter {
+    /// The last instant this meter has information about: the end of the last closed
+    /// busy interval or the start of the open one, whichever is later, and zero for a
+    /// meter that has seen nothing.
+    ///
+    /// **Not a clock.** It is an inspection accessor — "when did this node last hear
+    /// anything" — and reading [`CbrMeter::cbr`] at it reports the load of whenever the
+    /// channel was last busy rather than the load now: a node busy from 0 to 50 ms and
+    /// silent afterwards reads 1.0 for ever, which pins every [`crate::traits::Dcc`]
+    /// model at `δ_min`. [`Mac::cbr`] takes the instant to measure at for exactly this
+    /// reason.
+    #[must_use]
+    pub fn last_known(&self) -> SimTime {
+        let closed = self.busy.back().map_or(0, |&(_, to)| to);
+        closed.max(self.open.unwrap_or(0))
+    }
+}
+
+/// The access category at an internal index.
+fn ac_of_index(index: usize) -> AccessCategory {
+    match index {
+        0 => AccessCategory::Bk,
+        1 => AccessCategory::Be,
+        2 => AccessCategory::Vi,
+        _ => AccessCategory::Vo,
+    }
+}
+
+fn ch_of(sdu: &MacSdu) -> ChannelId {
+    sdu.frame.channel
+}
+
+fn en302663_mac() -> Source {
+    Source {
+        kind: SourceKind::Standard,
+        reference: "ETSI EN 302 663 V1.3.1 Annex C.4.2, C.4.4 and C.5, Tables C.3-C.6".to_string(),
+        accessed: None,
+        note: Some(
+            "The AC parameters are attributed to IEEE 802.11-2016 Table 9-138 (not 9-137) \
+             and the PHY constants to Table 17-21."
+                .to_string(),
+        ),
+    }
+}
+
+/// Rewrites the card's EDCA rows (`cw_min_*`, `cw_max`, `aifsn`) to `profile`'s table,
+/// citing it, so the card states the parameters the MAC contends with.
+fn restate_edca_card(card: &mut ModelCard, profile: EdcaProfile) {
+    let p = |ac| profile.params(ac);
+    let per_ac =
+        |f: fn(EdcaParams) -> u32| serde_json::json!(AccessCategory::ALL.map(|ac| f(p(ac))));
+    let source = match profile {
+        EdcaProfile::En302663 => en302663_mac(),
+        EdcaProfile::SaeJ2945_1 => Source::new(SourceKind::Standard, profile.citation()),
+    };
+    for row in &mut card.parameters {
+        let value = match row.name.as_str() {
+            "cw_min_vo" => serde_json::json!(p(AccessCategory::Vo).cw_min),
+            "cw_min_vi" => serde_json::json!(p(AccessCategory::Vi).cw_min),
+            "cw_min_be_bk" => serde_json::json!(p(AccessCategory::Be).cw_min),
+            "cw_max" => per_ac(|e| e.cw_max),
+            "aifsn" => per_ac(|e| e.aifsn),
+            _ => continue,
+        };
+        row.default = value;
+        row.source = source.clone();
+    }
+}
+
+fn edca_card() -> ModelCard {
+    let mut card = ModelCard::new(
+        EdcaOcbMac::ID,
+        Family::Mac,
+        "1.0.0",
+        "EDCA in OCB mode: four access categories with their own AIFS and contention \
+         window, backoff frozen on a busy medium, internal collisions resolved to the \
+         higher category, no ACK and therefore no retransmission, and the 100 ms CBR \
+         measurement.",
+    );
+    card.tier = vec![Tier::High];
+    card.equations = vec![
+        Equation::new("AIFS", "AIFS[AC] = AIFSN[AC] × aSlotTime + aSIFSTime"),
+        Equation {
+            name: "backoff".to_string(),
+            latex_or_text: "uniform in [0, CWmin] slots, counted down while the medium is \
+                            idle, frozen while busy, resumed one AIFS after it goes idle"
+                .to_string(),
+            notes: Some(
+                "CW never doubles: OCB has no group-addressed ACK, so the procedure runs \
+                 once (EN 302 663 Annex C.4.2 note)."
+                    .to_string(),
+            ),
+        },
+        Equation::new("CBR", "CBR = T_busy / T_CBR, T_CBR = 100 ms"),
+    ];
+    card.parameters = vec![
+        Parameter {
+            name: "slot_time_us".to_string(),
+            unit: "µs".to_string(),
+            default: serde_json::json!(13),
+            range: None,
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            name: "sifs_us".to_string(),
+            unit: "µs".to_string(),
+            default: serde_json::json!(32),
+            range: None,
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            name: "cw_min_vo".to_string(),
+            unit: "slots".to_string(),
+            default: serde_json::json!(3),
+            range: None,
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            name: "cw_min_vi".to_string(),
+            unit: "slots".to_string(),
+            default: serde_json::json!(7),
+            range: None,
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            name: "cw_min_be_bk".to_string(),
+            unit: "slots".to_string(),
+            default: serde_json::json!(15),
+            range: None,
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            // BK, BE, VI, VO. Carried, never applied: OCB never doubles the window.
+            name: "cw_max".to_string(),
+            unit: "slots".to_string(),
+            default: serde_json::json!([1023, 1023, 15, 7]),
+            range: None,
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            name: "aifsn".to_string(),
+            unit: "slots".to_string(),
+            default: serde_json::json!([9, 6, 3, 2]),
+            range: None,
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            name: "t_cbr_ms".to_string(),
+            unit: "ms".to_string(),
+            default: serde_json::json!(100),
+            range: None,
+            source: Source::new(
+                SourceKind::Standard,
+                "ETSI EN 302 571 V2.1.1 §4.2.10.1 and TS 102 687 Table 3",
+            ),
+            calibration: None,
+        },
+        Parameter {
+            name: "queue_depth".to_string(),
+            unit: "frames".to_string(),
+            default: serde_json::json!(DEFAULT_QUEUE_DEPTH),
+            range: Some(vec![serde_json::json!(1), serde_json::json!(4_096)]),
+            source: Source {
+                kind: SourceKind::TodoCalibrate,
+                reference: "no cited standard fixes a per-AC queue depth; it is a radio \
+                            implementation choice"
+                    .to_string(),
+                accessed: None,
+                note: Some(
+                    "64 frames is more than a 10 Hz generator can fill inside a CBR \
+                     window, so the default cannot silently shape a scalability result."
+                        .to_string(),
+                ),
+            },
+            calibration: Some(
+                "Read the queue depth from the target OBU's datasheet or measure the \
+                 depth at which a saturated MK5 starts dropping."
+                    .to_string(),
+            ),
+        },
+        Parameter {
+            name: "use_acks".to_string(),
+            unit: "-".to_string(),
+            default: serde_json::json!(false),
+            range: Some(vec![serde_json::json!(false)]),
+            source: Source {
+                kind: SourceKind::Standard,
+                reference: "EN 302 663 Annex C.4.2: no group-addressed ACKs; Veins \
+                            Mac1609_4 useAcks = false"
+                    .to_string(),
+                accessed: None,
+                note: Some(
+                    "The range admits only false: this model does not implement the retry \
+                     path, because the traffic it exists for is all group-addressed."
+                        .to_string(),
+                ),
+            },
+            calibration: None,
+        },
+    ];
+    card.assumptions = vec![
+        "Every frame is group-addressed, so no ACK is expected, no frame is \
+         retransmitted, and CW is CWmin for every attempt."
+            .to_string(),
+        "The engine reports CCA transitions; between two reports the medium state is \
+         unchanged."
+            .to_string(),
+        "A node's own transmissions count as busy in its CBR window, which is what the \
+         simulators this is compared against do, although the standard defines the \
+         measurement on receive."
+            .to_string(),
+        "One backoff draw per enqueue, whether or not the medium turns out to be idle for \
+         AIFS: a draw count that depended on the channel state would make the stream \
+         position depend on timing."
+            .to_string(),
+        "One further backoff draw per grant that leaves the queue non-empty: the next \
+         frame in the access category starts its own backoff procedure one AIFS after \
+         the granted frame's air time, so a queue drains one frame per contention round \
+         rather than one frame per enqueue. A grant is a causal event, so the draw count \
+         follows the sequence of grants and not the engine's poll cadence."
+            .to_string(),
+        "Under alternating access a countdown that the interval end or the other \
+         channel's interval stops is frozen as on a busy medium and resumes one AIFS \
+         after the next start of its channel's interval; a frame that would cross the \
+         interval end waits (Veins Mac1609_4 timeLeftInSlot, behaviour only). A frame is \
+         never dropped for this. A unit with two radios is not gated."
+            .to_string(),
+        "The channel busy ratio is measured over the window ending at the instant the \
+         caller asks for (Mac::cbr takes it), so a channel that falls silent decays to \
+         zero rather than holding its last busy value."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "No RTS/CTS (the Veins reference sets dot11RTSThreshold to 12,000 bit, which \
+         disables it for any frame this simulator sends) and no retry limits."
+            .to_string(),
+        "IEEE 1609.4 alternating access (net.channel_access: alternating) gates grants on \
+         the 100/50/4 ms sync, CCH and guard intervals, whose values are UNVERIFIED at the \
+         primary level; the default is continuous operation. The \
+         interval boundaries are exact UTC multiples at every unit: no sync tolerance or \
+         clock error is modelled."
+            .to_string(),
+        "The queue is FIFO per access category with no ageing or preemption.".to_string(),
+    ];
+    card.ignores = vec![
+        "Nothing relative to the slotted abstraction below it; relative to reality: \
+         chipset-specific deferral quirks."
+            .to_string(),
+    ];
+    card.sources = vec![
+        en302663_mac(),
+        Source::new(
+            SourceKind::Code,
+            "Veins Mac1609_4 reference configuration: useAcks false, \
+             dot11RTSThreshold 12,000 bit, ackLength 112 bit",
+        ),
+    ];
+    card.validation = Validation {
+        status: ValidationStatus::LiteratureChecked,
+        references: vec![en302663_mac()],
+        tests: vec![
+            "an_idle_medium_grants_immediately_after_aifs".to_string(),
+            "a_busy_medium_freezes_the_backoff".to_string(),
+            "a_broadcast_frame_is_never_retransmitted".to_string(),
+            "an_internal_collision_resolves_to_the_higher_category".to_string(),
+            "cbr_of_an_idle_channel_is_zero_and_of_a_saturated_one_approaches_one".to_string(),
+            "mac_airtime_accounting_sums_to_the_transmitted_time".to_string(),
+            "a_saturated_queue_drains_every_frame".to_string(),
+            "a_queue_keeps_draining_across_a_busy_medium".to_string(),
+            "a_channel_that_falls_silent_decays_to_zero".to_string(),
+            "a_grant_is_at_the_slot_the_backoff_computed_not_at_the_poll".to_string(),
+            "alternating_gate_never_grants_into_a_guard".to_string(),
+            "continuous_gate_is_the_ungated_mac".to_string(),
+            "sch_frame_waits_for_the_sch_interval".to_string(),
+        ],
+    };
+    card.determinism = Determinism {
+        uses_rng: true,
+        rng_domains: vec!["mac-backoff".to_string()],
+    };
+    card
+}
+
+// =========================================================================================
+// `mac/80211p/slotted-abstraction`
+// =========================================================================================
+
+/// `mac/80211p/slotted-abstraction` — the medium tier's MAC.
+///
+/// Contention is resolved per 13 µs slot: a frame draws a slot uniformly in
+/// `[0, CWmin]`, transmits at that slot boundary, and two nodes in CCA range that drew
+/// the same slot collide — which the PHY sees as two overlapping arrivals and reports
+/// through its own error model. There is no per-AC AIFS, no backoff freeze and no
+/// internal-collision rule, which is exactly the list the tier table says this tier
+/// ignores.
+#[derive(Debug)]
+pub struct SlottedMac {
+    card: ModelCard,
+    queue_depth: usize,
+    cw: u32,
+    nodes: BTreeMap<(u32, u16), SlottedState>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SlottedState {
+    queue: VecDeque<(MacSdu, AccessCategory, SimTime, u32)>,
+    cbr: CbrMeter,
+    granted: u64,
+    granted_airtime_ns: u64,
+    dropped: u64,
+    busy: bool,
+}
+
+impl SlottedMac {
+    /// The model's id.
+    pub const ID: &'static str = "mac/80211p/slotted-abstraction";
+
+    /// The MAC with the AC_VO contention window, which is the one a CAM or BSM uses.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            card: slotted_card(),
+            queue_depth: DEFAULT_QUEUE_DEPTH,
+            cw: AccessCategory::Vo.cw_min(),
+            nodes: BTreeMap::new(),
+        }
+    }
+
+    /// The slot a queued frame is waiting for, if any.
+    #[must_use]
+    pub fn pending_slot(&self, node: NodeId, ch: ChannelId) -> Option<u32> {
+        self.nodes
+            .get(&(node.index(), ch.0))
+            .and_then(|s| s.queue.front().map(|(_, _, _, slot)| *slot))
+    }
+
+    /// The air time granted at this node, nanoseconds.
+    #[must_use]
+    pub fn granted_airtime_ns(&self, node: NodeId, ch: ChannelId) -> u64 {
+        self.nodes
+            .get(&(node.index(), ch.0))
+            .map_or(0, |s| s.granted_airtime_ns)
+    }
+
+    /// Records a busy interval, for the CBR measurement.
+    pub fn note_busy(&mut self, node: NodeId, ch: ChannelId, from: SimTime, to: SimTime) {
+        self.nodes
+            .entry((node.index(), ch.0))
+            .or_default()
+            .cbr
+            .note_busy(from, to);
+    }
+
+    /// [`SlottedMac::note_busy`] for an interval declared ahead of `now`
+    /// ([`CbrMeter::note_busy_at`]).
+    pub fn note_busy_at(
+        &mut self,
+        node: NodeId,
+        ch: ChannelId,
+        now: SimTime,
+        from: SimTime,
+        to: SimTime,
+    ) {
+        self.nodes
+            .entry((node.index(), ch.0))
+            .or_default()
+            .cbr
+            .note_busy_at(now, from, to);
+    }
+}
+
+impl Default for SlottedMac {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Model for SlottedMac {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+impl<C: Ctx + ?Sized> Mac<C> for SlottedMac {
+    fn tier(&self) -> Tier {
+        Tier::Medium
+    }
+
+    fn enqueue(
+        &mut self,
+        ctx: &mut C,
+        node: NodeId,
+        sdu: MacSdu,
+        ac: AccessCategory,
+    ) -> core::result::Result<(), DropCause> {
+        if sdu.frame.bytes > timing::MAX_MSDU_BYTES {
+            return Err(DropCause::TooLarge {
+                bytes: sdu.frame.bytes,
+                cap: timing::MAX_MSDU_BYTES,
+            });
+        }
+        let now = ctx.now();
+        let slot = ctx
+            .rng(RngDomain::MacBackoff, EntityRef::Node(node))
+            .below(u64::from(self.cw) + 1) as u32;
+        let depth = self.queue_depth;
+        let state = self
+            .nodes
+            .entry((node.index(), sdu.frame.channel.0))
+            .or_default();
+        if state.queue.len() >= depth {
+            state.dropped += 1;
+            return Err(DropCause::QueueFull {
+                ac: ac.label(),
+                depth,
+            });
+        }
+        state.queue.push_back((sdu, ac, now, slot));
+        Ok(())
+    }
+
+    fn on_cca(&mut self, ctx: &mut C, node: NodeId, ch: ChannelId, cca: CcaState) {
+        let now = ctx.now();
+        let state = self.nodes.entry((node.index(), ch.0)).or_default();
+        match cca {
+            CcaState::Busy { .. } => {
+                if !state.busy {
+                    state.busy = true;
+                    state.cbr.busy_from(now);
+                }
+            }
+            CcaState::Idle => {
+                if state.busy {
+                    state.busy = false;
+                    state.cbr.idle_at(now);
+                }
+            }
+        }
+    }
+
+    fn on_tx_done(&mut self, _ctx: &mut C, node: NodeId, h: TxHandle) {
+        self.nodes
+            .entry((node.index(), h.channel.0))
+            .or_default()
+            .cbr
+            .note_busy(h.start, h.end);
+    }
+
+    fn cbr(&self, node: NodeId, ch: ChannelId, now: SimTime) -> f64 {
+        self.nodes
+            .get(&(node.index(), ch.0))
+            .map_or(0.0, |s| s.cbr.cbr(now))
+    }
+
+    fn resource_model(&self) -> ResourceModel {
+        ResourceModel::Csma { edca: false }
+    }
+
+    fn next_poll_at(&self, node: NodeId, ch: ChannelId) -> Option<SimTime> {
+        let state = self.nodes.get(&(node.index(), ch.0))?;
+        if state.busy {
+            return None;
+        }
+        let (_, _, enqueued_at, slot) = *state.queue.front()?;
+        Some(enqueued_at + u64::from(slot) * timing::SLOT_TIME.as_nanos())
+    }
+
+    fn poll(&mut self, ctx: &mut C, node: NodeId, ch: ChannelId) -> Option<TxGrant> {
+        let now = ctx.now();
+        let state = self.nodes.get_mut(&(node.index(), ch.0))?;
+        if state.busy {
+            return None;
+        }
+        let (_, _, enqueued_at, slot) = *state.queue.front()?;
+        let due = enqueued_at + u64::from(slot) * timing::SLOT_TIME.as_nanos();
+        if now < due {
+            return None;
+        }
+        let (sdu, ac, _, slot) = state.queue.pop_front()?;
+        state.granted += 1;
+        state.granted_airtime_ns += air_time(sdu.frame.bytes, sdu.frame.mcs).as_nanos();
+        Some(TxGrant {
+            sdu,
+            ac,
+            // The drawn slot, not the poll instant: two nodes that drew different slots
+            // must be granted at different instants or the tier has no collision
+            // mechanism at all.
+            at: due,
+            backoff_slots: slot,
+            // The slotted abstraction has no per-AC AIFS.
+            aifs_ns: 0,
+            attempt: 1,
+        })
+    }
+}
+
+fn slotted_card() -> ModelCard {
+    let mut card = ModelCard::new(
+        SlottedMac::ID,
+        Family::Mac,
+        "1.0.0",
+        "The medium tier's MAC: slotted CSMA in 13 µs slots with one uniform draw in \
+         [0, CWmin] per frame, and the same 100 ms CBR measurement as the high tier.",
+    );
+    card.tier = vec![Tier::Medium];
+    card.equations = vec![Equation {
+        name: "slot draw".to_string(),
+        latex_or_text: "slot ~ U[0, CWmin]; transmit at enqueue + slot × aSlotTime".to_string(),
+        notes: Some(
+            "Two nodes in CCA range that draw the same slot overlap on the air, and the \
+             PHY's error model decides what that costs."
+                .to_string(),
+        ),
+    }];
+    card.parameters = vec![
+        Parameter {
+            name: "slot_time_us".to_string(),
+            unit: "µs".to_string(),
+            default: serde_json::json!(13),
+            range: None,
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            name: "cw".to_string(),
+            unit: "slots".to_string(),
+            default: serde_json::json!(AccessCategory::Vo.cw_min()),
+            range: Some(vec![serde_json::json!(1), serde_json::json!(1_023)]),
+            source: en302663_mac(),
+            calibration: None,
+        },
+        Parameter {
+            name: "queue_depth".to_string(),
+            unit: "frames".to_string(),
+            default: serde_json::json!(DEFAULT_QUEUE_DEPTH),
+            range: Some(vec![serde_json::json!(1), serde_json::json!(4_096)]),
+            source: Source {
+                kind: SourceKind::TodoCalibrate,
+                reference: "no cited standard fixes a queue depth".to_string(),
+                accessed: None,
+                note: None,
+            },
+            calibration: Some("As for mac/80211p/edca-ocb.".to_string()),
+        },
+    ];
+    card.assumptions = vec![
+        "One contention window for all traffic: the AC_VO window, which is what safety \
+         messages use."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "No per-AC AIFS, no backoff freeze, no internal-collision rule, no capture \
+         timing: the frame either goes out in its slot or waits for the medium."
+            .to_string(),
+    ];
+    card.ignores = vec![
+        "Relative to mac/80211p/edca-ocb: per-AC AIFS, backoff freezing, internal \
+         collisions and 1609.4 switching."
+            .to_string(),
+    ];
+    card.sources = vec![en302663_mac()];
+    card.validation = Validation {
+        status: ValidationStatus::UnitTested,
+        references: Vec::new(),
+        tests: vec![
+            "the_slotted_mac_grants_at_its_slot".to_string(),
+            "mac_airtime_accounting_sums_to_the_transmitted_time".to_string(),
+            "a_saturated_queue_drains_every_frame".to_string(),
+            "a_queue_keeps_draining_across_a_busy_medium".to_string(),
+            "a_channel_that_falls_silent_decays_to_zero".to_string(),
+            "a_grant_is_at_the_slot_the_backoff_computed_not_at_the_poll".to_string(),
+        ],
+    };
+    card.determinism = Determinism {
+        uses_rng: true,
+        rng_domains: vec!["mac-backoff".to_string()],
+    };
+    card
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testctx::TestCtx;
+    use crate::types::{FrameDescriptor, Mcs, SduRef};
+    use v2xw_core::ids::{FrameSeq, SduId};
+
+    const CH: ChannelId = ChannelId::CCH;
+
+    fn sdu(bytes: u32, at: SimTime) -> MacSdu {
+        MacSdu {
+            frame: FrameDescriptor::broadcast(
+                bytes,
+                Mcs::R6Qpsk12,
+                SduRef::new(SduId::new(1), FrameSeq::new(1)),
+            ),
+            enqueued_at: at,
+        }
+    }
+
+    #[test]
+    fn an_idle_medium_grants_immediately_after_aifs() {
+        let mut ctx = TestCtx::new(1);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        // The channel has been idle since time zero, and AC_VO's AIFS is 58 µs.
+        ctx.set_now(1_000_000);
+        let now = ctx.now();
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, now), AccessCategory::Vo).expect("queued");
+        let grant = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+        assert_eq!(grant.backoff_slots, 0, "an idle medium needs no backoff");
+        assert_eq!(grant.ac, AccessCategory::Vo);
+        assert_eq!(grant.attempt, 1);
+        assert_eq!(mac.queue_len(node, CH, AccessCategory::Vo), 0);
+        // And nothing more is granted.
+        assert!(Mac::poll(&mut mac, &mut ctx, node, CH).is_none());
+    }
+
+    #[test]
+    fn a_frame_enqueued_on_a_busy_medium_waits_for_aifs_and_its_backoff() {
+        let mut ctx = TestCtx::new(2);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        // The medium goes busy, then a frame arrives.
+        Mac::on_cca(
+            &mut mac,
+            &mut ctx,
+            node,
+            CH,
+            CcaState::Busy { energy_dbm: -70.0 },
+        );
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Vo).expect("queued");
+        let b = mac.backoff(node, CH, AccessCategory::Vo).expect("drawn");
+        assert!(b.resume_at.is_none(), "frozen on a busy medium");
+        assert!(b.drawn <= AccessCategory::Vo.cw_min());
+        // Nothing is granted while it is busy, however long we wait.
+        ctx.set_now(5_000_000);
+        assert!(Mac::poll(&mut mac, &mut ctx, node, CH).is_none());
+        // The medium goes idle: the countdown resumes one AIFS later.
+        Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+        let resume = mac
+            .backoff(node, CH, AccessCategory::Vo)
+            .and_then(|b| b.resume_at)
+            .expect("resumed");
+        assert_eq!(resume, 5_000_000 + AccessCategory::Vo.aifs().as_nanos());
+        // One nanosecond before the last slot elapses, nothing.
+        let due = resume + u64::from(b.drawn) * timing::SLOT_TIME.as_nanos();
+        if b.drawn > 0 {
+            ctx.set_now(due - 1);
+            assert!(
+                Mac::poll(&mut mac, &mut ctx, node, CH).is_none(),
+                "too early"
+            );
+        }
+        ctx.set_now(due);
+        let grant = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+        assert_eq!(grant.backoff_slots, b.drawn);
+    }
+
+    #[test]
+    fn a_busy_medium_freezes_the_backoff() {
+        let mut ctx = TestCtx::new(3);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        // Start busy so that a real backoff is drawn, then go idle to start counting.
+        Mac::on_cca(
+            &mut mac,
+            &mut ctx,
+            node,
+            CH,
+            CcaState::Busy { energy_dbm: -70.0 },
+        );
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Be).expect("queued");
+        let drawn = mac
+            .backoff(node, CH, AccessCategory::Be)
+            .expect("drawn")
+            .drawn;
+        ctx.set_now(1_000_000);
+        Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+        // Count down one slot past AIFS, then freeze.
+        let aifs = AccessCategory::Be.aifs().as_nanos();
+        ctx.set_now(1_000_000 + aifs + timing::SLOT_TIME.as_nanos());
+        let _ = Mac::poll(&mut mac, &mut ctx, node, CH);
+        let after_one_slot = mac
+            .backoff(node, CH, AccessCategory::Be)
+            .map(|b| b.remaining);
+        if drawn > 1 {
+            assert_eq!(after_one_slot, Some(drawn - 1), "one slot counted");
+        }
+        Mac::on_cca(
+            &mut mac,
+            &mut ctx,
+            node,
+            CH,
+            CcaState::Busy { energy_dbm: -70.0 },
+        );
+        // Ten milliseconds of busy medium must not consume a single slot.
+        let later = ctx.now() + 10_000_000;
+        ctx.set_now(later);
+        assert!(Mac::poll(&mut mac, &mut ctx, node, CH).is_none());
+        assert_eq!(
+            mac.backoff(node, CH, AccessCategory::Be)
+                .map(|b| b.remaining),
+            after_one_slot,
+            "the countdown was frozen, not merely paused in appearance"
+        );
+    }
+
+    /// A countdown interrupted part-way resumes, one AIFS after the medium clears, from
+    /// the slots still owed — whether the busy medium is reported when it starts or, by a
+    /// sampling caller, later with the instant it started ([`EdcaOcbMac::freeze_at`]).
+    /// Before 2026-10-06 it restarted from the full draw.
+    #[test]
+    fn an_interrupted_countdown_resumes_from_the_slots_still_owed() {
+        let slot = timing::SLOT_TIME.as_nanos();
+        let aifs = AccessCategory::Be.aifs().as_nanos();
+        for late_report in [false, true] {
+            let mut ctx = TestCtx::new(8);
+            let mut mac = EdcaOcbMac::new();
+            let (node, drawn) = (0..64u32)
+                .map(NodeId::new)
+                .find_map(|node| {
+                    ctx.set_now(0);
+                    Mac::on_cca(
+                        &mut mac,
+                        &mut ctx,
+                        node,
+                        CH,
+                        CcaState::Busy { energy_dbm: -70.0 },
+                    );
+                    Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Be)
+                        .expect("queued");
+                    let d = mac
+                        .backoff(node, CH, AccessCategory::Be)
+                        .expect("drawn")
+                        .drawn;
+                    (d >= 4).then_some((node, u64::from(d)))
+                })
+                .expect("some node draws at least 4 slots");
+            ctx.set_now(1_000_000);
+            Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+            // Busy from part-way through the fourth slot of the countdown.
+            let busy_at = 1_000_000 + aifs + 3 * slot + 5_000;
+            if late_report {
+                mac.freeze_at(node, CH, busy_at);
+                ctx.set_now(1_000_000 + aifs + drawn * slot);
+            } else {
+                ctx.set_now(busy_at);
+            }
+            Mac::on_cca(
+                &mut mac,
+                &mut ctx,
+                node,
+                CH,
+                CcaState::Busy { energy_dbm: -70.0 },
+            );
+            ctx.set_now(3_000_000);
+            Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+            let expected = 3_000_000 + aifs + (drawn - 3) * slot;
+            assert_eq!(
+                Mac::<TestCtx>::next_poll_at(&mac, node, CH),
+                Some(expected),
+                "late report {late_report}: drawn {drawn}, 3 slots counted before the busy medium"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broadcast_frame_is_never_retransmitted() {
+        let mut ctx = TestCtx::new(4);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        ctx.set_now(1_000_000);
+        let now = ctx.now();
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, now), AccessCategory::Vo).expect("queued");
+        let grant = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+        assert!(grant.sdu.frame.kind.is_group_addressed());
+        assert_eq!(grant.attempt, 1);
+        // The transmission completes. In OCB there is no ACK to wait for.
+        let handle = TxHandle {
+            id: 1,
+            tx: node,
+            channel: CH,
+            start: grant.at,
+            end: grant.at + air_time(300, Mcs::R6Qpsk12).as_nanos(),
+            air_time: air_time(300, Mcs::R6Qpsk12),
+        };
+        Mac::on_tx_done(&mut mac, &mut ctx, node, handle);
+        // Nothing was re-queued, nothing was retried, and CW never moved.
+        assert_eq!(mac.queue_len(node, CH, AccessCategory::Vo), 0);
+        assert_eq!(mac.retransmissions(node, CH), 0);
+        assert!(Mac::poll(&mut mac, &mut ctx, node, CH).is_none());
+        for ac in AccessCategory::ALL {
+            assert_eq!(mac.contention_window(ac), ac.cw_min());
+            assert!(mac.contention_window(ac) <= ac.cw_max());
+        }
+        // Even after many frames, the window is still CWmin.
+        for i in 0..20u64 {
+            ctx.set_now(2_000_000 + i * 1_000_000);
+            let now = ctx.now();
+            Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, now), AccessCategory::Vo)
+                .expect("queued");
+            let g = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+            assert_eq!(g.attempt, 1);
+        }
+        assert_eq!(mac.retransmissions(node, CH), 0);
+        assert_eq!(mac.contention_window(AccessCategory::Vo), 3);
+    }
+
+    /// A saturated queue drains: every frame enqueued in one access category is
+    /// eventually granted, once each and in order.
+    ///
+    /// `enqueue` arms the backoff only when none is pending and `poll` used to clear it
+    /// after a grant with no re-arm, so every frame queued behind another in the same AC
+    /// was stranded for ever: three AC_VO frames enqueued together on an idle medium and
+    /// polled every millisecond for 200 ms produced one grant and left two frames in the
+    /// queue with `backoff = None`. Under a 10 Hz generator that never queues two frames
+    /// at once the MAC looked fine, which is why the crate's 127 tests all passed.
+    #[test]
+    fn a_saturated_queue_drains_every_frame() {
+        let mut ctx = TestCtx::new(21);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        const N: usize = 16;
+
+        // N frames into one AC, all at once, on an idle medium.
+        ctx.set_now(1_000_000);
+        let at = ctx.now();
+        for i in 0..N {
+            Mac::enqueue(
+                &mut mac,
+                &mut ctx,
+                node,
+                sdu(300 + i as u32, at),
+                AccessCategory::Vo,
+            )
+            .expect("queued");
+        }
+        assert_eq!(mac.queue_len(node, CH, AccessCategory::Vo), N);
+
+        // Poll once a millisecond for 200 ms, which is far beyond AIFS (58 µs) plus at
+        // most CWmin = 3 slots of 13 µs for every one of them.
+        let mut granted = Vec::new();
+        for ms in 1..=200u64 {
+            ctx.set_now(ms * 1_000_000);
+            while let Some(g) = Mac::poll(&mut mac, &mut ctx, node, CH) {
+                granted.push(g);
+            }
+        }
+        assert_eq!(
+            granted.len(),
+            N,
+            "{} of {N} frames granted, {} still queued",
+            granted.len(),
+            mac.queue_len(node, CH, AccessCategory::Vo)
+        );
+        assert_eq!(mac.queue_len(node, CH, AccessCategory::Vo), 0);
+        assert_eq!(mac.granted(node, CH, AccessCategory::Vo), N as u64);
+        // In order, and each frame exactly once: the byte counts were made distinct so
+        // that a re-granted or dropped frame shows up here.
+        let sizes: Vec<u32> = granted.iter().map(|g| g.sdu.frame.bytes).collect();
+        let expected: Vec<u32> = (0..N as u32).map(|i| 300 + i).collect();
+        assert_eq!(sizes, expected);
+        // Each grant carries its own fresh backoff draw, in [0, CWmin].
+        assert!(
+            granted
+                .iter()
+                .all(|g| g.backoff_slots <= AccessCategory::Vo.cw_min())
+        );
+        // The MAC's air-time ledger counted each frame once (invariant I-R3).
+        let expected_air: u64 = expected
+            .iter()
+            .map(|b| air_time(*b, Mcs::R6Qpsk12).as_nanos())
+            .sum();
+        assert_eq!(mac.granted_airtime_ns(node, CH), expected_air);
+        // Nothing was dropped and the queue is genuinely idle again.
+        assert_eq!(mac.dropped(node, CH), 0);
+        assert_eq!(mac.backoff(node, CH, AccessCategory::Vo), None);
+    }
+
+    /// The same, with the medium going busy and idle underneath: a queue that is draining
+    /// keeps draining across a freeze.
+    #[test]
+    fn a_queue_keeps_draining_across_a_busy_medium() {
+        let mut ctx = TestCtx::new(22);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        ctx.set_now(1_000_000);
+        let at = ctx.now();
+        for i in 0..6u32 {
+            Mac::enqueue(
+                &mut mac,
+                &mut ctx,
+                node,
+                sdu(300 + i, at),
+                AccessCategory::Be,
+            )
+            .expect("queued");
+        }
+        let mut granted = 0;
+        for ms in 1..=400u64 {
+            ctx.set_now(ms * 1_000_000);
+            // Ten milliseconds of busy medium every fifty.
+            if ms % 50 == 0 {
+                Mac::on_cca(
+                    &mut mac,
+                    &mut ctx,
+                    node,
+                    CH,
+                    CcaState::Busy { energy_dbm: -60.0 },
+                );
+            } else if ms % 50 == 10 {
+                Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+            }
+            while Mac::poll(&mut mac, &mut ctx, node, CH).is_some() {
+                granted += 1;
+            }
+        }
+        assert_eq!(granted, 6);
+        assert_eq!(mac.queue_len(node, CH, AccessCategory::Be), 0);
+    }
+
+    #[test]
+    fn an_internal_collision_resolves_to_the_higher_category() {
+        let mut ctx = TestCtx::new(5);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        // Well past the longest AIFS on an idle medium, so both categories are eligible
+        // in the same instant.
+        ctx.set_now(1_000_000);
+        let now = ctx.now();
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, now), AccessCategory::Be).expect("queued");
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, now), AccessCategory::Vo).expect("queued");
+        let first = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+        assert_eq!(first.ac, AccessCategory::Vo, "the higher category wins");
+        assert_eq!(mac.internal_collisions(node, CH), 1);
+        // The loser is not dropped: it goes next.
+        let second = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+        assert_eq!(second.ac, AccessCategory::Be);
+    }
+
+    #[test]
+    fn cbr_of_an_idle_channel_is_zero_and_of_a_saturated_one_approaches_one() {
+        let mut ctx = TestCtx::new(6);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        // Nothing has ever been heard: zero.
+        assert_eq!(Mac::<TestCtx>::cbr(&mac, node, CH, 0), 0.0);
+        ctx.set_now(500_000_000);
+        Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+        assert_eq!(Mac::<TestCtx>::cbr(&mac, node, CH, ctx.now()), 0.0);
+
+        // A saturated channel: busy for the whole window.
+        let mut saturated = EdcaOcbMac::new();
+        saturated.note_busy(node, CH, 0, 1_000_000_000);
+        let meter_cbr = Mac::<TestCtx>::cbr(&saturated, node, CH, 1_000_000_000);
+        assert!((meter_cbr - 1.0).abs() < 1e-12, "{meter_cbr}");
+
+        // Half busy: one 50 ms interval inside the 100 ms window.
+        let mut half = EdcaOcbMac::new();
+        half.note_busy(node, CH, 950_000_000, 1_000_000_000);
+        let half_cbr = Mac::<TestCtx>::cbr(&half, node, CH, 1_000_000_000);
+        assert!((half_cbr - 0.5).abs() < 1e-12, "{half_cbr}");
+
+        // A channel filled with 584 µs frames back to back approaches one.
+        let mut loaded = EdcaOcbMac::new();
+        let air = air_time(400, Mcs::R6Qpsk12).as_nanos();
+        let mut t = 0;
+        while t + air <= 100_000_000 {
+            loaded.note_busy(node, CH, t, t + air);
+            t += air;
+        }
+        let loaded_cbr = Mac::<TestCtx>::cbr(&loaded, node, CH, 100_000_000);
+        assert!(loaded_cbr > 0.99, "{loaded_cbr}");
+    }
+
+    /// The CBR a MAC reports is the load **now**, not the load at the last instant its
+    /// meter happened to hear something.
+    ///
+    /// `Mac::cbr` used to end the window at `CbrMeter::last_known()`, so a node busy from
+    /// 0 to 50 ms and silent ever since reported 1.000000 for the rest of the run, and a
+    /// light load of ten 584 µs frames in the first 100 ms reported 0.064471 for ever
+    /// instead of decaying to zero. Every `Dcc` model consumes this through `on_cbr`, so
+    /// such a node was pinned at `δ_min` = 0.0006 — one frame per second — permanently.
+    #[test]
+    fn a_channel_that_falls_silent_decays_to_zero() {
+        let node = NodeId::new(0);
+
+        // Saturated for the first 50 ms, then nothing.
+        let mut mac = EdcaOcbMac::new();
+        mac.note_busy(node, CH, 0, 50_000_000);
+        // Inside the window it reads what it should.
+        assert!((Mac::<TestCtx>::cbr(&mac, node, CH, 50_000_000) - 1.0).abs() < 1e-12);
+        // Half the window later, half of it is still inside.
+        let at_100 = Mac::<TestCtx>::cbr(&mac, node, CH, 100_000_000);
+        assert!((at_100 - 0.5).abs() < 1e-12, "{at_100}");
+        // Once the busy period has fallen out of the 100 ms window, zero — and it stays
+        // zero however long the node is quiet for.
+        for now in [150_000_000, 1_000_000_000, 600_000_000_000] {
+            let cbr = Mac::<TestCtx>::cbr(&mac, node, CH, now);
+            assert_eq!(cbr, 0.0, "{cbr} at {now} ns");
+        }
+        // The stale reading this replaced.
+        assert_eq!(
+            mac.state_ref(node, CH).expect("state").cbr.last_known(),
+            50_000_000
+        );
+
+        // The validator's light-load case: ten 584 µs frames in the first 100 ms.
+        let mut light = EdcaOcbMac::new();
+        let air = air_time(400, Mcs::R6Qpsk12).as_nanos();
+        for i in 0..10u64 {
+            light.note_busy(node, CH, i * 10_000_000, i * 10_000_000 + air);
+        }
+        let loaded = Mac::<TestCtx>::cbr(&light, node, CH, 100_000_000);
+        assert!((loaded - 0.058_4).abs() < 1e-9, "{loaded}");
+        assert_eq!(Mac::<TestCtx>::cbr(&light, node, CH, 1_000_000_000), 0.0);
+    }
+
+    /// A jammer's windows are declared a step ahead. The 100 ms reading
+    /// at `now` still counts what ended before `now`: a 90 %-duty pulse train (90 ms of
+    /// every 100 ms) reads 0.9. Fault: pruning at the window's end (`note_busy`), which
+    /// folds the last 100 ms away and reads 0.
+    #[test]
+    fn windows_declared_ahead_still_count_in_the_reading_at_now() {
+        const MS: u64 = 1_000_000;
+        let mut meter = CbrMeter::new();
+        for step in 0..10u64 {
+            let now = step * 100 * MS;
+            // The step's own window, declared at its start: [now, now + 90 ms).
+            meter.note_busy_at(now, now, now + 90 * MS);
+            let reading = meter.cbr(now + 100 * MS);
+            if step > 0 {
+                // Read at the next step, before its own window is declared.
+                assert!((reading - 0.9).abs() < 1e-9, "step {step}: CBR {reading}");
+            }
+        }
+        // And read after the next step's window is declared, as the engine does (the
+        // jamming is declared before the DCC reads its CBR).
+        let now = 1_000 * MS;
+        meter.note_busy_at(now, now, now + 90 * MS);
+        let r = meter.cbr(now);
+        assert!(
+            (r - 0.9).abs() < 1e-9,
+            "CBR {r} after the next window is declared"
+        );
+    }
+
+    #[test]
+    fn overlapping_busy_intervals_cannot_push_the_cbr_above_one() {
+        let mut meter = CbrMeter::new();
+        // Three receptions that all overlap: the medium is busy once.
+        meter.note_busy(0, 60_000_000);
+        meter.note_busy(10_000_000, 70_000_000);
+        meter.note_busy(20_000_000, 50_000_000);
+        let cbr = meter.cbr(100_000_000);
+        assert!((cbr - 0.7).abs() < 1e-12, "{cbr}");
+        assert!(cbr <= 1.0);
+    }
+
+    /// The running busy time over a span is the mean of the 100 ms readings that tile it:
+    /// a 2 ms frame every 200 ms is a 1 % busy share, which no single reading at a 1 s
+    /// flush shows (each reads 0 % or 2 %, and the one at 1 s reads 0 %). The reading at
+    /// the flush was `mac.cbr` before.
+    #[test]
+    fn the_running_busy_time_is_the_mean_of_the_readings_that_tile_a_span() {
+        const MS: u64 = 1_000_000;
+        let mut meter = CbrMeter::new();
+        let mut tiled_ns = 0.0;
+        let mut marks = vec![meter.busy_total_ns(0)];
+        for tile in 1..=20u64 {
+            let end = tile * 100 * MS;
+            // Causal: the frames that start inside this tile, noted before it is read.
+            for start in (end - 100 * MS..end).step_by((200 * MS) as usize) {
+                if start % (200 * MS) == 0 {
+                    meter.note_busy(start, start + 2 * MS);
+                }
+            }
+            tiled_ns += meter.cbr(end) * (100 * MS) as f64;
+            if tile == 10 {
+                assert_eq!(meter.cbr(end), 0.0, "the reading at the flush aliases");
+            }
+            if tile % 10 == 0 {
+                marks.push(meter.busy_total_ns(end));
+                assert!(
+                    (meter.busy_total_ns(end) as f64 - tiled_ns).abs() < 1.0,
+                    "at {end}: running {} against the tiled readings {tiled_ns}",
+                    meter.busy_total_ns(end)
+                );
+            }
+        }
+        assert_eq!(marks, vec![0, 10 * MS, 20 * MS], "1 % of each second");
+    }
+
+    /// Overlaps are merged across the instant the running sum folds them in, and a busy
+    /// period still open counts up to the instant asked about.
+    #[test]
+    fn the_running_busy_time_merges_overlaps_and_counts_an_open_period() {
+        const MS: u64 = 1_000_000;
+        let mut meter = CbrMeter::new();
+        meter.note_busy(0, 60 * MS);
+        meter.note_busy(40 * MS, 90 * MS);
+        // Folds [0, 50 ms) in while [40, 90) is still held.
+        meter.note_busy(140 * MS, 150 * MS);
+        meter.note_busy(80 * MS, 120 * MS);
+        assert_eq!(meter.busy_total_ns(500 * MS), 130 * MS);
+        meter.busy_from(600 * MS);
+        assert_eq!(meter.busy_total_ns(650 * MS), 180 * MS);
+        meter.idle_at(900 * MS);
+        meter.note_busy(1_200 * MS, 1_201 * MS);
+        assert_eq!(meter.busy_total_ns(2_000 * MS), 431 * MS);
+    }
+
+    #[test]
+    fn the_cbr_window_forgets_what_falls_out_of_it() {
+        let mut meter = CbrMeter::new();
+        meter.note_busy(0, 50_000_000);
+        assert!((meter.cbr(100_000_000) - 0.5).abs() < 1e-12);
+        // Half a second later that interval is long gone.
+        assert_eq!(meter.cbr(500_000_000), 0.0);
+        assert_eq!(meter.window(), timing::T_CBR);
+    }
+
+    #[test]
+    fn mac_airtime_accounting_sums_to_the_transmitted_time() {
+        // The MAC half of invariant I-R3: the air time it grants equals the air time of
+        // the frames it granted, frame for frame.
+        let mut ctx = TestCtx::new(7);
+        let mut mac = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        let sizes = [100u32, 300, 400, 1_000, 2_304];
+        let mut expected = 0u64;
+        let mut granted = 0u64;
+        for (i, bytes) in sizes.into_iter().enumerate() {
+            ctx.set_now(1_000_000 * (i as u64 + 1));
+            let now = ctx.now();
+            Mac::enqueue(
+                &mut mac,
+                &mut ctx,
+                node,
+                sdu(bytes, now),
+                AccessCategory::Vo,
+            )
+            .expect("queued");
+            let grant = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+            expected += air_time(grant.sdu.frame.bytes, grant.sdu.frame.mcs).as_nanos();
+            granted += 1;
+        }
+        assert_eq!(granted, sizes.len() as u64);
+        assert_eq!(mac.granted_airtime_ns(node, CH), expected);
+        assert_eq!(
+            mac.granted(node, CH, AccessCategory::Vo),
+            sizes.len() as u64
+        );
+    }
+
+    #[test]
+    fn a_full_queue_drops_and_says_which_queue() {
+        let mut ctx = TestCtx::new(8);
+        let mut mac = EdcaOcbMac::new().with_queue_depth(2);
+        let node = NodeId::new(0);
+        for _ in 0..2 {
+            Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Be)
+                .expect("queued");
+        }
+        let err = Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Be)
+            .expect_err("full");
+        assert!(matches!(err, DropCause::QueueFull { depth: 2, .. }));
+        assert_eq!(mac.dropped(node, CH), 1);
+        // And an oversized frame is refused whatever the queue looks like.
+        let err = Mac::enqueue(
+            &mut mac,
+            &mut ctx,
+            node,
+            sdu(timing::MAX_MSDU_BYTES + 1, 0),
+            AccessCategory::Vo,
+        )
+        .expect_err("too large");
+        assert!(matches!(err, DropCause::TooLarge { .. }));
+    }
+
+    #[test]
+    fn the_slotted_mac_grants_at_its_slot() {
+        let mut ctx = TestCtx::new(9);
+        let mut mac = SlottedMac::new();
+        let node = NodeId::new(0);
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Vo).expect("queued");
+        let slot = mac.pending_slot(node, CH).expect("a slot was drawn");
+        assert!(slot <= AccessCategory::Vo.cw_min());
+        if slot > 0 {
+            ctx.set_now(u64::from(slot) * timing::SLOT_TIME.as_nanos() - 1);
+            assert!(
+                Mac::poll(&mut mac, &mut ctx, node, CH).is_none(),
+                "too early"
+            );
+        }
+        ctx.set_now(u64::from(slot) * timing::SLOT_TIME.as_nanos());
+        let grant = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+        assert_eq!(grant.backoff_slots, slot);
+        assert_eq!(
+            mac.granted_airtime_ns(node, CH),
+            air_time(300, Mcs::R6Qpsk12).as_nanos()
+        );
+        assert_eq!(
+            Mac::<TestCtx>::resource_model(&mac),
+            ResourceModel::Csma { edca: false }
+        );
+        assert_eq!(Mac::<TestCtx>::tier(&mac), Tier::Medium);
+    }
+
+    /// The transmission instant is the slot the backoff computed, and the engine can
+    /// find out when that is: nodes that drew *different* slots are granted at
+    /// *different* instants, whatever cadence the engine polls on.
+    ///
+    /// `TxGrant.at` used to be `ctx.now()` in both MACs and the `Mac` trait offered no
+    /// way to ask when to poll, so a coarse poll found every node past due and granted
+    /// them all in the same instant — which erases the medium tier's only collision
+    /// mechanism, since two nodes 13 µs apart then collide anyway.
+    #[test]
+    fn a_grant_is_at_the_slot_the_backoff_computed_not_at_the_poll() {
+        let mut ctx = TestCtx::new(23);
+        let mut mac = SlottedMac::new();
+        let slot_ns = timing::SLOT_TIME.as_nanos();
+
+        // Eight nodes queue at t = 0 and the engine polls late and coarsely, at 10 ms.
+        let mut drawn = BTreeMap::new();
+        for id in 0..8u32 {
+            let node = NodeId::new(id);
+            Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Vo)
+                .expect("queued");
+            let slot = mac.pending_slot(node, CH).expect("slot");
+            // The engine can schedule its timer exactly, before it polls anything.
+            assert_eq!(
+                Mac::<TestCtx>::next_poll_at(&mac, node, CH),
+                Some(u64::from(slot) * slot_ns)
+            );
+            drawn.insert(id, slot);
+        }
+        ctx.set_now(10_000_000);
+        let mut granted_at = BTreeMap::new();
+        for id in 0..8u32 {
+            let node = NodeId::new(id);
+            let g = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+            assert_eq!(g.backoff_slots, drawn[&id]);
+            granted_at.insert(id, g.at);
+        }
+        // Two nodes share an instant exactly when they drew the same slot — not because
+        // they were polled together.
+        for a in 0..8u32 {
+            for b in 0..8u32 {
+                assert_eq!(
+                    granted_at[&a] == granted_at[&b],
+                    drawn[&a] == drawn[&b],
+                    "nodes {a} and {b}: slots {} and {}, instants {} and {}",
+                    drawn[&a],
+                    drawn[&b],
+                    granted_at[&a],
+                    granted_at[&b]
+                );
+                assert_eq!(granted_at[&a], u64::from(drawn[&a]) * slot_ns);
+            }
+        }
+        let distinct: std::collections::BTreeSet<SimTime> = granted_at.values().copied().collect();
+        assert!(
+            distinct.len() > 1,
+            "every node granted in one instant: {granted_at:?}"
+        );
+
+        // EDCA answers the same question from its own state: AIFS plus the drawn slots,
+        // and nothing at all when the queue is empty or the medium is busy.
+        let mut ctx = TestCtx::new(24);
+        let mut edca = EdcaOcbMac::new();
+        let node = NodeId::new(0);
+        assert_eq!(Mac::<TestCtx>::next_poll_at(&edca, node, CH), None);
+        ctx.set_now(1_000_000);
+        Mac::on_cca(
+            &mut edca,
+            &mut ctx,
+            node,
+            CH,
+            CcaState::Busy { energy_dbm: -60.0 },
+        );
+        let at = ctx.now();
+        Mac::enqueue(&mut edca, &mut ctx, node, sdu(300, at), AccessCategory::Vo).expect("queued");
+        assert_eq!(
+            Mac::<TestCtx>::next_poll_at(&edca, node, CH),
+            None,
+            "frozen on a busy medium"
+        );
+        ctx.set_now(2_000_000);
+        Mac::on_cca(&mut edca, &mut ctx, node, CH, CcaState::Idle);
+        let slots = edca
+            .backoff(node, CH, AccessCategory::Vo)
+            .expect("armed")
+            .remaining;
+        let expected =
+            2_000_000 + AccessCategory::Vo.aifs().as_nanos() + u64::from(slots) * slot_ns;
+        assert_eq!(
+            Mac::<TestCtx>::next_poll_at(&edca, node, CH),
+            Some(expected)
+        );
+        // Polling at exactly that instant grants at exactly that instant.
+        ctx.set_now(expected);
+        let g = Mac::poll(&mut edca, &mut ctx, node, CH).expect("granted");
+        assert_eq!(g.at, expected);
+        assert_eq!(Mac::<TestCtx>::next_poll_at(&edca, node, CH), None);
+    }
+
+    #[test]
+    fn two_nodes_drawing_the_same_slot_is_what_a_collision_is() {
+        // The medium tier's collision mechanism: the MAC does not detect it, it simply
+        // grants both frames in the same slot and the PHY sees two overlapping arrivals.
+        let mut ctx = TestCtx::new(10);
+        let mut mac = SlottedMac::new();
+        let mut slots = BTreeMap::new();
+        for id in 0..8u32 {
+            let node = NodeId::new(id);
+            Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Vo)
+                .expect("queued");
+            slots.insert(id, mac.pending_slot(node, CH).expect("slot"));
+        }
+        // With CWmin = 3 and eight nodes, at least two must share a slot.
+        let distinct: std::collections::BTreeSet<u32> = slots.values().copied().collect();
+        assert!(distinct.len() < slots.len(), "{slots:?}");
+    }
+
+    #[test]
+    fn the_resource_model_and_tier_are_reported() {
+        let edca = EdcaOcbMac::new();
+        assert_eq!(
+            Mac::<TestCtx>::resource_model(&edca),
+            ResourceModel::Csma { edca: true }
+        );
+        assert_eq!(Mac::<TestCtx>::tier(&edca), Tier::High);
+    }
+
+    #[test]
+    fn the_cards_validate_and_register() {
+        let mut registry = v2xw_core::registry::Registry::new();
+        for card in [edca_card(), slotted_card()] {
+            card.validate().expect("card validates");
+            card.check_api_version().expect("api version");
+            registry.register(card).expect("registers");
+        }
+        assert!(registry.contains(EdcaOcbMac::ID));
+        assert!(registry.contains(SlottedMac::ID));
+    }
+
+    #[test]
+    fn a_mac_can_be_used_as_a_trait_object() {
+        let mut ctx = TestCtx::new(11);
+        let mut mac: Box<dyn Mac<TestCtx>> = Box::new(EdcaOcbMac::new());
+        let node = NodeId::new(0);
+        ctx.set_now(1_000_000);
+        let now = ctx.now();
+        mac.enqueue(&mut ctx, node, sdu(300, now), AccessCategory::Vo)
+            .expect("queued");
+        assert!(mac.poll(&mut ctx, node, CH).is_some());
+        assert_eq!(mac.id(), EdcaOcbMac::ID);
+    }
+
+    /// On an idle channel the access delay is exactly the AIFS and backoff the grant
+    /// reports: none at all for a frame that finds the medium idle for a full AIFS, and the
+    /// rest of the AIFS plus the drawn slots for one that finds it idle for less.
+    #[test]
+    fn access_on_an_idle_channel_is_the_aifs_and_backoff_the_grant_reports() {
+        let node = NodeId::new(0);
+        let aifs = AccessCategory::Vo.aifs().as_nanos();
+        // Idle since time zero: immediate access, and the grant says so.
+        let mut ctx = TestCtx::new(1);
+        let mut mac = EdcaOcbMac::new();
+        ctx.set_now(1_000_000);
+        Mac::enqueue(
+            &mut mac,
+            &mut ctx,
+            node,
+            sdu(300, 1_000_000),
+            AccessCategory::Vo,
+        )
+        .expect("queued");
+        let g = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+        assert_eq!((g.at, g.aifs_ns, g.backoff_slots), (1_000_000, 0, 0));
+
+        // Idle for 10 µs when the frame arrives: 48 µs of AIFS left, then the backoff.
+        for seed in 1..=20u64 {
+            let mut ctx = TestCtx::new(seed);
+            let mut mac = EdcaOcbMac::new();
+            ctx.set_now(1_000_000);
+            Mac::on_cca(
+                &mut mac,
+                &mut ctx,
+                node,
+                CH,
+                CcaState::Busy { energy_dbm: -70.0 },
+            );
+            ctx.set_now(1_200_000);
+            Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+            let ready = 1_210_000;
+            ctx.set_now(ready);
+            Mac::enqueue(
+                &mut mac,
+                &mut ctx,
+                node,
+                sdu(300, ready),
+                AccessCategory::Vo,
+            )
+            .expect("queued");
+            let due = Mac::<TestCtx>::next_poll_at(&mac, node, CH).expect("armed");
+            ctx.set_now(due);
+            let g = Mac::poll(&mut mac, &mut ctx, node, CH).expect("granted");
+            let slots = u64::from(g.backoff_slots) * timing::SLOT_TIME.as_nanos();
+            assert_eq!(g.aifs_ns, aifs - 10_000);
+            assert_eq!(
+                g.at - ready,
+                g.aifs_ns + slots,
+                "access delay is the AIFS and the backoff, with no deferral"
+            );
+        }
+    }
+
+    // ---- IEEE 1609.4 alternating access in the MAC ----
+
+    const ALT: ChannelSchedule = ChannelSchedule {
+        access: ChannelAccess::Alternating,
+    };
+    const SCH: ChannelId = ChannelId::SCH1;
+
+    /// One grant as the gate tests compare them.
+    type Granted = (SimTime, u32, ChannelId, AccessCategory, u32);
+
+    /// Drives `mac` through `n` keyed-random enqueues on one node (sizes 50-1 400 B, both
+    /// channels, all four categories), reporting each own transmission to the MAC as a
+    /// busy medium on its channel, and polls exactly at `next_poll_at`. Returns every
+    /// grant in order.
+    fn drive(mac: &mut EdcaOcbMac, seed: u64, n: usize) -> Vec<Granted> {
+        let mut ctx = TestCtx::new(seed);
+        let node = NodeId::new(0);
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15 ^ seed;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let mut idles: Vec<(SimTime, ChannelId)> = Vec::new();
+        let mut out: Vec<Granted> = Vec::new();
+        let drain = |mac: &mut EdcaOcbMac,
+                     ctx: &mut TestCtx,
+                     idles: &mut Vec<(SimTime, ChannelId)>,
+                     out: &mut Vec<Granted>,
+                     until: SimTime| {
+            loop {
+                let polls = [CH, SCH].map(|c| (Mac::<TestCtx>::next_poll_at(mac, node, c), c));
+                let ev = polls
+                    .iter()
+                    .filter_map(|(t, _)| *t)
+                    .chain(idles.iter().map(|(t, _)| *t))
+                    .min();
+                let Some(ev) = ev.filter(|&e| e <= until) else {
+                    return;
+                };
+                ctx.set_now(ev);
+                if let Some(pos) = idles.iter().position(|(t, _)| *t == ev) {
+                    let (_, c) = idles.remove(pos);
+                    Mac::on_cca(mac, ctx, node, c, CcaState::Idle);
+                    continue;
+                }
+                for (t, c) in polls {
+                    if t != Some(ev) {
+                        continue;
+                    }
+                    let g = Mac::poll(mac, ctx, node, c).expect("next_poll_at promised a grant");
+                    assert_eq!(g.at, ev, "granted at the instant next_poll_at named");
+                    let air = air_time(g.sdu.frame.bytes, g.sdu.frame.mcs).as_nanos();
+                    out.push((g.at, g.sdu.frame.bytes, c, g.ac, g.backoff_slots));
+                    Mac::on_cca(mac, ctx, node, c, CcaState::Busy { energy_dbm: -60.0 });
+                    idles.push((g.at + air, c));
+                }
+            }
+        };
+        let mut t: SimTime = 0;
+        for k in 0..n {
+            let r = next();
+            t += r % 20_000_000;
+            drain(mac, &mut ctx, &mut idles, &mut out, t);
+            ctx.set_now(t);
+            let ch = if (r >> 50) & 1 == 0 { CH } else { SCH };
+            let mut s = sdu(50 + ((r >> 20) % 1_351) as u32, t);
+            s.frame.channel = ch;
+            s.frame.sdu_ref = SduRef::new(SduId::new(k as u32 + 1), FrameSeq::new(1));
+            let ac = ac_of_index(((r >> 40) % 4) as usize);
+            let _ = Mac::enqueue(mac, &mut ctx, node, s, ac);
+        }
+        drain(mac, &mut ctx, &mut idles, &mut out, t + 10_000_000_000);
+        out
+    }
+
+    #[test]
+    fn alternating_gate_never_grants_into_a_guard() {
+        let mut mac = EdcaOcbMac::new().with_alternating(ALT, CH, Some(SCH));
+        let grants = drive(&mut mac, 16, 10_000);
+        assert!(grants.len() > 9_900, "{} grants", grants.len());
+        for &(at, bytes, ch, _, _) in &grants {
+            let want = if ch == CH {
+                Interval::Cch
+            } else {
+                Interval::Sch
+            };
+            let air = air_time(bytes, Mcs::R6Qpsk12).as_nanos();
+            assert_eq!(ALT.interval(at), want, "grant at {at} ns on {ch:?}");
+            assert!(
+                at + air <= ALT.interval_end_ns(at),
+                "a {bytes} B frame at {at} ns straddles the interval end {}",
+                ALT.interval_end_ns(at)
+            );
+        }
+        let node = NodeId::new(0);
+        // Both kinds of hold happened, so the check above was exercised.
+        assert!(mac.gate_deferrals(node, CH) > 0 && mac.gate_deferrals(node, SCH) > 0);
+        assert!(mac.guard_deferrals(node, CH) > 0 && mac.guard_deferrals(node, SCH) > 0);
+        let (g, d) = mac.total_gate_deferrals();
+        assert_eq!(
+            (g, d),
+            (
+                mac.gate_deferrals(node, CH) + mac.gate_deferrals(node, SCH),
+                mac.guard_deferrals(node, CH) + mac.guard_deferrals(node, SCH)
+            )
+        );
+    }
+
+    #[test]
+    fn continuous_gate_is_the_ungated_mac() {
+        let continuous = ChannelSchedule {
+            access: ChannelAccess::Continuous,
+        };
+        let mut plain = EdcaOcbMac::new();
+        let mut gated = EdcaOcbMac::new().with_alternating(continuous, CH, Some(SCH));
+        let a = drive(&mut plain, 23, 3_000);
+        let b = drive(&mut gated, 23, 3_000);
+        assert_eq!(a, b, "a continuous schedule must not move a single grant");
+        assert_eq!(gated.total_gate_deferrals(), (0, 0));
+        // The script is one the alternating gate does change, so equality means something.
+        let mut alt = EdcaOcbMac::new().with_alternating(ALT, CH, Some(SCH));
+        assert_ne!(a, drive(&mut alt, 23, 3_000));
+        // A two-radio unit is not gated either.
+        let mut two = EdcaOcbMac::new().with_alternating(ALT, CH, Some(SCH));
+        two.set_two_radios(NodeId::new(0));
+        assert_eq!(a, drive(&mut two, 23, 3_000));
+    }
+
+    #[test]
+    fn sch_frame_waits_for_the_sch_interval() {
+        let mut ctx = TestCtx::new(31);
+        let mut mac = EdcaOcbMac::new().with_alternating(ALT, CH, Some(SCH));
+        let node = NodeId::new(0);
+        let t0 = 10_000_000;
+        ctx.set_now(t0);
+        for i in 0..3u32 {
+            let mut s = sdu(300 + i, t0);
+            s.frame.channel = SCH;
+            Mac::enqueue(&mut mac, &mut ctx, node, s, AccessCategory::Be).expect("queued");
+        }
+        Mac::enqueue(&mut mac, &mut ctx, node, sdu(400, t0), AccessCategory::Vo).expect("queued");
+        // The CCH frame goes now: the CCH interval runs from 4 to 50 ms.
+        let g = Mac::poll(&mut mac, &mut ctx, node, CH).expect("cch granted");
+        assert_eq!((g.at, g.sdu.frame.bytes), (t0, 400));
+        // Nothing on the SCH in the CCH interval.
+        assert!(Mac::poll(&mut mac, &mut ctx, node, SCH).is_none());
+        let first = Mac::<TestCtx>::next_poll_at(&mac, node, SCH).expect("armed");
+        assert_eq!(first, 54_000_000 + AccessCategory::Be.aifs().as_nanos());
+        let mut sizes = Vec::new();
+        while let Some(due) = Mac::<TestCtx>::next_poll_at(&mac, node, SCH) {
+            ctx.set_now(due);
+            let g = Mac::poll(&mut mac, &mut ctx, node, SCH).expect("granted");
+            assert!(g.at >= first && ALT.interval(g.at) == Interval::Sch);
+            sizes.push(g.sdu.frame.bytes);
+        }
+        assert_eq!(sizes, vec![300, 301, 302], "the queue keeps FIFO order");
+        assert!(mac.gate_deferrals(node, SCH) >= 1);
+        assert_eq!(mac.gate_deferrals(node, CH), 0);
+    }
+
+    /// SAE J2945/1 Table 18 (`UPEDCA-003`) is
+    /// AC_BK 15/1023/9, AC_BE 15/1023/6, AC_VI 15/1023/4 and AC_VO 3/7/2, so AIFS(VI) is
+    /// 4 × 13 + 32 = 84 µs. The EN 302 663 profile keeps the OCB defaults (AC_VI 7/15/3,
+    /// 71 µs), and a MAC built on a profile contends with it and says so on its card.
+    #[test]
+    fn the_j2945_edca_set_is_table_18() {
+        let j = EdcaProfile::SaeJ2945_1;
+        let row = |p: EdcaProfile, ac| {
+            let e = p.params(ac);
+            (e.cw_min, e.cw_max, e.aifsn)
+        };
+        assert_eq!(row(j, AccessCategory::Vi), (15, 1023, 4));
+        assert_eq!(row(j, AccessCategory::Vo), (3, 7, 2));
+        assert_eq!(row(j, AccessCategory::Be), (15, 1023, 6));
+        assert_eq!(row(j, AccessCategory::Bk), (15, 1023, 9));
+        assert_eq!(
+            j.params(AccessCategory::Vi).aifs(),
+            Duration::from_micros(84)
+        );
+        let en = EdcaProfile::En302663;
+        assert_eq!(row(en, AccessCategory::Vi), (7, 15, 3));
+        assert_eq!(
+            en.params(AccessCategory::Vi).aifs(),
+            Duration::from_micros(71)
+        );
+        for ac in AccessCategory::ALL {
+            assert_eq!(en.params(ac), EdcaParams::standard(ac));
+        }
+        assert_eq!(EdcaProfile::from_id("sae-j2945-1"), Some(j));
+        assert_eq!(EdcaProfile::from_id("en-302-663"), Some(en));
+
+        let mac = EdcaOcbMac::new().with_profile(j);
+        assert_eq!(mac.edca_profile(), j);
+        assert_eq!(mac.contention_window(AccessCategory::Vi), 15);
+        assert_eq!(mac.cw_max(AccessCategory::Vi), 1023);
+        assert_eq!(mac.aifs(AccessCategory::Vi), Duration::from_micros(84));
+        assert_eq!(mac.aifs(AccessCategory::Vo), Duration::from_micros(58));
+        let card = |m: &EdcaOcbMac, name: &str| {
+            m.card
+                .parameters
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.default.clone())
+        };
+        assert_eq!(card(&mac, "cw_min_vi"), Some(serde_json::json!(15)));
+        assert_eq!(
+            card(&mac, "cw_max"),
+            Some(serde_json::json!([1023, 1023, 1023, 7]))
+        );
+        assert_eq!(card(&mac, "aifsn"), Some(serde_json::json!([9, 6, 4, 2])));
+        // The default MAC is EN 302 663's, card and all.
+        let plain = EdcaOcbMac::new();
+        assert_eq!(plain.edca_profile(), en);
+        assert_eq!(plain.contention_window(AccessCategory::Vi), 7);
+        assert_eq!(
+            card(&plain, "cw_max"),
+            Some(serde_json::json!([1023, 1023, 15, 7]))
+        );
+        assert_eq!(card(&plain, "aifsn"), Some(serde_json::json!([9, 6, 3, 2])));
+    }
+
+    /// The draws follow the profile: 48 AC_VI frames queued at once draw their backoffs in
+    /// [0, 15] under SAE J2945/1 Table 18, so the largest exceeds EN 302 663's CWmin of 7.
+    #[test]
+    fn an_ac_vi_backoff_under_j2945_draws_up_to_fifteen_slots() {
+        let max_drawn = |profile: EdcaProfile| {
+            let mut ctx = TestCtx::new(33);
+            let mut mac = EdcaOcbMac::new().with_profile(profile).with_queue_depth(64);
+            let node = NodeId::new(0);
+            ctx.set_now(1_000_000);
+            let at = ctx.now();
+            for i in 0..48u32 {
+                Mac::enqueue(
+                    &mut mac,
+                    &mut ctx,
+                    node,
+                    sdu(300 + i, at),
+                    AccessCategory::Vi,
+                )
+                .expect("queued");
+            }
+            let mut slots = Vec::new();
+            for ms in 1..=400u64 {
+                ctx.set_now(ms * 1_000_000);
+                while let Some(g) = Mac::poll(&mut mac, &mut ctx, node, CH) {
+                    slots.push(g.backoff_slots);
+                }
+            }
+            assert_eq!(slots.len(), 48, "every frame granted");
+            slots.into_iter().max().unwrap_or(0)
+        };
+        let j = max_drawn(EdcaProfile::SaeJ2945_1);
+        assert!(j > 7 && j <= 15, "SAE J2945/1 AC_VI max draw {j}");
+        assert!(max_drawn(EdcaProfile::En302663) <= 7);
+    }
+}

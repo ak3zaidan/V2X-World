@@ -1,0 +1,13 @@
+# The 240 s two-list run with the carousel at 4 s. With a 3 s carousel the lists come 30 s
+# apart (on the 10 s cadence grid), a multiple of the carousel, so every later list meets a
+# tick 2.146 s after it, exactly as the first does, and the unaligned case is not
+# exercised. With 4 s a list 10 or 30 s after the one that armed the carousel meets a tick
+# 0.146 s after its publication.
+schema: v2xw/scenario/1
+meta:
+  base: rsu-crl-slow-backhaul-bc3-240.yaml
+  name: rsu-crl-slow-backhaul-bc4-240
+security:
+  scms:
+    lifecycle:
+      crl_broadcast_interval_s: 4.0

@@ -1,0 +1,6 @@
+# share-constpos-l-10 with the MA rule threat/ma/legacy-window .
+schema: v2xw/scenario/1
+meta: {base: share-constpos-l-10.yaml, name: live-atk ma-legacy}
+detection:
+  ma:
+    id: threat/ma/legacy-window

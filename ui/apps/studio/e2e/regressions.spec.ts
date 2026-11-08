@@ -1,0 +1,313 @@
+/**
+ * Regression tests for the Studio findings that only a real browser can prove.
+ *
+ * The projection-layer findings are covered by the Node suite in `test/`, which
+ * can count store notifications exactly. These four need the real DOM: React's synthetic `onChange`
+ * on an `<input type="range">`, native pointer dragging, the tab order, and `:focus-visible` — none
+ * of which survive being simulated.
+ *
+ * The run is left running at t = 0, because `studio.spec.ts` (which sorts after this file) starts by
+ * clicking the pause button.
+ */
+
+import { expect, test, type Page } from "@playwright/test";
+
+import { resetEngine } from "./reset-engine.js";
+
+interface Probe {
+  seeks: number;
+  inputs: number;
+  statusPolls: number;
+  methods: string[];
+}
+
+declare global {
+  interface Window {
+    __vwpProbe?: Probe;
+  }
+}
+
+/**
+ * Wrap `engine.request` so every §6 call made from the UI is counted.
+ *
+ * `StudioEngine.request` is a prototype method, so an own property shadows it for the singleton the
+ * components import — nothing in the app is rebuilt and no production code is touched.
+ */
+async function instrument(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const api = window.__vwpStudio;
+    if (!api) throw new Error("__vwpStudio is not exposed");
+    const engine = api.engine as unknown as { request(method: string, params: unknown): Promise<unknown> };
+    const original = engine.request.bind(engine);
+    const probe: Probe = { seeks: 0, inputs: 0, statusPolls: 0, methods: [] };
+    window.__vwpProbe = probe;
+    (engine as unknown as Record<string, unknown>).request = (method: string, params: unknown) => {
+      probe.methods.push(method);
+      if (method === "run.seek") probe.seeks++;
+      if (method === "run.status") probe.statusPolls++;
+      return original(method, params);
+    };
+    document
+      .querySelector('[data-testid="scrub-range"]')
+      ?.addEventListener("input", () => {
+        probe.inputs++;
+      });
+  });
+}
+
+async function streaming(page: Page): Promise<void> {
+  await page.goto("/");
+  await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "streaming", { timeout: 60_000 });
+  await expect(page.getByTestId("scrub-range")).toBeEnabled({ timeout: 30_000 });
+  // Each test starts from a running run at t = 0, whatever the previous one left behind: a seek
+  // with `pause_after` stops the stream, and a stopped stream sends no Telemetry.
+  await page.evaluate(async () => {
+    const engine = window.__vwpStudio?.engine as unknown as
+      | { request(method: string, params: unknown): Promise<unknown> }
+      | undefined;
+    await engine?.request("run.resume", {}).catch(() => undefined);
+  });
+  await expect
+    .poll(async () => page.evaluate(() => window.__vwpStudio?.actorCount() ?? 0), { timeout: 60_000 })
+    .toBeGreaterThan(10);
+}
+
+/**
+ * Follow a drawn actor that is backed by a `Hello` node, and wait for the HUD to fill.
+ *
+ * `__vwpStudio.selectFirstActor()` takes the first occupied pose slot, which is not necessarily an
+ * equipped node — and an actor with no node id gets no `Telemetry` subscription (§6.7), so the HUD
+ * would stay on its placeholder. The node table decides here instead.
+ */
+async function followFirstActor(page: Page): Promise<void> {
+  const clicked = await page.evaluate(() => {
+    const engine = window.__vwpStudio?.engine as unknown as
+      | {
+          client: { poses: { count: number; occupied: Uint8Array; actorId: Uint32Array } } | null;
+          nodeByActor: Map<number, number>;
+          selectActor(id: number | null, mode?: string): Promise<void>;
+        }
+      | undefined;
+    const poses = engine?.client?.poses;
+    if (!engine || !poses) return null;
+    for (let slot = 0; slot < poses.count; slot++) {
+      if (poses.occupied[slot] !== 1) continue;
+      const id = poses.actorId[slot];
+      if (engine.nodeByActor.get(id) === undefined) continue;
+      void engine.selectActor(id, "chase");
+      return id;
+    }
+    return null;
+  });
+  expect(clicked, "no drawn actor is backed by a Hello node").not.toBeNull();
+  await expect(page.getByTestId("hud-identity")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("hud-row-radio")).toBeVisible({ timeout: 60_000 });
+}
+
+test.afterEach(async ({ request }) => {
+  await resetEngine(request);
+});
+
+test("dragging the scrub bar across thousands of steps issues one run.seek", async ({ page }) => {
+  await streaming(page);
+  await instrument(page);
+
+  const scrub = page.getByTestId("scrub-range");
+  const box = await scrub.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+
+  const y = box.y + box.height / 2;
+  const x0 = box.x + box.width * 0.06;
+  const x1 = box.x + box.width * 0.82;
+  const clockBefore = await page.getByTestId("sim-clock").textContent();
+
+  await page.mouse.move(x0, y);
+  await page.mouse.down();
+  // 120 discrete moves across the track. The mock run is 3,600 s at a 0.1 s mobility step, so the
+  // thumb crosses ~36,000 steps end to end and every one of these moves lands on a new step.
+  const steps = 120;
+  let clockMovedMidDrag = false;
+  for (let i = 1; i <= steps; i++) {
+    await page.mouse.move(x0 + ((x1 - x0) * i) / steps, y);
+    if (i === Math.floor(steps / 2)) {
+      // The display must follow the thumb while the gesture is still in flight.
+      const clockDuring = await page.getByTestId("sim-clock").textContent();
+      clockMovedMidDrag = clockDuring !== clockBefore;
+      const seeksSoFar = await page.evaluate(() => window.__vwpProbe?.seeks ?? -1);
+      expect(seeksSoFar, "no seek may be issued before the thumb is released").toBe(0);
+    }
+  }
+  await page.mouse.up();
+
+  await expect.poll(async () => page.evaluate(() => window.__vwpProbe?.seeks ?? 0), { timeout: 20_000 }).toBe(1);
+
+  const probe = await page.evaluate(() => window.__vwpProbe);
+  expect(probe).toBeTruthy();
+  // The DOM `input` event is what React reports as `onChange`; one per step crossed is exactly the
+  // rate the old handler turned into `run.seek` calls.
+  expect(probe!.inputs, "the drag must actually cross many steps").toBeGreaterThan(50);
+  expect(probe!.seeks).toBe(1);
+  // `TimeControls.call()` polls `run.status` after every request; one seek means one poll.
+  expect(probe!.statusPolls).toBeLessThanOrEqual(2);
+  expect(clockMovedMidDrag, "the clock must track the thumb during the drag").toBe(true);
+
+  // The seek actually happened: the clock is no longer where it started.
+  await expect.poll(async () => page.getByTestId("sim-clock").textContent(), { timeout: 20_000 }).not.toBe(clockBefore);
+
+});
+
+test("arrow keys on the scrub bar commit once per gesture, not once per repeat", async ({ page }) => {
+  await streaming(page);
+  await instrument(page);
+
+  const scrub = page.getByTestId("scrub-range");
+  await scrub.focus();
+  const before = await scrub.inputValue();
+
+  await page.keyboard.down("ArrowRight");
+  // The key is still down: the thumb has moved but nothing has been committed.
+  expect(await scrub.inputValue()).not.toBe(before);
+  expect(await page.evaluate(() => window.__vwpProbe?.seeks ?? -1)).toBe(0);
+
+  await page.keyboard.up("ArrowRight");
+  await expect.poll(async () => page.evaluate(() => window.__vwpProbe?.seeks ?? 0), { timeout: 20_000 }).toBe(1);
+
+  // A second, separate press is a second gesture and so a second seek — that is correct.
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => page.evaluate(() => window.__vwpProbe?.seeks ?? 0), { timeout: 20_000 }).toBe(2);
+});
+
+test("the HUD shows only what has a value, and its Details button opens the overlay by keyboard", async ({ page }) => {
+  await streaming(page);
+
+  // The HUD only populates for a followed node (§6.7 `view.follow` is the Telemetry subscription).
+  await followFirstActor(page);
+
+  // 1. Since the owner's review of 2026-10-06 the HUD is a read-out, not a row of buttons into a
+  //    "why" tab: its values are plain text, none reads "n/a", and none is a bare zero count.
+  const hud = page.getByTestId("obu-hud");
+  expect(await hud.locator("button.hud-field").count()).toBe(0);
+  expect(await hud.innerText()).not.toMatch(/\bn\/a\b/);
+  await expect(page.getByTestId("hud-health")).toBeVisible();
+
+  // 2. The Details button is a real, tabbable button with a painted focus ring (WCAG 2.1 SC 2.4.7).
+  const details = page.getByTestId("hud-details");
+  await details.focus();
+  const outline = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return { testid: el.getAttribute("data-testid"), style: cs.outlineStyle, width: cs.outlineWidth, matches: el.matches(":focus-visible") };
+  });
+  expect(outline?.testid).toBe("hud-details");
+  expect(outline!.matches).toBe(true);
+  expect(outline!.style).not.toBe("none");
+  expect(Number.parseFloat(outline!.width)).toBeGreaterThanOrEqual(2);
+
+  // 3. Enter opens the overlay, Escape closes it, and I toggles it.
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("inspector-panel")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("state-field-cbr_pm")).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
+  await page.locator("body").press("i");
+  await expect(page.getByTestId("inspector-panel")).toBeVisible();
+  await page.locator("body").press("i");
+  await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
+});
+
+test("the marker overlay's shape channels are on from the first frame", async ({ page }) => {
+  await streaming(page);
+  // No overlay menu was touched: this is the state the app opens in.
+  const state = await page.evaluate(() => {
+    const viewer = window.__vwpStudio?.engine.viewer as unknown as
+      | {
+          overlays: {
+            isEnabled(n: string): boolean;
+            markers: { isChannelEnabled(c: string): boolean };
+          };
+        }
+      | null
+      | undefined;
+    if (!viewer) return null;
+    return {
+      reported: viewer.overlays.isEnabled("reported"),
+      revoked: viewer.overlays.isEnabled("revoked"),
+      detections: viewer.overlays.isEnabled("detections"),
+      attackersGt: viewer.overlays.isEnabled("attackers_gt"),
+      chReported: viewer.overlays.markers.isChannelEnabled("reported"),
+      chRevoked: viewer.overlays.markers.isChannelEnabled("revoked"),
+      chDetection: viewer.overlays.markers.isChannelEnabled("detection"),
+    };
+  });
+  expect(state).not.toBeNull();
+  // "colour-blind-safe categorical palette for actor states … with shape redundancy".
+  expect(state!.reported).toBe(true);
+  expect(state!.revoked).toBe(true);
+  expect(state!.detections).toBe(true);
+  expect(state!.chReported).toBe(true);
+  expect(state!.chRevoked).toBe(true);
+  expect(state!.chDetection).toBe(true);
+  // Ground truth stays off so `lockGroundTruth` (blind evaluation) still means something.
+  expect(state!.attackersGt).toBe(false);
+
+});
+
+/**
+ * A small window is still a simulator: at 800 x 520 the fixed side panels and plots strip used to
+ * leave the viewport 360 x 146 px. It keeps at least half of each dimension now, at every window
+ * size the camera fuzz drives, with the inspector open as well as closed.
+ *
+ * And the main view is the viewport: with nothing selected and no panel open it takes the full
+ * width and at least four fifths of the height (the header and the time bar are the rest). The
+ * settings sidebar and the plots strip that used to take 37 % of the screen do not come back.
+ */
+test("the viewport keeps a usable share of a small window", async ({ page }) => {
+  for (const size of [
+    { width: 800, height: 520 },
+    { width: 960, height: 600 },
+    { width: 1280, height: 720 },
+    { width: 1280, height: 800 },
+  ]) {
+    await page.setViewportSize(size);
+    await page.goto("/");
+    for (const inspector of [false, true]) {
+      if (inspector) await page.getByTestId("inspector-toggle").click();
+      const box = await page.getByTestId("viewport").boundingBox();
+      expect(box, `no viewport at ${size.width} x ${size.height}`).not.toBeNull();
+      const share = { w: box!.width / size.width, h: box!.height / size.height };
+      const where = `${size.width} x ${size.height}, inspector ${inspector ? "open" : "closed"}`;
+      console.warn(`viewport ${box!.width} x ${box!.height} in ${where}`);
+      expect(share.w, `viewport ${box!.width} px wide at ${where}`).toBeGreaterThanOrEqual(inspector ? 0.5 : 0.999);
+      expect(share.h, `viewport ${box!.height} px tall at ${where}`).toBeGreaterThanOrEqual(size.height >= 720 ? 0.8 : 0.5);
+    }
+    // Nothing in the header is cut off or pushed out of the window.
+    const clipped = await page.evaluate(() =>
+      Array.from(document.querySelectorAll(".topbar button, .topbar [data-testid]"))
+        .filter((e) => {
+          const r = e.getBoundingClientRect();
+          return r.width > 0 && (r.right > innerWidth + 0.5 || r.left < -0.5);
+        })
+        .map((e) => e.getAttribute("data-testid") ?? e.textContent),
+    );
+    expect(clipped, `header controls outside a ${size.width} px window`).toEqual([]);
+  }
+
+  // With nothing to say the status banner renders nothing, and the viewport and the time bar keep
+  // their rows: the time bar used to slide into the viewport's row and stretch to 220 px of empty
+  // bar. From 1280 px up the bar is one row, with the inspector open too.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/");
+  await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "streaming", { timeout: 60_000 });
+  await expect(page.getByTestId("status-banner")).toHaveCount(0, { timeout: 30_000 });
+  for (const inspector of [false, true]) {
+    if (inspector) await page.getByTestId("inspector-toggle").click();
+    const bar = await page.getByTestId("time-controls").boundingBox();
+    const box = await page.getByTestId("viewport").boundingBox();
+    const where = `1280 x 720, no banner, inspector ${inspector ? "open" : "closed"}`;
+    console.warn(`time bar ${bar!.height} px, viewport ${box!.width} x ${box!.height} at ${where}`);
+    expect(bar!.height, `time bar height at ${where}`).toBeLessThanOrEqual(48);
+    expect(box!.height / 720, `viewport ${box!.height} px tall at ${where}`).toBeGreaterThanOrEqual(0.8);
+  }
+});

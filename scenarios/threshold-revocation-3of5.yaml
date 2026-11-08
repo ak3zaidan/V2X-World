@@ -1,0 +1,45 @@
+# ============================================================================
+# t-of-n revocation: the linkage seeds Shamir-shared over five servers, any three of
+# which release them — with LA2 and two of the five down.
+# ============================================================================
+#
+#     v2xw run scenarios/threshold-revocation-3of5.yaml --out runs/revoke-3of5
+#
+# `threshold-revocation-2of2.yaml` with `security.threshold.roles: [linkage]`. Each
+# chain's seed for every period is dealt as Shamir shares with Feldman commitments when
+# the chain is allocated (`v2xw_proto::threshold::linkage`, the dealer model — stated
+# there), so the Misbehaviour Authority asks the five members, verifies each share as it
+# arrives, and interpolates once three valid ones are in: one round, two secrets per
+# revocation. LA2 is down from 90 s exactly as in the baseline, and so are linkage members
+# 0 and 1 — two of five, the most a 3-of-5 committee survives.
+#
+# Read against the baseline: revocations issued after 90 s (here: all of them; there:
+# none), the revocation-latency decomposition (`resolved → issued` now carries the
+# committee's round and the members' WAN latency), and the committee's own numbers in
+# `phase2.committees.linkage` — sessions, timeouts, exclusions, bytes.
+schema: v2xw/scenario/1
+
+meta:
+  name: threshold-revocation-3of5
+  base: threshold-revocation-2of2.yaml
+  description: >-
+    Revocation with a 3-of-5 linkage committee instead of two Linkage Authorities, with
+    LA2 and two committee members down from 90 s.
+  tags: [study, threshold, revocation, linkage, robustness, shamir, scms]
+  created: "2026-10-07"
+
+actors:
+  backend:
+    failures:
+      - {node: la2, mode: offline, from_s: 90.0}
+      - {node: linkage-member-0, mode: offline, from_s: 90.0}
+      - {node: linkage-member-1, mode: offline, from_s: 90.0}
+
+security:
+  threshold:
+    roles: [linkage]
+    linkage_members: 5
+    linkage_quorum: 3
+    # A linkage server is another organisation: a WAN round trip, not the backend LAN.
+    member_latency_ms: 20.0
+    round_timeout_ms: 500.0

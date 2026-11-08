@@ -1,0 +1,26 @@
+# Mini release run 5 (test): the held-out Heading family beside attacks seen in train,
+# and a pulsed (duty-cycle) jammer for 10 s.
+schema: v2xw/scenario/1
+# Its own seed: no two runs share traffic, so a split by run is a split by traffic.
+seed: "0xD5_0005"
+meta: {base: base.yaml, name: dataset r5 heldout-heading}
+threats:
+  attackers:
+    - {id: threat/attacker/legacy/ReversedHeading, actor_ids: [28], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ReversedHeading, actor_ids: [42], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/HeadingOffset, actor_ids: [26], schedule: {from_s: 20.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ConstPos, actor_ids: [33], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ConstPosOffset, actor_ids: [6], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/PosHeadingInconsistent, actor_ids: [38], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/OutOfOrder, actor_ids: [29], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/Disruptive, actor_ids: [31], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ExpiredCert, actor_ids: [21], schedule: {from_s: 15.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/NotYetValid, actor_ids: [13], schedule: {from_s: 15.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/DelayedMessages, actor_ids: [17], schedule: {from_s: 25.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/StopAndGo, actor_ids: [51], schedule: {from_s: 40.0, to_s: 75.0}}
+  jammers:
+    - id: attacker/jammer/pulsed
+      params: {position_m: [548.0, 280.0], power_dbm: 20, period_ms: 10.0, duty: 0.5, from_s: 40.0, to_s: 50.0}
+exporters:
+  - id: dataset
+    opts: {run_id: r05, split: test, tier: mini, instrumented_receivers: 10, heldout_attacks: [ReversedHeading, HeadingOffset]}

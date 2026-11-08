@@ -1,0 +1,264 @@
+# Documentation site for V2X World.
+#
+# Built with Zensical (`zensical build`), which reads this file; the same file builds with
+# mkdocs-material. The configuration reference under docs/configuration/reference/ is
+# generated from the engine's published settings surface (`just docs-gen`), and the Rust
+# API docs are built by `cargo doc` into site/api/ in CI (.github/workflows/docs.yml).
+#
+# `site_name` is the project's public name, V2X World (the README's title and CITATION.cff's
+# `title`); keep the three in step.
+
+site_name: "V2X World"
+site_description: >-
+  A deterministic, discrete-event simulator of connected-vehicle (V2X) systems: traffic,
+  radio, network, IEEE 1609.2 security, the SCMS and ETSI PKI, attackers and misbehaviour
+  detection.
+site_url: https://ak3zaidan.github.io/V2X-World/
+repo_url: https://github.com/ak3zaidan/V2X-World
+repo_name: ak3zaidan/V2X-World
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+# docs/README.md is the documentation map for readers browsing the repository on GitHub;
+# on the site the home page (docs/index.md) takes its place. The other patterns keep
+# working notes that may sit beside the documentation in a checkout (design records,
+# validation logs, papers in preparation) off the published site.
+exclude_docs: |
+  README.md
+  /adr/
+  /benchmark/
+  /calibration/
+  /design/
+  /guides/
+  /papers/
+  /redteam/
+  /site/
+  /validation/
+copyright: >-
+  © 2026 Ahmed Zaidan · code
+  <a href="https://github.com/ak3zaidan/V2X-World/blob/main/LICENSE">Apache-2.0</a> · dataset
+  <a href="https://huggingface.co/datasets/akzaidan/v2x-scms-mbd-mini">CC BY 4.0</a>
+
+theme:
+  name: material
+  language: en
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.path
+    - toc.follow
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+    - content.action.view
+  palette:
+    - media: "(prefers-color-scheme)"
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:zensical.extensions.emoji.twemoji
+      emoji_generator: !!python/name:zensical.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.snippets:
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ak3zaidan/V2X-World
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Introduction: getting-started/introduction.md
+      - Install and build: getting-started.md
+      - Your first simulation: getting-started/first-simulation.md
+      - Studio tour: getting-started/studio-tour.md
+      - Command-line tool: getting-started/cli.md
+      - Python: getting-started/python.md
+  - User guide:
+      - Scenarios: scenarios.md
+      - Worlds and maps: guide/worlds-and-maps.md
+      - Traffic demand: guide/traffic-demand.md
+      - Running and recording: guide/running-and-recording.md
+      - Metrics and outputs: recording-and-metrics.md
+      - Metric catalogue: metrics/catalogue.md
+      - Comparing runs: guide/comparing-runs.md
+      - Experiments and sweeps: guide/experiments-and-sweeps.md
+      - Sensitivity analysis: guide/sensitivity.md
+      - Datasets and exports: guide/datasets.md
+      - Dataset (V2X-SCMS-MBD):
+          - Release schema: dataset/schema.md
+          - Samples: dataset/samples.md
+          - Hugging Face release: dataset/hf-release.md
+          - Release tools: dataset/tools.md
+          - Record contract: dataset/record-contract.md
+      - SUMO co-simulation: guide/sumo-cosimulation.md
+      - Studio: studio.md
+      - Assistant: guide/assistant.md
+  - Models:
+      - Overview and model cards: models/index.md
+      - Traffic and mobility: models/traffic.md
+      - Radio and network: models/network.md
+      - Messages: models/messages.md
+      - V2X applications: models/applications.md
+      - Energy and emissions: models/energy.md
+      - SCMS and credentials: models/scms.md
+      - Security and crypto: models/security.md
+      - Threats and misbehaviour detection: models/threats.md
+      - Privacy: models/privacy.md
+      - Determinism and time: models/determinism-and-time.md
+  - Configuration:
+      - Overview: configuration/overview.md
+      - How settings work: configuration.md
+      - Generated reference:
+          - configuration/reference/index.md
+          - Run:
+              - meta: configuration/reference/meta.md
+              - schema: configuration/reference/schema.md
+              - seed: configuration/reference/seed.md
+              - time: configuration/reference/time.md
+          - World:
+              - city: configuration/reference/city.md
+              - world: configuration/reference/world.md
+          - Traffic:
+              - actors: configuration/reference/actors.md
+              - mobility: configuration/reference/mobility.md
+              - traffic: configuration/reference/traffic.md
+              - scale: configuration/reference/scale.md
+          - Environment:
+              - weather: configuration/reference/weather.md
+          - Radio:
+              - radio: configuration/reference/radio.md
+          - Network:
+              - net: configuration/reference/net.md
+          - Messages:
+              - messages: configuration/reference/messages.md
+              - perception: configuration/reference/perception.md
+          - Security:
+              - security: configuration/reference/security.md
+          - Nodes:
+              - nodes: configuration/reference/nodes.md
+          - Threats:
+              - threats: configuration/reference/threats.md
+          - Detection:
+              - detection: configuration/reference/detection.md
+          - Measurement:
+              - metrics: configuration/reference/metrics.md
+              - exporters: configuration/reference/exporters.md
+              - experiment: configuration/reference/experiment.md
+          - Applications:
+              - apps: configuration/reference/apps.md
+          - Energy:
+              - energy: configuration/reference/energy.md
+          - Timeline:
+              - events: configuration/reference/events.md
+          - Model parameters: configuration/reference/models.md
+      - Curated tables:
+          - Settings by research question: reference/configuration-reference.md
+          - Traffic, world and run inventory: reference/config-inventory-traffic.md
+          - Radio and network inventory: reference/config-inventory-network.md
+          - Security and SCMS inventory: reference/config-inventory-scms.md
+          - SCMS constants: reference/scms-constants.md
+          - Sensitivity catalogue: reference/sensitivity-catalogue.md
+          - Sensitivity expectations: reference/sensitivity-expectations.md
+  - Development:
+      - Architecture: architecture.md
+      - Crates: crates.md
+      - Building and testing: testing.md
+      - Validation and conformance tools: dev/tools.md
+      - Conventions: dev/conventions.md
+      - Extending:
+          - Overview: extending.md
+          - Models: dev/extending/models.md
+          - Detectors: dev/extending/detectors.md
+          - Metrics: dev/extending/metrics.md
+          - Settings: dev/extending/settings.md
+          - Scenarios: dev/extending/scenarios.md
+          - Plugins: dev/extending/plugins.md
+      - Engine server and RPC: dev/server.md
+      - Engine-UI protocol (VWP v1): protocol/vwp-v1.md
+      - Recording format: dev/recording-format.md
+      - Contributing: dev/contributing.md
+  - API:
+      - Rust API: api/index.md
+      - Python API: api/python.md
+  - Glossary: glossary.md
+  - About:
+      - Standards and references: about/standards.md
+      - Citation and licence: about/citation.md

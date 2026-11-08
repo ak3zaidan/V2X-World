@@ -1,0 +1,8 @@
+# attack-base.yaml with 10 % ConstPos attackers from 20 s.
+schema: v2xw/scenario/1
+meta: {base: attack-base.yaml, name: attack-constpos-10}
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.1
+      schedule: {from_s: 20.0, to_s: 150.0}

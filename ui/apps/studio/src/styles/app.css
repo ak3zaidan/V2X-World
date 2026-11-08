@@ -1,0 +1,1420 @@
+/*
+ * One stylesheet for the whole Studio. No UI framework: the wireframe is a CSS grid,
+ * the panels are plain sections, and the only colours that matter — the actor-state palette — are
+ * injected as custom properties from `@vwp/viewer`'s theme by `lib/theme.ts`, so the DOM and the
+ * WebGL scene are literally the same numbers.
+ */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --bg-panel: #111820;
+  --bg-raised: #161f29;
+  --bg-input: #0d141b;
+  --border: #223041;
+  --border-strong: #31435a;
+  --text: #dbe5ef;
+  --text-dim: #8fa3b8;
+  --text-faint: #63768a;
+  --accent: #56b4e9;
+  --accent-dim: #2b6d90;
+  --ok: #009e73;
+  --warn: #e69f00;
+  --err: #d55e00;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius: 6px;
+  --row: 22px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef2f6;
+  --bg-panel: #ffffff;
+  --bg-raised: #f5f8fb;
+  --bg-input: #ffffff;
+  --border: #d3dce5;
+  --border-strong: #b4c2d0;
+  --text: #17222d;
+  --text-dim: #4d5e70;
+  --text-faint: #7b8b9c;
+  --accent: #0072b2;
+  --accent-dim: #96c8e6;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 var(--sans);
+  overflow: hidden;
+}
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg-panel); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+/* The generic hover darkens a button to the panel colour, which turned the primary action into a
+   plain one under the pointer. */
+button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-dim) 80%, var(--accent)); border-color: var(--accent); }
+/* White on the light theme's pale accent (#96c8e6) was 1.9:1; on the full accent it is 5.1:1. */
+:root[data-theme="light"] button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+:root[data-theme="light"] button.primary:hover:not(:disabled) { background: #005f94; }
+button.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+button.icon { padding: 3px 8px; font-family: var(--mono); }
+
+input[type="text"], input[type="number"], select, textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+  width: 100%;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/*
+ * A button that reads as a label or a link.
+ *
+ * `all: unset` has to live in a stylesheet rather than in a `style={{}}` prop: an inline
+ * declaration beats every rule for the properties it sets, so an inline `all: unset` also unsets
+ * `outline` in the `:focus-visible` state and a keyboard user loses the focus ring entirely
+ * (WCAG 2.1 SC 2.4.7). Here the reset and the focus ring are in the same cascade, and the more
+ * specific `:focus-visible` rule wins.
+ */
+.linklike {
+  all: unset;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.linklike:hover, .linklike:focus-visible { color: var(--accent); text-decoration: underline; }
+.linklike:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* ------------------------------------------------------------------ shell */
+
+/*
+ * Two rows: the header and the body. The plots strip that used to be a third row is the Metrics
+ * panel now, and the settings sidebar is the Settings window.
+ */
+.app {
+  --topbar-h: 42px;
+  display: grid;
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
+  height: 100%;
+}
+.app.standalone { grid-template-rows: auto minmax(0, 1fr); }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  min-width: 0;
+}
+.topbar h1 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.topbar .meta { color: var(--text-dim); font-family: var(--mono); font-size: 11px; }
+.topbar-rule { width: 1px; align-self: stretch; margin: 9px 2px; background: var(--border); flex: none; }
+
+/* The scenario's name: the second thing a reader looks for, after "is it running?". */
+.topbar-scenario {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 32ch;
+}
+.scenario-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border-color: transparent;
+  min-width: 0;
+  font-weight: 600;
+}
+.scenario-switch:hover:not(:disabled) { background: var(--bg-raised); border-color: var(--border); }
+.scenario-switch .caret { color: var(--text-faint); font-size: 10px; }
+.headline-clock { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.headline-clock .mono { color: var(--text); font-size: 13px; }
+
+/* A square button holding an icon; `labelled` adds a word after it. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+  position: relative;
+}
+.icon-button:hover:not(:disabled) { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
+.icon-button.on, .icon-button[aria-expanded="true"] { color: var(--text); background: var(--bg-raised); border-color: var(--border-strong); }
+.icon-button.labelled { padding: 0 10px 0 8px; white-space: nowrap; flex: none; }
+.badge-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--bg-panel);
+}
+
+/* The header's menus. */
+.app-menu { min-width: 240px; padding: 4px; }
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 5px 8px;
+  border-radius: 4px;
+}
+.menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--bg-raised); border-color: var(--border); outline: none; }
+.menu-item .count, .toggle .count, .tree-item .count {
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.menu-item .check-mark { width: 12px; color: var(--accent); }
+.menu-rule { height: 1px; background: var(--border); margin: 4px 2px; }
+.menu-note { padding: 4px 8px; font-size: 11px; }
+.menu-note.shortcuts { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; }
+kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------- panels over the main view */
+
+/*
+ * A full-screen panel covers everything under the header, which stays: the run state, the clock and
+ * the primary action are never hidden behind Settings or Metrics.
+ */
+.fullpanel {
+  position: fixed;
+  top: var(--topbar-h, 42px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+.fullpanel[hidden] { display: none; }
+.fullpanel-inner { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.fullpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.fullpanel-head h2, .sheet-head h2, .settings-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.fullpanel-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; }
+
+/* A sheet slides over the viewport's left edge; the time controls and the inspector stay usable. */
+.stage { position: relative; min-height: 0; display: grid; }
+.sheet {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(420px, calc(100% - 48px));
+  z-index: 30;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-strong);
+  box-shadow: 12px 0 32px rgb(0 0 0 / 35%);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+.sheet-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--border); }
+.sheet-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sheet-body > .panel-body { flex: 1; }
+.run-details .kv { grid-template-columns: minmax(64px, max-content) 1fr; }
+.run-details .sec {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  padding: 10px 0 4px;
+}
+
+/* The map is asked for a point: say so over it, with a way out. */
+.pick-banner {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+/* ------------------------------------------------------------- the settings window */
+
+.settings-window { display: flex; flex-direction: column; min-height: 0; height: 100%; flex: 1; background: var(--bg); }
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-wrap: wrap;
+}
+.settings-search { position: relative; flex: 1 1 320px; min-width: 200px; max-width: 720px; display: flex; align-items: center; }
+.settings-search input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px 90px 6px 10px;
+  font-size: 13px;
+}
+.settings-search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.settings-count { position: absolute; right: 10px; font-size: 11px; pointer-events: none; }
+.settings-filters { display: flex; gap: 6px; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.toggle.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.segmented button { border: none; border-radius: 0; background: transparent; padding: 4px 10px; font-size: 12px; color: var(--text-dim); }
+.segmented button.on { background: var(--bg-raised); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+
+.settings-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr); }
+.settings-tree {
+  overflow: auto;
+  padding: 10px 6px 16px 10px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.tree-item.group { font-weight: 600; color: var(--text); margin-top: 4px; }
+.tree-item.sub { padding-left: 20px; }
+.tree-item.on { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
+.tree-item.group.on { box-shadow: inset 2px 0 0 var(--accent); }
+
+.settings-content { overflow: auto; padding: 4px 28px 40px; scroll-padding-top: 8px; }
+.settings-content > section, .settings-content > .json-view, .settings-content > .settings-empty { max-width: 920px; }
+.settings-content h3 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 22px 0 2px;
+  padding-top: 6px;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.settings-content h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 16px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.group-blurb { margin: 0 0 6px; font-size: 12px; }
+.settings-scenario .kv { max-width: 640px; margin: 6px 0; }
+.presets { margin: 10px 0; }
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 4px 16px; margin-top: 6px; }
+.preset-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 0; border-bottom: 1px dotted var(--border); min-width: 0; }
+.preset-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-row button { padding: 1px 10px; font-size: 12px; }
+.settings-check { margin: 10px 0; }
+
+/* One setting: the marker bar, then title, description, control, and the meta line. */
+.setting { display: flex; gap: 10px; padding: 10px 8px 10px 0; border-radius: var(--radius); }
+.setting:hover { background: color-mix(in srgb, var(--bg-raised) 60%, transparent); }
+.setting:focus-within { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.setting-marker { width: 3px; flex: none; border-radius: 2px; background: transparent; }
+.setting.modified .setting-marker { background: var(--border-strong); }
+.setting.edited .setting-marker { background: var(--accent); }
+.setting.invalid .setting-marker { background: var(--err); }
+.setting-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.setting-title { font-size: 13px; color: var(--text); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; }
+.setting-title b { font-weight: 600; }
+.setting-crumb { color: var(--text-dim); }
+.setting-title .unit { color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+.setting-flag { font-size: 10px; color: var(--text-dim); border: 1px solid var(--border-strong); border-radius: 8px; padding: 0 5px; margin-left: 4px; }
+.setting-flag.edited-flag { color: var(--accent); border-color: var(--accent); }
+.setting-desc { font-size: 12px; color: var(--text-dim); line-height: 1.45; max-width: 760px; }
+.setting-desc .status-note { color: var(--warn); margin-top: 2px; }
+.setting-control { max-width: 420px; }
+.setting-control.inline { display: flex; align-items: center; gap: 8px; }
+.setting-control input[type="checkbox"] { width: auto; }
+.setting-control textarea { font-family: var(--mono); font-size: 11px; }
+.setting:has(.events-editor) .setting-control, .setting:has(textarea) .setting-control { max-width: 760px; }
+.setting-error { color: var(--err); font-size: 12px; border-left: 2px solid var(--err); padding-left: 8px; }
+.setting-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 11px; color: var(--text-faint); }
+.setting-meta code { font-size: 10.5px; color: var(--text-dim); }
+.setting.inactive .setting-title, .setting.inactive .setting-control { opacity: 0.65; }
+.linkbutton {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 11px;
+  border-radius: 2px;
+}
+.linkbutton:hover { text-decoration: underline; }
+.linkbutton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.linkbutton:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.json-view { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; height: 100%; }
+.json-text {
+  flex: 1;
+  min-height: 60vh;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.settings-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-wrap: wrap;
+}
+.settings-foot-text { flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.settings-foot-text .note { margin: 0; }
+.settings-message { overflow-wrap: anywhere; }
+
+/* Narrow windows: the tree collapses to a strip of group chips above the list. */
+@media (max-width: 900px) {
+  .settings-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-tree { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 6px; }
+  .tree-item.sub { display: none; }
+  .tree-item { width: auto; white-space: nowrap; }
+  .settings-content { padding: 4px 14px 40px; }
+}
+
+/* ------------------------------------------------------------- the status sentence */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  font-size: 12px;
+  border-left: 3px solid var(--border-strong);
+}
+.statusbar.ok { border-left-color: var(--ok); }
+.statusbar.busy { border-left-color: var(--accent); }
+.statusbar.warn { border-left-color: var(--warn); }
+.statusbar.err { border-left-color: var(--err); }
+.statusbar.idle { border-left-color: var(--border-strong); }
+.statusbar-text { flex: 1; min-width: 0; }
+.statusbar-text strong { font-weight: 600; }
+.statusbar-error { color: var(--err); }
+/* A refusal of the header's Run, beside the button: two lines at most, the rest on hover. */
+.primary-error {
+  color: var(--err); font-size: 12px; max-width: 46ch; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/*
+ * A long identifier, shown short and copied in full.
+ *
+ * The `copy` hint is text rather than an icon so it is legible at 10px and readable by a screen
+ * reader without an extra label, and it only colours up on hover so a panel of these does not read
+ * as a row of buttons.
+ */
+.ident {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border-radius: 2px;
+}
+.ident .ident-hint {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.ident:hover .mono, .ident:focus-visible .mono { color: var(--accent); text-decoration: underline; }
+.ident:hover .ident-hint, .ident:focus-visible .ident-hint { color: var(--accent); }
+.ident:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/*
+ * The viewport. Nothing takes width from the simulator: the vehicle details are an overlay over it
+ * (`styles/vehicle.css`), not a column beside it.
+ */
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  position: relative;
+}
+/* A crowded header keeps the scenario and city readable: the buttons that have an icon drop
+   their word first (the word stays in the tooltip), and the buttons never shrink or wrap. */
+@media (max-width: 1240px) {
+  .topbar .icon-button.labelled:has(> svg) > span:not([class]) { display: none; }
+}
+@media (max-width: 900px) {
+  .topbar .headline-clock .faint, .icon-button.labelled span { display: none; }
+}
+@media (max-height: 640px) {
+  .app { --topbar-h: 36px; }
+}
+
+.panel {
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.panel.right { border-right: none; border-left: 1px solid var(--border); }
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  flex: none;
+}
+.panel-body { overflow: auto; padding: 8px 10px; flex: 1; min-height: 0; }
+.panel-foot { border-top: 1px solid var(--border); padding: 6px 10px; display: flex; gap: 6px; flex: none; }
+
+/*
+ * Three rows: the status sentence (absent most of the time and 0px then), the viewport, the time
+ * controls. The sentence is in the flow rather than floating over the picture — a message that
+ * covers the thing it is describing is a message people learn to dismiss, and this one is
+ * frequently the only text on the page worth reading.
+ */
+.centre {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+/*
+ * Placed by row, not by order: with no sentence to show the banner renders nothing, and the grid's
+ * auto-placement then put the viewport in the sentence's row and the time bar in the viewport's,
+ * where it stretched to 70-220 px of empty bar and took that height from the picture.
+ */
+.centre > .stage { grid-row: 2; }
+.centre > .timebar { grid-row: 3; }
+
+/* ------------------------------------------------------------------ tabs */
+
+.tabs { display: flex; gap: 2px; }
+.tabs button {
+  border-radius: 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  padding: 3px 8px;
+  color: var(--text-dim);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* ------------------------------------------------------------------ viewport */
+
+/*
+ * `overflow: hidden`: the toolbar, the legend and the floating HUD are positioned inside the
+ * viewport and must never spill over the time controls below it — at 800 x 520 the toolbar used to
+ * cover the scrub bar.
+ */
+.viewport { position: relative; min-height: 0; overflow: hidden; background: var(--viewer-bg, #0b0f14); }
+.viewport canvas { display: block; width: 100%; height: 100%; }
+
+.viewport-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+.viewport-toolbar > * { pointer-events: auto; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: var(--mono);
+  backdrop-filter: blur(6px);
+}
+
+.menu { position: relative; }
+.menu-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 250px;
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+}
+.menu-pop label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.menu-pop label:hover { background: var(--bg-raised); }
+.menu-pop label.disabled { opacity: 0.4; cursor: not-allowed; }
+.menu-pop .sec {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  padding: 6px 4px 2px;
+}
+
+.gt-tag {
+  font-size: 9px;
+  border: 1px solid var(--gt-tag, #009e73);
+  color: var(--gt-tag, #009e73);
+  border-radius: 3px;
+  padding: 0 3px;
+  letter-spacing: 0.06em;
+}
+
+/* ------------------------------------------------------------------ HUD */
+
+.hud {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  width: min(760px, calc(100% - 16px));
+  background: color-mix(in srgb, var(--bg-panel) 90%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 11px;
+  backdrop-filter: blur(8px);
+  /* Never over the toolbar, however short the viewport (at 800 x 520 the HUD covered its buttons). */
+  max-height: min(52%, calc(100% - var(--vp-toolbar-bottom, 38px) - 16px));
+  overflow: auto;
+}
+.hud-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.hud-head .id { font-weight: 600; color: var(--accent); }
+.hud-body { padding: 4px 8px 8px; }
+.hud-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 3px 0;
+  border-bottom: 1px dotted var(--border);
+}
+.hud-row:last-child { border-bottom: none; }
+.hud-row .k { color: var(--text-dim); }
+.hud-row .v { color: var(--text); }
+.hud-field { display: inline-flex; gap: 5px; align-items: baseline; cursor: help; }
+/* The pose line reads the stream, not the node's telemetry, so it has no provenance to open and
+   is not a button; it is laid out like the values it sits among. */
+.hud-pose-field { display: inline-flex; gap: 5px; align-items: baseline; }
+.hud-field:hover .k { color: var(--accent); }
+/*
+ * The clickable telemetry values are real buttons (keyboard control is required, and
+ * clicking one is the documented way into the inspector's "why" tab). `button.hud-field` is more
+ * specific than `.hud-field`, so the reset here wins wherever it lands in the cascade.
+ */
+button.hud-field {
+  all: unset;
+  display: inline-flex;
+  gap: 5px;
+  align-items: baseline;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+button.hud-field:hover .k, button.hud-field:focus-visible .k { color: var(--accent); text-decoration: underline; }
+button.hud-field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.hud-na { color: var(--text-faint); font-style: italic; }
+.hud-missing { color: var(--warn); }
+
+/*
+ * Text only an assistive technology reads. Used for the help that used to live in a `title`
+ * attribute, which is invisible to keyboard and touch users and is not a reliable accessible name.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sparkrow {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+.spark { min-width: 0; }
+/* A rule between the cells: with only a gap, one cell's value ran into the next one's name
+   ("10.00 verify q"), and a reader could not tell which number belonged to which series. */
+.spark + .spark { border-left: 1px solid var(--border); padding-left: 10px; }
+.spark .label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-bottom: 1px;
+}
+.spark .label b { color: var(--text); font-weight: 600; }
+
+/* ------------------------------------------------------------------ time controls */
+
+.timebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-wrap: wrap;
+}
+.timebar .transport { display: flex; gap: 4px; }
+/*
+ * One row down to a 900 px wide centre (a 1,280 px window with the inspector open). The row wraps
+ * where its items' flex bases do not fit, so the two items that can give way start from a basis of
+ * zero and grow into what is left: first the "of 1h 00m · Running" note, up to its own width (its
+ * large grow factor gives it the space before the bar gets any; when there is too little it is cut
+ * with an ellipsis rather than pushing the bar onto a second line), then the scrub bar, which is
+ * never under 120 px. A second row cost the viewport 150 px of height at 1280 x 720.
+ */
+.timebar select { max-width: 120px; }
+.timebar [data-testid="time-state"] {
+  flex: 1000 1 0;
+  min-width: 0;
+  max-width: max-content;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scrub { position: relative; flex: 1 1 0; min-width: 120px; height: 26px; }
+.scrub input[type="range"] { position: absolute; inset: 0; width: 100%; margin: 0; z-index: 2; background: transparent; }
+.scrub .track {
+  position: absolute;
+  left: 0; right: 0; top: 11px; height: 4px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.scrub .fill { position: absolute; top: 12px; height: 2px; background: var(--accent); }
+.scrub .mark {
+  position: absolute;
+  top: 4px;
+  width: 2px;
+  height: 8px;
+  border-radius: 1px;
+  z-index: 1;
+}
+.timebar .clock { font-family: var(--mono); min-width: 90px; text-align: right; }
+
+.plot-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  background: var(--bg-raised);
+  flex: none;
+}
+.plot-card .title { font-size: 10px; color: var(--text-dim); display: flex; justify-content: space-between; gap: 10px; }
+
+/* ------------------------------------------------------------------ generic bits */
+
+.section { margin-bottom: 12px; }
+.section > h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  margin: 0 0 5px;
+  font-weight: 600;
+}
+.kv { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 1px 10px; font-size: 12px; }
+.kv dt { color: var(--text-dim); }
+.kv dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+
+.field { margin-bottom: 8px; }
+.field label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 2px; }
+.field .unit { color: var(--text-faint); font-family: var(--mono); }
+.field .help { font-size: 10px; color: var(--text-faint); margin-top: 2px; line-height: 1.35; }
+/* A setting the engine does not act on: still editable, visibly not part of the run. */
+.field.inactive > label, .field.inactive input, .field.inactive select, .field.inactive textarea { opacity: 0.6; }
+.field.edited > label { color: var(--accent); }
+.field .status-note { color: var(--warn); }
+.field-status {
+  display: inline-block; font-size: 9px; line-height: 1.4; padding: 0 5px; margin-left: 4px;
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text-dim); text-transform: none;
+  vertical-align: 1px; white-space: nowrap;
+}
+.field-status.warn { border-color: var(--warn); color: var(--warn); }
+.field-status.info { border-color: var(--accent); color: var(--accent); }
+.field-status.off { border-style: dashed; color: var(--text-faint); }
+.settings-group > summary { cursor: pointer; list-style: revert; }
+.settings-group > summary h3 { margin: 0; }
+.err-text { color: var(--err); }
+textarea.bad { border-color: var(--err); }
+
+.table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: var(--mono); }
+.table th, .table td { text-align: right; padding: 2px 5px; border-bottom: 1px solid var(--border); }
+.table th:first-child, .table td:first-child { text-align: left; }
+.table th { color: var(--text-dim); font-weight: 500; }
+
+.note {
+  border-left: 2px solid var(--warn);
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: 11px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 6px 0;
+}
+.note.info { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.note.err { border-left-color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
+
+.log { font-family: var(--mono); font-size: 11px; }
+.log .line { display: flex; gap: 6px; padding: 1px 0; border-bottom: 1px dotted var(--border); }
+.log .lvl { width: 38px; flex: none; }
+.log .lvl.info { color: var(--text-faint); }
+.log .lvl.warn { color: var(--warn); }
+.log .lvl.error { color: var(--err); }
+.log .tgt { color: var(--accent); width: 72px; flex: none; overflow: hidden; text-overflow: ellipsis; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; }
+.legend .item { display: inline-flex; align-items: center; gap: 4px; }
+
+.pill {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-family: var(--mono);
+}
+.pill.ok { border-color: var(--ok); color: var(--ok); }
+.pill.warn { border-color: var(--warn); color: var(--warn); }
+.pill.err { border-color: var(--err); color: var(--err); }
+
+/*
+ * There is no `.right` text-alignment utility here, and there must not be one.
+ *
+ * `.right` existed as `text-align: right` and was used by nothing — except that the inspector is
+ * `<aside class="panel right">`, where `right` names the side of the window. The utility matched it
+ * and right-aligned the entire inspector: its prose, its key/value pairs and the 64-character world
+ * digest it used to print, which is a large part of why that digest read as unreadable texture.
+ * Anything that needs right alignment now says so in its own rule, by its own name.
+ */
+.mono { font-family: var(--mono); }
+.dim { color: var(--text-dim); }
+.faint { color: var(--text-faint); }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; }
+.scroll-y { overflow-y: auto; }
+
+.method-list { font-family: var(--mono); font-size: 11px; }
+.method-list .m { display: flex; gap: 6px; padding: 2px 0; border-bottom: 1px dotted var(--border); }
+.method-list .m .name { color: var(--accent); min-width: 150px; }
+.method-list .m .sum { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.uplot { font-family: var(--sans) !important; }
+.u-legend { font-size: 10px !important; }
+
+/* ------------------------------------------------- the side-by-side */
+
+/*
+ * The centre column holds one viewport, or two.
+ *
+ * `grid` rather than `flex` so the two panes are exactly half each whatever the aspect ratio: a
+ * comparison in which one pane is wider than the other is a comparison of two different framings,
+ * and the eye reads the difference in the framing rather than in the runs. The 1px gap is the
+ * divider; a border would be inside one pane's box and belong to it.
+ */
+.viewstack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  gap: 1px;
+  background: var(--border);
+}
+.viewstack.split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.compare-pane { border-left: none; }
+
+/* A chip that has something to say rather than something to report. */
+.chip.warn-chip { border-color: var(--warn); color: var(--warn); }
+
+/* The provenance trigger beside an overlay row or a legend swatch: present, never loud. */
+.why-dot {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  flex: none;
+  padding: 0 2px;
+}
+.why-dot:hover, .why-dot:focus-visible { color: var(--accent); }
+
+/*
+ * A client-measured figure in a text run (the frame-rate strip, the world summary).
+ *
+ * Styled as text, not as a button, because there are a dozen of them inside one sentence and a
+ * dozen buttons there would read as a toolbar. The underline on hover and the focus ring are what
+ * say it is activatable, and both are required: the focus ring is the only one a keyboard user
+ * gets (WCAG 2.1 SC 2.4.7).
+ */
+button.stat {
+  all: unset;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  border-radius: 2px;
+}
+button.stat:hover { color: var(--accent); text-decoration: underline; }
+button.stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The unit line under a plot: the axis label as a control (§6.12 catalogue unit). */
+.axis-note {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 9px;
+  padding: 0 2px 1px;
+}
+.plot-card.wide { min-width: 320px; }
+
+/* A checkbox row in a panel body. */
+.check { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 2px 0; }
+.check input { flex: none; }
+
+/* A wrapping row of toggle chips: the metric picker. */
+.chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.chips button { font-size: 10px; padding: 1px 5px; }
+
+/* Difference tables: a row that differs, and a row only one side has. */
+.row-differs td { color: var(--warn); }
+.row-one-sided td { color: var(--text-faint); font-style: italic; }
+
+/* A menu that has to open upwards, because it is anchored to the bottom bar. */
+.menu-pop.up { bottom: calc(100% + 4px); top: auto; }
+
+/*
+ * A menu anchored near the right edge of the window, which opens leftwards so it stays on screen.
+ *
+ * Named `anchor-right`, not `right`: `right` is also how the inspector names its side of the
+ * window, and a utility by that name is what right-aligned that whole panel for however long.
+ */
+.menu-pop.anchor-right { left: auto; right: 0; }
+
+/* Identifiers in a header disclosure: the labels are short, so the value column can start early. */
+.menu-pop .kv { grid-template-columns: minmax(64px, max-content) 1fr; }
+.menu-pop.wide { min-width: 340px; max-width: 460px; }
+
+.note.warn-note { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+
+/* ---------------------------------------------- the transport bar (state/transport.ts) */
+
+/*
+ * How much of the span exists.
+ *
+ * Between the empty track and the accent fill: the run's intended duration is the whole track, the
+ * part the engine has simulated is this region, and the position is the fill. Without the middle
+ * region, four fifths of the bar on a run three seconds in was time nothing had simulated, drawn
+ * exactly like time that had, and a drag into it came back "seek out of range".
+ */
+.scrub .produced {
+  position: absolute;
+  top: 11px;
+  height: 4px;
+  left: 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* What a control said when it could not do what was asked. Takes the full width of the bar's
+ * wrapped row rather than squeezing between the clock and the event list. */
+.timebar-notice {
+  flex-basis: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--warn);
+  border-left: 2px solid var(--warn);
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.timebar-notice button { margin-left: auto; }
+
+/* ---------------------------------------------- the left-hand tabs */
+
+/*
+ * The four tabs did not say which to use first: same size, same weight, same colour, in an order
+ * nothing motivated. They are now ordered by when you need them and the first one is marked as the
+ * place to start, with the secondary two set off by a rule.
+ */
+.tabs .tab-count {
+  font-size: 9px;
+  font-family: var(--mono);
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.tabs button.active .tab-count { color: var(--text); border-color: var(--border-strong); }
+.tabs .tab-rule {
+  align-self: stretch;
+  width: 1px;
+  margin: 4px 5px;
+  background: var(--border);
+  flex: none;
+}
+
+/* ---------------------------------------------- progressive disclosure inside a panel */
+
+/*
+ * The identifiers, digests and frame counters a panel used to print in full.
+ *
+ * They are worth keeping — a run id that cannot be copied cannot be cited — and they are noise
+ * until the moment they are needed, so each group sits behind one of these. Closed by default,
+ * copyable when open.
+ */
+.disclose { margin: 6px 0; }
+.disclose > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 2px 0;
+  list-style: none;
+}
+.disclose > summary::-webkit-details-marker { display: none; }
+.disclose > summary::before { content: "▸ "; color: var(--text-faint); }
+.disclose[open] > summary::before { content: "▾ "; }
+.disclose > summary:hover { color: var(--text); }
+.disclose-body { padding: 2px 0 4px 12px; }
+
+/* An identifier shown short, with the whole of it one click away. */
+.idline { display: flex; align-items: baseline; gap: 6px; }
+.idline code { font-size: 10px; overflow-wrap: anywhere; }
+
+/* ---------------------------------------------- the recordings list (Runs tab) */
+
+.runrow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--border);
+}
+.runrow.current { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.runrow .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.runrow .meta { font-size: 10px; color: var(--text-dim); font-family: var(--mono); }
+
+/* The scenario timeline on the time bar: a diamond at each event's instant, a band while one
+   with an `until` is in force. Hollow until the engine reports it fired, filled after. */
+.scrub .event-band {
+  position: absolute;
+  top: 16px;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--warn, #d97706) 45%, transparent);
+  z-index: 1;
+}
+.scrub .scenario-mark {
+  position: absolute;
+  top: 14px;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  transform: rotate(45deg);
+  border: 1.5px solid var(--warn, #d97706);
+  background: var(--bg, #111);
+  z-index: 2;
+}
+.scrub .scenario-mark[data-fired="true"] { background: var(--warn, #d97706); }
+
+.events-editor .event-row {
+  border: 1px solid var(--line, #3334);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 6px 0;
+}
+.events-editor .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.events-editor label.inline { display: inline-flex; gap: 4px; align-items: center; font-weight: normal; }
+.events-editor input[type="number"] { width: 6em; }
+.events-editor .fired { color: var(--ok, #16a34a); }
+.events-editor button.active { outline: 2px solid var(--accent); }
+
+/*
+ * The followed vehicle's messages and queues (components/MessagePanel.tsx).
+ *
+ * The SPDU's spans are tinted with the Okabe-Ito palette the rest of the page uses (colour-blind
+ * safe), as a translucent background under text that keeps the theme's own colour, so every octet
+ * reads at the body text's contrast in both themes; the legend repeats each span's name, so the
+ * colour is never the only carrier.
+ */
+:root {
+  --span-header: #8fa3b8;
+  --span-payload: #56b4e9;
+  --span-info: #e69f00;
+  --span-signer: #009e73;
+  --span-signature: #cc79a7;
+}
+:root[data-theme="light"] {
+  --span-header: #7b8b9c;
+  --span-payload: #0072b2;
+  --span-info: #d55e00;
+  --span-signer: #009e73;
+  --span-signature: #aa4488;
+}
+.feed { display: flex; flex-direction: column; gap: 6px; }
+/* The panel body scrolls; no part of the panel shrinks under another (a shrunk table let the open
+   message draw over its rows). */
+.feed > * { flex-shrink: 0; }
+.feed-bar { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.feed-tabs { display: flex; gap: 4px; }
+.feed-tabs button { font-size: 11px; padding: 2px 8px; }
+.feed-status { font-size: 10px; font-family: var(--mono); min-height: 14px; overflow-wrap: anywhere; }
+.feed-filters { display: flex; flex-wrap: wrap; gap: 4px; font-size: 11px; align-items: center; }
+.feed-filters .chip { cursor: pointer; backdrop-filter: none; color: var(--text-dim); }
+.feed-filters .chip.on { color: var(--text); border-color: var(--accent); }
+.feed-scroll { max-height: 38vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.feed-table { font-size: 10.5px; }
+.feed-table thead th { position: sticky; top: 0; background: var(--bg-panel); z-index: 1; }
+.feed-table tbody tr[tabindex] { cursor: pointer; }
+.feed-table tbody tr[tabindex]:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.feed-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.feed-table tbody tr.open td { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.feed-table tbody tr.lost td { color: var(--text-dim); }
+.feed-table tbody tr.rotated td { border-bottom: 1px solid var(--accent); }
+.feed-badge { color: var(--accent); font-size: 9.5px; white-space: nowrap; }
+.feed-detail {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  background: var(--bg-raised);
+  font-size: 11px;
+}
+.feed-detail-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.feed-detail h4 { margin: 8px 0 3px; font-size: 11px; color: var(--text-dim); font-weight: 600; }
+.feed-hex pre { margin: 4px 0 0; font-size: 10.5px; line-height: 1.5; white-space: pre; overflow-x: auto; }
+.feed-hex-legend { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 10px; }
+.feed-hex-key { padding: 0 4px; border-radius: 3px; border-left: 3px solid transparent; }
+.feed-hex .span-1609-2-header { background: color-mix(in srgb, var(--span-header) 24%, transparent); border-left-color: var(--span-header); }
+.feed-hex .span-payload { background: color-mix(in srgb, var(--span-payload) 26%, transparent); border-left-color: var(--span-payload); }
+.feed-hex .span-headerinfo { background: color-mix(in srgb, var(--span-info) 24%, transparent); border-left-color: var(--span-info); }
+.feed-hex .span-signer { background: color-mix(in srgb, var(--span-signer) 24%, transparent); border-left-color: var(--span-signer); }
+.feed-hex .span-signature { background: color-mix(in srgb, var(--span-signature) 24%, transparent); border-left-color: var(--span-signature); }
+.feed-hex .span-envelope, .feed-hex .span-undecoded { background: color-mix(in srgb, var(--span-header) 18%, transparent); border-left-color: var(--span-header); }
+pre .feed-hex-key, pre span[class^="span-"] { border-left: none; }
+.warn-text { color: var(--warn); }
+
+/* ================================================================ viewport chrome (2026-09-30)
+ * The viewport shows the simulation, not chrome: the overlays and the camera group on the left,
+ * the key folded to one chip on the right, developer readouts only in developer mode. */
+
+.vp-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  height: 24px;
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-family: var(--mono);
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+}
+.vp-group .vp-select {
+  width: auto;
+  height: 22px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  padding: 0 4px 0 8px;
+  color: var(--text);
+}
+.vp-sep { width: 1px; align-self: stretch; background: var(--border); }
+.vp-follow { padding: 0 8px; color: var(--text-dim); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.vp-follow.on { color: var(--text); }
+.vp-clear {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 6px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+}
+.vp-clear:hover:not(:disabled) { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
+
+.vp-legend { position: relative; display: flex; flex-direction: column; align-items: flex-end; }
+.vp-legend-toggle { cursor: pointer; color: var(--text-dim); }
+.vp-legend-toggle.on, .vp-legend-toggle:hover { color: var(--text); }
+.vp-legend-swatches { display: inline-flex; gap: 2px; }
+.vp-legend-swatches i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+.vp-legend-body {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+/* ================================================================ chase HUD (2026-09-30) */
+
+.hud { width: min(620px, calc(100% - 16px)); }
+.hud-row { align-items: baseline; flex-wrap: nowrap; }
+.hud-row-body { display: flex; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
+.hud-row-title {
+  width: 58px;
+  flex: none;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.hud-field.plain { cursor: default; }
+.hud-field.plain .k { color: var(--text-dim); }
+.hud-field.plain:hover .k { color: var(--text-dim); }
+
+/* ================================================================ inspector (2026-09-30) */
+
+.insp-head { text-transform: none; letter-spacing: 0; }
+.insp-title { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-tabs { padding: 0 6px; border-bottom: 1px solid var(--border); flex: none; }
+.insp-tabs button { padding: 5px 9px; font-size: 12px; }
+.insp-tabs .count {
+  margin-left: 5px;
+  font-size: 9.5px;
+  font-family: var(--mono);
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.insp-section .kv { grid-template-columns: minmax(110px, max-content) 1fr; }
+details.section > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+details.section > summary::-webkit-details-marker { display: none; }
+details.section > summary::before { content: "▸"; color: var(--text-faint); font-size: 10px; }
+details.section[open] > summary::before { content: "▾"; }
+details.section > summary h3 {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+details.section[open] > summary { margin-bottom: 5px; }
+
+/* ================================================================ transport bar (2026-09-30)
+ * One row: play or pause, step, speed, the clock, the timeline with its events, the span. */
+
+.timebar { gap: 8px; flex-wrap: nowrap; }
+.timebar .tb-play { min-width: 34px; }
+.timebar .tb-speed { width: auto; max-width: 150px; }
+.timebar .clock { min-width: 0; text-align: left; font-size: 12px; }
+.timebar .tb-end { font-family: var(--mono); font-size: 11px; white-space: nowrap; flex: none; max-width: none; }
+.timebar:has(.timebar-notice) { flex-wrap: wrap; }
+.scrub { height: 28px; }
+.scrub .track { top: 15px; }
+.scrub .fill { top: 16px; }
+.scrub .produced { top: 15px; }
+.scrub .event-band { top: 20px; }
+.scrub-events { position: absolute; left: 0; right: 0; top: 0; height: 12px; z-index: 3; pointer-events: none; }
+.scrub-events button {
+  pointer-events: auto;
+  position: absolute;
+  padding: 0;
+  min-width: 0;
+  border: none;
+  cursor: pointer;
+}
+.scrub-events button:disabled { cursor: not-allowed; }
+.scrub .scrub-events .mark {
+  top: 2px;
+  width: 3px;
+  height: 10px;
+  margin-left: -1.5px;
+  border-radius: 1px;
+  /* A wider hit area than the tick it draws. */
+  box-shadow: 0 0 0 3px transparent;
+  outline: none;
+}
+.scrub .scrub-events .mark:hover { transform: scaleY(1.3); box-shadow: 0 0 0 1px var(--text); }
+.scrub .scrub-events .scenario-mark { top: 1px; }
+.scrub .scrub-events .scenario-mark:hover { box-shadow: 0 0 0 1px var(--text); }
+
+/* ---- HUD actions and the vehicle history (owner, 2026-10-29) ---- */
+.hud-actions { margin-left: auto; display: inline-flex; gap: 6px; }
+.hud-action {
+  font: inherit; font-size: 11px; padding: 2px 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-strong); background: transparent; color: var(--text);
+}
+.hud-action:hover, .hud-action:focus-visible { border-color: var(--accent); color: var(--accent); }
+.hud-asof { color: var(--text-dim); font-size: 10px; }
+
+.vh-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.45); display: flex; justify-content: center; align-items: center; }
+.vh {
+  width: min(860px, calc(100vw - 32px)); height: min(86vh, 900px); display: flex; flex-direction: column;
+  background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  font-size: 13px; color: var(--text);
+}
+.vh-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 14px 16px 8px; border-bottom: 1px solid var(--border); }
+.vh-head h2 { margin: 0 0 2px; font-size: 16px; }
+.vh-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.vh-chip { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; }
+.vh-chip.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.vh-chip:disabled { opacity: 0.4; cursor: default; }
+.vh-count { opacity: 0.7; margin-left: 2px; }
+.vh-note { margin: 6px 16px 0; font-size: 12px; }
+.vh-steps { list-style: none; margin: 0; padding: 8px 8px 16px; overflow: auto; flex: 1; }
+.vh-empty { padding: 16px; }
+.vh-step { position: relative; }
+.vh-step::before { content: ""; position: absolute; left: 88px; /* head padding 8 + time 64 + gap 10 + half the 14px dot column, less half the 2px line */ top: 0; bottom: 0; width: 2px; background: var(--border); }
+.vh-step:first-child::before { top: 18px; }
+.vh-step:last-child::before { bottom: calc(100% - 18px); }
+.vh-step-head { all: unset; box-sizing: border-box; width: 100%; display: grid; grid-template-columns: 64px 14px 1fr auto; gap: 10px; align-items: start; padding: 8px 8px; border-radius: 6px; cursor: pointer; }
+.vh-step-head:hover, .vh-step-head:focus-visible { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.vh-time { color: var(--text-dim); text-align: right; font-size: 12px; padding-top: 1px; }
+.vh-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; justify-self: center; position: relative; z-index: 1; box-shadow: 0 0 0 3px var(--bg-panel); }
+.vh-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.vh-title { font-weight: 500; }
+.vh-summary { color: var(--text-dim); font-size: 12px; }
+.vh-kind { font-size: 11px; white-space: nowrap; padding-top: 2px; }
+.vh-step.open > .vh-step-head { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.vh-detail { margin: 2px 8px 10px 96px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-raised, var(--bg-panel)); font-size: 12px; }
+.vh-detail h4 { margin: 12px 0 4px; font-size: 12px; color: var(--text-dim); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+.vh-facts { margin: 0; display: grid; gap: 4px; }
+.vh-facts > div { display: grid; grid-template-columns: 150px 1fr; gap: 10px; }
+.vh-facts dt { color: var(--text-dim); }
+.vh-facts dd { margin: 0; }
+.vh-msgs { width: 100%; border-collapse: collapse; }
+.vh-msgs th { text-align: left; font-weight: 500; color: var(--text-dim); padding: 3px 6px; border-bottom: 1px solid var(--border); }
+.vh-msgs td { padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.vh-msgs .num { text-align: right; white-space: nowrap; }
+.vh-inside td { background: color-mix(in srgb, var(--text) 3%, transparent); }
+.vh-stages { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.vh-msgs .nowrap { white-space: nowrap; }
+.vh-times { color: var(--accent); font-weight: 600; }

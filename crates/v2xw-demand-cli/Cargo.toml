@@ -1,0 +1,26 @@
+[package]
+name = "v2xw-demand-cli"
+description = "The `v2xw-demand` command: OD matrices to trips, dynamic traffic assignment, routes from counts and GTFS, on the world a scenario builds."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+v2xw-demand = { path = "../v2xw-demand", version = "0.1.0" }
+# The scenario loader and world builder, so a route file is made on exactly the world a
+# run of that scenario builds (route files are checked against the world's content hash).
+v2xw-engine = { path = "../v2xw-engine", version = "0.1.0" }
+v2xw-world = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+v2xw-core = { workspace = true }
+v2xw-mobility = { workspace = true }
+
+[[bin]]
+name = "v2xw-demand"
+path = "src/main.rs"

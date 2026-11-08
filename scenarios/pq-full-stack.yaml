@@ -1,0 +1,39 @@
+# ============================================================================
+# The whole stack post-quantum: ML-DSA-44 signatures *and* ML-KEM-768 encryption to
+# the PCA and to the device, against the hybrid of each.
+# ============================================================================
+#
+#     v2xw experiment run scenarios/pq-full-stack.yaml --out runs/pq-full-stack
+#
+# `pq-signatures.yaml` with `security.kem` swept too. Every encrypted-key structure the
+# SCMS carries — the PCA's sealed pre-linkage values, each uploaded post-quantum key, each
+# certificate's wrapper to the device — grows from IEEE 1609.2's 65-byte
+# `EciesP256EncryptedKey` to the ML-KEM-768 ciphertext (1,088 B, FIPS 203 Table 3) plus the
+# wrapped key and tag, and each encryption and decryption pays an encapsulation or
+# decapsulation (liboqs on a Raspberry Pi 5 for authorities, Table 8; devices on the Cohda
+# MK6 library that prices it, derived by the pqm4 cycle ratio and flagged).
+#
+# Read the cell pairs: (signature, kem) = (hybrid, hybrid) is the cautious migration and
+# (pure, pure) the end state; their difference in provisioning bytes and backend time is
+# what the hybrid's insurance costs.
+schema: v2xw/scenario/1
+
+meta:
+  name: pq-full-stack
+  base: pq-signatures.yaml
+  description: >-
+    Post-quantum signatures and post-quantum encryption to the PCA and device, pure and
+    hybrid, on the pq-signatures fleet.
+  tags: [study, post-quantum, ml-kem, ml-dsa, scms]
+  created: "2026-10-07"
+
+security:
+  signature: ml-dsa-44
+  kem: ml-kem-768
+
+experiment:
+  sweep:
+    security.kem: [ecies-p256, hybrid-ecies-p256-ml-kem-768, ml-kem-768]
+    security.signature: [hybrid-mldsa44-ecdsa-p256, ml-dsa-44]
+  seeds: [1]
+  replications: 1

@@ -1,0 +1,87 @@
+# Documentation site: https://ak3zaidan.github.io/V2X-World/
+#
+# Generates the configuration reference from the engine's published settings surface
+# (crates/v2xw-engine/examples/dump_settings.rs -> tools/docs/gen_config_reference.py) and
+# the metric catalogue (examples/dump_metrics.rs -> tools/docs/gen_metric_catalogue.py),
+# builds the Rust API docs into site/api/, builds the site with Zensical and deploys it
+# to GitHub Pages. The repository's Pages source must be set to "GitHub Actions".
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "crates/**"
+      - "tools/docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned toolchain
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the site generator
+        run: python -m pip install -r tools/docs/requirements.txt
+
+      - name: Generate the configuration reference and the metric catalogue
+        run: |
+          mkdir -p target/docs
+          cargo run -q -p v2xw-engine --example dump_settings -- --out target/docs/settings.json
+          python tools/docs/gen_config_reference.py target/docs/settings.json
+          cargo run -q -p v2xw-engine --example dump_metrics -- --out target/docs/metrics.json
+          python tools/docs/gen_metric_catalogue.py target/docs/metrics.json
+
+      - name: Build the site
+        run: zensical build --clean --strict
+
+      - name: Build the Rust API docs into site/api
+        run: |
+          # Libraries only: the v2xw-server and v2xw-demand binaries share a doc directory
+          # with the libraries of the same name, and v2xw-demand-cli has no library.
+          cargo doc --workspace --no-deps --lib --exclude v2xw-demand-cli
+          mkdir -p site/api
+          cp -R target/doc/. site/api/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

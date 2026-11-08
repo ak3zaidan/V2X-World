@@ -1,0 +1,984 @@
+//! Unit tests of the governance entities and the device trust store.
+
+use super::*;
+
+const S: SimTime = NS_PER_S;
+const DAY: SimTime = 86_400 * NS_PER_S;
+
+fn params() -> ScmsParams {
+    // The US deployment, stated rather than inherited from the defaults.
+    ScmsParams {
+        electors: 5,
+        elector_quorum: 3,
+        ..ScmsParams::default()
+    }
+}
+
+fn rng() -> RngRegistry {
+    RngRegistry::new(7)
+}
+
+fn gov() -> Governance {
+    Governance::ceremony(&params(), &ScmsNodes::default(), &rng(), 0)
+}
+
+fn fresh(g: &Governance) -> DeviceTrust {
+    DeviceTrust {
+        anchors: g.anchors(),
+        ..DeviceTrust::default()
+    }
+}
+
+fn bootstrapped(g: &Governance) -> DeviceTrust {
+    let mut t = fresh(g);
+    t.install_ctl(&g.ctl)
+        .expect("the genesis CTL is signed by every elector");
+    t.install_chain(&g.lccf, S)
+        .expect("the local chain verifies");
+    t.install_policy(&g.lpf).expect("the RA's policy verifies");
+    t
+}
+
+fn hex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+        .collect()
+}
+
+#[test]
+fn a_bootstrapped_device_trusts_every_online_authority() {
+    let g = gov();
+    let t = bootstrapped(&g);
+    assert_eq!(t.anchors.len(), 5, "five elector anchors (Profile §2.1.15)");
+    for role in ICA_ISSUED
+        .iter()
+        .chain(ROOT_ISSUED.iter())
+        .chain(["root", "ica"].iter())
+    {
+        assert!(t.trusts_role(role), "{role} not trusted");
+    }
+    assert_eq!(
+        t.ctl_sequence,
+        Some(1),
+        "a 2026 t0 starts at the production series' sequence 1 (gov C-10)"
+    );
+    assert_eq!(t.policy().map(|p| p.certs_per_period), Some(20));
+    assert_eq!(t.rejected, 0);
+    assert_eq!(
+        t.tolerated, 2,
+        "the published-RA chain-length conflict, and only it"
+    );
+}
+
+/// Gap row 31 acceptance: a CTL signed by 2 of the 5 electors is refused, 3 of 5 accepted.
+#[test]
+fn two_of_five_is_refused_and_three_of_five_accepted() {
+    let g = gov();
+    for (n, ok) in [(2u32, false), (3, true), (5, true)] {
+        let mut t = fresh(&g);
+        let signers: Vec<u32> = (0..n).collect();
+        let r = t.install_ctl(&g.ctl_endorsed_by(&signers));
+        if ok {
+            assert_eq!(r, Ok(n), "{n} of 5");
+        } else {
+            assert_eq!(
+                r,
+                Err(TrustError::CtlQuorum {
+                    valid: 2,
+                    needed: 3
+                })
+            );
+            assert_eq!(t.ctl_sequence, None);
+            assert!(t.roots.is_empty(), "no root is approved by a refused CTL");
+        }
+    }
+    // Any three, not the first three.
+    let mut t = fresh(&g);
+    assert_eq!(t.install_ctl(&g.ctl_endorsed_by(&[4, 1, 3])), Ok(3));
+}
+
+/// The 1609.2.1 rule: a CTL's `quorum` governs the *next* CTL, and only a CTL that meets
+/// the quorum in force can change it. One stolen elector key cannot; three can, and then
+/// one key suffices for every later CTL — an observable weakness of the design.
+#[test]
+fn the_quorum_can_only_be_lowered_by_a_quorum() {
+    let g = gov();
+    let mut t = bootstrapped(&g);
+    assert_eq!(
+        t.install_ctl(&g.forge_next_ctl(1, &[0])),
+        Err(TrustError::CtlQuorum {
+            valid: 1,
+            needed: 3
+        })
+    );
+    assert_eq!(t.install_ctl(&g.forge_next_ctl(1, &[0, 1, 2])), Ok(3));
+    assert_eq!(t.ctl_trust.as_ref().map(|c| c.quorum), Some(1));
+    let mut g2 = g.shadow();
+    g2.ctl.sequence = g.ctl.sequence + 1;
+    assert_eq!(t.install_ctl(&g2.forge_next_ctl(1, &[0])), Ok(1));
+}
+
+#[test]
+fn a_tampered_policy_or_chain_is_refused() {
+    let g = gov();
+    let mut t = bootstrapped(&g);
+    // New labels on the old signed bytes: the device reads what was signed.
+    let mut relabelled = g.lpf.clone();
+    relabelled.version += 1;
+    relabelled.policy.certs_per_period = 100;
+    assert_eq!(t.install_policy(&relabelled), Err(TrustError::BadSignature));
+    // A flipped signature byte.
+    let mut flipped = g.policy_file(Scope::Local, 2, g.lpf.policy, "ra");
+    let n = flipped.spdu.len();
+    flipped.spdu[n - 1] ^= 1;
+    assert_eq!(t.install_policy(&flipped), Err(TrustError::BadSignature));
+    // A component certificate altered inside the chain file (its signature's last byte).
+    let mut chain = g.lccf.clone();
+    chain.version += 1;
+    let n = chain.spdu.len();
+    chain.spdu[n - 1] ^= 1;
+    assert_eq!(t.install_chain(&chain, S), Err(TrustError::BadSignature));
+    assert_eq!(t.rejected, 3);
+    assert_eq!(t.policy().map(|p| p.certs_per_period), Some(20));
+}
+
+/// A policy file signed by an authority the device trusts but whose SSP is not the RA's
+/// (or the PG's) is refused.
+#[test]
+fn a_policy_signed_by_the_wrong_authority_is_refused() {
+    let g = gov();
+    let mut t = bootstrapped(&g);
+    let by_eca = g.policy_file(Scope::Local, 2, g.lpf.policy, "eca");
+    assert_eq!(t.install_policy(&by_eca), Err(TrustError::WrongSigner));
+    let global_by_ra = g.policy_file(Scope::Global, 2, g.lpf.policy, "ra");
+    assert_eq!(
+        t.install_policy(&global_by_ra),
+        Err(TrustError::WrongSigner)
+    );
+    let by_ra = g.policy_file(Scope::Local, 2, g.lpf.policy, "ra");
+    assert_eq!(t.install_policy(&by_ra), Ok(()));
+}
+
+#[test]
+fn a_policy_decision_reaches_the_device_as_a_newer_signed_file() {
+    let mut g = gov();
+    let mut t = bootstrapped(&g);
+    let mut p = g.gpf.policy;
+    p.certs_per_period = 10;
+    let v = g.decide_policy(p);
+    assert_eq!(v, 2);
+    t.install_policy(&g.lpf).expect("verifies");
+    assert_eq!(t.policy().map(|p| p.certs_per_period), Some(10));
+    assert_eq!(t.install_policy(&g.lpf), Err(TrustError::Stale));
+    assert_eq!(g.counters.manager_decisions, 1);
+}
+
+#[test]
+fn the_ceremony_is_deterministic() {
+    let a = gov();
+    let b = gov();
+    assert_eq!(a.ctl, b.ctl);
+    assert_eq!(a.lccf, b.lccf);
+    assert_eq!(a.gpf, b.gpf);
+    let c = Governance::ceremony(&params(), &ScmsNodes::default(), &RngRegistry::new(8), 0);
+    assert_ne!(
+        a.ctl.roots, c.ctl.roots,
+        "a different seed makes different keys"
+    );
+    assert_ne!(a.ctl.electors, c.ctl.electors);
+}
+
+/// Gap row 31 acceptance: removing a root makes that provider's authorities untrusted on
+/// a device once it installs the CTL, and the CRL Generator's signature stops verifying.
+#[test]
+fn root_removal_propagates_to_devices() {
+    let mut g = gov();
+    let mut t = bootstrapped(&g);
+    let digest = [7u8; 32];
+    let (crlg, sig) = g.sign_as("crlg", &digest).expect("crlg certified");
+    assert!(t.verify_signed(crlg, &digest, &sig));
+    let root = g.ctl.roots[0];
+    let decided = 10 * DAY;
+    let at = g.remove_root(root, decided).expect("approved root");
+    assert_eq!(at, decided + 2 * DAY, "removal within 48 h");
+    assert_eq!(g.publish_due(at - 1), 0, "not before the deadline");
+    assert_eq!(g.publish_due(at), 1);
+    assert_eq!(g.ctl.sequence, 2, "the list after the sequence-1 genesis");
+    assert!(g.ctl.roots.is_empty());
+    assert_eq!(t.install_ctl(&g.ctl), Ok(5));
+    assert!(t.roots.is_empty());
+    assert!(!t.trusts_role("pca") && !t.trusts_role("ra") && !t.trusts_role("crlg"));
+    assert!(t.purged >= 13, "every authority certificate was discarded");
+    assert!(!t.verify_signed(crlg, &digest, &sig));
+    // The provider's chain file no longer installs either.
+    assert_eq!(t.install_chain(&g.lccf, at), Err(TrustError::UnknownIssuer));
+    assert!(g.log.iter().any(|e| e.kind == "eac-remove-root"));
+}
+
+/// An elector change must be installed in sequence: a device that missed it cannot verify
+/// a later CTL signed with the new elector's help, and catches up from the history.
+#[test]
+fn an_elector_replacement_is_installed_in_sequence() {
+    let mut g = gov();
+    let mut early = bootstrapped(&g);
+    let mut late = bootstrapped(&g);
+    let (slot, at) = g.replace_elector(&rng(), 0, DAY).expect("slot 0 approved");
+    assert_eq!(slot, 5);
+    g.publish_due(at);
+    let c1 = g.ctl.clone();
+    assert_eq!(
+        c1.signers,
+        vec![1, 2, 3, 4],
+        "the removed elector does not sign"
+    );
+    let dec = ctl::decode_ctl_spdu(&c1.spdu).expect("decodes");
+    assert_eq!(dec.elector_remove().len(), 1);
+    assert_eq!(dec.elector_approve().len(), 5);
+    assert_eq!(early.install_ctl(&c1), Ok(4));
+    // CTL 2 signed by the new elector and two old ones.
+    let c2 = g.build_ctl(c1.sequence + 1, c1.effective, None, None, &[5, 1, 2]);
+    assert_eq!(early.install_ctl(&c2), Ok(3));
+    assert_eq!(
+        late.install_ctl(&c2),
+        Err(TrustError::CtlQuorum {
+            valid: 2,
+            needed: 3
+        })
+    );
+    for c in g.ctls_after(late.ctl_sequence) {
+        late.install_ctl(&c).expect("catch up in order");
+    }
+    assert_eq!(late.install_ctl(&c2), Ok(3));
+    // The removed elector no longer counts.
+    let c3 = g.build_ctl(c1.sequence + 2, c1.effective, None, None, &[0, 1, 2]);
+    assert_eq!(
+        early.install_ctl(&c3),
+        Err(TrustError::CtlQuorum {
+            valid: 2,
+            needed: 3
+        })
+    );
+    assert_eq!(g.anchors().len(), 5);
+    assert_eq!(g.nodes.electors.len(), 5);
+}
+
+/// Root rollover: the new root is added by CTL, the components are re-certified under it,
+/// devices keep trusting throughout, and removing the old root afterwards leaves the new
+/// hierarchy trusted.
+#[test]
+fn a_root_rollover_keeps_devices_trusting() {
+    let mut g = gov();
+    let mut t = bootstrapped(&g);
+    let online = ScmsNodes::default();
+    let (old, new, at) = g.rollover_root(&rng(), &online, DAY);
+    assert_ne!(old, new);
+    g.publish_due(at);
+    assert_eq!(g.ctl.roots.len(), 2);
+    t.install_ctl(&g.ctl).expect("signed by all five");
+    t.install_chain(&g.lccf, at)
+        .expect("the re-certified chain verifies");
+    let digest = [9u8; 32];
+    let (crlg, sig) = g.sign_as("crlg", &digest).expect("crlg");
+    assert!(
+        t.verify_signed(crlg, &digest, &sig),
+        "the new CRL signer is trusted"
+    );
+    let at2 = g.remove_root(old, at).expect("old root approved");
+    g.publish_due(at2);
+    t.install_ctl(&g.ctl).expect("removal CTL");
+    assert!(t.verify_signed(crlg, &digest, &sig));
+    for role in ["root", "ica", "pca", "ra", "eca", "ma", "pg", "crlg"] {
+        assert!(t.trusts_role(role), "{role} lost after rollover");
+    }
+    assert!(t.purged >= 13, "the old hierarchy was discarded");
+}
+
+/// The SSPs and permission groups are byte-for-byte those of the published US component
+/// certificates (production chain file 2025-08-13 and test chain file 2025-07-17, decoded
+/// by the oracle's asn1tools encoder; see `third_party/scms-artefacts/PROVENANCE.md`).
+#[test]
+fn permissions_are_the_published_bytes() {
+    let g = gov();
+    let enc =
+        |v: &Option<SequenceOfPsidGroupPermissions>| hex_of(&coer(v.as_ref().unwrap()).unwrap());
+    let app = |role: &str| {
+        hex_of(
+            &coer(
+                &g.cert(role)
+                    .unwrap()
+                    .0
+                    .to_be_signed
+                    .app_permissions
+                    .clone()
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+    };
+    let tbs = |role: &str| g.cert(role).unwrap().0.to_be_signed.clone();
+    // rootca.prod.s2x.io
+    assert_eq!(
+        app("root"),
+        "0102800123800381000280020100800700010001010100"
+    );
+    assert_eq!(
+        enc(&tbs("root").cert_issue_permissions),
+        "0104e081010301ffc06080010100012301ffc06080010100012601ffc060800101800201008101ffc0"
+    );
+    // ica.prod.s2x.io
+    assert_eq!(app("ica"), "01018001238003830002");
+    assert_eq!(
+        enc(&tbs("ica").cert_issue_permissions),
+        "0102a0810102c06080010280012381800201008101ffc0"
+    );
+    // eca.prod.s2x.io
+    assert_eq!(app("eca"), "01018001238003840002");
+    assert_eq!(
+        enc(&tbs("eca").cert_issue_permissions),
+        "010200800101800123800101038c0002208140"
+    );
+    // aca.prod.s2x.io
+    assert_eq!(app("pca"), "01018001238003850002");
+    assert_eq!(enc(&tbs("pca").cert_issue_permissions), "01010081");
+    // ra.prod.s2x.io: the group in certIssuePermissions, the production form (the test
+    // RAs carry the same bytes in certRequestPermissions); 010180810100 is the oracle's
+    // encoding of the published production RA's field. ma.v2x-scms.saesoltech.io (test).
+    assert_eq!(app("ra"), "010180012380038b0002");
+    assert_eq!(enc(&tbs("ra").cert_issue_permissions), "010180810100");
+    assert!(tbs("ra").cert_request_permissions.is_none());
+    assert_eq!(app("ma"), "010180012380078a000201010120");
+    // crlg.preprod.v2x.isscms.com carries CrlSignerSsp version 1 (`86 00 01`); the
+    // 2022 module fixes version 2, so the one octet differs and nothing else.
+    assert_eq!(
+        app("crlg"),
+        "0102800123800386000280020100800d00010101040004000300010002"
+    );
+    assert_eq!(
+        hex_of(&coer(&security_mgmt_ssp("elector")).unwrap()),
+        "800002"
+    );
+    assert_eq!(hex_of(&coer(&security_mgmt_ssp("pg")).unwrap()), "820002");
+    assert_eq!(
+        hex_of(&coer(&security_mgmt_ssp("la1")).unwrap()),
+        "8800020001"
+    );
+    let _ = hex("00");
+}
+
+fn hex_of(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Issuer, crlSeries, cracaId, lifetime, key and encryption key of every component
+/// certificate follow the published pattern (Profile Table 1; production chain file).
+#[test]
+fn every_component_certificate_has_the_published_shape() {
+    let g = gov();
+    let root = g.cert("root").unwrap().clone();
+    let ica = g.cert("ica").unwrap().clone();
+    for spec in ROLE_SPECS {
+        let c = g.cert(spec.role).unwrap();
+        let t = &c.0.to_be_signed;
+        let (issuer, series): (Option<&Certificate>, u16) = match spec.issuer {
+            IssuedBy::SelfSigned => (None, 0),
+            IssuedBy::Root if spec.role == "ica" => (Some(&root), 2),
+            IssuedBy::Root => (Some(&root), 256),
+            IssuedBy::Ica => (Some(&ica), 2),
+        };
+        assert_eq!(t.crl_series.0.0, series, "{}", spec.role);
+        let craca = issuer.map_or([0; 3], hashed_id3);
+        assert_eq!(&t.craca_id.0[..], &craca[..], "{}", spec.role);
+        assert!(sig1609::verify_explicit_cert(c, issuer), "{}", spec.role);
+        assert_eq!(
+            issuer_id8(c),
+            issuer.map(|i| cert_hashed_id8(i).unwrap()),
+            "{}",
+            spec.role
+        );
+        let (s, e) = ctl::validity(c);
+        assert_eq!(e - s, spec.lifetime.seconds(), "{}", spec.role);
+        assert_eq!(t.encryption_key.is_some(), spec.encryption, "{}", spec.role);
+        assert_eq!(role_of(c), Some(spec.role));
+        assert!(matches!(
+            sig1609::explicit_key(c),
+            Some((sig1609::Hash1609::Sha256, _))
+        ));
+        let cid = format!("{}.provider-a", spec.host);
+        assert_eq!(ctl::cert_name(c), Some(cid.as_str()));
+    }
+    assert!(g.encryption_scalar("ra").is_some() && g.encryption_scalar("pca").is_none());
+}
+
+/// The electors are SCMS Manager's published form: P-384, self-signed with SHA-384,
+/// `80 00 02`, staggered 12/15/18/21/24-year validity from Time32 503 136 005.
+#[test]
+fn the_electors_are_the_published_form() {
+    let g = gov();
+    let a = g.anchors();
+    assert_eq!(a.quorum, 3);
+    for (k, c) in a.electors.iter().enumerate() {
+        assert!(ctl::elector_cert_ok(c));
+        assert_eq!(ctl::app_ssp(c, 35), Some(Some(vec![0x80, 0x00, 0x02])));
+        let (s, e) = ctl::validity(c);
+        assert_eq!(s, u64::from(ELECTOR_START_TIME32));
+        assert_eq!(e - s, u64::from(ELECTOR_YEARS[k]) * YEAR_S);
+    }
+    let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).unwrap();
+    assert_eq!(dec.series(), US_CTL_SERIES_ID);
+    assert_eq!(dec.quorum(), Some(3));
+    assert_eq!(dec.signatures.len(), 5, "every elector responds");
+}
+
+#[test]
+fn an_expired_component_certificate_is_refused() {
+    let g = gov();
+    let mut t = fresh(&g);
+    t.install_ctl(&g.ctl).unwrap();
+    // The ACA certificate lives 4 years; the chain file five years on carries it expired.
+    let later = 5 * YEAR_S * NS_PER_S;
+    assert_eq!(t.install_chain(&g.lccf, later), Err(TrustError::Expired));
+}
+
+/// A chain file whose certificate claims a permission its issuer cannot grant is refused
+/// by the 1609.2 rules, even though every signature verifies.
+#[test]
+fn an_over_permissioned_certificate_is_refused() {
+    let g = gov();
+    let mut t = fresh(&g);
+    t.install_ctl(&g.ctl).unwrap();
+    // The ICA re-signs an ACA certificate that claims certIssuePermissions it may not
+    // issue (minChainLength 2 under an ICA allowing chain length 1 below it).
+    let ica = &g.authorities["ica"];
+    let mut tbs = g.cert("pca").unwrap().0.to_be_signed.clone();
+    tbs.cert_issue_permissions = Some(SequenceOfPsidGroupPermissions(vec![group(
+        SubjectPermissions::all(()),
+        3,
+        0,
+        true,
+        false,
+    )]));
+    let bad = issue(tbs, Some((&ica.cert, &ica.key)), &ica.key);
+    let home = ctl::decode_ctl_spdu(&g.ctl.spdu).unwrap();
+    let mut certs = g.chain_certs();
+    certs.push(bad);
+    let file = ChainFile {
+        scope: Scope::Local,
+        version: 9,
+        certs: certs.clone(),
+        ctl_sequence: 0,
+        spdu: ctl::encode_certificate_chain(&home.raw, certs).unwrap(),
+    };
+    assert_eq!(t.install_chain(&file, S), Err(TrustError::NotPermitted));
+}
+
+/// SLA deadlines: an addition within 3 business days, a removal within 48 h.
+#[test]
+fn ctl_publication_follows_the_eac_deadlines() {
+    let clock = GovernanceConfig::default().clock;
+    // t0 is Tuesday 2026-01-06 09:00 UTC: three business days is Friday.
+    assert_eq!(clock.to_rfc3339_at(0), "2026-01-06T09:00:00Z");
+    assert_eq!(
+        ctl_publication_deadline(CtlChangeKind::AddRoot, 0, clock),
+        3 * DAY
+    );
+    // Decided Friday: Monday, Tuesday, Wednesday.
+    assert_eq!(
+        ctl_publication_deadline(CtlChangeKind::AddRoot, 3 * DAY, clock),
+        8 * DAY
+    );
+    assert_eq!(
+        ctl_publication_deadline(CtlChangeKind::RemoveRoot, 3 * DAY, clock),
+        5 * DAY
+    );
+}
+
+fn clock_at(clock: WallClock, rfc3339: &str) -> SimTime {
+    let want = WallClock::parse_rfc3339(rfc3339).unwrap().t0_unix_s();
+    u64::try_from(want - clock.t0_unix_s()).unwrap() * NS_PER_S
+}
+
+/// The business days are Eastern and skip the observed federal holidays (5 U.S.C.
+/// § 6103(a)). An addition decided on Friday 2026-01-16 04:00 EST skips Monday 19 January
+/// (Birthday of Martin Luther King, Jr.) and is due Thursday 22 January. One decided on
+/// Wednesday 2026-11-25 skips Thanksgiving (Thursday 26) and the weekend: Friday 27,
+/// Monday 30, Tuesday 1 December. An elector replacement adds an elector, which the
+/// electors have 5 business days for (Elector Policy v1.0 §2.2.5, §2.4.2): decided
+/// Tuesday 2026-01-06, due Tuesday 13 January.
+#[test]
+fn ctl_deadlines_count_eastern_business_days_without_federal_holidays() {
+    let clock = GovernanceConfig::default().clock;
+    assert_eq!(clock.to_rfc3339_at(10 * DAY), "2026-01-16T09:00:00Z");
+    assert_eq!(
+        ctl_publication_deadline(CtlChangeKind::AddRoot, 10 * DAY, clock),
+        16 * DAY,
+        "Martin Luther King Jr. Day is not a business day"
+    );
+    let wed = clock_at(clock, "2026-11-25T09:00:00Z");
+    assert_eq!(
+        clock.to_rfc3339_at(ctl_publication_deadline(CtlChangeKind::AddRoot, wed, clock)),
+        "2026-12-01T09:00:00Z",
+        "Thanksgiving is not a business day"
+    );
+}
+
+/// An elector replacement adds an elector: 5 business days (Elector Policy §2.2.5).
+#[test]
+fn an_elector_replacement_ctl_has_the_five_business_days_of_an_addition() {
+    let clock = GovernanceConfig::default().clock;
+    assert_eq!(
+        ctl_publication_deadline(CtlChangeKind::ReplaceElector, 0, clock),
+        7 * DAY,
+        "an elector addition has 5 business days"
+    );
+}
+
+/// A replacement elector gets the default 15-year certificate (Elector Policy v1.0
+/// §2.3.1), not the 24 years of the fifth genesis elector.
+#[test]
+fn a_replacement_elector_is_valid_for_the_default_fifteen_years() {
+    let mut g = gov();
+    let (slot, _) = g.replace_elector(&rng(), 0, DAY).expect("slot 0 approved");
+    let (start, end) = ctl::validity(&g.electors[slot as usize].elector.cert);
+    assert_eq!(end - start, 15 * YEAR_S);
+}
+
+/// A root removal drops the root from `rootCaApprove` and, as SCMS Manager's published
+/// removal (test CTL sequence 3, 2025-07-17), lists nothing in `rootCaRemove`.
+#[test]
+fn a_removed_root_leaves_the_approve_list_and_is_not_listed_as_removed() {
+    let mut g = gov();
+    let (peer, at) = g.add_root(&rng(), "provider-b", 0);
+    g.publish_due(at);
+    let at = g.remove_root(peer, at + DAY).expect("approved");
+    g.publish_due(at);
+    let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    assert!(!dec.root_ca_approve().contains(&peer));
+    assert_eq!(dec.root_ca_approve().len(), 1);
+    assert!(dec.root_ca_remove().is_empty(), "rootCaRemove stays empty");
+}
+
+/// The device-facing PDU PKI and the governance hierarchy give their RA
+/// the same permission fields (one provider uses one form).
+#[test]
+fn both_engine_pkis_give_the_ra_the_same_permission_form() {
+    let g = gov();
+    let pki = crate::scms::pdu::ScmsPki::new(7, 600_000_000).expect("pki");
+    let a = &g.cert("ra").unwrap().0.to_be_signed;
+    let b = &pki.ra.cert.0.to_be_signed;
+    assert_eq!(a.cert_issue_permissions, b.cert_issue_permissions);
+    assert_eq!(a.cert_request_permissions, b.cert_request_permissions);
+    assert!(a.cert_issue_permissions.is_some() && a.cert_request_permissions.is_none());
+}
+
+#[test]
+fn adding_a_provider_root_and_a_test_ballot_are_recorded() {
+    let mut g = gov();
+    let (id, at) = g.add_root(&rng(), "provider-b", 0);
+    assert_eq!(g.ctl.roots.len(), 1, "not before publication");
+    g.publish_due(at);
+    assert!(g.ctl.roots.contains(&id));
+    let mut t = bootstrapped(&g);
+    assert_eq!(t.roots.len(), 2);
+    assert_eq!(g.test_ballot(at), vec![0, 1, 2, 3, 4]);
+    assert_eq!(g.counters.test_ballots, 1);
+    assert!(t.install_ctl(&g.ctl).is_err(), "already installed");
+    let kinds: Vec<&str> = g.log.iter().map(|e| e.kind).collect();
+    assert_eq!(
+        kinds,
+        vec!["ctl-genesis", "eac-add-root", "eac-test-ballot"]
+    );
+}
+
+/// Writes every artefact for the independent oracle (`oracle.py real`) when
+/// `V2XW_GOV_DUMP` names a directory; a no-op otherwise.
+#[test]
+fn dump_artefacts_for_the_oracle() {
+    let Ok(dir) = std::env::var("V2XW_GOV_DUMP") else {
+        return;
+    };
+    let mut g = gov();
+    let w = |name: &str, b: &[u8]| std::fs::write(format!("{dir}/{name}"), b).unwrap();
+    w("ctl0.oer", &g.ctl.spdu);
+    w("gccf1.oer", &g.gccf.spdu);
+    w("lccf1.oer", &g.lccf.spdu);
+    w("gpf1.oer", &g.gpf.spdu);
+    w("lpf1.oer", &g.lpf.spdu);
+    let (_, at) = g.replace_elector(&rng(), 0, DAY).unwrap();
+    g.publish_due(at);
+    let (_, _, at) = g.rollover_root(&rng(), &ScmsNodes::default(), at);
+    g.publish_due(at);
+    w("ctl2.oer", &g.ctl.spdu);
+    w("lccf-rollover.oer", &g.lccf.spdu);
+}
+
+/// Two devices that install the same CTL and chain file hold one copy of each governance
+/// certificate between them (`shared_cert`), and each still trusts exactly what it
+/// installed: the store is per device, the decoded certificate is not.
+#[test]
+fn devices_share_one_copy_of_each_governance_certificate() {
+    let g = gov();
+    let (a, b) = (bootstrapped(&g), bootstrapped(&g));
+    assert!(!a.chain.is_empty() && !a.roots.is_empty());
+    assert_eq!(
+        a.chain.keys().collect::<Vec<_>>(),
+        b.chain.keys().collect::<Vec<_>>()
+    );
+    for (d, c) in &a.chain {
+        assert!(
+            Arc::ptr_eq(c, &b.chain[d]),
+            "chain certificate {d:02x?} is copied"
+        );
+    }
+    for (h, c) in &a.roots {
+        assert!(Arc::ptr_eq(c, &b.roots[h]), "root {h:02x?} is copied");
+    }
+    // A store dropped leaves the other's certificates whole.
+    let held: Vec<[u8; 8]> = b.chain.keys().copied().collect();
+    drop(a);
+    for d in held {
+        assert!(cert_hashed_id8(&b.chain[&d]).is_ok_and(|x| x == d));
+    }
+}
+
+/// gov C-9: a CTL's `effectiveDate` is the EAC vote, and the list is published by the SLA
+/// deadline after it (production sequence 1: effective 2025-07-16, published 2025-08-13).
+#[test]
+fn a_ctl_is_effective_at_its_vote_and_published_by_the_deadline() {
+    let mut g = gov();
+    let clock = g.config.clock;
+    // t0 is Tuesday 2026-01-06 09:00 UTC; the vote is three days later, a Friday.
+    let decided = 3 * DAY;
+    let unix = clock.unix_seconds_at(decided);
+    let (y, m, d) = crate::scms::calendar::eastern_date(unix);
+    assert_eq!(
+        crate::scms::calendar::weekday(crate::scms::calendar::days_from_civil(y, m, d)),
+        5,
+        "the vote is on a Friday (0 = Sunday)"
+    );
+    let (_, at) = g.add_root(&rng(), "provider-b", decided);
+    // Three business days after a Friday: Monday, Tuesday, Wednesday.
+    assert_eq!(
+        at,
+        decided + 5 * DAY,
+        "published at the 3-business-day deadline"
+    );
+    let e = g.log.last().expect("the decision is logged");
+    assert_eq!((e.decided_at, e.published_at), (decided, Some(at)));
+    let vote32 = clock.time32(decided).expect("in range");
+    assert_eq!(g.publish_due(at), 1);
+    assert_eq!(g.ctl.effective, vote32, "effective at the vote");
+    let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    assert_eq!(
+        dec.effective_date(),
+        vote32,
+        "the signed effectiveDate is the vote"
+    );
+    assert!(dec.effective_date() < clock.time32(at).expect("in range"));
+}
+
+/// gov C-10: the genesis CTL takes the production series' sequence at the run's `t0`
+/// (sequence 0 of 2019-12-12, sequence 1 effective 2025-07-16), unless one is stated.
+#[test]
+fn the_genesis_sequence_follows_the_production_series() {
+    use crate::scms::calendar::days_from_civil;
+    assert_eq!(
+        PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S,
+        days_from_civil(2025, 7, 16) * 86_400,
+        "2025-07-16 00:00 UTC"
+    );
+    let at = |unix: i64, stated: Option<u32>| {
+        let p = ScmsParams {
+            ctl_genesis_sequence: stated,
+            ..params()
+        };
+        let config = GovernanceConfig {
+            clock: v2xw_core::time::WallClock::new(unix),
+            ..GovernanceConfig::default()
+        };
+        Governance::ceremony_with(&p, &ScmsNodes::default(), &rng(), 0, config)
+    };
+    let y2026 = days_from_civil(2026, 3, 2) * 86_400;
+    let y2024 = days_from_civil(2024, 3, 4) * 86_400;
+    for (unix, stated, want) in [
+        (y2026, None, 1),
+        (y2024, None, 0),
+        (PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S, None, 1),
+        (PRODUCTION_CTL_SEQUENCE_1_FROM_UNIX_S - 1, None, 0),
+        (y2026, Some(0), 0),
+        (y2024, Some(1), 1),
+    ] {
+        let g = at(unix, stated);
+        assert_eq!(g.ctl.sequence, want, "t0 {unix}, stated {stated:?}");
+        let dec = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+        assert_eq!(u32::from(dec.sequence()), want, "the signed sequence");
+        let e = g
+            .log
+            .iter()
+            .find(|e| e.kind == "ctl-genesis")
+            .expect("logged");
+        assert_eq!(e.ctl_sequence, Some(want));
+        // A device bootstraps from it.
+        assert_eq!(bootstrapped(&g).ctl_sequence, Some(want));
+    }
+    // The next decision counts on from a sequence-1 genesis.
+    let mut g = at(y2026, None);
+    let root = g.ctl.roots[0];
+    let published = g.remove_root(root, DAY).expect("approved");
+    g.publish_due(published);
+    assert_eq!(g.ctl.sequence, 2);
+}
+
+/// gov C-11: the CTL that removes a root carries the dropped root's certificate once in
+/// `unsigned` (the 2025-07-17 test CTL, sequence 3, still carries the root it stops
+/// approving), and the next CTL carries exactly the approved roots. A device trusts only
+/// the approved ones.
+#[test]
+fn a_removal_ctl_carries_the_dropped_root_once() {
+    let mut g = gov();
+    let mut t = bootstrapped(&g);
+    let (peer, at) = g.add_root(&rng(), "provider-b", 0);
+    g.publish_due(at);
+    assert_eq!(t.install_ctl(&g.ctl), Ok(5));
+    assert!(t.roots.contains_key(&peer));
+    // The removal: approve entries + 1 certificates, the extra one the dropped root.
+    let at = g.remove_root(peer, at + DAY).expect("approved");
+    g.publish_due(at);
+    let removal = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    let approved = removal.root_ca_approve();
+    assert_eq!(approved.len(), 1, "the home root only");
+    assert!(
+        removal.root_ca_remove().is_empty(),
+        "rootCaRemove stays empty"
+    );
+    assert_eq!(removal.certificates.len(), approved.len() + 1);
+    let carried: Vec<[u8; 32]> = removal
+        .certificates
+        .iter()
+        .map(|c| cert_hashed_id32(c).expect("encodes"))
+        .collect();
+    assert!(carried.contains(&peer), "the dropped root is carried");
+    assert!(approved.iter().all(|h| carried.contains(h)));
+    // A device installs it and drops the root all the same.
+    assert_eq!(t.install_ctl(&g.ctl), Ok(5));
+    assert!(!t.roots.contains_key(&peer), "carried is not approved");
+    assert_eq!(t.roots.len(), 1);
+    // The next CTL carries exactly the approved roots.
+    let (_, at) = g.add_root(&rng(), "provider-c", at + DAY);
+    g.publish_due(at);
+    let next = ctl::decode_ctl_spdu(&g.ctl.spdu).expect("decodes");
+    assert_eq!(next.root_ca_approve().len(), 2);
+    assert_eq!(next.certificates.len(), next.root_ca_approve().len());
+    assert!(
+        next.certificates
+            .iter()
+            .all(|c| cert_hashed_id32(c).expect("encodes") != peer),
+        "the dropped root is carried once only"
+    );
+}
+
+/// The Board reviews an addition within 10 business days before the vote
+/// (Elector Policy v1.0 §2.4.2) and investigates a removal within 24 h (§2.4.4-2.4.5).
+/// A request on Thursday 2026-07-02 skips Friday 2026-07-03 (Independence Day, observed,
+/// as 4 July is a Saturday) and two weekends: 6-10 and 13-17 July, a vote on Friday 17.
+#[test]
+fn a_request_before_a_holiday_votes_ten_business_days_later() {
+    let clock = GovernanceConfig::default().clock;
+    let thu = clock_at(clock, "2026-07-02T15:00:00Z");
+    for kind in [CtlChangeKind::AddRoot, CtlChangeKind::ReplaceElector] {
+        assert_eq!(
+            clock.to_rfc3339_at(review_vote_at(kind, thu, clock)),
+            "2026-07-17T15:00:00Z",
+            "{kind:?}: 10 business days, the observed holiday and weekends skipped"
+        );
+    }
+    assert_eq!(
+        clock.to_rfc3339_at(review_vote_at(CtlChangeKind::RemoveRoot, thu, clock)),
+        "2026-07-03T15:00:00Z",
+        "a removal is investigated within 24 h, holiday or not"
+    );
+    assert_eq!(review_vote_at(CtlChangeKind::Genesis, thu, clock), thu);
+    // The governance entry point logs the request and gives the same vote instant.
+    let mut g = gov();
+    let vote = g.request(CtlChangeKind::AddRoot, thu, "provider-b".into());
+    assert_eq!(vote, review_vote_at(CtlChangeKind::AddRoot, thu, clock));
+    let e = g.log.last().expect("logged");
+    assert_eq!((e.kind, e.decided_at), ("eac-request", thu));
+    assert!(e.signers.is_empty(), "a request is not a signature");
+    let (_, published) = g.add_root(&rng(), "provider-b", vote);
+    assert_eq!(
+        clock.to_rfc3339_at(published),
+        "2026-07-22T15:00:00Z",
+        "then the 3-business-day publication deadline runs from the vote"
+    );
+}
+
+/// A provider's root may leave the CTL only after its 365 days' notice
+/// ([SM-PROV] §3.5.6).
+#[test]
+fn a_root_removal_waits_for_its_notice() {
+    let mut g = gov();
+    let (peer, at) = g.add_root(&rng(), "provider-b", 0);
+    g.publish_due(at);
+    let notice = at + DAY;
+    assert_eq!(
+        g.termination_notice(peer, notice),
+        Some(notice + 365 * DAY),
+        "the earliest removal"
+    );
+    assert_eq!(
+        g.log.last().map(|e| (e.kind, e.detail.as_str())),
+        Some(("provider-termination-notice", "provider-b"))
+    );
+    assert_eq!(g.termination_notice([0; 32], notice), None, "no such root");
+    let ctls = g.counters.ctls_published;
+    assert_eq!(
+        g.remove_root(peer, notice + 200 * DAY),
+        None,
+        "refused early"
+    );
+    assert_eq!(g.counters.early_root_removal_refused, 1);
+    assert_eq!(g.counters.roots_removed, 0);
+    assert!(g.pending.is_empty(), "no CTL decided");
+    assert!(g.ctl.roots.contains(&peer), "still approved");
+    // A second notice does not restart the clock.
+    assert_eq!(
+        g.termination_notice(peer, notice + 300 * DAY),
+        Some(notice + 365 * DAY)
+    );
+    let at = g
+        .remove_root(peer, notice + 366 * DAY)
+        .expect("the notice has run out");
+    assert_eq!(g.publish_due(at), 1);
+    assert_eq!(g.counters.ctls_published, ctls + 1);
+    assert!(!g.ctl.roots.contains(&peer), "removed");
+    assert_eq!(g.counters.early_root_removal_refused, 1);
+    // A root without a notice is still removed at once (the home root after a rollover).
+    let (old, _, at) = g.rollover_root(&rng(), &ScmsNodes::default(), at + DAY);
+    g.publish_due(at);
+    assert!(g.remove_root(old, at + DAY).is_some(), "no notice, no wait");
+}
+
+/// The engine schedules a Test Ballot from each elector's last signature in
+/// the log (Elector Policy v1.0 §1.1, no elector idle for more than a year).
+#[test]
+fn an_electors_last_signature_is_its_latest_ballot() {
+    let year = TEST_BALLOT_MAX_IDLE_DAYS * DAY;
+    let mut g = gov();
+    for k in 0..5 {
+        assert_eq!(
+            g.last_signature_at(k),
+            Some(0),
+            "slot {k} signed the genesis CTL"
+        );
+    }
+    assert!(!g.test_ballot_due(year - S, year));
+    assert!(
+        g.test_ballot_due(year, year),
+        "a year since the genesis CTL"
+    );
+    // An EAC vote signed by every elector restarts every clock.
+    let (_, at) = g.add_root(&rng(), "provider-b", 100 * DAY);
+    g.publish_due(at);
+    assert_eq!(
+        g.last_signature_at(3),
+        Some(100 * DAY),
+        "the vote, not publication"
+    );
+    assert!(!g.test_ballot_due(year, year));
+    // A replacement: the removed elector is excluded from the vote, the new one has not
+    // signed and is idle from its joining.
+    let (new, at) = g.replace_elector(&rng(), 0, 200 * DAY).expect("approved");
+    g.publish_due(at);
+    assert_eq!(
+        g.last_signature_at(0),
+        Some(100 * DAY),
+        "excluded from the vote"
+    );
+    assert_eq!(g.last_signature_at(1), Some(200 * DAY));
+    assert_eq!(g.last_signature_at(new), None, "not signed yet");
+    assert!(
+        !g.test_ballot_due(100 * DAY + year, year),
+        "slot 0 is no longer approved, the new slot joined at day 200"
+    );
+    assert!(g.test_ballot_due(200 * DAY + year, year));
+    assert_eq!(g.test_ballot(250 * DAY).len(), 5);
+    assert_eq!(g.last_signature_at(new), Some(250 * DAY));
+    assert!(!g.test_ballot_due(250 * DAY + year - S, year));
+    assert!(g.test_ballot_due(250 * DAY + year, year));
+}
+
+/// Elector Technical Specification v1.1 §2.5: under dual signatures the
+/// transition CTL of a post-quantum elector replacement is signed by the outgoing P-384
+/// key and by the incoming ML-DSA-65 key (in the sidecar), so a device that knows only
+/// the old key accepts it, and so does a device that knows only the new PQ key.
+#[test]
+fn a_pq_transition_ctl_verifies_under_either_key() {
+    let mut g = gov();
+    g.set_elector_replacement_pq(ElectorReplacementPq::Dual);
+    let old_key = g.ctl.electors[0];
+    let base = bootstrapped(&g);
+    let knowing = |electors: &[[u8; 48]], pq: Option<&Vec<u8>>| {
+        let mut t = base.clone();
+        let tr = t.ctl_trust.as_mut().expect("bootstrapped");
+        tr.electors = electors.iter().copied().collect();
+        tr.quorum = 1;
+        t.pq_electors = pq.into_iter().cloned().collect();
+        t
+    };
+    let (slot, at) = g.replace_elector(&rng(), 0, DAY).expect("slot 0 approved");
+    g.publish_due(at);
+    let c = g.ctl.clone();
+    let pq = g
+        .elector_pq_public(slot)
+        .expect("the new elector holds an ML-DSA-65 key");
+
+    assert_eq!(
+        knowing(&[old_key], None).install_ctl(&c),
+        Ok(1),
+        "old key only"
+    );
+    assert_eq!(
+        knowing(&[], Some(&pq)).install_ctl(&c),
+        Ok(1),
+        "new PQ key only"
+    );
+
+    // The shape: the outgoing key signs, one ML-DSA-65 signature of FIPS 204's size rides
+    // beside the CTL, and the encoded CTL is a classical one (it decodes as before).
+    assert!(c.signers.contains(&0), "the outgoing P-384 key signs");
+    assert_eq!(c.pq_signatures.len(), 1);
+    assert_eq!(c.pq_signatures[0].signature.len(), 3_309);
+    assert_eq!(c.pq_signatures[0].public, pq);
+    let dec = ctl::decode_ctl_spdu(&c.spdu).expect("decodes");
+    assert_eq!(dec.elector_remove(), vec![old_key]);
+    assert!(
+        g.log
+            .iter()
+            .any(|e| e.detail.contains("dual: P-384 + ML-DSA-65"))
+    );
+
+    // Neither acceptance is vacuous. The PQ-only device refuses the same CTL without its
+    // sidecar, a sidecar by another key, and this sidecar on another CTL.
+    let mut bare = c.clone();
+    bare.pq_signatures.clear();
+    assert!(matches!(
+        knowing(&[], Some(&pq)).install_ctl(&bare),
+        Err(TrustError::CtlQuorum { .. })
+    ));
+    let mut other_key = c.clone();
+    other_key.pq_signatures = vec![ctl::pq_sign_tbs_ctl(&[9; 32], &dec.tbs_coer)];
+    assert!(knowing(&[], Some(&pq)).install_ctl(&other_key).is_err());
+    let mut moved = g.forge_next_ctl(3, &[1]);
+    moved.pq_signatures = c.pq_signatures.clone();
+    assert!(knowing(&[], Some(&pq)).install_ctl(&moved).is_err());
+
+    // A classical replacement (the default) leaves the outgoing key out and carries no
+    // sidecar, so neither single-key device can follow it.
+    let mut h = gov();
+    let (_, at) = h.replace_elector(&rng(), 0, DAY).expect("slot 0 approved");
+    h.publish_due(at);
+    assert!(h.ctl.pq_signatures.is_empty());
+    assert!(knowing(&[old_key], None).install_ctl(&h.ctl).is_err());
+    assert_eq!(h.elector_pq_public(5), None);
+}

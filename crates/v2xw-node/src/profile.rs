@@ -1,0 +1,1550 @@
+//! Hardware profiles: the schema, and the loader for the data
+//! files that carry it.
+//!
+//! A profile is *data*, not code: a YAML file under `profiles/hardware/` whose every
+//! numeric field carries either a citation or an explicit admission that the vendor does
+//! not publish it, together with a plan for measuring it. Rule **H1** is that there
+//! is no third case, and [`HardwareProfile::validate`] is where it is enforced; rule
+//! **H2** is that a profile with no secure element says `hsm.kind: none` rather than
+//! leaving the block empty, so that "all crypto runs on the CPU" is a stated decision
+//! rather than an accident of an absent key.
+//!
+//! # Why a field is a sum type
+//!
+//! The obvious schema — `cores: u32` — cannot express what the public hardware sources actually
+//! say, which is that Cohda publishes the MK5's DMIPS rating and not its core
+//! clock. Given a plain `u32` an implementer has exactly two options: invent a number, or
+//! drop the field. Both are worse than the truth. [`Field`] is the truth: either a value
+//! with the source it came from, or no value with the measurement that would produce one.
+//!
+//! The consequence is visible in the model card. A published field becomes a
+//! [`v2xw_core::card::Parameter`] with a real [`v2xw_core::card::Source`]; an unpublished
+//! one becomes a parameter whose source kind is
+//! [`v2xw_core::card::SourceKind::TodoCalibrate`] carrying the calibration plan, which is
+//! exactly what registry rule R1 reports on. Counting the second kind is how this crate
+//! answers "how much of this profile is real".
+//!
+//! # Deviations from the document's YAML, and why
+//!
+//! §7 writes the alternative software-crypto cost tables as nested maps inside
+//! `software_crypto` (`class_cortex_a53_1_2ghz: {…}`), and the Luna appliance's tier
+//! table inside `hsm`. Both are carried here under their own top-level keys
+//! (`software_crypto_classes`, `hsm_tiers`) so that `software_crypto` and `hsm.ops` have
+//! one value type each and a reader never has to guess whether a key is an operation or a
+//! class. No number and no citation is changed by the move. Unknown keys are ignored, as
+//! §7's conventions paragraph requires, so the `# ext` fields (GNSS, OS, environmental)
+//! survive in the file without the loader having to model them.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+use v2xw_core::card::{
+    Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation, ValidationStatus,
+};
+use v2xw_core::model::Model;
+use v2xw_core::time::Duration;
+
+use crate::error::{NodeError, Result};
+
+// ---------------------------------------------------------------------------------------
+// Fields
+// ---------------------------------------------------------------------------------------
+
+/// Why a field carries no value, or what qualifies the value it carries.
+///
+/// The spellings are the profiles' own, carried through rather than normalised: `NOT PUBLISHED` and
+/// `UNVERIFIED` tags are kept exactly as the profiles record them, and a status this crate did not
+/// anticipate deserialises into
+/// [`FieldStatus::Other`] rather than failing the load.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FieldStatus {
+    /// The vendor does not publish it.
+    NotPublished,
+    /// Nobody has measured it for this simulator yet.
+    TodoCalibrate,
+    /// A figure from a different device, board or chipset generation.
+    Proxy,
+    /// A figure from the previous generation of the same chipset.
+    ProxyPreviousGeneration,
+    /// A 3GPP evaluation-methodology assumption, not device data.
+    EvaluationAssumption,
+    /// A published figure the source itself treats as unconfirmed.
+    Unverified,
+    /// A published lower bound (`>2500/s`), not a measured rate.
+    LowerBound,
+    /// A published upper bound (`<9 ms`), not a measured latency. The model uses the
+    /// bound itself unless the field's operation also states a lower edge
+    /// ([`HsmOp::latency_lower_us`]), and every view of the figure says it is a bound.
+    UpperBound,
+    /// Computed from other published figures (a latency taken as 1/throughput, say), not
+    /// published itself.
+    Derived,
+    /// A vendor claim that reads as system-level rather than silicon-level.
+    VendorClaimSystemLevel,
+    /// Published, but the sheet flags it as implausible.
+    AnomalousAsPublished,
+    /// The field does not exist on this device, so there is nothing to publish and
+    /// nothing to measure: a backend server has no antenna gain, and a profile with
+    /// `hsm.kind: none` has no secure-element queue depth.
+    ///
+    /// Distinguished from [`FieldStatus::NotPublished`] because conflating the two would
+    /// make the `todo-calibrate` page list work that can never be done, which is how a
+    /// gap report stops being read.
+    NotApplicable,
+    /// Any other spelling the sheets use.
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl FieldStatus {
+    /// True when the status means "there is no number here yet".
+    ///
+    /// Only these two reach the registry's `todo-calibrate` page: a `proxy` or a
+    /// `lower-bound` field *has* a value and a citation, and reporting it as uncalibrated
+    /// would drown the fields that genuinely have nothing.
+    pub fn is_missing(&self) -> bool {
+        matches!(self, FieldStatus::NotPublished | FieldStatus::TodoCalibrate)
+    }
+
+    /// True when the field does not exist on this device.
+    pub fn is_not_applicable(&self) -> bool {
+        matches!(self, FieldStatus::NotApplicable)
+    }
+
+    /// The spelling used in cards and reports.
+    pub fn as_str(&self) -> &str {
+        match self {
+            FieldStatus::NotPublished => "not-published",
+            FieldStatus::TodoCalibrate => "todo-calibrate",
+            FieldStatus::Proxy => "proxy",
+            FieldStatus::ProxyPreviousGeneration => "proxy-previous-generation",
+            FieldStatus::EvaluationAssumption => "evaluation-assumption",
+            FieldStatus::Unverified => "unverified",
+            FieldStatus::LowerBound => "lower-bound",
+            FieldStatus::UpperBound => "upper-bound",
+            FieldStatus::Derived => "derived",
+            FieldStatus::VendorClaimSystemLevel => "vendor-claim-system-level",
+            FieldStatus::AnomalousAsPublished => "anomalous-as-published",
+            FieldStatus::NotApplicable => "not-applicable",
+            FieldStatus::Other(s) => s.as_str(),
+        }
+    }
+}
+
+/// One numeric or textual field of a hardware profile, with its provenance.
+///
+/// Deserialises from either a bare scalar (`cores: 2`) or the qualified map form
+/// (`{value: null, status: not-published, calibration: "…"}`). A bare scalar carries no
+/// citation of its own and inherits the enclosing block's `source`, which is how §7 writes
+/// the common case.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Field<T> {
+    /// The value, when one is published.
+    pub value: Option<T>,
+    /// What qualifies the value, or why there is none.
+    pub status: Option<FieldStatus>,
+    /// Where the value came from.
+    pub source: Option<String>,
+    /// How to obtain the value. Rule H1 requires this whenever `value` is `None`.
+    pub calibration: Option<String>,
+}
+
+impl<T> Field<T> {
+    /// A published value with its citation.
+    pub fn published(value: T, source: impl Into<String>) -> Self {
+        Field {
+            value: Some(value),
+            status: None,
+            source: Some(source.into()),
+            calibration: None,
+        }
+    }
+
+    /// An unpublished field with the measurement that would fill it.
+    pub fn missing(status: FieldStatus, calibration: impl Into<String>) -> Self {
+        Field {
+            value: None,
+            status: Some(status),
+            source: None,
+            calibration: Some(calibration.into()),
+        }
+    }
+
+    /// True when no value is published.
+    pub fn is_missing(&self) -> bool {
+        self.value.is_none()
+    }
+
+    /// The value, if any.
+    pub fn get(&self) -> Option<&T> {
+        self.value.as_ref()
+    }
+}
+
+impl<T: Copy> Field<T> {
+    /// The value or a caller-supplied stand-in.
+    ///
+    /// The stand-in is the caller's choice and therefore the caller's assumption: nothing
+    /// in this module ever supplies one, because a default here would be exactly the
+    /// invented number rule H1 exists to prevent.
+    pub fn or(&self, fallback: T) -> T {
+        self.value.unwrap_or(fallback)
+    }
+}
+
+impl<T> Default for Field<T> {
+    fn default() -> Self {
+        Field {
+            value: None,
+            status: Some(FieldStatus::NotPublished),
+            source: None,
+            calibration: None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FieldRepr<T> {
+    Qualified(QualifiedField<T>),
+    Bare(T),
+}
+
+#[derive(Deserialize)]
+struct QualifiedField<T> {
+    #[serde(default = "none")]
+    value: Option<T>,
+    #[serde(default)]
+    status: Option<FieldStatus>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    calibration: Option<String>,
+}
+
+fn none<T>() -> Option<T> {
+    None
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Field<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> core::result::Result<Self, D::Error> {
+        Ok(match FieldRepr::<T>::deserialize(d)? {
+            FieldRepr::Bare(value) => Field {
+                value: Some(value),
+                status: None,
+                source: None,
+                calibration: None,
+            },
+            FieldRepr::Qualified(q) => Field {
+                value: q.value,
+                status: q.status,
+                source: q.source,
+                calibration: q.calibration,
+            },
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The profile
+// ---------------------------------------------------------------------------------------
+
+/// What kind of node a profile describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NodeKind {
+    /// An on-board unit.
+    Obu,
+    /// A roadside unit.
+    Rsu,
+    /// A vulnerable-road-user device.
+    VruDevice,
+    /// A backend server.
+    BackendServer,
+    /// A cellular base station.
+    BaseStation,
+    /// A network-attached HSM appliance.
+    HsmAppliance,
+}
+
+/// What kind of security hardware a profile has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HsmKind {
+    /// A discrete secure element on its own bus.
+    SecureElement,
+    /// A security block inside the main SoC.
+    SocHsm,
+    /// No security hardware: rule H2 sends every operation to the CPU.
+    None,
+    /// A dedicated accelerator or appliance.
+    Accelerator,
+}
+
+/// Where an operation runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunsOn {
+    /// Inside the secure element or SoC HSM.
+    Hsm,
+    /// In a separate hardware engine (a baseband verification engine, say).
+    Accelerator,
+    /// On the application processor.
+    Cpu,
+}
+
+/// A citation attached to a whole profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileSource {
+    /// What kind of document this is (`datasheet`, `product-brief`, `paper`, …).
+    pub kind: String,
+    /// The reference itself.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// When it was read.
+    #[serde(default)]
+    pub accessed: Option<String>,
+}
+
+/// The CPU block.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CpuSpec {
+    /// Core count.
+    #[serde(default)]
+    pub cores: Field<u32>,
+    /// Core clock, hertz.
+    #[serde(default)]
+    pub clock_hz: Field<f64>,
+    /// Instruction set / core family.
+    #[serde(default)]
+    pub arch: Field<String>,
+    /// Dhrystone MIPS rating.
+    #[serde(default)]
+    pub dmips: Field<f64>,
+}
+
+/// One cryptographic operation on the security hardware.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HsmOp {
+    /// Operations per second.
+    #[serde(default)]
+    pub throughput_per_s: Field<f64>,
+    /// Per-operation latency, microseconds.
+    #[serde(default)]
+    pub latency_us: Field<f64>,
+    /// Which engine runs it.
+    #[serde(default)]
+    pub runs_on: Field<RunsOn>,
+    /// The lower edge of the latency, microseconds, when `latency_us` is an upper bound
+    /// and a lower edge is known. With both, each call's service time is drawn uniformly
+    /// between them (`RngDomain::ServiceTime`, per node), rather than every call costing
+    /// the worst case. Absent in a profile whose source publishes no lower edge: inventing
+    /// one would set the load of every run.
+    #[serde(default)]
+    pub latency_lower_us: Field<f64>,
+}
+
+/// How a modelled operation cost was arrived at: what a reader may and may not conclude
+/// from the number. Shown beside every crypto timing the Studio prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CostBasis {
+    /// A published per-operation latency.
+    Published,
+    /// A vendor upper bound ("<9 ms"), modelled at the bound: a worst case.
+    UpperBound,
+    /// An upper bound with a stated lower edge: drawn uniformly between them per call.
+    WithinBound,
+    /// No latency is published; the service time is 1 / the published rate. When the
+    /// rate is itself a lower bound (">2500/s") this is an upper bound on the service
+    /// time of one engine, and says nothing about pipeline depth.
+    DerivedFromThroughput,
+    /// A software benchmark of this device or its class of core, cited in the profile.
+    SoftwareBenchmark,
+    /// A software figure from another board, flagged as a proxy in the profile.
+    SoftwareProxy,
+    /// The primitive catalogue's figure for a comparable core, scaled (derived).
+    Catalogue,
+    /// A hybrid signature: the sum of its components' costs.
+    Composite,
+}
+
+impl CostBasis {
+    /// The kebab-case spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CostBasis::Published => "published",
+            CostBasis::UpperBound => "upper-bound",
+            CostBasis::WithinBound => "within-bound",
+            CostBasis::DerivedFromThroughput => "derived-from-throughput",
+            CostBasis::SoftwareBenchmark => "software-benchmark",
+            CostBasis::SoftwareProxy => "software-proxy",
+            CostBasis::Catalogue => "catalogue",
+            CostBasis::Composite => "composite",
+        }
+    }
+
+    /// Whether the number is exact for this device (a published latency or benchmark).
+    pub fn is_exact(self) -> bool {
+        matches!(self, CostBasis::Published | CostBasis::SoftwareBenchmark)
+    }
+}
+
+/// One operation's modelled cost on a profile, with where it runs and how the figure was
+/// arrived at ([`HardwareProfile::op_cost_facts`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OpCostFacts {
+    /// The operation id (`ecdsa-p256-sign`, …).
+    pub op: String,
+    /// The modelled service time of one call, µs (the bound, for an upper bound; the
+    /// midpoint of the range, for a range).
+    pub service_us: f64,
+    /// `[low, high]`, µs, when each call is drawn from a range.
+    pub range_us: Option<[f64; 2]>,
+    /// Which engine runs it.
+    pub runs_on: RunsOn,
+    /// How the figure was arrived at.
+    pub basis: CostBasis,
+    /// The profile's citation for the figure, when it has one.
+    pub source: Option<String>,
+}
+
+impl OpCostFacts {
+    /// Where the operation runs, in plain words.
+    pub fn where_text(&self, hsm: HsmKind) -> &'static str {
+        match (self.runs_on, hsm) {
+            (RunsOn::Hsm, HsmKind::SocHsm) => "the SoC's secure element (hardware security module)",
+            (RunsOn::Hsm, _) => "the secure element (hardware security module)",
+            (RunsOn::Accelerator, _) => "the hardware verification accelerator",
+            (RunsOn::Cpu, _) => "the application processor, in software",
+        }
+    }
+
+    /// What the figure is, in plain words: a sentence a reader can quote.
+    pub fn basis_text(&self) -> String {
+        let ms = self.service_us / 1000.0;
+        match self.basis {
+            CostBasis::Published => format!("{ms:.3} ms, the published latency"),
+            CostBasis::UpperBound => format!(
+                "at most {ms:.3} ms: the vendor publishes only an upper bound, and the model \
+                 charges the bound (a worst case, not a measurement)"
+            ),
+            CostBasis::WithinBound => {
+                let [lo, hi] = self.range_us.unwrap_or([self.service_us; 2]);
+                format!(
+                    "drawn per call between {:.3} and {:.3} ms (the published upper bound and \
+                     the profile's stated lower edge)",
+                    lo / 1000.0,
+                    hi / 1000.0
+                )
+            }
+            CostBasis::DerivedFromThroughput => format!(
+                "{ms:.3} ms, derived as 1 / the published rate ({:.0}/s): an estimate for one \
+                 engine, not a published latency",
+                1e6 / self.service_us.max(1e-9)
+            ),
+            CostBasis::SoftwareBenchmark => format!("{ms:.3} ms, a cited software benchmark"),
+            CostBasis::SoftwareProxy => format!(
+                "{ms:.3} ms, a software benchmark from a comparable board (a flagged proxy)"
+            ),
+            CostBasis::Catalogue => format!(
+                "{ms:.3} ms, the primitive catalogue's figure for a comparable core (derived)"
+            ),
+            CostBasis::Composite => format!("{ms:.3} ms, the sum of the hybrid's components"),
+        }
+    }
+}
+
+/// Software ECDSA P-256 on a Cortex-A53 (Raspberry Pi 3B @ 1.2 GHz, OpenSSL `speed`):
+/// 1631.1 sign/s and 775.3 verify/s, i.e. 613 µs and 1290 µs. The reference point
+/// for "on one processor, ECDSA verify costs about twice sign".
+pub const SOFTWARE_ECDSA_P256_A53_US: (f64, f64) = (613.0, 1290.0);
+
+/// Where a profile signs and verifies, and why the two compare as they do.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CryptoPlacement {
+    /// The profile id.
+    pub profile: String,
+    /// The signing operation, when the profile costs it.
+    pub sign: Option<OpPlacement>,
+    /// The verification operation, when the profile costs it.
+    pub verify: Option<OpPlacement>,
+    /// One paragraph: why verify is faster or slower than sign on this hardware.
+    pub explanation: String,
+}
+
+/// One operation's placement as the Studio shows it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OpPlacement {
+    /// The facts behind it.
+    #[serde(flatten)]
+    pub facts: OpCostFacts,
+    /// `signed in the secure element`, `verified by the hardware accelerator`, ….
+    pub label: String,
+    /// Where it runs, in plain words.
+    pub where_text: String,
+    /// What the figure is, in plain words.
+    pub basis_text: String,
+    /// The modelled time, ms.
+    pub modelled_ms: f64,
+}
+
+impl HsmOp {
+    /// How [`HsmOp::service_time`]'s figure was arrived at, or `None` when there is none.
+    pub fn basis(&self) -> Option<CostBasis> {
+        if self.latency_us.value.is_some() {
+            return Some(
+                match (&self.latency_us.status, self.latency_lower_us.value) {
+                    (Some(FieldStatus::UpperBound), Some(_)) => CostBasis::WithinBound,
+                    (Some(FieldStatus::UpperBound), None) => CostBasis::UpperBound,
+                    (Some(FieldStatus::Derived), _) => CostBasis::DerivedFromThroughput,
+                    _ => CostBasis::Published,
+                },
+            );
+        }
+        self.throughput_per_s
+            .value
+            .filter(|r| *r > 0.0)
+            .map(|_| CostBasis::DerivedFromThroughput)
+    }
+
+    /// `[low, high]`, µs, when each call is drawn from a range: an upper-bound latency
+    /// with a lower edge below it.
+    pub fn range_us(&self) -> Option<[f64; 2]> {
+        let hi = self.latency_us.value?;
+        let lo = self.latency_lower_us.value?;
+        (matches!(self.latency_us.status, Some(FieldStatus::UpperBound)) && lo > 0.0 && lo < hi)
+            .then_some([lo, hi])
+    }
+
+    /// The modelled service time for one call.
+    ///
+    /// The published latency when there is one; otherwise the reciprocal of the published
+    /// throughput, which §7.1 names explicitly as the fallback ("until then service time =
+    /// 1/throughput (500 us, derived) with a single HSM server") and marks `derived`. When
+    /// neither is published the answer is `None`, not a guess: a node whose HSM has no cost
+    /// anchor must be configured with one, or told to run the operation in software.
+    pub fn service_time(&self) -> Option<Duration> {
+        if let Some(us) = self.latency_us.value {
+            return Some(Duration::from_secs_f64(us / 1e6));
+        }
+        let rate = self.throughput_per_s.value?;
+        (rate > 0.0).then(|| Duration::from_secs_f64(1.0 / rate))
+    }
+}
+
+/// The security-hardware block.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HsmSpec {
+    /// What kind of security hardware.
+    pub kind: HsmKind,
+    /// The part, when named.
+    #[serde(default)]
+    pub part: Field<String>,
+    /// Per-operation costs, keyed by the operation id the profiles use
+    /// (`ecdsa-p256-verify`, `ecdsa-p256-sign`, …).
+    #[serde(default)]
+    pub ops: BTreeMap<String, HsmOp>,
+    /// How many requests the host may have outstanding.
+    #[serde(default)]
+    pub queue_depth: Field<u32>,
+    /// How many engines serve the queue.
+    #[serde(default)]
+    pub servers: Field<u32>,
+}
+
+impl Default for HsmSpec {
+    fn default() -> Self {
+        HsmSpec {
+            kind: HsmKind::None,
+            part: Field::default(),
+            ops: BTreeMap::new(),
+            queue_depth: Field::default(),
+            servers: Field::default(),
+        }
+    }
+}
+
+/// A software cost-table entry: the measured microseconds for one call, or nothing.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct CostUs {
+    /// Microseconds per call.
+    pub us: Option<f64>,
+    /// What qualifies the figure, or why there is none.
+    pub status: Option<FieldStatus>,
+    /// Where it came from.
+    pub source: Option<String>,
+    /// How to measure it.
+    pub calibration: Option<String>,
+    /// The published rate, when the source gives one; recorded for provenance only.
+    pub ops_per_s: Option<f64>,
+}
+
+#[derive(Deserialize)]
+struct CostUsRepr {
+    #[serde(default = "none")]
+    us: Option<f64>,
+    #[serde(default)]
+    status: Option<FieldStatus>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    calibration: Option<String>,
+    #[serde(default)]
+    ops_per_s: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for CostUs {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> core::result::Result<Self, D::Error> {
+        let r = CostUsRepr::deserialize(d)?;
+        Ok(CostUs {
+            us: r.us,
+            status: r.status,
+            source: r.source,
+            calibration: r.calibration,
+            ops_per_s: r.ops_per_s,
+        })
+    }
+}
+
+impl CostUs {
+    /// The modelled service time, if the figure is published.
+    pub fn service_time(&self) -> Option<Duration> {
+        self.us.map(|us| Duration::from_secs_f64(us / 1e6))
+    }
+}
+
+/// Transmit-power limits, dBm.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TxPower {
+    /// Minimum.
+    #[serde(default)]
+    pub min: Field<f64>,
+    /// Maximum.
+    #[serde(default)]
+    pub max: Field<f64>,
+    /// The power a scenario starts a node at.
+    #[serde(default)]
+    pub default: Field<f64>,
+}
+
+/// The antenna block.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AntennaSpec {
+    /// Gain, dBi.
+    #[serde(default)]
+    pub gain_dbi: Field<f64>,
+    /// Height above ground, metres.
+    #[serde(default)]
+    pub height_m: Field<f64>,
+    /// Radiation pattern.
+    #[serde(default)]
+    pub pattern: Field<String>,
+}
+
+/// The radio block.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RadioSpec {
+    /// Radio access technologies.
+    #[serde(default)]
+    pub rat: Vec<String>,
+    /// The chipset, when named.
+    #[serde(default)]
+    pub chipset: Field<String>,
+    /// Transmit power limits.
+    #[serde(default)]
+    pub tx_power_dbm: TxPower,
+    /// System receive sensitivity, dBm.
+    #[serde(default)]
+    pub sensitivity_dbm: Field<f64>,
+    /// Receiver noise figure, dB.
+    #[serde(default)]
+    pub noise_figure_db: Field<f64>,
+    /// The antenna.
+    #[serde(default)]
+    pub antenna: AntennaSpec,
+}
+
+/// How many bytes each stored item costs, and the fixed memory a node uses before it
+/// stores anything.
+///
+/// `storage_model: inherit` in a profile means these defaults, which come from the IEEE 1609.2
+/// sizes and the SCMS batch parameters rather than from any vendor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageModel {
+    /// Bytes per stored certificate.
+    pub cert_bytes_per_entry: u32,
+    /// Bytes per CRL entry.
+    pub crl_bytes_per_entry: u32,
+    /// Bytes per neighbour-table entry.
+    pub neighbor_bytes_per_entry: u32,
+    /// Fixed RAM the node occupies before any store grows.
+    pub baseline_ram_bytes: u64,
+}
+
+impl Default for StorageModel {
+    fn default() -> Self {
+        StorageModel {
+            // "≈ 40 B/entry [BRECHT §VI-F]" for a linkage-seed CRL
+            // entry (32 B of seeds plus framing); a `HashedId10` entry with its `Time32` is
+            // 14 B by IEEE 1609.2 clause 7, so 40 is the larger of the two and the one the
+            // store-size accounting of §2.2 uses.
+            crl_bytes_per_entry: 40,
+            // 120 B per certificate entry, assumption (this engine's own definition).
+            cert_bytes_per_entry: 120,
+            // "entries × ~200 B (`TODO: calibrate`)".
+            neighbor_bytes_per_entry: 200,
+            baseline_ram_bytes: 0,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StorageModelRepr {
+    /// `storage_model: inherit` — the string is the keyword itself, which the loader
+    /// checks by shape rather than by value: any scalar here means "take the defaults".
+    Inherit(#[allow(dead_code)] String),
+    Explicit(StorageModel),
+}
+
+fn de_storage<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> core::result::Result<StorageModel, D::Error> {
+    Ok(match StorageModelRepr::deserialize(d)? {
+        StorageModelRepr::Inherit(_) => StorageModel::default(),
+        StorageModelRepr::Explicit(s) => s,
+    })
+}
+
+/// A hardware profile.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct HardwareProfile {
+    /// Registry id, e.g. `obu/cohda-mk5`.
+    pub id: String,
+    /// What kind of node it describes.
+    pub kind: NodeKind,
+    /// The profile's own version (profiles are versioned and the manifest pins
+    /// them).
+    pub version: String,
+    /// One line on what this profile is and what is doubtful about it.
+    #[serde(default)]
+    pub purpose: String,
+    /// True for the default OBU profile.
+    #[serde(default)]
+    pub reference_profile: bool,
+    /// True for a profile describing a device nobody sells.
+    #[serde(default)]
+    pub hypothetical: bool,
+    /// The documents behind it.
+    #[serde(default)]
+    pub sources: Vec<ProfileSource>,
+    /// The application processor.
+    #[serde(default)]
+    pub cpu: CpuSpec,
+    /// RAM, bytes.
+    #[serde(default)]
+    pub ram_bytes: Field<u64>,
+    /// Non-volatile storage, bytes.
+    #[serde(default)]
+    pub flash_bytes: Field<u64>,
+    /// Security hardware.
+    #[serde(default)]
+    pub hsm: HsmSpec,
+    /// Software fallback costs, keyed by operation id.
+    #[serde(default)]
+    pub software_crypto: BTreeMap<String, CostUs>,
+    /// Alternative software cost tables, keyed by class then operation. §7's
+    /// `class_*` maps, lifted out of `software_crypto` (see the module documentation).
+    #[serde(default)]
+    pub software_crypto_classes: BTreeMap<String, BTreeMap<String, CostUs>>,
+    /// The radio.
+    #[serde(default)]
+    pub radio: RadioSpec,
+    /// Power draw, watts.
+    #[serde(default)]
+    pub power_w: Field<f64>,
+    /// Store-size accounting.
+    #[serde(default, deserialize_with = "de_storage")]
+    pub storage_model: StorageModel,
+    /// The primitive-catalogue profiles (`v2xw_sec::primitive::profiles`) whose cited
+    /// anchors price an operation this profile publishes no figure for, first match
+    /// first. How a scheme added to the registry is priced on a device without editing
+    /// its YAML: the catalogue anchor for the same silicon — published, or derived by a
+    /// cycle ratio and flagged as such — stands in.
+    #[serde(default)]
+    pub crypto_anchors: Vec<String>,
+    /// Catalogue profiles that price a *post-quantum* operation this profile publishes no
+    /// figure for and [`HardwareProfile::crypto_anchors`] does not reach: a flagged
+    /// software proxy from a comparable board, never a measurement of this device. It
+    /// exists because no roadside unit publishes a post-quantum figure, and without one an
+    /// RSU drops every post-quantum message as `verify_unpriced`. A classical operation is
+    /// never priced from here, so a classical run is unchanged. A scenario whose roadside
+    /// units lean on it gets a validation warning (`roadside.profile`).
+    #[serde(default)]
+    pub pq_software_proxy: Vec<String>,
+    /// The model card, built once at load.
+    #[serde(skip, default = "empty_card")]
+    card: ModelCard,
+}
+
+fn empty_card() -> ModelCard {
+    ModelCard::new(
+        "hardware-profile/unloaded",
+        Family::HardwareProfile,
+        "0",
+        "-",
+    )
+}
+
+impl HardwareProfile {
+    /// Parses a profile from YAML and validates it against rules H1 and H2.
+    ///
+    /// # Errors
+    /// [`NodeError::ProfileParse`] when the YAML does not match the schema,
+    /// [`NodeError::ProfileInvalid`] when a rule is broken, and [`NodeError::Card`] when
+    /// the card the profile generates does not validate.
+    pub fn from_yaml(text: &str) -> Result<Self> {
+        let mut p: HardwareProfile =
+            serde_yml::from_str(text).map_err(|source| NodeError::ProfileParse {
+                id: "<unparsed>".to_string(),
+                source,
+            })?;
+        p.validate()?;
+        p.card = p.build_card();
+        p.card.validate().map_err(|source| NodeError::Card {
+            id: p.id.clone(),
+            source,
+        })?;
+        Ok(p)
+    }
+
+    /// Checks rules H1 and H2.
+    ///
+    /// # Errors
+    /// [`NodeError::ProfileInvalid`] naming the first field that breaks one.
+    pub fn validate(&self) -> Result<()> {
+        if self.hsm.kind == HsmKind::None && !self.hsm.ops.is_empty() {
+            return Err(NodeError::ProfileInvalid {
+                id: self.id.clone(),
+                rule: "H2",
+                what: format!(
+                    "hsm.kind is `none` but {} operation(s) are declared on it; a profile \
+                     without security hardware charges every operation to the CPU",
+                    self.hsm.ops.len()
+                ),
+            });
+        }
+        for (name, f) in self.field_report() {
+            if f.value_present {
+                continue;
+            }
+            // A not-applicable field still owes the reader a sentence saying why it does
+            // not exist, so the H1 check below covers it too; what it does not owe is a
+            // place on the todo-calibrate page.
+            if f.calibration.is_none_or(|c| c.trim().is_empty()) {
+                return Err(NodeError::ProfileInvalid {
+                    id: self.id.clone(),
+                    rule: "H1",
+                    what: format!("`{name}` has no value and no calibration plan"),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Every schema field this crate models, in a stable order, with whether it carries a
+    /// value and what its provenance is.
+    ///
+    /// The order is the declaration order of the schema, which is fixed source text, so
+    /// two runs produce the same report and the same card. Nothing here iterates a
+    /// `HashMap`: `software_crypto` and `hsm.ops` are `BTreeMap`s.
+    pub fn field_report(&self) -> Vec<(String, FieldFacts<'_>)> {
+        let mut out: Vec<(String, FieldFacts<'_>)> = Vec::new();
+        macro_rules! push {
+            ($name:expr, $facts:expr $(,)?) => {
+                out.push(($name, $facts))
+            };
+        }
+
+        push!("cpu.cores".into(), FieldFacts::of(&self.cpu.cores));
+        push!("cpu.clock_hz".into(), FieldFacts::of(&self.cpu.clock_hz));
+        push!("cpu.arch".into(), FieldFacts::of(&self.cpu.arch));
+        push!("cpu.dmips".into(), FieldFacts::of(&self.cpu.dmips));
+        push!("ram_bytes".into(), FieldFacts::of(&self.ram_bytes));
+        push!("flash_bytes".into(), FieldFacts::of(&self.flash_bytes));
+        push!("hsm.part".into(), FieldFacts::of(&self.hsm.part));
+        for (op, spec) in &self.hsm.ops {
+            push!(
+                format!("hsm.ops.{op}.throughput_per_s"),
+                FieldFacts::of(&spec.throughput_per_s),
+            );
+            push!(
+                format!("hsm.ops.{op}.latency_us"),
+                FieldFacts::of(&spec.latency_us),
+            );
+            push!(
+                format!("hsm.ops.{op}.runs_on"),
+                FieldFacts::of(&spec.runs_on),
+            );
+        }
+        push!(
+            "hsm.queue_depth".into(),
+            FieldFacts::of(&self.hsm.queue_depth),
+        );
+        push!("hsm.servers".into(), FieldFacts::of(&self.hsm.servers));
+        for (op, cost) in &self.software_crypto {
+            push!(
+                format!("software_crypto.{op}.us"),
+                FieldFacts::of_cost(cost)
+            );
+        }
+        for (class, table) in &self.software_crypto_classes {
+            for (op, cost) in table {
+                push!(
+                    format!("software_crypto_classes.{class}.{op}.us"),
+                    FieldFacts::of_cost(cost),
+                );
+            }
+        }
+        push!("radio.chipset".into(), FieldFacts::of(&self.radio.chipset));
+        push!(
+            "radio.tx_power_dbm.min".into(),
+            FieldFacts::of(&self.radio.tx_power_dbm.min),
+        );
+        push!(
+            "radio.tx_power_dbm.max".into(),
+            FieldFacts::of(&self.radio.tx_power_dbm.max),
+        );
+        push!(
+            "radio.tx_power_dbm.default".into(),
+            FieldFacts::of(&self.radio.tx_power_dbm.default),
+        );
+        push!(
+            "radio.sensitivity_dbm".into(),
+            FieldFacts::of(&self.radio.sensitivity_dbm),
+        );
+        push!(
+            "radio.noise_figure_db".into(),
+            FieldFacts::of(&self.radio.noise_figure_db),
+        );
+        push!(
+            "radio.antenna.gain_dbi".into(),
+            FieldFacts::of(&self.radio.antenna.gain_dbi),
+        );
+        push!(
+            "radio.antenna.height_m".into(),
+            FieldFacts::of(&self.radio.antenna.height_m),
+        );
+        push!(
+            "radio.antenna.pattern".into(),
+            FieldFacts::of(&self.radio.antenna.pattern),
+        );
+        push!("power_w".into(), FieldFacts::of(&self.power_w));
+        out
+    }
+
+    /// How many of this profile's fields carry no value and therefore need calibrating.
+    pub fn todo_calibrate_count(&self) -> usize {
+        self.field_report()
+            .iter()
+            .filter(|(_, f)| f.needs_calibration())
+            .count()
+    }
+
+    /// The names of the fields that need calibrating, in schema order.
+    pub fn todo_calibrate_fields(&self) -> Vec<String> {
+        self.field_report()
+            .into_iter()
+            .filter(|(_, f)| f.needs_calibration())
+            .map(|(n, _)| n)
+            .collect()
+    }
+
+    /// Whether this profile itself prices `op`: an HSM figure (a service time or a
+    /// published range), a software-table figure, or a catalogue anchor.
+    fn publishes_op(&self, op: &str) -> bool {
+        (self.hsm.kind != HsmKind::None
+            && self
+                .hsm
+                .ops
+                .get(op)
+                .is_some_and(|s| s.service_time().is_some() || s.range_us().is_some()))
+            || self
+                .software_crypto
+                .get(op)
+                .and_then(CostUs::service_time)
+                .is_some()
+            || self.anchored_cost(op).is_some()
+    }
+
+    /// The operation this profile actually charges for `op`. ECDSA P-384 is charged with
+    /// its own figure where the profile publishes one (`obu-generic-automotive-soc-no-hsm`:
+    /// 8,104 us sign, 5,721 us verify, R5 B.5), and as P-256 otherwise
+    /// ([`HardwareProfile::op_cost_is_curve_proxy`] flags it). Before, every profile
+    /// charged P-384 as P-256, even the one that publishes P-384.
+    #[must_use]
+    pub fn priced_op<'a>(&self, op: &'a str) -> &'a str {
+        match curve_fallback(op) {
+            Some(fallback) if !self.publishes_op(op) => fallback,
+            _ => op,
+        }
+    }
+
+    /// Whether `op` is charged as another curve's operation on this profile: a P-384
+    /// operation the profile does not price, charged as P-256 scaled by
+    /// [`HardwareProfile::curve_ratio`].
+    #[must_use]
+    pub fn op_cost_is_curve_proxy(&self, op: &str) -> bool {
+        self.priced_op(op) != op
+    }
+
+    /// The factor a P-384 operation this profile does not price is charged at over its
+    /// P-256 sibling: the two primitives' published costs on the first catalogue
+    /// reference that publishes both for the operation, the profile's `crypto_anchors`
+    /// first and then the catalogue's anchors for this device
+    /// (`v2xw_sec::primitive::anchors::for_node_profile`). That is the catalogue's
+    /// [`v2xw_sec::primitive::CostRatio`] rule: a sibling's published
+    /// cost on this profile, scaled by the cycle ratio on a reference that publishes both.
+    /// On the CRATON2 (Pi 3B anchor) verify is 8.24x and sign 4.55x. `1.0` for every other
+    /// operation, for a P-384 operation the profile prices itself, and when no reference
+    /// publishes both (P-384 key generation).
+    #[must_use]
+    pub fn curve_ratio(&self, op: &str) -> f64 {
+        let Some(base) = curve_fallback(op) else {
+            return 1.0;
+        };
+        if self.publishes_op(op) {
+            return 1.0;
+        }
+        let (Some((p384, kind)), Some((p256, base_kind))) = (
+            v2xw_sec::scheme::primitive_of_op(op),
+            v2xw_sec::scheme::primitive_of_op(base),
+        ) else {
+            return 1.0;
+        };
+        let c = v2xw_sec::primitive::PrimitiveCatalogue::standard();
+        let (Some(a), Some(b)) = (c.get(p384), c.get(p256)) else {
+            return 1.0;
+        };
+        let device = v2xw_sec::primitive::anchors::for_node_profile(&self.id);
+        self.crypto_anchors
+            .iter()
+            .map(String::as_str)
+            .chain(
+                device
+                    .into_iter()
+                    .flat_map(|d| d.anchors.iter().map(|x| x.profile)),
+            )
+            .find_map(|r| {
+                let x = a.cost.row(r)?.duration(kind)?.as_nanos();
+                let y = b.cost.row(r)?.duration(base_kind)?.as_nanos();
+                (x > 0 && y > 0).then(|| x as f64 / y as f64)
+            })
+            .unwrap_or(1.0)
+    }
+
+    /// The service time this profile gives one cryptographic operation, and where it runs.
+    ///
+    /// Resolution order, which is rule H2 plus the node model's "service times come from the
+    /// primitive cost tables scaled by the profile":
+    ///
+    /// 1. the HSM's own figure for the operation, when the profile has security hardware
+    ///    and publishes one;
+    /// 2. otherwise the software cost table, charged to the CPU.
+    ///
+    /// `None` means the profile publishes neither, which a scenario must resolve before a
+    /// node using it can run — deliberately, because the alternative is an invented number
+    /// that would silently set the load of every run.
+    pub fn op_cost(&self, op: &str) -> Option<(Duration, RunsOn)> {
+        let ratio = self.curve_ratio(op);
+        let cost = self.op_cost_unscaled(op)?;
+        if ratio == 1.0 {
+            return Some(cost);
+        }
+        Some((scale_duration(cost.0, ratio), cost.1))
+    }
+
+    /// [`HardwareProfile::op_cost`] before the P-384 curve ratio.
+    fn op_cost_unscaled(&self, op: &str) -> Option<(Duration, RunsOn)> {
+        let op = self.priced_op(op);
+        // A hybrid signature is both signatures, made or checked one after the other: its
+        // cost is the sum of the components' costs, and it needs every one. It runs where
+        // the first (classical) half runs; a post-quantum half on a CPU beside an HSM
+        // would overlap in a real device, and this sum is the upper bound of that. The
+        // components come from the scheme registry (`v2xw_sec::scheme`).
+        if let Some(parts) = v2xw_sec::scheme::op_components(op) {
+            let mut total = 0u64;
+            let mut where_ = None;
+            for part in parts {
+                let (t, w) = self.op_cost(part)?;
+                total = total.saturating_add(t.as_nanos());
+                where_.get_or_insert(w);
+            }
+            return Some((Duration::from_nanos(total), where_?));
+        }
+        if self.hsm.kind != HsmKind::None
+            && let Some(spec) = self.hsm.ops.get(op)
+            && let Some(t) = spec.service_time()
+        {
+            return Some((t, spec.runs_on.value.unwrap_or(RunsOn::Hsm)));
+        }
+        if let Some(t) = self.software_crypto.get(op).and_then(CostUs::service_time) {
+            return Some((t, RunsOn::Cpu));
+        }
+        self.anchored_cost(op).map(|t| (t, RunsOn::Cpu))
+    }
+
+    /// The catalogue figure for `op` on the first of [`HardwareProfile::crypto_anchors`]
+    /// that prices it, when the profile itself publishes none.
+    pub fn anchored_cost(&self, op: &str) -> Option<Duration> {
+        let (primitive, kind) = v2xw_sec::scheme::primitive_of_op(op)?;
+        let c = v2xw_sec::primitive::PrimitiveCatalogue::standard();
+        let d = c.get(primitive)?;
+        self.crypto_anchors
+            .iter()
+            .find_map(|a| d.cost_duration(kind, a, c))
+            .or_else(|| self.pq_proxy_cost(primitive, kind))
+    }
+
+    fn pq_proxy_cost(
+        &self,
+        primitive: v2xw_sec::primitive::PrimitiveId,
+        kind: v2xw_sec::primitive::PrimitiveOpKind,
+    ) -> Option<Duration> {
+        if !v2xw_sec::scheme::is_post_quantum_primitive(primitive) {
+            return None;
+        }
+        let c = v2xw_sec::primitive::PrimitiveCatalogue::standard();
+        let d = c.get(primitive)?;
+        // A published figure on any proxy board before a ratio-derived one on an earlier
+        // board: the MK6 publishes ML-DSA under Botan and Falcon under liboqs.
+        let published = self
+            .pq_software_proxy
+            .iter()
+            .find(|a| d.cost_duration(kind, a, c).is_some() && !d.cost_is_derived(kind, a, c));
+        published
+            .or_else(|| {
+                self.pq_software_proxy
+                    .iter()
+                    .find(|a| d.cost_duration(kind, a, c).is_some())
+            })
+            .and_then(|a| d.cost_duration(kind, a, c))
+    }
+
+    /// Whether `op`'s cost on this profile comes from its post-quantum software proxy
+    /// ([`HardwareProfile::pq_software_proxy`]): no published figure, no anchor, only the
+    /// flagged comparable-board benchmark. For a hybrid, whether any half does.
+    pub fn op_cost_is_pq_proxy(&self, op: &str) -> bool {
+        if let Some(parts) = v2xw_sec::scheme::op_components(op) {
+            return parts.iter().any(|p| self.op_cost_is_pq_proxy(p));
+        }
+        let Some((primitive, kind)) = v2xw_sec::scheme::primitive_of_op(op) else {
+            return false;
+        };
+        let published = (self.hsm.kind != HsmKind::None
+            && self.hsm.ops.get(op).and_then(HsmOp::service_time).is_some())
+            || self
+                .software_crypto
+                .get(op)
+                .and_then(CostUs::service_time)
+                .is_some();
+        if published {
+            return false;
+        }
+        let c = v2xw_sec::primitive::PrimitiveCatalogue::standard();
+        let anchored = c.get(primitive).is_some_and(|d| {
+            self.crypto_anchors
+                .iter()
+                .any(|a| d.cost_duration(kind, a, c).is_some())
+        });
+        !anchored && self.pq_proxy_cost(primitive, kind).is_some()
+    }
+
+    /// `op`'s modelled cost with where it runs and how the figure was arrived at, or
+    /// `None` when [`HardwareProfile::op_cost`] has none. The same resolution order.
+    pub fn op_cost_facts(&self, op: &str) -> Option<OpCostFacts> {
+        let (t, runs_on) = self.op_cost(op)?;
+        let curve_proxy = self.op_cost_is_curve_proxy(op);
+        let ratio = self.curve_ratio(op);
+        let charged = self.priced_op(op);
+        let us = t.as_nanos() as f64 / 1e3;
+        let mut facts = OpCostFacts {
+            op: op.to_string(),
+            service_us: us,
+            range_us: None,
+            runs_on,
+            basis: CostBasis::Catalogue,
+            source: None,
+        };
+        if v2xw_sec::scheme::op_components(op).is_some() {
+            facts.basis = CostBasis::Composite;
+            return Some(facts);
+        }
+        if self.hsm.kind != HsmKind::None
+            && let Some(spec) = self.hsm.ops.get(charged)
+            && let Some(basis) = spec.basis()
+        {
+            facts.basis = basis;
+            facts.range_us = spec.range_us().map(|[lo, hi]| [lo * ratio, hi * ratio]);
+            if let Some([lo, hi]) = facts.range_us {
+                facts.service_us = 0.5 * (lo + hi);
+            }
+            facts.source = spec
+                .latency_us
+                .source
+                .clone()
+                .or_else(|| spec.throughput_per_s.source.clone());
+            if curve_proxy {
+                facts.source = Some(curve_proxy_note(op, ratio, facts.source.as_deref()));
+            }
+            return Some(facts);
+        }
+        if let Some(c) = self.software_crypto.get(charged).filter(|c| c.us.is_some()) {
+            facts.basis = if matches!(c.status, Some(FieldStatus::Proxy)) {
+                CostBasis::SoftwareProxy
+            } else {
+                CostBasis::SoftwareBenchmark
+            };
+            facts.source = if curve_proxy {
+                Some(curve_proxy_note(op, ratio, c.source.as_deref()))
+            } else {
+                c.source.clone()
+            };
+        } else if self.op_cost_is_pq_proxy(op) {
+            facts.basis = CostBasis::SoftwareProxy;
+            facts.source = Some(format!(
+                "post-quantum software proxy: the catalogue figure on {} (a comparable \
+                 board, not this device)",
+                self.pq_software_proxy.join(" / ")
+            ));
+        }
+        Some(facts)
+    }
+
+    /// Where this profile signs and verifies with `sign_op` and `verify_op`, labelled for
+    /// the Studio, and one paragraph on why the two compare as they do here.
+    pub fn crypto_placement(&self, sign_op: &str, verify_op: &str) -> CryptoPlacement {
+        let place = |op: &str, verb: &str| {
+            self.op_cost_facts(op).map(|facts| {
+                let where_text = facts.where_text(self.hsm.kind).to_string();
+                let label = match facts.runs_on {
+                    RunsOn::Hsm => format!("{verb} in the secure element"),
+                    RunsOn::Accelerator => format!("{verb} by the hardware accelerator"),
+                    RunsOn::Cpu => format!("{verb} in software on the application processor"),
+                };
+                OpPlacement {
+                    basis_text: facts.basis_text(),
+                    modelled_ms: facts.service_us / 1000.0,
+                    label,
+                    where_text,
+                    facts,
+                }
+            })
+        };
+        let sign = place(sign_op, "signed");
+        let verify = place(verify_op, "verified");
+        let (sw_sign, sw_verify) = SOFTWARE_ECDSA_P256_A53_US;
+        let software_rule = format!(
+            "On one processor in software, ECDSA verification costs about twice signing \
+             (OpenSSL on a Cortex-A53: sign {sw_sign:.0} us, verify {sw_verify:.0} us)."
+        );
+        let explanation = match (&sign, &verify) {
+            (Some(s), Some(v)) if s.facts.runs_on != v.facts.runs_on => format!(
+                "Signing and verification run on different hardware here: {} and {}. \
+                 Signing needs the private key, so it stays inside the tamper-resistant \
+                 element, a small, slow core; verification needs no secret and runs on {}. \
+                 That is why verify can be faster than sign on this device. {software_rule} \
+                 To study verify-dominated cost, pick a software-crypto profile such as \
+                 obu/unex-obu-301-craton2-software or obu/generic-automotive-soc-no-hsm.",
+                s.where_text, v.where_text, v.where_text
+            ),
+            (Some(s), Some(v)) if v.facts.service_us >= s.facts.service_us => format!(
+                "Both run on {}: verification costs more than signing, as ECDSA does on one \
+                 processor. {software_rule}",
+                s.where_text
+            ),
+            (Some(s), Some(_)) => format!(
+                "Both run on {}, and this profile's figures put verification below signing; \
+                 check their sources. {software_rule}",
+                s.where_text
+            ),
+            _ => format!("This profile does not cost both operations. {software_rule}"),
+        };
+        CryptoPlacement {
+            profile: self.id.clone(),
+            sign,
+            verify,
+            explanation,
+        }
+    }
+
+    /// Whether `op`'s cost on this profile is a figure derived rather than published for
+    /// this device: taken from a catalogue anchor, or scaled by a cycle ratio there.
+    pub fn op_cost_is_derived(&self, op: &str) -> bool {
+        if let Some(parts) = v2xw_sec::scheme::op_components(op) {
+            return parts.iter().any(|p| self.op_cost_is_derived(p));
+        }
+        let published = (self.hsm.kind != HsmKind::None
+            && self.hsm.ops.get(op).and_then(HsmOp::service_time).is_some())
+            || self
+                .software_crypto
+                .get(op)
+                .and_then(CostUs::service_time)
+                .is_some();
+        !published && (self.anchored_cost(op).is_some() || self.curve_ratio(op) != 1.0)
+    }
+
+    /// The profile's model card (family `hardware-profile`).
+    pub fn card(&self) -> &ModelCard {
+        &self.card
+    }
+
+    fn build_card(&self) -> ModelCard {
+        let mut card = ModelCard::new(
+            &self.id,
+            Family::HardwareProfile,
+            &self.version,
+            if self.purpose.is_empty() {
+                format!("Hardware profile for {}.", self.id)
+            } else {
+                self.purpose.clone()
+            },
+        );
+        // A profile is data, not a fidelity choice: the same numbers describe the device
+        // whichever tier the scenario runs the node at (the compute tier changes how
+        // many servers consume them, not what they are).
+        card.tier = vec![Tier::Abstract, Tier::Medium, Tier::High];
+        card.sources = self
+            .sources
+            .iter()
+            .map(|s| {
+                let mut src = Source::new(source_kind(&s.kind), s.reference.clone());
+                src.accessed = s.accessed.clone();
+                src
+            })
+            .collect();
+        for (name, facts) in self.field_report() {
+            // A field that does not exist on this device is not a parameter of the model:
+            // a backend server has no antenna gain and a profile with `hsm.kind: none` has
+            // no secure-element queue depth. Carrying them as parameters would put thirty
+            // entries on the registry's todo-calibrate page describing work that can never
+            // be done, which is how a gap report stops being read. The YAML still explains
+            // each one, and `HardwareProfile::validate` still demands that explanation.
+            if facts.status.is_some_and(FieldStatus::is_not_applicable) {
+                continue;
+            }
+            let unit = unit_of(&name).to_string();
+            let mut p = if facts.value_present {
+                Parameter::new(
+                    name,
+                    unit,
+                    facts.default.clone(),
+                    Source::new(
+                        SourceKind::Datasheet,
+                        facts
+                            .source
+                            .map(str::to_string)
+                            .unwrap_or_else(|| self.first_source_ref()),
+                    ),
+                )
+            } else {
+                let mut p = Parameter::new(
+                    name,
+                    unit,
+                    serde_json::Value::Null,
+                    Source::todo_calibrate(
+                        facts
+                            .status
+                            .map(|s| s.as_str().to_string())
+                            .unwrap_or_else(|| "not-published".to_string()),
+                    ),
+                );
+                p.calibration = facts.calibration.map(str::to_string);
+                p
+            };
+            if let Some(status) = facts.status
+                && facts.value_present
+            {
+                p.source.note = Some(status.as_str().to_string());
+            }
+            card.parameters.push(p);
+        }
+        card.assumptions.push(
+            "Service times come from the profile's own figures only; where a vendor \
+             publishes none, the profile says so and the scenario must supply one."
+                .to_string(),
+        );
+        let report = self.field_report();
+        let not_applicable = report
+            .iter()
+            .filter(|(_, f)| f.status.is_some_and(FieldStatus::is_not_applicable))
+            .count();
+        card.limitations.push(format!(
+            "{} of {} fields that exist on this device carry no published value and are \
+             listed on the registry's todo-calibrate page (rule R1); a further {} fields \
+             of the schema do not exist on this device at all.",
+            self.todo_calibrate_count(),
+            report.len() - not_applicable,
+            not_applicable
+        ));
+        card.validation = Validation::new(ValidationStatus::LiteratureChecked);
+        card
+    }
+
+    fn first_source_ref(&self) -> String {
+        self.sources
+            .first()
+            .map(|s| s.reference.clone())
+            .unwrap_or_else(|| format!("{} (profile-level sources)", self.id))
+    }
+}
+
+impl Model for HardwareProfile {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+/// The provenance of one field, flattened so that [`HardwareProfile::field_report`] can
+/// return every field of a heterogeneous schema in one list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldFacts<'a> {
+    /// Whether the field carries a value.
+    pub value_present: bool,
+    /// The value as JSON, for the model card's `default`.
+    pub default: serde_json::Value,
+    /// What qualifies the value, or why there is none.
+    pub status: Option<&'a FieldStatus>,
+    /// Where it came from.
+    pub source: Option<&'a str>,
+    /// How to measure it.
+    pub calibration: Option<&'a str>,
+}
+
+impl FieldFacts<'_> {
+    /// True when the field carries no value and the value is one that could exist.
+    pub fn needs_calibration(&self) -> bool {
+        !self.value_present && !self.status.is_some_and(FieldStatus::is_not_applicable)
+    }
+}
+
+impl<'a> FieldFacts<'a> {
+    fn of<T: Serialize>(f: &'a Field<T>) -> Self {
+        FieldFacts {
+            value_present: f.value.is_some(),
+            default: f
+                .value
+                .as_ref()
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or(serde_json::Value::Null),
+            status: f.status.as_ref(),
+            source: f.source.as_deref(),
+            calibration: f.calibration.as_deref(),
+        }
+    }
+
+    fn of_cost(c: &'a CostUs) -> Self {
+        FieldFacts {
+            value_present: c.us.is_some(),
+            default: c
+                .us
+                .and_then(|v| serde_json::to_value(v).ok())
+                .unwrap_or(serde_json::Value::Null),
+            status: c.status.as_ref(),
+            source: c.source.as_deref(),
+            calibration: c.calibration.as_deref(),
+        }
+    }
+}
+
+fn source_kind(kind: &str) -> SourceKind {
+    match kind {
+        "paper" => SourceKind::Paper,
+        "spec" | "standard" => SourceKind::Standard,
+        "benchmark" | "dataset" => SourceKind::Dataset,
+        "code" => SourceKind::Code,
+        "gap" => SourceKind::TodoCalibrate,
+        // Product briefs, information sheets, FCC filings, security policies and press
+        // releases are all vendor documents; the sheet's own `kind` string is kept in the
+        // reference text, so nothing is lost by mapping them to one enum variant.
+        _ => SourceKind::Datasheet,
+    }
+}
+
+fn unit_of(name: &str) -> &'static str {
+    if name.ends_with("_hz") {
+        "Hz"
+    } else if name.ends_with("_bytes") {
+        "B"
+    } else if name.ends_with(".us") || name.ends_with("_us") {
+        "us"
+    } else if name.ends_with("per_s") {
+        "1/s"
+    } else if name.ends_with("_dbm")
+        || name.ends_with("dbm.min")
+        || name.ends_with("dbm.max")
+        || name.ends_with("dbm.default")
+    {
+        "dBm"
+    } else if name.ends_with("_db") {
+        "dB"
+    } else if name.ends_with("_dbi") {
+        "dBi"
+    } else if name.ends_with("_m") {
+        "m"
+    } else if name.ends_with("_w") {
+        "W"
+    } else if name.ends_with("cores") || name.ends_with("queue_depth") || name.ends_with("servers")
+    {
+        "count"
+    } else if name.ends_with("dmips") {
+        "DMIPS"
+    } else {
+        "-"
+    }
+}
+
+/// The operation ids a node signs and verifies with under a scenario's
+/// `security.signature`, from the scheme registry (`v2xw_sec::scheme`).
+///
+/// A hybrid is the ECDSA P-256 signature with a post-quantum one concatenated:
+/// signing makes both and verifying checks both, so its ops are
+/// compound ids whose cost [`HardwareProfile::op_cost`] composes from the components. A
+/// pure post-quantum scheme signs with its own primitive's op. Brainpool keeps the P-256
+/// ops (no shipped profile publishes a brainpool figure). P-384 signs and verifies with
+/// `ecdsa-p384-*`, which a profile without a P-384 figure charges as P-256
+/// ([`HardwareProfile::priced_op`]). An unknown name falls back to P-256, which the loader
+/// never lets through.
+#[must_use]
+pub fn signature_ops(signature: &str) -> (&'static str, &'static str) {
+    v2xw_sec::scheme::signature(signature).map_or(("ecdsa-p256-sign", "ecdsa-p256-verify"), |s| {
+        (s.sign_op(), s.verify_op())
+    })
+}
+
+/// The P-256 operation a P-384 one is charged as on a profile that does not price P-384
+/// ([`HardwareProfile::priced_op`]); `None` for every other operation.
+fn curve_fallback(op: &str) -> Option<&'static str> {
+    match op {
+        "ecdsa-p384-sign" => Some("ecdsa-p256-sign"),
+        "ecdsa-p384-verify" => Some("ecdsa-p256-verify"),
+        "ecdsa-p384-keygen" => Some("ecdsa-p256-keygen"),
+        _ => None,
+    }
+}
+
+fn curve_proxy_note(op: &str, ratio: f64, source: Option<&str>) -> String {
+    format!(
+        "{op} charged as P-256 x {ratio:.3} (derived: the P-384 / P-256 cycle ratio on a \
+         catalogue reference that publishes both, HardwareProfile::curve_ratio): this \
+         profile publishes no P-384 figure ({})",
+        source.unwrap_or("no source")
+    )
+}
+
+/// `d` scaled by `k`, nanosecond-rounded.
+fn scale_duration(d: Duration, k: f64) -> Duration {
+    Duration::from_nanos((d.as_nanos() as f64 * k).round() as u64)
+}

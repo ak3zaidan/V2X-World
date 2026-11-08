@@ -1,0 +1,2958 @@
+//! The OBU runtime: the thing that turns a vehicle into a communicating station.
+//!
+//! # What a node is
+//!
+//! A node is a hardware profile, a set of queues and servers sized by it, a clock, a
+//! position belief, a set of stores, a verification policy and a pair of message timers.
+//! [`ObuRuntime::step`] drives all of it once per engine tick: generate, sign, hand to the
+//! network layer; receive, verify, update the stores; and once per telemetry window,
+//! report.
+//!
+//! # What a node is not
+//!
+//! It is not a view onto the simulation. [`ObuRuntime`] implements
+//! [`v2xw_core::nodeview::NodeView`], and everything a detector, a generator, a safety
+//! application or an attacker can see about this node is that trait's surface: its own id,
+//! its own believed time, its own position estimate, its own credentials, its neighbour
+//! table and what it has received. There is no accessor here that returns the truth,
+//! because there is no way for this crate to obtain the truth: [`crate::ctx::NodeCtx`] has
+//! no `world()` and no `actors()`.
+//!
+//! This firewall is strong but **not compile-proof** —
+//! an implementor can still smuggle ground truth in through an associated type — and that
+//! enforcement therefore belongs in a conformance sentinel. [`crate::firewall`] is that
+//! sentinel. The claim made here is the one that is true: the ordinary route is closed,
+//! and the unusual route is checked by a test that has been shown to fail when the route
+//! is taken.
+//!
+//! # The two ground-truth values that do cross
+//!
+//! Two quantities in the telemetry record are marked **GT** in vwp-v1 §3.5.2:
+//! `clock_offset_ns` and `pos_error_m`. Both are differences between a belief and a truth,
+//! so neither can be computed inside the firewall. They enter through
+//! [`ObuRuntime::observe_truth`], which the engine calls from *outside* — it is the
+//! engine, not the node, that knows both numbers — and they are stored in a field that
+//! nothing but the telemetry path reads. The sentinel checks that too, because a
+//! ground-truth value that arrived legitimately and was then used illegitimately is
+//! exactly the leak the firewall exists to stop.
+
+use std::collections::{BTreeMap, VecDeque};
+
+use v2xw_core::belief::PositionEstimate;
+use v2xw_core::geo::GeoOrigin;
+use v2xw_core::geom::Dims;
+use v2xw_core::ids::NodeId;
+use v2xw_core::nodeview::NodeView;
+use v2xw_core::time::{Duration, SimTime, WallClock};
+use v2xw_msg::MsgType;
+use v2xw_msg::cam::{self, ParticipantType};
+use v2xw_msg::codec::{EtsiUperCodec, Message, MessageCodec};
+use v2xw_msg::generator::DccState;
+use v2xw_msg::j2735::bsm;
+use v2xw_msg::sec_types::HashedId8;
+use v2xw_record::wire::telemetry::NodeTelemetry;
+
+use crate::clock::ClockModel;
+
+/// The keyed stream a change of identity draws its new BSM `msgCnt` from.
+pub const IDENTITY_CHANGE_STREAM: &str = "node/identity-change";
+/// The keyed stream a node draws its first BSM `msgCnt` from at start-up (SAE J2945/1
+/// §6.3.6.2 `DATAACC-002`: the first value after start-up is random). A stream of its own,
+/// so the values drawn at later identity changes are the ones they were before.
+pub const STARTUP_MSG_COUNT_STREAM: &str = "node/msgcnt-startup";
+use crate::ctx::{NodeCtx, NodeCtxExt};
+use crate::generate::{MessageSchedule, ServiceSet};
+use crate::policy::{
+    PolicyView, Prioritized, RxSummary, VerificationPolicy, VerifyDecision, VerifyDecisionRecord,
+};
+use crate::profile::{HardwareProfile, RunsOn};
+use crate::queue::{Admission, DropCause, DropLedger, NodeQueue, QueueKind, Queued};
+use crate::secure::{CryptoMode, NodeSecurity, PSID_SAFETY, SignedFrame, SpduVerdict};
+use crate::server::{OpDescriptor, ProfileServiceModel, ServerBank, ServiceModel};
+use crate::stores::{
+    CredentialHandle, Neighbor, NeighborTable, PeerCertCache, Stores, VerificationState,
+};
+use crate::telemetry::{NodeState, TelemetryInputs, TelemetryWindow, gnss_fix_code};
+
+/// A frame handed to a node by the PHY.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RxFrame {
+    /// The signer's certificate digest, as the SPDU names it.
+    pub signer: Option<HashedId8>,
+    /// What the SPDU claims to carry.
+    pub msg_type: MsgType,
+    /// Frame size on the air.
+    pub bytes: u32,
+    /// The position the payload claims, in world ENU metres.
+    pub claimed_pos: Option<v2xw_core::geom::Vec3>,
+    /// The speed it claims, m/s.
+    pub claimed_speed_mps: f64,
+    /// The heading it claims, ENU radians.
+    pub claimed_heading_rad: f64,
+    /// The generation time it claims, on the *sender's* clock.
+    pub claimed_generation_time: SimTime,
+    /// Whether the SPDU attached a full certificate rather than a digest.
+    pub full_certificate: bool,
+    /// Whether the signature is in fact good.
+    ///
+    /// The engine computes this from the sender's real key when the scenario runs in
+    /// `modeled` crypto mode; in `real` mode the crypto backend does. Either way the node
+    /// only learns it by *spending the verification time*, which is what
+    /// [`ObuRuntime::step`] charges — a node that skips the check never reads this field.
+    pub signature_valid: bool,
+    /// The signed SPDU as it arrived on the air, when the engine carries the bytes.
+    ///
+    /// `Some` is the honest path: the node parses these bytes, resolves the signer's
+    /// certificate out of its own cache and checks the signature with its own crypto
+    /// backend, so [`RxFrame::signature_valid`] is not consulted at all. `None` is the
+    /// legacy path, where the engine decided validity on the node's behalf and the node
+    /// only pays for the check. See [`ObuRuntime::classify`].
+    pub spdu: Option<Vec<u8>>,
+    /// On the legacy path (`spdu` `None`): the signer certificate the frame attaches,
+    /// which the receiver validates to its installed roots before
+    /// [`RxFrame::signature_valid`] counts ([`NodeSecurity::verify_sized`]). `None` when
+    /// the frame carries its SPDU (the certificate is in the bytes) or when the engine
+    /// has none to attach.
+    pub signer_certificate: Option<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    /// The validity period (`from`, `to`, on the simulation timeline) of the certificate
+    /// the sender really signed under, when it is not the one the frame's bytes name: an
+    /// attacker signing under a genuine certificate it holds outside that certificate's
+    /// validity (`ExpiredCert`: one that has expired; `NotYetValid`: one not yet valid).
+    /// Such a signature verifies; what refuses the frame is the IEEE 1609.2 §5.2 rule that
+    /// `generationTime` lie inside the signer's validity period, which a receiver checks
+    /// from the certificate, before any signature. The simulation does not mint the
+    /// out-of-window certificate, so its period travels here; a receiver reads it only as
+    /// that certificate's `validityPeriod` ([`frame_outside_validity`]). `None` for every
+    /// other frame.
+    pub signer_validity: Option<(SimTime, SimTime)>,
+    /// A BSM's `secMark` and `accelSet` (default for anything else).
+    pub bsm: crate::bsm_timing::BsmExtras,
+}
+
+/// The validity period a frame's signer certificate states, when the frame's
+/// `generationTime` lies outside it: the IEEE 1609.2 §5.2 receiver rule
+/// ([`crate::rxval::RxReject::GenerationTimeOutsideValidity`]) for the certificate of
+/// [`RxFrame::signer_validity`]. `None` when the frame names no such certificate or its
+/// generation time is inside the period.
+#[must_use]
+pub fn frame_outside_validity(frame: &RxFrame) -> Option<(SimTime, SimTime)> {
+    frame
+        .signer_validity
+        .filter(|(from, to)| !(*from..=*to).contains(&frame.claimed_generation_time))
+}
+
+/// A message this node received and has an opinion about — the
+/// [`NodeView::Message`] of invariant I-C2.
+///
+/// Every field is a claim or an observation of this node's own. There is no true position
+/// and no actor id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedMessage {
+    /// Who signed it, as far as this node can tell.
+    pub signer: Option<HashedId8>,
+    /// What it is.
+    pub msg_type: MsgType,
+    /// How big it was.
+    pub bytes: u32,
+    /// When this node believes it arrived.
+    pub received_at: SimTime,
+    /// The generation time it claims.
+    pub claimed_generation_time: SimTime,
+    /// The position it claims.
+    pub claimed_pos: Option<v2xw_core::geom::Vec3>,
+    /// The speed it claims.
+    pub claimed_speed_mps: f64,
+    /// The heading it claims.
+    pub claimed_heading_rad: f64,
+    /// What this node concluded about the signature.
+    pub verification: VerificationState,
+    /// The signer certificate's validity period (`from`, `to`), when this node refused
+    /// the message because its `generationTime` lies outside it (IEEE 1609.2 §5.2;
+    /// [`frame_outside_validity`]): the reason a misbehaviour detector reports as a
+    /// certificate-validity failure rather than a bad signature. `None` otherwise.
+    pub outside_validity: Option<(SimTime, SimTime)>,
+    /// The facilities-layer payload the SPDU carried, when the node's applications read
+    /// the message's content ([`crate::apps`]).
+    pub payload: Option<std::sync::Arc<[u8]>>,
+    /// A BSM's `secMark` and `accelSet`, as the frame carried them.
+    pub bsm: crate::bsm_timing::BsmExtras,
+}
+
+/// Whether an application reads this message type's content beyond its claims.
+fn wants_payload(ty: MsgType) -> bool {
+    matches!(
+        ty,
+        MsgType::Bsm | MsgType::Cam | MsgType::Spat | MsgType::Map | MsgType::Denm | MsgType::Cpm
+    )
+}
+
+/// When and how a frame reached this node, handed in by the engine beside the frame.
+///
+/// Neither field is on the air and neither names the sender. `token` is an opaque handle
+/// the engine uses to join this node's [`RxReport`] back to the reception attempt it is
+/// about; `arrived_at` is the instant the last symbol reached this radio, which a real
+/// receiver observes with its own clock. Passing them beside [`RxFrame`] rather than inside
+/// it keeps every existing constructor of a frame valid.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RxStamp {
+    /// The engine's reception-attempt id, echoed back in the report.
+    pub token: u64,
+    /// When the frame finished arriving, on the simulation's timeline. `None` means "at
+    /// the instant of the step that delivers it", which is how a harness that has no
+    /// radio feeds a node.
+    pub arrived_at: Option<SimTime>,
+}
+
+/// What finally became of one received frame at this node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RxDisposition {
+    /// Handed to the applications, with what the node concluded about the signature.
+    /// `Invalid` and `Revoked` are delivered as such (a detector wants to see them) and
+    /// are *losses* to anything measuring delivery.
+    Delivered(VerificationState),
+    /// Discarded, for this reason.
+    Dropped(DropCause),
+    /// The node was switched off when the frame reached it.
+    NodeOff,
+    /// The signer's certificate was unknown (a `digest` signer identifier that missed the
+    /// cache), so nothing was verified, and the policy holds such a message back rather
+    /// than pass it on unchecked (IEEE 1609.2-2022 §5.2.4.2; SAE J2945/1-2020 §6.3.8).
+    /// The P2PCD request is counted on the peer store; the node's drop counter charges
+    /// `verify_policy_skip`.
+    UnknownSigner,
+    /// An unsecured out-of-band P2PCD learning response (`Ieee1609dot2Peer2PeerPDU`,
+    /// PSID 136), handed to the node's P2PCD Entity rather than to an application or the
+    /// verifier: it carries no signature, and each certificate in it is validated to an
+    /// installed root before it is learned (IEEE 1609.2a-2017 §8.2.4.1.1).
+    P2pcdResponse,
+    /// Refused by a 1609.2 receiver rule other than revocation ([`crate::rxval::RxReject`]:
+    /// the chain to an installed root, validity, region, PSID, an overdue CRL) before its
+    /// signature was relied on. The message is `Invalid` to the applications, as before;
+    /// the rule is kept so its `node.rx` fate names it rather than reading as a forgery
+    /// (in a multi-week run, 97,679 `crl-overdue` refusals were `signature-invalid`).
+    Refused(crate::rxval::RxReject),
+    /// Discarded by WSMP because no higher-layer entity on this device registered the
+    /// frame's PSID (IEEE 1609.3-2020: a received WSM is delivered only to the entity that
+    /// registered its PSID). A vehicle or handset has no application for a relayed
+    /// misbehaviour report (PSID 0x26, [SM-MBR] §2.2: the report is for the RSU that
+    /// forwards it), so it never reaches the device's 1609.2 security services and
+    /// nothing is verified (verifying overheard reports would cost first-sight
+    /// verification, 2,349 µs each).
+    PsidNotRegistered,
+    /// Discarded by the IEEE 1609.2 §5.2 relevance check of its `generationTime`
+    /// ([`crate::rxval::GenerationTimeWindow`]) before the verification policy: too old
+    /// or too far in the future on this node's clock. Nothing was verified, and nothing
+    /// reached an application or a misbehaviour detector.
+    NotRelevant(crate::rxval::RxReject),
+}
+
+/// One received frame's journey through this node, reported so the engine can record it on
+/// `node.rx`. Every instant is on the node's **own clock**; the engine converts them to the
+/// simulation's timeline with the arrival instant it handed in, so the durations between
+/// them — which is what a latency decomposition needs — are exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RxReport {
+    /// The engine's token, from [`RxStamp::token`].
+    pub token: u64,
+    /// What became of it.
+    pub disposition: RxDisposition,
+    /// When it finished arriving.
+    pub arrived: SimTime,
+    /// When it was parsed and the verification policy decided.
+    pub parsed: SimTime,
+    /// When its signature check started, if it had one.
+    pub verify_start: Option<SimTime>,
+    /// When its signature check finished, if it had one.
+    pub verify_done: Option<SimTime>,
+}
+
+/// What the verification queue holds beside each waiting frame.
+#[derive(Debug, Clone, Copy)]
+struct Waiting {
+    token: u64,
+    arrived: SimTime,
+    parsed: SimTime,
+    depth: u64,
+    /// The service priority the policy gave it (higher first; 0 for every policy but
+    /// `prioritized`, which keeps those first in, first out).
+    priority: u32,
+}
+
+/// A frame whose signature check has started and not yet finished: it reaches the
+/// applications at `finish`, not before.
+#[derive(Debug, Clone)]
+struct Verifying {
+    /// The message as the applications will receive it, with the node's conclusion.
+    message: VerifiedMessage,
+    /// The report the engine joins to the reception attempt.
+    report: RxReport,
+}
+
+/// One message this node wants transmitted.
+///
+/// # The bytes, not a count
+///
+/// [`Transmission::bytes`] used to be the whole story, and the story was
+/// `93 + signer identifier` with no payload at all. It is kept — every consumer reads it
+/// and it is still exactly the frame's length — but it is now *derived* from
+/// [`Transmission::signed`], which carries the encoded facilities-layer payload and the
+/// IEEE 1609.2 SPDU that wraps it. A consumer that wants the split (and the `node.tx`
+/// record wants it: `payload_bytes` and `envelope_bytes` are two of its columns) takes it
+/// from there rather than recomputing an overhead nobody measured.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transmission {
+    /// What it is.
+    pub msg_type: MsgType,
+    /// The signed size, bytes. Equal to `signed.bytes_on_wire()` whenever `signed` is
+    /// present, which it is for every message a node's own generator produced.
+    pub bytes: u32,
+    /// The credential it was signed with.
+    pub signer: HashedId8,
+    /// Whether it attached the full certificate rather than a digest.
+    pub full_certificate: bool,
+    /// When the signature completed and the frame reached the transmit queue — the
+    /// earliest the MAC could have it.
+    pub ready_at: SimTime,
+    /// The instant the payload claims, on this node's own clock.
+    pub generation_time: SimTime,
+    /// When the signer picked the message up, on this node's own clock: the end of its
+    /// wait for the signing server, and the start of the signature.
+    pub sign_start: SimTime,
+    /// The real bytes: the encoded payload and the signed SPDU.
+    ///
+    /// `None` only for a frame the *engine* synthesised on a node's behalf — the
+    /// misbehaviour-report and CRL-broadcast paths of `v2xw-engine`, which size a payload
+    /// from a protocol table and never build one. Every frame a node's own generator
+    /// produced carries `Some`, and an aggregation over `node.tx` that finds `None` is
+    /// looking at a frame nobody encoded.
+    pub signed: Option<SignedFrame>,
+    /// The position the payload reports when it is not the node's current belief: a BSM
+    /// under the per-device timing model ([`crate::bsm_timing`]). `None` is the belief.
+    pub claimed_pos: Option<v2xw_core::geom::Vec3>,
+    /// A BSM's `secMark` and `accelSet`, for the receivers' SM-MBR checks.
+    pub bsm: crate::bsm_timing::BsmExtras,
+}
+
+impl Transmission {
+    /// The facilities-layer payload's length, for the `node.tx` record's `payload_bytes`.
+    pub fn payload_bytes(&self) -> Option<u32> {
+        self.signed.as_ref().map(SignedFrame::payload_bytes)
+    }
+
+    /// The security envelope's length, for the `node.tx` record's `envelope_bytes`.
+    pub fn envelope_bytes(&self) -> Option<u32> {
+        self.signed.as_ref().map(SignedFrame::envelope_bytes)
+    }
+
+    /// The attached certificate's octets inside the envelope (zero for a digest signer),
+    /// for the `node.tx` record's `cert_bytes`.
+    pub fn cert_bytes(&self) -> Option<u32> {
+        self.signed.as_ref().map(|f| f.cert_bytes)
+    }
+
+    /// A transmission whose size is known but whose bytes are not — the shape the engine's
+    /// own application-layer frames need.
+    ///
+    /// Named rather than a struct literal so that adding a field here is one edit in this
+    /// crate instead of one in every caller.
+    pub fn sized(
+        msg_type: MsgType,
+        bytes: u32,
+        signer: HashedId8,
+        full_certificate: bool,
+        ready_at: SimTime,
+        generation_time: SimTime,
+    ) -> Transmission {
+        Transmission {
+            msg_type,
+            bytes,
+            signer,
+            full_certificate,
+            ready_at,
+            generation_time,
+            // A frame sized from a table is signed by the engine on the node's behalf with
+            // no queue in front of the signer, so the signature starts at generation.
+            sign_start: generation_time,
+            signed: None,
+            claimed_pos: None,
+            bsm: crate::bsm_timing::BsmExtras::default(),
+        }
+    }
+}
+
+/// What one step produced.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StepOutcome {
+    /// Frames for the network layer, in generation order.
+    pub transmissions: Vec<Transmission>,
+    /// Messages delivered to the applications, in arrival order.
+    pub delivered: Vec<VerifiedMessage>,
+    /// The telemetry record, when this step closed a window.
+    pub telemetry: Option<NodeTelemetry>,
+    /// Every received frame whose fate was settled in this step, with the instants of its
+    /// journey through the node.
+    pub rx_reports: Vec<RxReport>,
+    /// GLOSA's advice to the driver at this step, when the applications gave one
+    /// ([`crate::apps`]).
+    pub advice: Option<crate::apps::SpeedAdvice>,
+    /// What this step dropped, per cause in [`DropCause::ALL`] order
+    /// ([`crate::queue::DropLedger::take_step`]). The receive-side causes are also on
+    /// `rx_reports`, frame by frame; the transmit and CRL causes are only here.
+    pub drops: [u32; 6],
+}
+
+/// How a node is configured.
+#[derive(Debug, Clone)]
+pub struct NodeConfig {
+    /// Which message services it runs.
+    pub services: ServiceSet,
+    /// Queue capacities, in [`QueueKind::ALL`] order.
+    pub queue_capacity: [usize; 5],
+    /// How many peer certificates it caches.
+    pub peer_cache_capacity: usize,
+    /// How many neighbours it tracks.
+    pub neighbor_capacity: usize,
+    /// How long between telemetry frames.
+    pub telemetry_period: Duration,
+    /// Transmit power, dBm.
+    pub tx_power_dbm: f64,
+    /// The primitive the signing and verification cost tables are keyed by.
+    pub sign_op: &'static str,
+    /// The verification primitive.
+    pub verify_op: &'static str,
+    /// An operation charged once for each certificate the node learns, on top of the
+    /// message verification: in the NDSS 2024 Partially-Hybrid mode (messages signed with
+    /// ECDSA, certificates hybrid) the post-quantum half of the hybrid's verification, the
+    /// issuer's post-quantum signature on the certificate. `None` (the default) charges
+    /// nothing extra.
+    pub cert_verify_op: Option<&'static str>,
+    /// The scenario's wall clock, for `generationTime`, `secMark` and certificate
+    /// validity. Real messages carry real timestamps, so the node needs one.
+    pub wall: WallClock,
+    /// The geodetic anchor of the world's ENU frame.
+    ///
+    /// Both message formats carry latitude and longitude, so a node cannot encode one
+    /// without knowing where `(0, 0, 0)` is. The default is the null island anchor, which
+    /// encodes perfectly well and is obviously wrong in a map view — better than a
+    /// plausible city that silently misplaces every run that forgot to set it.
+    pub origin: GeoOrigin,
+    /// The vehicle's dimensions, for `vehicleLength`/`vehicleWidth` and `size`.
+    pub dims: Dims,
+    /// What kind of road user this is, for the CAM's `stationType`.
+    pub station_type: ParticipantType,
+    /// Which crypto backend signs and verifies.
+    ///
+    /// Phase 1 acceptance criterion 3: a run in `real` and a run in `modeled` must produce
+    /// identical event logs apart from the manifest. That holds here because this field is
+    /// the *only* thing either mode changes — see [`crate::secure::NodeCrypto`].
+    pub crypto_mode: CryptoMode,
+    /// The PSID a safety message is signed under. Changing it changes the envelope
+    /// overhead; see [`crate::secure::PSID_SAFETY`].
+    pub psid: u64,
+    /// The BSM generator's inter-transmission times (SAE J2945/1; `messages.generator`).
+    pub bsm_params: v2xw_msg::generator::BsmGenParams,
+    /// The CAM generator's triggering rules (EN 302 637-2; `messages.generator`).
+    pub cam_params: v2xw_msg::generator::CamGenParams,
+    /// SPaT and MAP broadcast periods of a unit running them (network audit).
+    pub spat_interval: Duration,
+    /// See `spat_interval`.
+    pub map_interval: Duration,
+    /// The CPM generation interval `T_GenCpm` (network audit).
+    pub cpm_interval: Duration,
+    /// The CP service's load behaviour: DCC-limited `T_GenCpm`, the quality threshold and
+    /// the utility cut ([`crate::cpm::CpmConfig`], off by default).
+    pub cpm: crate::cpm::CpmConfig,
+    /// The optional DENM triggers ([`crate::events::DenmTriggers`], off by
+    /// default).
+    pub denm_triggers: crate::events::DenmTriggers,
+    /// The most path-history points a BSM or CAM carries (J2945/1's 15;
+    /// `messages.path_history_points`).
+    pub path_history_points: usize,
+    /// What a pseudonym change does to the path history
+    /// (`messages.bsm.path_history_on_change`). `None` follows the node's standard: a node
+    /// that sends BSMs keeps it (SAE J2945/1 has no clearing rule, and §6.3.6.16 `DATAACC-039` asks for 200 m of history), and a
+    /// station without the BSM service (an ETSI CAM station) clears it.
+    pub path_history_on_change: Option<v2xw_msg::j2945::PathHistoryOnChange>,
+    /// Whether the node's facilities layer is ETSI's (the GeoNetworking/BTP stack): an
+    /// SRM or SSM then goes out as a SREM or SSEM, with the ETSI `ItsPduHeader` in front.
+    pub etsi_facilities: bool,
+}
+
+impl Default for NodeConfig {
+    fn default() -> Self {
+        NodeConfig {
+            services: ServiceSet::BOTH,
+            // No profile publishes a queue depth — every one of the ten carries
+            // `hsm.queue_depth` as uncalibrated — so these are engine defaults, not device
+            // figures, and a scenario that cares must set them. 64 is one second of
+            // arrivals from 6 neighbours at 10 Hz, which is enough that the queue is not
+            // the first thing to saturate in a small scenario and small enough that it
+            // does saturate in a large one.
+            queue_capacity: [64, 64, 64, 32, 16],
+            peer_cache_capacity: 128,
+            neighbor_capacity: 256,
+            telemetry_period: Duration::from_secs(1),
+            tx_power_dbm: 20.0,
+            sign_op: "ecdsa-p256-sign",
+            verify_op: "ecdsa-p256-verify",
+            cert_verify_op: None,
+            wall: WallClock::default(),
+            origin: GeoOrigin::new(0.0, 0.0, 0.0),
+            dims: Dims::CAR,
+            station_type: ParticipantType::PassengerCar,
+            crypto_mode: CryptoMode::Modeled,
+            psid: PSID_SAFETY,
+            bsm_params: v2xw_msg::generator::BsmGenParams::j2945_1(),
+            cam_params: v2xw_msg::generator::CamGenParams::en302637_2(),
+            spat_interval: crate::generate::SPAT_INTERVAL,
+            map_interval: crate::generate::MAP_INTERVAL,
+            cpm_interval: crate::cpm::T_GEN_CPM,
+            cpm: crate::cpm::CpmConfig::default(),
+            denm_triggers: crate::events::DenmTriggers::default(),
+            path_history_points: v2xw_msg::j2945::PathHistoryParams::J2945_1.max_points,
+            path_history_on_change: None,
+            etsi_facilities: false,
+        }
+    }
+}
+
+/// An on-board unit.
+pub struct ObuRuntime {
+    /// Received envelopes that would not parse.
+    spdu_parse_failures: u64,
+    /// Received envelopes that parsed but whose signature did not verify.
+    spdu_signature_failures: u64,
+    /// Certificates learned since the last verification was booked, whose post-quantum
+    /// issuer signature (`NodeConfig::cert_verify_op`) the next booking pays for.
+    cert_checks_due: u32,
+    /// Out-of-band P2PCD learning responses this node's P2P entity broadcast, with the
+    /// instant (node clock) each became due, waiting for the host to take them
+    /// ([`ObuRuntime::take_p2pcd_responses`]).
+    p2pcd_outbox: Vec<(SimTime, Vec<u8>)>,
+    /// The P2PCD counters as of the last `node.p2pcd` record.
+    p2pcd_seen: crate::p2pcd::P2pcdStats,
+    node: NodeId,
+    config: NodeConfig,
+    service: ProfileServiceModel,
+    /// Whether the profile prices `config.verify_op` at all (fixed at construction: the
+    /// catalogue lookup is not free, and neither changes over a run).
+    verify_priced: bool,
+    cpu: ServerBank,
+    hsm: ServerBank,
+    /// A separate hardware engine, where the profile says one exists.
+    ///
+    /// On the reference OBU the FIPS security policy is explicit that the >2,500/s
+    /// verification engine is an on-chip block *outside* the certified eHSM boundary,
+    /// so signing on the Cortex-M0 and verifying on the engine
+    /// do not contend. Lumping them into one bank would make a node that signs at 110/s
+    /// appear to slow its own 2,500/s verification path, which is a modelling artefact
+    /// and not a property of the part.
+    accel: ServerBank,
+    queues: [NodeQueue<Queued<RxFrame>>; 5],
+    /// Beside every frame in the verification queue (`queues[1]`), in the same order: the
+    /// token and the instants its report needs.
+    verify_meta: VecDeque<Waiting>,
+    /// Checks in progress, keyed by (finish instant, start order): what the applications
+    /// receive once each finishes. A check that has started has been charged to its server
+    /// and its verdict is fixed, but the message is not the applications' until the server
+    /// is done with it.
+    verifying: BTreeMap<(SimTime, u64), Verifying>,
+    /// The start-order tie-break for [`ObuRuntime::verifying`].
+    verify_seq: u64,
+    /// When each frame still waiting to be parsed will start its parse, on the node's
+    /// clock — the receive queue's occupancy, when parsing has a cost.
+    parse_starts: VecDeque<SimTime>,
+    drops: DropLedger,
+    /// Messages due that the node did not send because it held no usable credential
+    /// ([CAMP-EE §2.2.10.2]: it stops transmitting rather than sending unsigned). Also in
+    /// `drops` as `tx_overflow`; kept apart so a starving unit can be told from a full
+    /// queue.
+    tx_uncredentialed: u64,
+    /// Whether the BSM `msgCnt` has had its random start-up value
+    /// ([`STARTUP_MSG_COUNT_STREAM`]).
+    msg_count_seeded: bool,
+    /// SRMs due that the node did not send because it is a privileged vehicle (its
+    /// identification slot was filled) with no identification certificate valid at the
+    /// time: a pseudonym does not sign one in its place. Also in
+    /// `tx_uncredentialed` and in `drops` as `tx_overflow`.
+    srm_no_identification: u64,
+    clock: ClockModel,
+    belief: PositionEstimate,
+    stores: Stores,
+    policy: Box<dyn VerificationPolicy>,
+    schedule: MessageSchedule,
+    /// The event-driven and infrastructure services (DENM, SPaT, MAP, SRM, SSM).
+    events: crate::events::EventServices,
+    state: NodeState,
+    received: Vec<VerifiedMessage>,
+    evidence_capacity: usize,
+    /// The roadside routers this unit has learned an SCMS service from (IEEE 1609.3: a
+    /// verified WSA listing PSID 0x23 with a WAVE Routing Advertisement), by the router's
+    /// advertised /64 prefix, with when the last such WSA arrived.
+    scms_routers: BTreeMap<[u8; 8], SimTime>,
+    window: TelemetryWindow,
+    dcc: DccState,
+    dcc_state_code: u16,
+    /// The node's own security stack: the envelope, the crypto backend, the signer.
+    security: NodeSecurity,
+    /// The ETSI codec. Stateless, but it carries the model card that says *which* ASN.1
+    /// modules produced these bytes, which is what a manifest pins.
+    etsi: EtsiUperCodec,
+    /// Relevance scores a safety application published, by signer digest.
+    ///
+    /// The `on-demand` policy is "verify only messages
+    /// that a safety application marks relevant", and until an application existed nothing
+    /// produced a mark: every [`crate::policy::RxSummary::relevance`] was `None` and an
+    /// `on-demand` node verified only strangers. [`crate::safety::SafetyAppSet`] is the
+    /// producer and [`ObuRuntime::set_relevance`] is how the engine installs what it
+    /// produced.
+    ///
+    /// A [`BTreeMap`] keyed by the digest bytes, for the reason
+    /// [`crate::stores::NeighborTable`] is: an ordering that reaches a decision may not
+    /// come from a hash container.
+    relevance: BTreeMap<[u8; 8], f64>,
+    /// The two §3.5.2 fields marked **GT**, handed in from outside the firewall by
+    /// [`ObuRuntime::observe_truth`] and read by nothing but the telemetry path.
+    gt_pos_error_m: f32,
+    /// The per-device BSM timing model, when the scenario turns it on
+    /// ([`crate::bsm_timing`]): the calibration and this device's class.
+    bsm_timing: Option<(
+        std::sync::Arc<crate::bsm_timing::BsmTimingCalibration>,
+        Option<crate::bsm_timing::BsmTimingDevice>,
+    )>,
+    /// The vehicle's own bus and what the unit derives from it (path history, path
+    /// prediction, lights, event flags): [`crate::vehicle`].
+    own: crate::vehicle::OwnVehicle,
+    /// The V2X applications, when the node runs them ([`crate::apps`]).
+    apps: Option<Box<crate::apps::AppLayer>>,
+    /// The collective perception service ([`crate::cpm`]).
+    cpm: crate::cpm::CpmService,
+}
+
+impl core::fmt::Debug for ObuRuntime {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ObuRuntime")
+            .field("node", &self.node)
+            .field("profile", &self.service.profile().id)
+            .field("state", &self.state)
+            .field("policy", &self.policy.card().id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ObuRuntime {
+    /// A node on `profile`, with `policy` and `config`, starting at `at`.
+    pub fn new(
+        node: NodeId,
+        profile: impl Into<std::sync::Arc<HardwareProfile>>,
+        policy: Box<dyn VerificationPolicy>,
+        config: NodeConfig,
+        at: SimTime,
+    ) -> Self {
+        let profile: std::sync::Arc<HardwareProfile> = profile.into();
+        let cpu_servers = profile.cpu.cores.or(1).max(1);
+        // Every profile carries `hsm.servers` as uncalibrated except obu/cohda-mk5, where
+        // §7.1 states the single-server assumption; the fallback is therefore one, and it
+        // is the pessimistic reading rather than a guess at parallelism nobody published.
+        let hsm_servers = profile.hsm.servers.or(1).max(1);
+        let service = ProfileServiceModel::new(std::sync::Arc::clone(&profile)).for_node(node);
+        let verify_priced = profile.op_cost(config.verify_op).is_some()
+            || profile
+                .hsm
+                .ops
+                .get(profile.priced_op(config.verify_op))
+                .and_then(crate::profile::HsmOp::range_us)
+                .is_some();
+        let stores = Stores {
+            peers: PeerCertCache::new(config.peer_cache_capacity),
+            neighbors: NeighborTable::new(config.neighbor_capacity),
+            heard: crate::stores::HeardTable::new(config.neighbor_capacity),
+            ..Default::default()
+        };
+        ObuRuntime {
+            spdu_parse_failures: 0,
+            spdu_signature_failures: 0,
+            cert_checks_due: 0,
+            p2pcd_outbox: Vec::new(),
+            p2pcd_seen: crate::p2pcd::P2pcdStats::default(),
+            node,
+            cpu: ServerBank::new("cpu", cpu_servers, at),
+            hsm: ServerBank::new("hsm", hsm_servers, at),
+            accel: ServerBank::new("accel", 1, at),
+            queues: [
+                NodeQueue::new(QueueKind::Rx, config.queue_capacity[0]),
+                NodeQueue::new(QueueKind::Verify, config.queue_capacity[1]),
+                NodeQueue::new(QueueKind::App, config.queue_capacity[2]),
+                NodeQueue::new(QueueKind::Tx, config.queue_capacity[3]),
+                NodeQueue::new(QueueKind::Crl, config.queue_capacity[4]),
+            ],
+            verify_meta: VecDeque::new(),
+            verifying: BTreeMap::new(),
+            verify_seq: 0,
+            parse_starts: VecDeque::new(),
+            drops: DropLedger::new(),
+            tx_uncredentialed: 0,
+            srm_no_identification: 0,
+            clock: ClockModel::new(0.0),
+            belief: PositionEstimate::no_fix(at),
+            stores,
+            policy,
+            schedule: MessageSchedule::new(config.services)
+                .with_params(config.cam_params, config.bsm_params)
+                .with_infra_intervals(config.spat_interval, config.map_interval),
+            events: {
+                let mut e = crate::events::EventServices::default();
+                e.set_triggers(config.denm_triggers, config.origin);
+                e
+            },
+            state: NodeState::Active,
+            received: Vec::new(),
+            evidence_capacity: 256,
+            scms_routers: BTreeMap::new(),
+            window: TelemetryWindow::new(at),
+            dcc: DccState::UNRESTRICTED,
+            dcc_state_code: v2xw_record::wire::U16_NONE,
+            relevance: BTreeMap::new(),
+            gt_pos_error_m: f32::NAN,
+            bsm_timing: None,
+            own: crate::vehicle::OwnVehicle::default()
+                .with_path_history_points(config.path_history_points)
+                .with_path_history_on_change(config.path_history_on_change.unwrap_or(
+                    if config.services.bsm {
+                        v2xw_msg::j2945::PathHistoryOnChange::Keep
+                    } else {
+                        v2xw_msg::j2945::PathHistoryOnChange::Clear
+                    },
+                )),
+            msg_count_seeded: false,
+            apps: None,
+            cpm: crate::cpm::CpmService::default()
+                .with_generation_interval(config.cpm_interval)
+                .with_config(config.cpm),
+            security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
+            etsi: EtsiUperCodec::new(),
+            service,
+            verify_priced,
+            config,
+        }
+    }
+
+    /// Runs this node at the abstract compute tier: every cryptographic operation its
+    /// profile costs takes [`crate::server::ProfileServiceModel::UNLIMITED_COST`], so it
+    /// is never compute-bound (`nodes.compute_tier: abstract`).
+    pub fn set_compute_unlimited(&mut self) {
+        self.service = self.service.clone().unlimited();
+    }
+
+    /// Runs the node's CPU as `servers` FIFO servers.
+    ///
+    /// The compute tiers: `medium` is one CPU server and one HSM server, `high`
+    /// is `c` CPU cores — the profile's `cpu.cores`, which is what [`ObuRuntime::new`]
+    /// builds. The engine sets one at the medium compute tier.
+    pub fn set_cpu_servers(&mut self, servers: u32) {
+        self.cpu = self.cpu.clone().resized(servers);
+    }
+
+    /// How many CPU servers the node runs.
+    pub fn cpu_servers(&self) -> usize {
+        self.cpu.servers()
+    }
+
+    /// Sets the cost of a parse, a detector pass or a neighbour-table task on this node's
+    /// CPU — the `app_task_us` every shipped profile carries as uncalibrated.
+    ///
+    /// With no cost (the default) a received frame is parsed the instant it arrives and the
+    /// receive queue never holds anything; with one, frames wait for the CPU and the queue
+    /// can overflow.
+    pub fn set_app_task_cost(&mut self, cost: Duration) {
+        self.service = self.service.clone().with_app_task_cost(cost);
+    }
+
+    /// The node's security stack, for a test that wants to check a signature this node
+    /// produced or ask which backend is running.
+    pub fn security(&self) -> &NodeSecurity {
+        &self.security
+    }
+
+    /// The security stack, mutably, for a credential protocol installing real credentials.
+    pub fn security_mut(&mut self) -> &mut NodeSecurity {
+        &mut self.security
+    }
+
+    /// The out-of-band P2PCD learning responses (`Ieee1609dot2Peer2PeerPDU`, unsecured,
+    /// PSID [`v2xw_sec::p2pcd::P2PCD_PSID`]) this node broadcast since the last call, each
+    /// with the node-clock instant it became due. The host puts them on the air.
+    pub fn take_p2pcd_responses(&mut self) -> Vec<(SimTime, Vec<u8>)> {
+        core::mem::take(&mut self.p2pcd_outbox)
+    }
+
+    /// A learning response heard on the air: counted against this node's own response
+    /// processes and learned from (validated to an installed root first). Returns how
+    /// many CA certificates were learned.
+    ///
+    /// # Errors
+    /// The bytes are not a learning response.
+    pub fn receive_p2pcd_response(&mut self, bytes: &[u8]) -> Result<usize, v2xw_sec::SecError> {
+        self.security.p2pcd_receive_response(bytes)
+    }
+
+    /// When the earliest out-of-band response back-off expires, on the simulation's
+    /// timeline seen from `now` — the instant a host that wants exact back-off timing
+    /// wakes the node for. `None` when no response process is running.
+    #[must_use]
+    pub fn next_p2pcd_due_after(&self, now: SimTime) -> Option<SimTime> {
+        let due = self.security.p2pcd_next_due()?;
+        Some(due.max(now))
+    }
+
+    fn p2pcd_send_due(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) {
+        for pdu in self.security.p2pcd_due(ctx.now()) {
+            self.p2pcd_outbox.push((believed, pdu));
+        }
+    }
+
+    /// Records what P2PCD did since the last record, on `node.p2pcd`.
+    fn p2pcd_record(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) {
+        let p = self.security.p2pcd();
+        if let Some(delta) = p.stats.since(&self.p2pcd_seen) {
+            self.p2pcd_seen = p.stats.clone();
+            ctx.emit(crate::p2pcd::P2pcdRecord {
+                t: believed,
+                node: self.node,
+                flavor: p.flavor().as_str(),
+                delta,
+            });
+        }
+    }
+
+    /// The node's stores.
+    pub fn stores(&self) -> &Stores {
+        &self.stores
+    }
+
+    /// Installs one credential the SCMS issued: the security stack imports the
+    /// key `d = e·b + r` for the implicit certificate after the device's own check, and the
+    /// store receives `handle` naming that certificate by its own `HashedId8` and carrying
+    /// its encoding. The store holds the handle, never the key.
+    ///
+    /// # Errors
+    /// The key does not reconstruct under its issuer, which a device refuses.
+    pub fn install_credential(
+        &mut self,
+        mut handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> Result<(), v2xw_sec::SecError> {
+        let signer = self
+            .security
+            .install(self.node, handle.i_period, handle.j_index, key)?;
+        handle.digest = signer.digest().clone();
+        handle.cert_coer = signer.cert_coer().to_vec();
+        self.stores.certs.insert(handle);
+        Ok(())
+    }
+
+    /// Installs one OBU identification certificate the SCMS issued in the
+    /// identification signer slot, beside the pseudonym pool
+    /// ([`crate::secure::NodeSecurity::install_identification`]): from then on the node's
+    /// SRMs are signed under the certificate valid at the time, and never under a
+    /// pseudonym. The BSM stays on pseudonyms (ASSUMPTION: whether a US emergency vehicle
+    /// signs BSMs under its identification certificate in emergency mode is unpublished).
+    /// Returns the certificate's `HashedId8`.
+    ///
+    /// # Errors
+    /// The key does not reconstruct under its issuer, which a device refuses.
+    pub fn install_identification(
+        &mut self,
+        key: &v2xw_sec::credential::ImplicitKey,
+        valid_from: SimTime,
+        valid_until: SimTime,
+    ) -> Result<HashedId8, v2xw_sec::SecError> {
+        self.security
+            .install_identification(self.node, key, valid_from, valid_until)
+            .map(|s| s.digest().clone())
+    }
+
+    /// Messages the node had due and did not send for want of a usable credential.
+    pub fn tx_uncredentialed(&self) -> u64 {
+        self.tx_uncredentialed
+    }
+
+    /// SRMs a privileged vehicle did not send because no identification certificate was
+    /// valid.
+    pub fn srm_no_identification(&self) -> u64 {
+        self.srm_no_identification
+    }
+
+    /// The node's stores, mutably, for the engine's provisioning and CRL paths.
+    pub fn stores_mut(&mut self) -> &mut Stores {
+        &mut self.stores
+    }
+
+    /// Verifies a received `SecuredCrl` against this node's installed trust and
+    /// charges the work (signer chain on first use, the CRL's own signature) to the CPU
+    /// bank at `now`, priced by this node's hardware profile. The caller installs what it
+    /// returns ([`crate::stores::CrlGate::add_verified_linkage`]); hash entries are
+    /// already recorded in the trust.
+    ///
+    /// # Errors
+    /// Why the CRL was refused.
+    pub fn install_secured_crl(
+        &mut self,
+        bytes: &[u8],
+        now: SimTime,
+    ) -> Result<crate::rxval::VerifiedCrl, crate::rxval::RxReject> {
+        let r = self.security.verify_secured_crl(bytes, now);
+        let cost = crate::rxval::charge(&mut self.security, &self.service.profile().id);
+        if cost.as_nanos() > 0 {
+            let _ = self.cpu.submit(now, cost);
+        }
+        r
+    }
+
+    /// The hardware profile.
+    pub fn profile(&self) -> &HardwareProfile {
+        self.service.profile()
+    }
+
+    /// What state the node is in.
+    pub fn state(&self) -> NodeState {
+        self.state
+    }
+
+    /// Moves the node to another state.
+    pub fn set_state(&mut self, state: NodeState) {
+        self.state = state;
+    }
+
+    /// The node's clock model.
+    pub fn clock(&self) -> &ClockModel {
+        &self.clock
+    }
+
+    /// The node's clock model, mutably, for a scenario event or an attacker's step.
+    pub fn clock_mut(&mut self) -> &mut ClockModel {
+        &mut self.clock
+    }
+
+    /// The message schedule.
+    pub fn schedule(&self) -> &MessageSchedule {
+        &self.schedule
+    }
+
+    /// The message schedule, for the engine's SAE J2945/1 BSM schedule: it enables
+    /// it, hands it the 100 ms transmission decision and reads the next BSM's instant.
+    pub fn schedule_mut(&mut self) -> &mut MessageSchedule {
+        &mut self.schedule
+    }
+
+    /// Hands the node this step's position belief, from the GNSS model.
+    ///
+    /// The GNSS model is the only thing entitled to hold both the truth and the belief;
+    /// what arrives here is the belief alone, and the node has no way to ask what it was
+    /// derived from.
+    pub fn set_belief(&mut self, belief: PositionEstimate) {
+        self.belief = belief;
+        self.own.on_fix(&belief);
+    }
+
+    /// Turns on the per-device BSM timing model with this calibration
+    /// ([`crate::bsm_timing`]); the device's class is drawn at its first BSM.
+    pub fn set_bsm_timing(&mut self, cal: std::sync::Arc<crate::bsm_timing::BsmTimingCalibration>) {
+        self.bsm_timing = Some((cal, None));
+    }
+
+    /// The device's timing class name and its declared fault (the class's `fault_kind`),
+    /// once it has sent a BSM under the model.
+    #[must_use]
+    pub fn bsm_timing_class_info(&self) -> Option<(String, Option<String>)> {
+        let (cal, d) = self.bsm_timing.as_ref()?;
+        let c = cal.classes.get(d.as_ref()?.class())?;
+        Some((c.name.clone(), c.fault_kind.clone()))
+    }
+
+    /// The device's timing class index, once it has sent a BSM under the model.
+    #[must_use]
+    pub fn bsm_timing_class(&self) -> Option<usize> {
+        self.bsm_timing
+            .as_ref()
+            .and_then(|(_, d)| d.as_ref().map(crate::bsm_timing::BsmTimingDevice::class))
+    }
+
+    /// Whether this vehicle's BSM carries a critical event flag at `now` (SAE J2945/1
+    /// §3.1.2: hard braking, ABS, traction control, stability control;
+    /// [`crate::secure::is_critical_event`]). Only a unit that sends BSMs has one: the flags
+    /// are the BSM's, and the rules that read them (`BSMSIGN-004`, `CERTCHG-001`,
+    /// `CERTCHG-002`) are J2945/1's, so a CAM sender's changes and cadence are untouched.
+    pub fn critical_event(&self, now: SimTime) -> bool {
+        self.config.services.bsm && crate::secure::is_critical_event(self.own.events(now))
+    }
+
+    /// Hands the node this step's reading of its own vehicle's bus ([`crate::vehicle`]):
+    /// the dynamics, the lights and the navigation's next movement. What its BSM's Part II,
+    /// its CAM's dynamics and its event triggers are built from.
+    pub fn set_vehicle_bus(&mut self, bus: crate::vehicle::VehicleBus) {
+        self.events.set_own_acceleration(bus.a_long_mps2);
+        self.events.set_vehicle_bus(&bus);
+        self.own.set_bus(bus);
+    }
+
+    /// The stationary-vehicle DENM's repetition interval and duration
+    /// ([`crate::events::EventServices::set_stationary_repetition`]).
+    pub fn set_stationary_repetition(
+        &mut self,
+        interval: v2xw_core::time::Duration,
+        duration: v2xw_core::time::Duration,
+    ) {
+        self.events.set_stationary_repetition(interval, duration);
+    }
+
+    /// Switches the vehicle's hazard warning lights, which its stationary-vehicle DENM
+    /// and its BSM's event flags read.
+    pub fn set_hazard_lights(&mut self, on: bool) {
+        self.events.set_hazard_lights(on);
+    }
+
+    /// The unit's view of its own vehicle.
+    pub fn own_vehicle(&self) -> &crate::vehicle::OwnVehicle {
+        &self.own
+    }
+
+    /// Runs the V2X applications ([`crate::apps`]) with `params` from the next step on.
+    pub fn enable_apps(&mut self, params: crate::apps::AppParams) {
+        self.apps = Some(Box::new(crate::apps::AppLayer::new(
+            params,
+            self.config.origin,
+            self.config.wall,
+        )));
+    }
+
+    /// The application layer, when the node runs one.
+    pub fn apps(&self) -> Option<&crate::apps::AppLayer> {
+        self.apps.as_deref()
+    }
+
+    /// Hands the node what its own sensors perceive now, for its CPMs ([`crate::cpm`]).
+    /// Like the position belief, it comes from the perception model outside the node.
+    pub fn set_perception(
+        &mut self,
+        objects: Vec<crate::cpm::ObjectIn>,
+        sensors: Vec<crate::cpm::SensorIn>,
+    ) {
+        self.events.set_perceived(&objects);
+        self.cpm.set_perception(objects, sensors);
+    }
+
+    /// The DENM triggers this node runs; the engine runs the perception model for a
+    /// vehicle whose traffic-condition trigger reads its sensors.
+    pub fn denm_triggers(&self) -> crate::events::DenmTriggers {
+        self.events.triggers()
+    }
+
+    /// The collective perception service's state.
+    pub fn cpm_service(&self) -> &crate::cpm::CpmService {
+        &self.cpm
+    }
+
+    /// Encodes one CPM: the station's belief, the objects selected and, when due, the
+    /// sensors (ETSI TS 103 324 through the generated encoder, [`v2xw_msg::cpm`]).
+    fn encode_cpm(
+        &self,
+        content: &crate::cpm::CpmContent,
+        believed: SimTime,
+        cred: &CredentialHandle,
+    ) -> Option<Vec<u8>> {
+        let mut id = [0u8; 4];
+        id.copy_from_slice(&cred.digest.0[..4]);
+        // TS 103 324 V2.1.1 §7.1.8.2: an object keeps its objectId "as long as an object is
+        // perceived ... and there is no pseudonym change". The ids are re-keyed by the
+        // pseudonym (a bijection on 0..=65535, so no two objects collide), so an object's
+        // id does not link the station across a pseudonym change, as its station id does
+        // not.
+        let salt = u16::from_be_bytes([cred.digest.0[4], cred.digest.0[5]]);
+        let objects = content
+            .objects
+            .iter()
+            .enumerate()
+            .map(|(k, o)| {
+                let mut sensor_ids = [0u8; 3];
+                let mut count = 0u8;
+                for bit in 1..8u8 {
+                    if o.sensors & (1 << bit) != 0 && usize::from(count) < sensor_ids.len() {
+                        sensor_ids[usize::from(count)] = bit;
+                        count += 1;
+                    }
+                }
+                v2xw_msg::cpm::CpmObject {
+                    id: o.id ^ salt,
+                    measurement_delta_ms: ((o.measured_at as i128 - believed as i128) / 1_000_000)
+                        as i32,
+                    pos: o.pos,
+                    vel: o.vel,
+                    length_m: o.length_m,
+                    width_m: o.width_m,
+                    age_ms: (believed.saturating_sub(o.first_seen) / 1_000_000) as u32,
+                    class: match o.kind {
+                        crate::cpm::ObjectKind::Vehicle => v2xw_msg::cpm::CpmObjectClass::Vehicle,
+                        crate::cpm::ObjectKind::Pedestrian => {
+                            v2xw_msg::cpm::CpmObjectClass::Pedestrian
+                        }
+                        crate::cpm::ObjectKind::Cyclist => v2xw_msg::cpm::CpmObjectClass::Cyclist,
+                    },
+                    sigma_m: o.sigma_m,
+                    sensor_ids,
+                    sensor_count: count,
+                    quality: content.quality.as_ref().and_then(|q| q.get(k).copied()),
+                }
+            })
+            .collect();
+        let sensors = content.sensors.as_ref().map(|list| {
+            list.iter()
+                .map(|s| v2xw_msg::cpm::CpmSensor {
+                    id: s.id,
+                    sensor_type: s.sensor_type,
+                    range_m: s.range_m,
+                    half_fov_rad: s.half_fov_rad,
+                    azimuth_rad: s.azimuth_rad,
+                    mount_m: s.mount_m,
+                })
+                .collect()
+        });
+        let input = v2xw_msg::cpm::CpmInput {
+            station_id: u32::from_be_bytes(id),
+            position: self.belief,
+            origin: self.config.origin,
+            reference_time: cam::timestamp_its(self.config.wall, believed).ok()?,
+            objects,
+            sensors,
+            // A roadside unit's CPM is an infrastructure CPM (TS 103 324 §7.1.3).
+            rsu: self.config.station_type == ParticipantType::Infrastructure,
+        };
+        let message = v2xw_msg::cpm::build_cpm(&input).ok()?;
+        Some(v2xw_msg::cpm::encode_cpm(&message).ok()?.bytes)
+    }
+
+    /// The vehicle's role, which its CAM's low-frequency container states (an emergency
+    /// vehicle, public transport...).
+    pub fn set_vehicle_role(&mut self, role: cam::VehicleRole) {
+        self.own.set_role(role);
+    }
+
+    /// Sets the DCC state the generators honour.
+    pub fn set_dcc(&mut self, dcc: DccState, state_code: u16) {
+        self.dcc = dcc;
+        self.dcc_state_code = state_code;
+    }
+
+    /// Installs the SPaT or MAP payload a roadside unit's controller feed produced; the
+    /// unit's schedule signs and sends it at the standard's rate ([`crate::events`]).
+    pub fn set_infra_payload(&mut self, msg_type: MsgType, bytes: Vec<u8>) {
+        self.events.set_infra_payload(msg_type, bytes);
+    }
+
+    /// Makes this roadside unit a WSA provider (IEEE 1609.3): it signs and
+    /// sends `wsa` (an encoded [`v2xw_msg::wsa::Wsa`]) every `interval`.
+    pub fn enable_wsa(&mut self, interval: Duration, wsa: Vec<u8>) {
+        self.events.set_infra_payload(MsgType::Wsa, wsa);
+        self.schedule = self.schedule.clone().with_wsa(interval);
+    }
+
+    /// The routers (by advertised /64 prefix) this unit learned an SCMS service from in a
+    /// verified WSA, and when it last heard each. What a WSA user's available-service list
+    /// holds (1609.3 §8.2.3: the user decides on a match of PSID).
+    pub fn scms_routers(&self) -> &BTreeMap<[u8; 8], SimTime> {
+        &self.scms_routers
+    }
+
+    /// The vehicle's own longitudinal acceleration, m/s², from its own accelerometer —
+    /// the input the hard-braking DENM trigger reads ([`crate::events`]). Like the
+    /// position belief it is the vehicle's own sensor, handed in from outside.
+    pub fn set_own_acceleration(&mut self, a_mps2: f64) {
+        self.events.set_own_acceleration(a_mps2);
+    }
+
+    /// The event and infrastructure services' state, for a test or a report.
+    pub fn events(&self) -> &crate::events::EventServices {
+        &self.events
+    }
+
+    /// Installs the relevance scores a safety application published
+    /// ([`crate::safety::SafetyAppSet::relevance`]).
+    ///
+    /// This is what closes the `on-demand` policy's open input. The map is replaced
+    /// wholesale rather than merged, because a subject that no application scored this
+    /// step is a subject no application considers relevant now — merging would leave a
+    /// warning's score in force after the warning cleared.
+    pub fn set_relevance(&mut self, relevance: BTreeMap<[u8; 8], f64>) {
+        self.relevance = relevance;
+    }
+
+    /// The relevance score this node holds for one signer, if any.
+    #[must_use]
+    pub fn relevance_of(&self, signer: &v2xw_msg::sec_types::HashedId8) -> Option<f64> {
+        self.relevance
+            .get(&crate::safety::digest_key(signer))
+            .copied()
+    }
+
+    /// Hands in the two ground-truth differences §3.5.2 asks for, from outside the
+    /// firewall.
+    ///
+    /// The engine computes both, because only the engine holds a belief and a truth at the
+    /// same time. They are written straight into the telemetry path and read by nothing
+    /// else — see the module documentation, and [`crate::firewall`] for the test.
+    pub fn observe_truth(&mut self, pos_error_m: f32) {
+        self.gt_pos_error_m = pos_error_m;
+    }
+
+    /// One engine tick.
+    ///
+    /// The order matters: the clock advances
+    /// first so that everything in the step shares one belief about the time; the inbox is
+    /// admitted and policed; verification is charged against the servers; the stores are
+    /// updated from what verification concluded; generation is checked against the node's
+    /// own belief and signed; and the window is closed if it is due.
+    pub fn step(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        inbox: Vec<RxFrame>,
+        distance_travelled_m: f64,
+    ) -> StepOutcome {
+        let stamped = inbox.into_iter().map(|f| (f, RxStamp::default())).collect();
+        self.step_timed(ctx, stamped, distance_travelled_m)
+    }
+
+    /// [`ObuRuntime::step`], with each frame's arrival instant and the engine's token for
+    /// it.
+    ///
+    /// # Reception in continuous time
+    ///
+    /// The step runs at the engine's tick, but a radio receives whenever a frame ends, and
+    /// the verification queue is a queue in continuous time. So the frames are taken in
+    /// arrival order and each is placed at the instant it arrived: the verification server
+    /// is advanced to that instant first — every waiting check that would have started by
+    /// then starts, at the instant it would have — and only then is the frame parsed,
+    /// offered to the policy (which sees the queue as it was at that instant) and queued.
+    /// At the end of the step the server is advanced to the step's own instant.
+    ///
+    /// What is still waiting stays in the queue across steps, so a node that cannot keep up
+    /// carries a real backlog, its queue-overflow drops happen at the instant the queue was
+    /// full, and a verification's wait is the wait it would have had. A message reaches the
+    /// applications when its check *finishes*: a check still running at the end of the step
+    /// is held, [`ObuRuntime::next_completion`] says when it finishes, and the engine wakes
+    /// the node then ([`ObuRuntime::wake_timed`]). Until 2026-09-24 it was delivered when
+    /// it started, up to one verification service time early.
+    pub fn step_timed(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        inbox: Vec<(RxFrame, RxStamp)>,
+        distance_travelled_m: f64,
+    ) -> StepOutcome {
+        let now = ctx.now();
+        self.clock.advance(now, self.belief.fix.has_position());
+        // What it signs and what it judges, on its own clock (edge-case package, item 2).
+        self.security.set_clock_offset(self.clock.offset_ns());
+        let believed = self.clock.believed_time(now);
+
+        let mut out = StepOutcome::default();
+        if self.state == NodeState::Off {
+            self.switched_off(believed, inbox, &mut out);
+            out.drops = self.drops.take_step();
+            return out;
+        }
+
+        self.receive(ctx, believed, inbox, &mut out);
+        self.p2pcd_send_due(ctx, believed);
+        self.stores.neighbors.age(believed);
+        self.stores.heard.age(believed);
+        self.stores.certs.travelled(distance_travelled_m);
+        // The change rule reads displacement from the last change point (veh C6), on the
+        // device's own fix: without one it knows no position.
+        if self.belief.fix.has_position() {
+            self.stores
+                .certs
+                .position(self.belief.pos.x, self.belief.pos.y);
+        }
+        self.stores.certs.sweep(believed, &self.stores.crl);
+        if !self.msg_count_seeded {
+            // The first BSM after start-up carries a random `msgCnt` (SAE J2945/1 §6.3.6.2
+            // `DATAACC-002`), so a fleet switched on together does not all count from 1.
+            self.msg_count_seeded = true;
+            let start = ctx
+                .rng(
+                    v2xw_core::rng::RngDomain::plugin(STARTUP_MSG_COUNT_STREAM),
+                    v2xw_core::rng::EntityRef::Node(self.node),
+                )
+                .below(128);
+            self.schedule
+                .restart_bsm_count(u8::try_from(start).unwrap_or(0));
+        }
+        let changes_before = self.stores.certs.changes();
+        // No change while the BSM carries a critical event flag (J2945/1 CERTCHG-002).
+        let critical = self.critical_event(believed);
+        let _ = self
+            .stores
+            .certs
+            .rotate_in_use(believed, self.belief.fix.has_position(), critical);
+        if self.stores.certs.changes() > changes_before {
+            // Every identifier on the air changes together (C2C-CC BSP RS_BSP_182; SAE
+            // J2945/1). The certificate carries the `TemporaryID` and the link-layer
+            // address with it; the BSM `msgCnt` does not, so it restarts at a random value,
+            // which J2735 allows "if the sender has changed identity". Counting on would
+            // name the old pseudonym to anyone listening.
+            let restart = ctx
+                .rng(
+                    v2xw_core::rng::RngDomain::plugin(IDENTITY_CHANGE_STREAM),
+                    v2xw_core::rng::EntityRef::Node(self.node),
+                )
+                .below(128);
+            self.schedule
+                .restart_bsm_count(u8::try_from(restart).unwrap_or(0));
+            // The first BSM under the new certificate carries it (S3).
+            self.security.restart_certificate_cadence();
+        }
+
+        if self.state.transmits() {
+            self.generate(ctx, believed, &mut out);
+        }
+
+        // The applications decide over what has been delivered so far, at the node's
+        // periodic step (10 Hz for an OBU): the rate a V2V application's threat
+        // assessment runs at (CAMP VSC-A).
+        if let Some(apps) = self.apps.as_mut() {
+            out.advice = apps.evaluate(
+                ctx,
+                self.node,
+                believed,
+                &self.belief,
+                &self.own,
+                self.config.dims,
+            );
+        }
+
+        self.p2pcd_record(ctx, believed);
+        if self.window.length(now) >= self.config.telemetry_period {
+            out.telemetry = Some(self.close_window(ctx, now));
+        }
+        out.drops = self.drops.take_step();
+        out
+    }
+
+    /// Wakes the node between its periodic steps, to hand over what has finished.
+    ///
+    /// A signature check that started during a step usually finishes after it, and its
+    /// message is not the applications' until it does. The engine calls this at
+    /// [`ObuRuntime::next_completion`]: the frames that have arrived by now are received
+    /// in continuous time exactly as [`ObuRuntime::step_timed`] receives them, every check
+    /// that has finished is delivered, and nothing else happens — no generation, no
+    /// pseudonym rotation, no telemetry window, which are the periodic step's.
+    pub fn wake_timed(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        inbox: Vec<(RxFrame, RxStamp)>,
+    ) -> StepOutcome {
+        let now = ctx.now();
+        self.clock.advance(now, self.belief.fix.has_position());
+        // What it signs and what it judges, on its own clock (edge-case package, item 2).
+        self.security.set_clock_offset(self.clock.offset_ns());
+        let believed = self.clock.believed_time(now);
+        let mut out = StepOutcome::default();
+        if self.state == NodeState::Off {
+            self.switched_off(believed, inbox, &mut out);
+            out.drops = self.drops.take_step();
+            return out;
+        }
+        self.receive(ctx, believed, inbox, &mut out);
+        self.p2pcd_send_due(ctx, believed);
+        self.p2pcd_record(ctx, believed);
+        out.drops = self.drops.take_step();
+        out
+    }
+
+    /// When the next signature check in progress finishes, on this node's own clock — the
+    /// instant the engine must wake it for ([`ObuRuntime::wake_timed`]). `None` when no
+    /// check is running.
+    #[must_use]
+    pub fn next_completion(&self) -> Option<SimTime> {
+        self.verifying.keys().next().map(|(finish, _)| *finish)
+    }
+
+    /// [`ObuRuntime::next_completion`] on the simulation's timeline, seen from `now`: the
+    /// node's clock stands a fixed offset from the truth between two of its steps, so the
+    /// interval to the finish is the same on both. Never before `now`.
+    #[must_use]
+    pub fn next_completion_after(&self, now: SimTime) -> Option<SimTime> {
+        let finish = self.next_completion()?;
+        let believed = self.clock.believed_time(now);
+        Some(now.saturating_add(finish.saturating_sub(believed)))
+    }
+
+    /// The longest this device's BSM signature can take ([`ProfileServiceModel::
+    /// service_time_bound`] of its signing operation): what it budgets when it has to have
+    /// a BSM signed before a sidelink reservation. `None` when the profile costs
+    /// no signature.
+    #[must_use]
+    pub fn sign_time_bound(&self) -> Option<Duration> {
+        self.service
+            .service_time_bound(&OpDescriptor::sign(self.config.sign_op, 0))
+    }
+
+    /// Aligns the next periodic BSM to a sidelink reservation
+    /// ([`MessageSchedule::align_to`]): `at` is the instant on the simulation's timeline a
+    /// BSM generated then reaches the MAC in time for the reserved resource, seen from
+    /// `now`, and `period` the reservation period. The node's clock stands a fixed offset
+    /// from the truth between two of its steps, so the instant is moved onto that clock and
+    /// the due instant back by the same offset. Returns the due instant on the
+    /// simulation's timeline, or `None` when the node runs no BSM service.
+    pub fn align_bsm(&mut self, now: SimTime, at: SimTime, period: Duration) -> Option<SimTime> {
+        let believed_now = self.clock.believed_time(now);
+        let on_clock = |t: SimTime| {
+            if t >= now {
+                believed_now.saturating_add(t - now)
+            } else {
+                believed_now.saturating_sub(now - t)
+            }
+        };
+        let due = self.schedule.align_to(on_clock(at), period, &self.dcc)?;
+        Some(if due >= believed_now {
+            now.saturating_add(due - believed_now)
+        } else {
+            now.saturating_sub(believed_now - due)
+        })
+    }
+
+    /// Everything a switched-off node was handed, and every check it had in progress, is
+    /// reported as reaching a node that was off, rather than vanishing.
+    fn switched_off(
+        &mut self,
+        believed: SimTime,
+        inbox: Vec<(RxFrame, RxStamp)>,
+        out: &mut StepOutcome,
+    ) {
+        for (_, v) in core::mem::take(&mut self.verifying) {
+            out.rx_reports.push(RxReport {
+                disposition: RxDisposition::NodeOff,
+                ..v.report
+            });
+        }
+        {
+            for (_, stamp) in inbox {
+                let at = stamp
+                    .arrived_at
+                    .map_or(believed, |t| self.clock.believed_time(t));
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::NodeOff,
+                    arrived: at,
+                    parsed: at,
+                    verify_start: None,
+                    verify_done: None,
+                });
+            }
+        }
+    }
+
+    fn receive(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        believed: SimTime,
+        inbox: Vec<(RxFrame, RxStamp)>,
+        out: &mut StepOutcome,
+    ) {
+        // Each frame at the instant it arrived, on this node's clock, in arrival order.
+        // The engine hands frames over in arrival order already; the stable sort makes that
+        // a property of this function rather than of its caller.
+        let mut frames: Vec<(RxFrame, RxStamp, SimTime)> = inbox
+            .into_iter()
+            .map(|(f, stamp)| {
+                let at = stamp
+                    .arrived_at
+                    .map_or(believed, |t| self.clock.believed_time(t))
+                    .min(believed);
+                (f, stamp, at)
+            })
+            .collect();
+        frames.sort_by_key(|(_, _, at)| *at);
+
+        let parse_op = OpDescriptor::task("spdu-parse", crate::server::OpClass::Parse);
+        let parse_cost = self.service.service_time(ctx, &parse_op);
+
+        for (frame, stamp, arrived) in frames {
+            self.window.message_in();
+
+            // 1. The receive queue and the parse. With no parse cost in the profile (every
+            //    shipped profile carries it as uncalibrated) parsing is instantaneous and
+            //    the receive queue is always empty; with one, frames wait for the CPU and
+            //    the queue can overflow.
+            let parsed = match parse_cost {
+                None => arrived,
+                Some(cost) => {
+                    while self.parse_starts.front().is_some_and(|&t| t <= arrived) {
+                        self.parse_starts.pop_front();
+                    }
+                    if self.parse_starts.len() >= self.queues[0].capacity() {
+                        self.drops.record(DropCause::RxOverflow);
+                        out.rx_reports.push(RxReport {
+                            token: stamp.token,
+                            disposition: RxDisposition::Dropped(DropCause::RxOverflow),
+                            arrived,
+                            parsed: arrived,
+                            verify_start: None,
+                            verify_done: None,
+                        });
+                        continue;
+                    }
+                    let sched = self.cpu.submit(arrived, cost);
+                    if sched.start > arrived {
+                        self.parse_starts.push_back(sched.start);
+                    }
+                    sched.finish
+                }
+            };
+
+            // 2. Everything the verifier would have started by the time the policy looks, and
+            //    every check that has finished by then handed to the applications — so the
+            //    neighbour table the policy reads is the one it would really read.
+            self.advance_verifications(ctx, parsed);
+            self.complete_verifications(parsed, out);
+
+            // An out-of-band P2PCD learning response (PSID 136) is an unsecured PDU for
+            // the P2PCD Entity, not a message for an application or the verifier: it is
+            // counted against this node's own response processes and learned from (each
+            // certificate validated to an installed root first), and reported as
+            // reported as such. It never enters the verification queue.
+            if frame.msg_type == MsgType::P2pcd {
+                if let Some(bytes) = frame.spdu.as_deref() {
+                    let _ = self.security.p2pcd_receive_response(bytes);
+                }
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::P2pcdResponse,
+                    arrived,
+                    parsed,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
+
+            // A relayed misbehaviour report (PSID 0x26) is addressed to the roadside unit
+            // that forwards it: no application on a vehicle registered its PSID, so WSMP
+            // discards it before the security services see it ([`RxDisposition::
+            // PsidNotRegistered`]). Nothing is learned from its certificate either.
+            if frame.msg_type == MsgType::Mbr {
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::PsidNotRegistered,
+                    arrived,
+                    parsed,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
+
+            // 3. The SDS's relevance check of `generationTime` on this node's own clock
+            //    (IEEE 1609.2 §5.2; `rxval::GenerationTimeWindow`): a stale or
+            //    future-dated SPDU is discarded before anything else is spent on it.
+            if let Err(why) = self.security.trust_mut().check_generation_time(
+                frame.msg_type,
+                frame.claimed_generation_time,
+                arrived,
+            ) {
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::NotRelevant(why),
+                    arrived,
+                    parsed,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
+
+            // J2945/1's vehicle density counts the stations whose BSMs were received and
+            // decoded, not the ones whose checks have finished (FMVSS 150 NPRM, 82 FR
+            // 3890; `HeardTable`): record this one now, before the policy queues it.
+            self.hear(&frame, arrived);
+
+            // 4. The policy, over the queue as it is at this instant.
+            self.learn_or_request(&frame);
+            self.p2pcd_rx(ctx, &frame);
+            let summary = RxSummary {
+                signer: frame.signer.clone(),
+                msg_type: frame.msg_type,
+                bytes: frame.bytes,
+                received_at: arrived,
+                claimed_pos: frame.claimed_pos,
+                // What a safety application said about this signer, if one ran and scored
+                // it (the `on-demand` policy "verifies only
+                // messages that a safety application marks relevant"). `None` when no
+                // application is installed or none scored this signer, which makes an
+                // `on-demand` node with no applications verify only strangers — the
+                // correct degenerate behaviour rather than a silent "everything is
+                // relevant".
+                //
+                // Nothing in the engine installs application scores, so without a fallback
+                // every relevance was `None` and the `on-demand` threshold decided nothing.
+                // The fallback is the message's own claim against this node's belief
+                // ([`crate::safety::relevance_from_claim`]); an installed score wins.
+                relevance: frame
+                    .signer
+                    .as_ref()
+                    .and_then(|s| self.relevance.get(&crate::safety::digest_key(s)).copied())
+                    .or_else(|| {
+                        frame.claimed_pos.map(|p| {
+                            crate::safety::relevance_from_claim(
+                                &self.belief,
+                                p,
+                                frame.claimed_speed_mps,
+                                frame.claimed_heading_rad,
+                            )
+                        })
+                    }),
+            };
+            // A profile that prices no verification for the run's scheme checks nothing.
+            // Its messages are dropped here as unverifiable (`verify_unpriced`), not queued
+            // behind a verifier that never runs: that queue filled and every later
+            // message was reported as an overflow — "the verifier cannot keep up" — on an
+            // idle verifier. Counted with the policy's skips in the telemetry, the one
+            // counter for a message the node did not verify.
+            if !self.verify_priced {
+                let _ = summary;
+                self.drops.record(DropCause::VerifyPolicySkip);
+                ctx.emit(VerifyDecisionRecord::unpriced(
+                    self.node,
+                    parsed,
+                    policy_id(self.policy.code()),
+                    msg_type_name(frame.msg_type),
+                ));
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::Dropped(DropCause::VerifyPolicySkip),
+                    arrived,
+                    parsed,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
+            let decision = {
+                let view = PolicyView {
+                    position: &self.belief,
+                    neighbors: &self.stores.neighbors,
+                    queue_depth: self.queues[1].len(),
+                    queue_capacity: self.queues[1].capacity(),
+                };
+                self.policy.decide(&summary, &view)
+            };
+            if let Some(rec) = VerifyDecisionRecord::decided(
+                self.node,
+                parsed,
+                policy_id(self.policy.code()),
+                msg_type_name(frame.msg_type),
+                &decision,
+            ) {
+                ctx.emit(rec);
+            }
+
+            match decision {
+                VerifyDecision::Drop { cause } => {
+                    self.drops.record(cause);
+                    out.rx_reports.push(RxReport {
+                        token: stamp.token,
+                        disposition: RxDisposition::Dropped(cause),
+                        arrived,
+                        parsed,
+                        verify_start: None,
+                        verify_done: None,
+                    });
+                }
+                VerifyDecision::DeliverUnverified { reason } => {
+                    let _ = reason;
+                    self.drops.record(DropCause::VerifyPolicySkip);
+                    let m = self.to_message(&frame, arrived, VerificationState::Unverified);
+                    self.deliver(m, out);
+                    out.rx_reports.push(RxReport {
+                        token: stamp.token,
+                        disposition: RxDisposition::Delivered(VerificationState::Unverified),
+                        arrived,
+                        parsed,
+                        verify_start: None,
+                        verify_done: None,
+                    });
+                }
+                VerifyDecision::Verify { priority, .. } => {
+                    let depth = self.queues[1].len() as u64;
+                    let queued = Queued {
+                        item: frame,
+                        enqueued_at: parsed,
+                    };
+                    let admitted = if self.policy.oldest_drop() {
+                        self.queues[1].push_evicting(queued)
+                    } else {
+                        self.queues[1].push(queued)
+                    };
+                    let waiting = Waiting {
+                        token: stamp.token,
+                        arrived,
+                        parsed,
+                        depth,
+                        priority,
+                    };
+                    match admitted {
+                        Admission::Queued => self.verify_meta.push_back(waiting),
+                        Admission::Refused(refused) => {
+                            self.overflow(ctx, &refused, waiting, out);
+                        }
+                        Admission::Evicted(evicted) => {
+                            // The oldest waiting frame made room for this one: its report
+                            // is the overflow, and this frame joins the back of the line.
+                            if let Some(old) = self.verify_meta.pop_front() {
+                                self.overflow(ctx, &evicted, old, out);
+                            }
+                            self.verify_meta.push_back(waiting);
+                        }
+                    }
+                }
+            }
+        }
+
+        self.advance_verifications(ctx, believed);
+        self.complete_verifications(believed, out);
+    }
+
+    /// Hands every check that has finished by `until` to the applications, in the order
+    /// they finished, with its report.
+    ///
+    /// This is the one place a verified message is delivered. It used to happen when the
+    /// check *started*, up to one verification service time before the signature was
+    /// actually known to be good; now it happens when it finishes, and a check still
+    /// running at the end of a step waits for [`ObuRuntime::wake_timed`] or the next step.
+    fn complete_verifications(&mut self, until: SimTime, out: &mut StepOutcome) {
+        while let Some(entry) = self.verifying.first_entry() {
+            if entry.key().0 > until {
+                break;
+            }
+            let done = entry.remove();
+            if done.report.disposition != RxDisposition::UnknownSigner {
+                self.deliver(done.message, out);
+            }
+            out.rx_reports.push(done.report);
+        }
+    }
+
+    /// Reports one frame the verification queue refused or evicted.
+    fn overflow(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        refused: &Queued<RxFrame>,
+        waiting: Waiting,
+        out: &mut StepOutcome,
+    ) {
+        self.drops.record(DropCause::VerifyOverflow);
+        ctx.emit(VerifyDecisionRecord::overflowed(
+            self.node,
+            waiting.parsed,
+            policy_id(self.policy.code()),
+            msg_type_name(refused.item.msg_type),
+        ));
+        out.rx_reports.push(RxReport {
+            token: waiting.token,
+            disposition: RxDisposition::Dropped(DropCause::VerifyOverflow),
+            arrived: waiting.arrived,
+            parsed: waiting.parsed,
+            verify_start: None,
+            verify_done: None,
+        });
+    }
+
+    /// The peer-to-peer certificate distribution path (IEEE 1609.2 clause 8).
+    ///
+    /// A message that attached its full certificate teaches this node the certificate; a
+    /// message that named one by digest and missed the cache cannot be verified until
+    /// P2PCD supplies it, and the request is counted. The counters are what make the
+    /// certificate-attachment cadence — full certificate every
+    /// 450 ms for J2945/1, once a second for ETSI — a measurable trade rather than a
+    /// constant: attaching more often costs bytes on the air and saves requests.
+    fn learn_or_request(&mut self, frame: &RxFrame) {
+        let Some(signer) = frame.signer.clone() else {
+            return;
+        };
+        if frame.full_certificate {
+            // A certificate the node did not hold: in the Partially-Hybrid mode its
+            // post-quantum issuer signature is checked once, now that it is learned.
+            if self.config.cert_verify_op.is_some() && !self.stores.peers.holds(&signer) {
+                self.cert_checks_due = self.cert_checks_due.saturating_add(1);
+            }
+            // An evicted certificate takes its validated state with it (crate::rxval).
+            if let Some(gone) = self
+                .stores
+                .peers
+                .learn_attached(&signer, frame.signer_certificate.as_ref())
+            {
+                self.security.trust_mut().forget(gone);
+            }
+        } else if !self.stores.peers.touch(&signer) {
+            self.stores.peers.record_digest_miss();
+        }
+    }
+
+    /// The SDS's P2PCD preprocessing of one received SPDU: the peer's requests and
+    /// responses, and a request for an issuer or signer this node does not hold
+    /// ([`NodeSecurity::p2pcd_preprocess`]). Independent of the verification policy: the
+    /// SDS looks at every signed SPDU the SDEE hands it, verified or not.
+    fn p2pcd_rx(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) {
+        let Some(bytes) = frame.spdu.as_deref() else {
+            return;
+        };
+        let Some(parsed) = self.security.parse(bytes) else {
+            return;
+        };
+        let known = match &parsed.signer {
+            v2xw_sec::envelope::ParsedSigner::Digest(d) => {
+                self.stores.peers.certificate(d).is_some()
+            }
+            _ => true,
+        };
+        self.security
+            .p2pcd_preprocess(ctx, self.node, &parsed, known);
+    }
+
+    /// Starts every waiting signature check whose start instant is no later than `until`.
+    ///
+    /// The head of the line starts at `max(when it was queued, when a server frees up)`;
+    /// if that is after `until` it is still waiting and so is everything behind it. A check
+    /// that starts is charged to its server and classified, and waits in `verifying` until
+    /// the instant it finishes ([`ObuRuntime::complete_verifications`] hands it over).
+    fn advance_verifications(&mut self, ctx: &mut dyn NodeCtx, until: SimTime) {
+        let probe = OpDescriptor::verify(self.config.verify_op, 0);
+        if self.service.service_time(ctx, &probe).is_none() {
+            // The profile costs no verification. Nothing is verified and nothing is
+            // silently delivered as if it had been: the queue simply does not drain, which
+            // shows up as a growing `q_verify` and a `verifications_per_s` of zero.
+            return;
+        }
+        let where_ = self.service.runs_on(&probe);
+        loop {
+            let Some(head) = self.queues[1].iter().next() else {
+                break;
+            };
+            let free = match where_ {
+                RunsOn::Hsm => self.hsm.earliest_free(),
+                RunsOn::Accelerator => self.accel.earliest_free(),
+                RunsOn::Cpu => self.cpu.earliest_free(),
+            };
+            let start = head.enqueued_at.max(free);
+            if start > until {
+                break;
+            }
+            // The server takes the highest-priority frame among those waiting when it
+            // starts, the oldest of them on a tie (`prioritized`
+            // verifies the relevant and the near first). Every other policy gives every
+            // frame priority 0, so this is the head of the line and the order is first in,
+            // first out exactly as before. It used to be first in, first out for
+            // `prioritized` too: the priority was computed, recorded and never read.
+            let mut pick = 0;
+            let mut best = self.verify_meta.front().map_or(0, |w| w.priority);
+            for (i, (q, w)) in self.queues[1]
+                .iter()
+                .zip(self.verify_meta.iter())
+                .enumerate()
+                .skip(1)
+            {
+                if q.enqueued_at > start {
+                    break;
+                }
+                if w.priority > best {
+                    best = w.priority;
+                    pick = i;
+                }
+            }
+            let Some(q) = self.queues[1].take_at(pick) else {
+                break;
+            };
+            let meta = self.verify_meta.remove(pick).unwrap_or(Waiting {
+                token: 0,
+                arrived: q.enqueued_at,
+                parsed: q.enqueued_at,
+                depth: 0,
+                priority: 0,
+            });
+            let frame = q.item;
+            // Charged over the bytes actually checked, as signing is over the bytes
+            // actually signed.
+            let op = OpDescriptor::verify(self.config.verify_op, frame.bytes);
+            let Some(cost) = self.service.service_time(ctx, &op) else {
+                continue;
+            };
+            // Receiver validation runs before the server is booked, so the time it charges
+            // (chain links, reconstructions, CRL work) is in this frame's service time.
+            let verdict = self.classify(ctx, &frame);
+            // A signer whose certificate (or issuer) this node does not hold cannot be
+            // verified, so no signature check runs and none is charged; only the
+            // validation work actually done is (IEEE 1609.2 §5.2, crate::rxval).
+            let cost = if verdict == VerificationState::Unverified {
+                Duration::from_nanos(0)
+            } else {
+                cost
+            };
+            let cost = cost
+                + crate::rxval::charge(&mut self.security, &self.service.profile().id)
+                + self.certificate_checks(ctx, frame.bytes);
+            let sched = match where_ {
+                RunsOn::Hsm => self.hsm.submit(q.enqueued_at, cost),
+                RunsOn::Accelerator => self.accel.submit(q.enqueued_at, cost),
+                RunsOn::Cpu => self.cpu.submit(q.enqueued_at, cost),
+            };
+            self.window.verification(sched.wait);
+
+            let mut rec = VerifyDecisionRecord::verified(
+                self.node,
+                q.enqueued_at,
+                sched.start,
+                sched.finish,
+                policy_id(self.policy.code()),
+                msg_type_name(frame.msg_type),
+                self.config.verify_op,
+                match verdict {
+                    VerificationState::Verified | VerificationState::Revoked => "valid",
+                    VerificationState::Invalid => "invalid",
+                    // No certificate to check against: the node concluded nothing.
+                    _ => "skipped",
+                },
+                meta.depth,
+            );
+            // The priority it was served by: 0 for every policy but `prioritized`.
+            rec.priority = meta.priority;
+            if verdict == VerificationState::Unverified {
+                rec = rec.unknown_signer(self.policy.holds_unknown_signer());
+            }
+            ctx.emit(rec);
+            // The verdict is fixed now, but the applications have it only when the server
+            // is done: the message waits in `verifying` until `sched.finish`.
+            let message = self.to_message(&frame, meta.arrived, verdict);
+            let refusal = self
+                .security
+                .take_last_refusal()
+                .filter(|_| verdict == VerificationState::Invalid);
+            let disposition =
+                if verdict == VerificationState::Unverified && self.policy.holds_unknown_signer() {
+                    self.drops.record(DropCause::VerifyPolicySkip);
+                    RxDisposition::UnknownSigner
+                } else if let Some(rule) = refusal {
+                    RxDisposition::Refused(rule)
+                } else {
+                    RxDisposition::Delivered(verdict)
+                };
+            let seq = self.verify_seq;
+            self.verify_seq += 1;
+            self.verifying.insert(
+                (sched.finish, seq),
+                Verifying {
+                    message,
+                    report: RxReport {
+                        token: meta.token,
+                        disposition,
+                        arrived: meta.arrived,
+                        parsed: meta.parsed,
+                        verify_start: Some(sched.start),
+                        verify_done: Some(sched.finish),
+                    },
+                },
+            );
+        }
+    }
+
+    /// What the node concludes about one frame, having spent the verification time.
+    ///
+    /// When the frame carries its SPDU the node does the real work: it parses the bytes,
+    /// resolves the signer's certificate out of its own bounded cache, and checks the
+    /// signature with its own crypto backend. [`RxFrame::signature_valid`] is not read at
+    /// all on that path — it is the engine's opinion, and a receiver does not have access
+    /// to one.
+    ///
+    /// When the frame carries no bytes the node falls back to that field, which is the
+    /// state the engine is still in. The fallback is visible rather than silent: it is the
+    /// only branch that reads `signature_valid`, and `tests/wire_bytes.rs` drives both.
+    ///
+    /// The revocation check is the bounded one: `authenticated` is the outcome of the
+    /// signature check, so a frame whose signature failed never reaches the CRL with an
+    /// attacker-chosen i-period in hand.
+    fn classify(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) -> VerificationState {
+        // A refusal is this frame's only if this judgement makes it.
+        let _ = self.security.take_last_refusal();
+        // The SPDU-level validity rule reads the certificate alone and costs nothing, so
+        // it refuses before any signature is checked (crate::rxval, `validate_inner`).
+        if frame_outside_validity(frame).is_some() {
+            self.security
+                .note_refusal(crate::rxval::RxReject::GenerationTimeOutsideValidity);
+            return VerificationState::Invalid;
+        }
+        // The revocation check reads the certificate's own `linkageData` (iCert and the
+        // linkage value), out of the certificate the signature was checked against: the
+        // field a linked CRL entry is matched against [1609.2 §5.1.3.4]. Nothing else
+        // tells a receiver which certificate a frame was signed under.
+        let (authentic, linkage) = match &frame.spdu {
+            Some(bytes) => match self.verify_on_the_wire(ctx, bytes) {
+                (SpduVerdict::Valid, linkage) => (true, linkage),
+                (SpduVerdict::Invalid, _) => (false, None),
+                // The node holds no certificate for this signer, so it has concluded
+                // nothing. Answering `Invalid` would blame a peer for this node's own
+                // empty cache; the P2PCD request is counted in `learn_or_request`.
+                (SpduVerdict::Unverifiable, _) => return VerificationState::Unverified,
+                // A 1609.2 receiver rule refused it (crate::rxval), or a hash CRL the node
+                // verified revokes the signer or a CA above it.
+                (SpduVerdict::Refused, _) => return VerificationState::Invalid,
+                (SpduVerdict::Revoked, _) => return VerificationState::Revoked,
+            },
+            None => match self.security.verify_sized(
+                ctx,
+                frame.signer_certificate.as_deref(),
+                frame.signature_valid,
+            ) {
+                (SpduVerdict::Valid, linkage) => (true, linkage),
+                (SpduVerdict::Invalid, _) => (false, None),
+                (SpduVerdict::Unverifiable, _) => return VerificationState::Unverified,
+                (SpduVerdict::Refused, _) => return VerificationState::Invalid,
+                (SpduVerdict::Revoked, _) => return VerificationState::Revoked,
+            },
+        };
+        if !authentic {
+            return VerificationState::Invalid;
+        }
+        let Some((i_cert, lv, craca, series)) = linkage else {
+            return VerificationState::Verified;
+        };
+        // Tell the gate which i-period this node believes it is in, before asking it to
+        // judge a peer's.
+        //
+        // `CrlGate` refuses a claimed period further than its skew from `current_period`,
+        // so that an attacker cannot make a receiver walk a hash chain for a period a
+        // year away. That defence turns into a denial of service against honest traffic
+        // if nothing ever tells the gate what period it is: it starts at 0 through
+        // `Default`, every real certificate claims a provisioned period, the difference
+        // exceeds the skew, and every frame is refused.
+        //
+        // Measured before this line existed: 98.23 % of received messages in a Phase 2
+        // run landed in `Invalid`, only 0.73 % verified, and the detector suite reported
+        // every one of them as a signature failure — 126 false misbehaviour reports and
+        // one honest device revoked.
+        //
+        // The node's own clock read against the i-period calendar is the source
+        // (`CrlGate::follow_clock`): a real device computes its period that way, and it is
+        // the node's own state, not ground truth. Its active credential is the fallback
+        // for a node told no calendar; it is wrong for a car that powers on holding an
+        // expired pool.
+        let own = self.stores.certs.active().map(|c| c.i_period);
+        self.stores
+            .crl
+            .follow_clock(self.clock.believed_time(ctx.now()), own);
+        match self
+            .stores
+            .crl
+            .check_from(u32::from(i_cert), lv, craca, series, authentic)
+        {
+            crate::stores::CrlVerdict::Revoked => VerificationState::Revoked,
+            crate::stores::CrlVerdict::NotRevoked => VerificationState::Verified,
+            // The node refused to spend work on an implausible claim, so it has learned
+            // nothing about revocation and must not treat the certificate as clean.
+            crate::stores::CrlVerdict::RefusedImplausiblePeriod { .. } => {
+                VerificationState::Invalid
+            }
+        }
+    }
+
+    /// Parses an SPDU, resolves its signer's certificate and checks the signature.
+    ///
+    /// The certificate comes from exactly two places, and both are the node's own: the
+    /// SPDU itself when the sender attached one, or this node's bounded peer cache when it
+    /// named one by digest. A miss is [`SpduVerdict::Unverifiable`] — the P2PCD case —
+    /// and never a rejection, because a receiver that has not been told a certificate has
+    /// learned nothing about the message signed under it.
+    fn verify_on_the_wire(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        bytes: &[u8],
+    ) -> (SpduVerdict, Option<crate::rxval::LinkageKey>) {
+        let Some(parsed) = self.security.parse(bytes) else {
+            self.spdu_parse_failures += 1;
+            return (SpduVerdict::Invalid, None);
+        };
+        let certificate = match NodeSecurity::attached_certificate(&parsed) {
+            Some(c) => {
+                // The certificate the peer cache evicts takes its validated state
+                // with it (crate::rxval, the end-entity cache).
+                if let Some(gone) = self.stores.peers.learn_certificate(c.clone()) {
+                    self.security.trust_mut().forget(gone);
+                }
+                Some(c)
+            }
+            None => NodeSecurity::parsed_signer_digest(&parsed)
+                .and_then(|d| self.stores.peers.certificate(&d)),
+        };
+        let Some(certificate) = certificate else {
+            return (SpduVerdict::Unverifiable, None);
+        };
+        let v = self
+            .security
+            .verify_parsed(ctx, &parsed, &certificate, self.node);
+        if v == SpduVerdict::Invalid {
+            self.spdu_signature_failures += 1;
+        }
+        (v, crate::rxval::linkage_key(&certificate))
+    }
+
+    /// The post-quantum certificate checks owed since the last booking
+    /// (`NodeConfig::cert_verify_op`, once per certificate learned), priced on this node's
+    /// hardware profile as its message verification is, and counted in
+    /// [`crate::rxval::RxStats::cert_pq_verifications`]. Zero when the mode has none.
+    fn certificate_checks(&mut self, ctx: &mut dyn NodeCtx, bytes: u32) -> Duration {
+        let n = core::mem::take(&mut self.cert_checks_due);
+        let Some(op) = self.config.cert_verify_op.filter(|_| n > 0) else {
+            return Duration::from_nanos(0);
+        };
+        self.security.trust_mut().stats.cert_pq_verifications += u64::from(n);
+        match self
+            .service
+            .service_time(ctx, &OpDescriptor::verify(op, bytes))
+        {
+            Some(d) => {
+                let total = Duration::from_nanos(d.as_nanos().saturating_mul(u64::from(n)));
+                let stats = &mut self.security.trust_mut().stats;
+                stats.charged_ns = stats.charged_ns.saturating_add(total.as_nanos());
+                total
+            }
+            None => {
+                self.security.trust_mut().stats.unpriced += u64::from(n);
+                Duration::from_nanos(0)
+            }
+        }
+    }
+
+    /// How many received SPDUs failed to parse at all.
+    ///
+    /// Split from the signature failures because the two have nothing in common: one is a
+    /// malformed or truncated envelope, the other is a well-formed envelope whose
+    /// signature does not check out. The aggregate `Invalid` count cannot tell them apart,
+    /// and while it could not, two wrong hypotheses were pursued.
+    #[must_use]
+    pub const fn spdu_parse_failures(&self) -> u64 {
+        self.spdu_parse_failures
+    }
+
+    /// How many received SPDUs parsed but whose signature did not verify.
+    #[must_use]
+    pub const fn spdu_signature_failures(&self) -> u64 {
+        self.spdu_signature_failures
+    }
+
+    fn to_message(
+        &self,
+        frame: &RxFrame,
+        believed: SimTime,
+        verification: VerificationState,
+    ) -> VerifiedMessage {
+        VerifiedMessage {
+            signer: frame.signer.clone(),
+            msg_type: frame.msg_type,
+            bytes: frame.bytes,
+            received_at: believed,
+            claimed_generation_time: frame.claimed_generation_time,
+            claimed_pos: frame.claimed_pos,
+            claimed_speed_mps: frame.claimed_speed_mps,
+            claimed_heading_rad: frame.claimed_heading_rad,
+            bsm: frame.bsm,
+            verification,
+            outside_validity: frame_outside_validity(frame)
+                .filter(|_| verification == VerificationState::Invalid),
+            // The facilities payload, out of the SPDU as it arrived, for the messages an
+            // application reads beyond the claims above (`crate::apps`). Only when the
+            // node runs applications: the parse is not free and nothing else reads it.
+            // Beyond the farthest any application looks (EEBL's 300 m, GLOSA's 300 m to the
+            // stop line) the content is not read, which is also what keeps a dense run's
+            // cost down: the claims above still reach the neighbour table.
+            // A WSA is read by the stack itself (the WAVE management entity), apps or not.
+            payload: if frame.msg_type == MsgType::Wsa
+                || (self.apps.is_some()
+                    && wants_payload(frame.msg_type)
+                    && frame
+                        .claimed_pos
+                        .is_none_or(|p| p.distance_2d(self.belief.pos) <= 320.0))
+            {
+                frame
+                    .spdu
+                    .as_deref()
+                    .and_then(|b| self.security.parse(b))
+                    .map(|p| std::sync::Arc::<[u8]>::from(p.payload))
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Records a received frame in the [`crate::stores::HeardTable`]: a frame that
+    /// describes a station (as [`Self::deliver`] judges it for the neighbour table) and
+    /// says where it is.
+    fn hear(&mut self, frame: &RxFrame, arrived: SimTime) {
+        if crate::stores::describes_a_station(frame.msg_type)
+            && let (Some(signer), Some(pos)) = (frame.signer.as_ref(), frame.claimed_pos)
+        {
+            self.stores.heard.hear(signer, pos, arrived);
+        }
+    }
+
+    fn deliver(&mut self, m: VerifiedMessage, out: &mut StepOutcome) {
+        self.window
+            .delivered(m.verification == VerificationState::Verified);
+        self.events.on_delivered(&m);
+        if let Some(apps) = self.apps.as_mut() {
+            apps.on_message(&m);
+        }
+        // The neighbour table is a table of *stations moving around this one*, and what
+        // fills it is their awareness messages. A SPaT, a MAP or a signal request says
+        // where a junction is, not where its sender is going, and a DENM describes an
+        // event rather than a station; none of them makes its sender a neighbour.
+        if m.verification != VerificationState::Invalid
+            && crate::stores::describes_a_station(m.msg_type)
+            && let Some(signer) = m.signer.clone()
+        {
+            if self.stores.neighbors.get(&signer).is_none() {
+                self.security.note_new_neighbour();
+            }
+            self.stores.neighbors.observe(Neighbor {
+                signer,
+                claimed_pos: m.claimed_pos.unwrap_or(v2xw_core::geom::Vec3::ZERO),
+                claimed_speed_mps: m.claimed_speed_mps,
+                claimed_heading_rad: m.claimed_heading_rad,
+                claimed_generation_time: m.claimed_generation_time,
+                last_heard: m.received_at,
+                messages: 1,
+                state: m.verification,
+            });
+        }
+        self.learn_wsa(&m);
+        if self.received.len() >= self.evidence_capacity {
+            self.received.remove(0);
+        }
+        self.received.push(m.clone());
+        out.delivered.push(m);
+    }
+
+    /// The WSA user (IEEE 1609.3 §8.2.3): a WSA whose signature verified (1609.3-2016
+    /// Annex H.1 secures it; RSU Spec v4.1 Req_586) and that lists the SCMS service
+    /// ([`v2xw_msg::wsa::PSID_SECURITY_MANAGEMENT`]) beside a WAVE Routing Advertisement
+    /// makes its router available, under the router's advertised prefix.
+    fn learn_wsa(&mut self, m: &VerifiedMessage) {
+        if m.msg_type != MsgType::Wsa || m.verification != VerificationState::Verified {
+            return;
+        }
+        let Some(wsa) = m
+            .payload
+            .as_deref()
+            .and_then(|b| v2xw_msg::wsa::decode_wsa(b).ok())
+        else {
+            return;
+        };
+        let offers_scms = wsa.services.as_ref().is_some_and(|s| {
+            s.iter()
+                .any(|i| i.psid == v2xw_msg::wsa::PSID_SECURITY_MANAGEMENT)
+        });
+        if let (true, Some(ra)) = (offers_scms, wsa.routing) {
+            let mut prefix = [0u8; 8];
+            prefix.copy_from_slice(&ra.prefix[..8]);
+            self.scms_routers.insert(prefix, m.received_at);
+        }
+    }
+
+    /// Builds, encodes, signs and queues whatever the schedule says is due.
+    ///
+    /// The order is the order a real stack does it in, and each step is real:
+    ///
+    /// 1. the timers decide, from the node's **belief** and the node's **clock**;
+    /// 2. the active credential is turned into a real key and a real certificate, once per
+    ///    pseudonym ([`crate::secure::NodeSecurity::provision`]);
+    /// 3. the payload is built from the belief and encoded by the format's own encoder —
+    ///    a CAM through the generated ETSI UPER bindings, a BSM through the hand-written
+    ///    J2735 encoder that was cross-validated against `pycrate` over 235 vectors;
+    /// 4. it is signed into an IEEE 1609.2 `SignedData` SPDU by the node's crypto backend;
+    /// 5. the signature's *modelled* time is charged against the profile's own server
+    ///    bank, so a slow signer queues and a node that cannot keep up falls behind.
+    ///
+    /// Step 3 is why a CAM and a BSM come out at different sizes. They are different
+    /// formats carrying different fields; the only way they can agree to the byte is if
+    /// neither was encoded.
+    fn generate(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime, out: &mut StepOutcome) {
+        // The two arguments are the node's own clock and the node's own belief. Nothing
+        // else is in scope, and `crate::firewall` checks that this stays true.
+        let requests = self.schedule.due(believed, &self.belief, &self.dcc);
+        let station_id = self.stores.certs.active().map(|c| {
+            u32::from_be_bytes([c.digest.0[0], c.digest.0[1], c.digest.0[2], c.digest.0[3]])
+        });
+        let events = self
+            .events
+            .due(believed, &self.belief, self.schedule.services(), station_id);
+        // The collective perception service: a CPM when its generation rules say so.
+        let cpm_content = if self.schedule.services().cpm {
+            // Under `messages.cpm_dcc_limited` the generation interval follows the
+            // DCC's gap; otherwise `due_under_dcc` ignores it.
+            self.cpm.due_under_dcc(believed, self.dcc.t_off)
+        } else {
+            None
+        };
+        if requests.is_empty() && events.is_empty() && cpm_content.is_none() {
+            return;
+        }
+        let wanted = (requests.len() + events.len() + usize::from(cpm_content.is_some())) as u32;
+        let Some(cred) = self.stores.certs.active().cloned() else {
+            // No usable credential: a node on the CRL, or one whose pool has run out.
+            // [CAMP-EE §2.2.10.2] — it stops transmitting rather than sending unsigned.
+            self.drops.record_n(DropCause::TxOverflow, wanted);
+            self.tx_uncredentialed += u64::from(wanted);
+            return;
+        };
+        // Only a credential the SCMS issued and the security stack installed can sign
+        // (`install_credential`). Every pseudonym in the store was installed with its own
+        // certificate when it was handed down, so the digest a revocation is matched by is
+        // the one on the air from the first frame, and rotating cannot dodge it. A handle
+        // with no key stops the node transmitting rather than sending unsigned
+        // [CAMP-EE §2.2.10.2].
+        if !self.security.set_active(cred.i_period, cred.j_index) {
+            self.drops.record_n(DropCause::TxOverflow, wanted);
+            self.tx_uncredentialed += u64::from(wanted);
+            return;
+        }
+        let Some(cred) = self.stores.certs.active().cloned() else {
+            self.drops.record_n(DropCause::TxOverflow, wanted);
+            self.tx_uncredentialed += u64::from(wanted);
+            return;
+        };
+        // A new pseudonym keeps the path history or starts a new one
+        // (`NodeConfig::path_history_on_change`).
+        self.own
+            .set_identity(crate::safety::digest_key(&cred.digest));
+
+        let mut built: Vec<(MsgType, SimTime, Option<Vec<u8>>)> =
+            Vec::with_capacity(wanted as usize);
+        // Per message: the timing model's report (a BSM under `crate::bsm_timing`) and the
+        // BSM fields a receiver's SM-MBR checks read.
+        let mut extras: Vec<(
+            Option<crate::bsm_timing::BsmReport>,
+            crate::bsm_timing::BsmExtras,
+        )> = Vec::with_capacity(wanted as usize);
+        for r in requests {
+            let report = if r.msg_type == MsgType::Bsm {
+                self.bsm_timing_report(ctx)
+            } else {
+                None
+            };
+            if report.is_some_and(|x| !x.send) {
+                // The device's own BSM clock has no tick in this window
+                // (`crate::bsm_timing`, schema v2): nothing is generated, and msgCnt counts
+                // only what is sent.
+                let count = self.schedule.bsm_msg_count();
+                self.schedule.restart_bsm_count((count + 127) % 128);
+                continue;
+            }
+            let payload = self.encode_payload(
+                r.msg_type,
+                believed,
+                &cred,
+                r.include_low_frequency,
+                report.as_ref(),
+            );
+            extras.push((
+                report,
+                self.bsm_extras(r.msg_type, believed, report.as_ref()),
+            ));
+            built.push((r.msg_type, r.at, payload));
+        }
+        if let Some(content) = cpm_content {
+            let payload = self.encode_cpm(&content, believed, &cred);
+            built.push((MsgType::Cpm, believed, payload));
+        }
+        for e in events {
+            let ty = e.msg_type();
+            let payload = self
+                .events
+                .encode(&e, believed, &cred, &self.config, &self.own);
+            built.push((ty, believed, payload));
+        }
+        let mut extras = extras.into_iter();
+        for (msg_type, at, payload) in built {
+            let (report, bsm_fields) = extras.next().unwrap_or_default();
+            let Some(payload) = payload else {
+                // The node could not build a conformant message — a belief with no fix, a
+                // position outside the ASN.1's range, a clock before the 1609.2 epoch. It
+                // transmits nothing rather than a payload that would not decode.
+                self.drops.record(DropCause::TxOverflow);
+                continue;
+            };
+            let r = (msg_type, at);
+            // [CAMP122] Table 1 row 44: a privileged vehicle signs its signal
+            // requests under its identification certificate. One that holds none valid
+            // now sends none: a pseudonym does not stand in.
+            if r.0 == MsgType::Srm && self.security.holds_identification() {
+                let ident = self.security.sign_identified(ctx, r.0, &payload, believed);
+                let Some(Ok((frame, pdu))) = ident else {
+                    if ident.is_none() {
+                        self.srm_no_identification += 1;
+                        self.tx_uncredentialed += 1;
+                    }
+                    self.drops.record(DropCause::TxOverflow);
+                    continue;
+                };
+                let signer = self
+                    .security
+                    .identification_signer(believed)
+                    .map_or_else(|| cred.digest.clone(), |s| s.digest().clone());
+                self.queue_signed(
+                    ctx,
+                    believed,
+                    r,
+                    (frame, &pdu),
+                    signer,
+                    None,
+                    bsm_fields,
+                    out,
+                );
+                continue;
+            }
+            // A BSM with a critical event flag carries the whole certificate (J2945/1
+            // BSMSIGN-004).
+            let critical = r.0 == MsgType::Bsm && self.critical_event(believed);
+            let sid = self.security.signer_id_for_event(r.0, believed, critical);
+            // TS 103 097 §7.1.2: a DENM's envelope carries its generation location, and the
+            // ETSI profile refuses to sign one without it. The node's own belief.
+            let location = (r.0 == MsgType::Denm)
+                .then(|| generation_location(&self.belief, self.config.origin));
+            // The model's 1609.2 generationTime jitter rides the header as a clock skew, and
+            // so does a BSM clock's tick: the message is generated and stamped at the tick,
+            // up to one fix interval after the wake, and signed from then.
+            let tx_delay = report.map_or(0, |x| x.tx_delay_ns);
+            let jitter = report.map_or(0, |x| x.header_jitter_ns)
+                + i64::try_from(tx_delay).unwrap_or(i64::MAX);
+            let signed = if jitter == 0 {
+                self.security.sign(ctx, r.0, &payload, sid, location)
+            } else {
+                self.security
+                    .sign_with_extra_skew(ctx, r.0, &payload, sid, location, jitter)
+            };
+            let Ok((frame, pdu)) = signed else {
+                self.drops.record(DropCause::TxOverflow);
+                continue;
+            };
+            let signer = cred.digest.clone();
+            self.queue_signed(
+                ctx,
+                believed,
+                r,
+                (frame, &pdu),
+                signer,
+                report.as_ref(),
+                bsm_fields,
+                out,
+            );
+        }
+    }
+
+    /// Charges one signed message's signature to the profile's server bank and queues it
+    /// for the air: the second half of [`ObuRuntime::generate`]'s loop, shared by the
+    /// pseudonym path and the identification slot. `signer` is the digest the
+    /// frame is signed under; `report` is the BSM timing model's, which moves the
+    /// generation time and the transmit instant.
+    #[allow(clippy::too_many_arguments)]
+    fn queue_signed(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        believed: SimTime,
+        r: (MsgType, SimTime),
+        signed: (SignedFrame, &v2xw_sec::envelope::SecuredPdu),
+        signer: HashedId8,
+        report: Option<&crate::bsm_timing::BsmReport>,
+        bsm_fields: crate::bsm_timing::BsmExtras,
+        out: &mut StepOutcome,
+    ) {
+        let (frame, pdu) = signed;
+        let tx_delay = report.map_or(0, |x| x.tx_delay_ns);
+        let jitter =
+            report.map_or(0, |x| x.header_jitter_ns) + i64::try_from(tx_delay).unwrap_or(i64::MAX);
+        // The cost is charged over the bytes actually signed, not over zero: a cost
+        // table that ever grows a per-byte term will then be read correctly without
+        // anyone having to remember to come back here.
+        let op = OpDescriptor::sign(self.config.sign_op, frame.payload_bytes());
+        let Some(cost) = self.service.service_time(ctx, &op) else {
+            // The profile costs no signature. Nothing is signed for free.
+            self.drops.record(DropCause::TxOverflow);
+            return;
+        };
+        let at = believed.saturating_add(tx_delay);
+        let sched = match self.service.runs_on(&op) {
+            RunsOn::Hsm => self.hsm.submit(at, cost),
+            RunsOn::Accelerator => self.accel.submit(at, cost),
+            RunsOn::Cpu => self.cpu.submit(at, cost),
+        };
+        let full_certificate = pdu.signer_id == v2xw_sec::SignerIdChoice::Certificate;
+        let bytes = frame.bytes_on_wire();
+        let tx = Transmission {
+            msg_type: r.0,
+            bytes,
+            signer: signer.clone(),
+            full_certificate,
+            ready_at: sched.finish,
+            generation_time: if jitter >= 0 {
+                r.1.saturating_add(jitter.unsigned_abs())
+            } else {
+                r.1.saturating_sub(jitter.unsigned_abs())
+            },
+            sign_start: sched.start,
+            signed: Some(frame),
+            claimed_pos: report.map(|x| x.pos),
+            bsm: bsm_fields,
+        };
+        if let Admission::Refused(_) = self.queues[3].push(Queued {
+            item: RxFrame {
+                signer: Some(signer),
+                msg_type: r.0,
+                bytes,
+                claimed_pos: Some(self.belief.pos),
+                claimed_speed_mps: self.belief.ground_speed_mps(),
+                claimed_heading_rad: self.belief.heading_rad,
+                claimed_generation_time: r.1,
+                full_certificate,
+                signature_valid: true,
+                signer_validity: None,
+                spdu: None,
+                signer_certificate: None,
+                bsm: bsm_fields,
+            },
+            enqueued_at: believed,
+        }) {
+            self.drops.record(DropCause::TxOverflow);
+            return;
+        }
+        let _ = self.queues[3].pop();
+        if full_certificate {
+            let critical = r.0 == MsgType::Bsm && self.critical_event(believed);
+            self.security
+                .note_certificate_attached_for_event(r.0, believed, critical);
+        }
+        // Air time is the PHY's to compute; until a scenario wires one in, the node
+        // reports the byte count and leaves `airtime_ms_per_s` at zero contribution
+        // rather than inventing a data rate.
+        self.window.message_out(Duration::ZERO, tx.full_certificate);
+        out.transmissions.push(tx);
+    }
+
+    /// The timing model's report for the BSM about to be built, drawing the device's
+    /// class at its first BSM; `None` when the model is off or there is no fix.
+    fn bsm_timing_report(&mut self, ctx: &mut dyn NodeCtx) -> Option<crate::bsm_timing::BsmReport> {
+        let node = self.node;
+        let (cal, device) = self.bsm_timing.as_mut()?;
+        let mut rng = ctx.rng(
+            crate::bsm_timing::rng_domain(),
+            v2xw_core::rng::EntityRef::Node(node),
+        );
+        let device =
+            device.get_or_insert_with(|| crate::bsm_timing::BsmTimingDevice::assign(cal, &mut rng));
+        if cal.classes[device.class()].stamp_chain.is_some() {
+            // The chain's draws have a stream of their own: the device's other draws stay
+            // the ones it makes without the chain.
+            let mut chain_rng = ctx.rng(
+                crate::bsm_timing::chain_rng_domain(),
+                v2xw_core::rng::EntityRef::Node(node),
+            );
+            return device.report_chained(cal, &mut rng, &mut chain_rng, &self.belief);
+        }
+        device.report(cal, &mut rng, &self.belief)
+    }
+
+    /// A BSM's `secMark`, `accelSet.long` and brake status as its encoder fills them.
+    fn bsm_extras(
+        &self,
+        msg_type: MsgType,
+        believed: SimTime,
+        timing: Option<&crate::bsm_timing::BsmReport>,
+    ) -> crate::bsm_timing::BsmExtras {
+        if msg_type != MsgType::Bsm {
+            return crate::bsm_timing::BsmExtras::default();
+        }
+        crate::bsm_timing::BsmExtras {
+            speed_mps: timing.and_then(|t| t.speed_mps),
+            heading_rad: timing.and_then(|t| t.heading_rad),
+            // The count `encode_payload` just put in the BSM.
+            msg_cnt: Some(self.schedule.bsm_msg_count()),
+            sec_mark_ms: Some(bsm::sec_mark(
+                self.config.wall,
+                timing.map_or(believed, |t| t.sec_mark_at),
+            )),
+            // J2735 Acceleration: 0.01 m/s² LSB, ±20 m/s².
+            accel_long_mps2: self
+                .own
+                .bus()
+                .map(|b| (b.a_long_mps2.clamp(-20.0, 20.0) * 100.0).round() / 100.0),
+            // `brakes.wheelBrakes` as `encode_payload` filled it from the bus (no bus: the
+            // status is not sent). The `unavailable` bit reads as unknown.
+            brakes_applied: self.own.bus().and_then(|_| {
+                let w = self.own.brakes().wheel_brakes.0;
+                (w & bsm::BrakeAppliedStatus::UNAVAILABLE.0 == 0)
+                    .then_some(w & bsm::BrakeAppliedStatus::ALL_WHEELS.0 != 0)
+            }),
+        }
+    }
+
+    /// Builds one message from the node's belief and encodes it with its own encoder.
+    ///
+    /// `None` when the belief cannot be expressed in the format — which is a real
+    /// condition, not a defensive `unwrap`: `Latitude` and `Longitude` are constrained
+    /// integers and a node whose world position falls outside the ellipsoid, or whose
+    /// clock predates the 1609.2 epoch, has nothing conformant to send.
+    ///
+    /// The station identifier is the first four bytes of the credential's own
+    /// `HashedId8`. That is not decoration: it means the identifier on the air changes
+    /// exactly when the pseudonym changes, which is the property a linkability study
+    /// measures. A station id derived from the node id would have made every pseudonym
+    /// change trivially reversible.
+    fn encode_payload(
+        &self,
+        msg_type: MsgType,
+        believed: SimTime,
+        cred: &CredentialHandle,
+        low_frequency: bool,
+        timing: Option<&crate::bsm_timing::BsmReport>,
+    ) -> Option<Vec<u8>> {
+        let mut id = [0u8; 4];
+        id.copy_from_slice(&cred.digest.0[..4]);
+        let bus = self.own.bus().copied();
+        match msg_type {
+            MsgType::Cam => {
+                let generation_time = cam::timestamp_its(self.config.wall, believed).ok()?;
+                let mut input = cam::CamInput::new(
+                    u32::from_be_bytes(id),
+                    self.config.station_type,
+                    self.belief,
+                    self.config.origin,
+                    self.config.dims,
+                    generation_time,
+                );
+                // The high-frequency container's dynamics, from the vehicle's own sensors.
+                if let Some(b) = bus {
+                    input.longitudinal_acceleration_mps2 = Some(b.a_long_mps2);
+                    input.lateral_acceleration_mps2 = Some(b.a_lat_mps2);
+                    input.yaw_rate_rad_s = Some(b.yaw_rate_rad_s);
+                    if b.speed_mps > 1.0 {
+                        input.curvature_inv_m = Some(b.yaw_rate_rad_s / b.speed_mps);
+                        input.curvature_from_yaw_rate = true;
+                    }
+                }
+                // The low-frequency container at EN 302 637-2's cadence (the first CAM,
+                // then every 500 ms or more, `generator::CamGenerator`): role, lights and
+                // the path history.
+                if low_frequency {
+                    let now = believed;
+                    let points = self.own.history_points(&self.belief);
+                    let mut lights = cam::ExteriorLightMask::NONE;
+                    if let Some(l) = self.own.lights(now) {
+                        use v2xw_msg::j2735::bsm::ExteriorLights as J;
+                        let has = |bit: J| l.0 & bit.0 != 0;
+                        if has(J::LOW_BEAM) {
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::LOW_BEAM.0,
+                            );
+                        }
+                        if has(J::LEFT_TURN) || has(J::HAZARD) {
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::LEFT_TURN.0,
+                            );
+                        }
+                        if has(J::RIGHT_TURN) || has(J::HAZARD) {
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::RIGHT_TURN.0,
+                            );
+                        }
+                    }
+                    input.low_frequency = Some(cam::CamLowFrequency {
+                        vehicle_role: self.own.role(),
+                        exterior_lights: lights,
+                        path_history: points
+                            .iter()
+                            .map(|p| cam::PathHistoryPoint {
+                                pos: p.pos,
+                                age: Duration::from_nanos(self.belief.time_ns.saturating_sub(p.t)),
+                            })
+                            .collect(),
+                    });
+                }
+                let message = cam::build_cam(&input).ok()?;
+                let encoded = self.etsi.encode(&Message::Cam(Box::new(message))).ok()?;
+                debug_assert!(encoded.is_real(), "the ETSI codec produces real UPER bytes");
+                Some(encoded.bytes)
+            }
+            MsgType::Bsm => {
+                // Under the timing model the BSM reports the position and the secMark its
+                // device class gives it (`crate::bsm_timing`); otherwise the belief now.
+                let mut reported = self.belief;
+                if let Some(t) = timing {
+                    reported.pos = t.pos;
+                    // The receiver's output noise on the transmitted speed and heading.
+                    if let Some(s) = t.speed_mps {
+                        let g = reported.ground_speed_mps();
+                        let k = if g > 0.0 { s / g } else { 0.0 };
+                        reported.vel = v2xw_core::geom::Vec3::new(
+                            reported.vel.x * k,
+                            reported.vel.y * k,
+                            reported.vel.z,
+                        );
+                    }
+                    if let Some(h) = t.heading_rad {
+                        reported.heading_rad = h;
+                    }
+                }
+                let mut input = bsm::BsmInput::new(
+                    self.schedule.bsm_msg_count(),
+                    id,
+                    reported,
+                    self.config.origin,
+                    self.config.dims,
+                    bsm::sec_mark(self.config.wall, timing.map_or(believed, |t| t.sec_mark_at)),
+                );
+                // Part I's dynamics from the vehicle's own sensors, which J2945/1 requires
+                // an OBU to fill (`accelSet`, `brakes`); `transmission` is forward gears
+                // for a vehicle that is moving or standing in traffic.
+                if let Some(b) = bus {
+                    input.longitudinal_acceleration_mps2 = Some(b.a_long_mps2);
+                    input.lateral_acceleration_mps2 = Some(b.a_lat_mps2);
+                    input.yaw_rate_rad_s = Some(b.yaw_rate_rad_s);
+                    input.brakes = self.own.brakes();
+                    input.transmission = bsm::TransmissionState::ForwardGears;
+                }
+                let mut message = bsm::build_bsm(&input).ok()?;
+                // Part II: J2945/1's path history and path prediction on every message,
+                // the event flags and lights when there are any (`crate::vehicle`).
+                if let Some(ext) =
+                    self.own
+                        .safety_extensions(&self.belief, believed, self.config.origin)
+                {
+                    message = message.with_vehicle_safety(ext);
+                }
+                // A `MessageFrame`, because that is what goes in a WSM payload; the bare
+                // PDU is three octets shorter and is not what a receiver decodes.
+                let encoded = bsm::encode_message_frame(&message).ok()?;
+                debug_assert!(encoded.is_real(), "the J2735 encoder produces real bytes");
+                Some(encoded.bytes)
+            }
+            // A roadside unit's intersection messages: what its controller feed installed,
+            // signed as it stands. A unit with no feed sends nothing rather than an empty
+            // message.
+            MsgType::Spat | MsgType::Map | MsgType::Wsa => {
+                self.events.infra_payload(msg_type).map(<[u8]>::to_vec)
+            }
+            // Nothing else is generated here. A DENM, an SRM and an SSM are the event
+            // services' (`crate::events`), and a CRL or a report is the engine's.
+            _ => None,
+        }
+    }
+
+    fn close_window(&mut self, _ctx: &mut dyn NodeCtx, now: SimTime) -> NodeTelemetry {
+        let storage = self.service.profile().storage_model;
+        let profile = self.service.profile();
+        let (total, verified, unverified, revoked) = self.stores.neighbors.counts();
+        let queue_depths = [
+            self.queues[0].depth_percentiles(),
+            self.queues[1].depth_percentiles(),
+            self.queues[2].depth_percentiles(),
+            self.queues[3].depth_percentiles(),
+            self.queues[4].depth_percentiles(),
+        ];
+        let stores_bytes = self.stores.bytes(&storage);
+        let inputs = TelemetryInputs {
+            node: self.node,
+            storage_used_b: stores_bytes,
+            storage_total_b: profile
+                .flash_bytes
+                .get()
+                .copied()
+                .unwrap_or(v2xw_record::wire::U64_NONE),
+            // The top-up schedule belongs to the credential protocol, which is not this
+            // crate's; until one is attached the field is the "none scheduled" sentinel
+            // rather than a zero that would read as "overdue".
+            next_topup_ns: v2xw_record::wire::U64_NONE,
+            crl_bytes: self.stores.crl.bytes(&storage),
+            outbox_bytes: self.stores.outbox.bytes(),
+            clock_offset_ns: self.clock.offset_ns(),
+            ram_used_kib: u32::try_from(
+                stores_bytes.saturating_add(storage.baseline_ram_bytes) / 1024,
+            )
+            .unwrap_or(u32::MAX),
+            ram_total_kib: profile
+                .ram_bytes
+                .get()
+                .map(|b| u32::try_from(b / 1024).unwrap_or(u32::MAX))
+                .unwrap_or(v2xw_record::wire::U32_NONE),
+            drops: self.drops.counts(),
+            cert_stored: self.stores.certs.stored_count() as u32,
+            crl_entries: self.stores.crl.entries() as u32,
+            outbox_msgs: self.stores.outbox.len() as u32,
+            peer_cache_entries: self.stores.peers.len() as u32,
+            digest_misses: self.stores.peers.digest_misses(),
+            gnss_sigma_m: self.belief.semi_major_m as f32,
+            gnss_hdop: f32::NAN,
+            clock_drift_ppm: self.clock.drift_ppm() as f32,
+            pos_error_m: self.gt_pos_error_m,
+            cpu_util_pm: self.cpu.utilisation_pm(now),
+            // §3.5.2 has one field for security hardware and this profile may have two
+            // engines, so the binding one is reported: what a HUD needs to know is how
+            // close the security path is to saturation, and that is the busier engine.
+            hsm_util_pm: self
+                .hsm
+                .utilisation_pm(now)
+                .max(self.accel.utilisation_pm(now)),
+            queue_depths,
+            dcc_state: self.dcc_state_code,
+            cbr_pm: self.dcc.cbr.map_or(v2xw_record::wire::U16_NONE, |c| {
+                (v2xw_core::math::quantize_to(c * 1000.0, 1.0) as u16).min(1000)
+            }),
+            tx_power_cdbm: i16::try_from(v2xw_core::math::quantize_to(
+                self.config.tx_power_dbm * 100.0,
+                1.0,
+            ) as i64)
+            .unwrap_or(i16::MAX),
+            neighbors: (total, verified, unverified, revoked),
+            cert_active: u16::try_from(self.stores.certs.active_count(now)).unwrap_or(u16::MAX),
+            crl_expansion_pm: self.stores.crl.expansion_pm(),
+            gnss_fix: gnss_fix_code(self.belief.fix),
+            state: self.state,
+            verify_policy: self.policy.code(),
+        };
+        let record = self.window.record(now, &inputs);
+
+        self.window.reset(now);
+        self.drops.reset();
+        self.cpu.reset_window(now);
+        self.hsm.reset_window(now);
+        self.accel.reset_window(now);
+        for q in &mut self.queues {
+            q.reset_window();
+        }
+        self.stores.peers.reset_window();
+        self.stores.crl.reset_window();
+        self.schedule.reset_window();
+        record
+    }
+}
+
+/// The 1609.2 `ThreeDLocation` a DENM's envelope carries, from the node's own belief.
+///
+/// Latitude and longitude in tenths of a microdegree (1609.2 `NinetyDegreeInt`,
+/// `OneEightyDegreeInt`); the elevation as [`elevation_1609`].
+fn generation_location(
+    belief: &PositionEstimate,
+    origin: v2xw_core::geo::GeoOrigin,
+) -> v2xw_sec::envelope::GenerationLocation {
+    let (lat, lon, alt) = origin.to_geodetic(belief.pos);
+    let tenth_micro = |deg: f64, lim: f64| (deg.clamp(-lim, lim) * 1e7).round() as i32;
+    v2xw_sec::envelope::GenerationLocation {
+        lat_tenth_microdeg: tenth_micro(lat, 90.0),
+        lon_tenth_microdeg: tenth_micro(lon, 180.0),
+        elevation: elevation_1609(alt),
+    }
+}
+
+/// The IEEE 1609.2 `Elevation` of a height above the WGS84 ellipsoid: "an integer number
+/// of decimeters representing the height above a minimum height of −409.5 m, with the
+/// maximum height being 6143.9 m" (`Ieee1609Dot2BaseTypes`, read from the module in
+/// `third_party/asn1/etsi/`). So 0 is −409.5 m and 65 534 is 6 143.9 m; a height outside
+/// that is clamped to the nearer end rather than wrapped.
+///
+/// Before 2026-10-06 the offset was a recalled 4 096 (0 at −409.6 m) and the top was
+/// clamped at 61 439, so every envelope's elevation was 0.1 m low and heights above
+/// 5 734.3 m were cut short.
+pub fn elevation_1609(height_m: f64) -> u16 {
+    ((height_m * 10.0).round() + 4_095.0).clamp(0.0, 65_534.0) as u16
+}
+
+fn policy_id(code: u8) -> &'static str {
+    match code {
+        0 => crate::policy::VERIFY_ALL_ID,
+        1 => crate::policy::ON_DEMAND_ID,
+        _ => crate::policy::PRIORITIZED_ID,
+    }
+}
+
+fn msg_type_name(t: MsgType) -> &'static str {
+    match t {
+        MsgType::Cam => "cam",
+        MsgType::Bsm => "bsm",
+        MsgType::Denm => "denm",
+        MsgType::Spat => "spat",
+        MsgType::Map => "map",
+        MsgType::Srm => "srm",
+        MsgType::Ssm => "ssm",
+        MsgType::Psm => "psm",
+        MsgType::Vam => "vam",
+        MsgType::Mbr => "mbr",
+        MsgType::P2pcd => "p2pcd",
+        MsgType::Crl => "crl",
+        _ => "other",
+    }
+}
+
+impl NodeView for ObuRuntime {
+    type Neighbors = NeighborTable;
+    type Credential = CredentialHandle;
+    type Message = VerifiedMessage;
+
+    fn node(&self) -> NodeId {
+        self.node
+    }
+
+    fn believed_time(&self) -> SimTime {
+        // The clock was advanced at the top of the step, so every plug-in that reads the
+        // view within one step sees the same instant.
+        self.clock.believed_time(self.belief.time_ns)
+    }
+
+    fn position(&self) -> &PositionEstimate {
+        &self.belief
+    }
+
+    fn neighbors(&self) -> &NeighborTable {
+        &self.stores.neighbors
+    }
+
+    fn credentials(&self) -> &[CredentialHandle] {
+        self.stores.certs.credentials()
+    }
+
+    fn received(&self) -> &[VerifiedMessage] {
+        &self.received
+    }
+}
+
+/// The default OBU: the reference profile with the prioritised
+/// policy.
+pub fn reference_obu(node: NodeId, at: SimTime) -> ObuRuntime {
+    let profile = crate::profiles::get(crate::profiles::REFERENCE_OBU)
+        .expect("the reference profile ships with the crate")
+        .clone();
+    ObuRuntime::new(
+        node,
+        profile,
+        Box::new(Prioritized::new(300.0)),
+        NodeConfig::default(),
+        at,
+    )
+}
+
+#[cfg(test)]
+mod elevation_tests {
+    /// 1609.2's `Elevation`: decimetres above −409.5 m, up to 6 143.9 m.
+    #[test]
+    fn the_envelope_elevation_is_1609_2s() {
+        assert_eq!(super::elevation_1609(-409.5), 0);
+        assert_eq!(super::elevation_1609(0.0), 4_095);
+        assert_eq!(super::elevation_1609(10.0), 4_195);
+        assert_eq!(super::elevation_1609(6_143.9), 65_534);
+        assert_eq!(super::elevation_1609(9_000.0), 65_534);
+        assert_eq!(super::elevation_1609(-500.0), 0);
+    }
+}

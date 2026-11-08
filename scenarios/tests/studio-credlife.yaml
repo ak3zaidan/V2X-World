@@ -1,0 +1,8 @@
+# scenarios/credential-lifecycle.yaml cut to 120 s for the Studio end-to-end specs. Nothing else differs.
+schema: v2xw/scenario/1
+meta:
+  base: ../credential-lifecycle.yaml
+  name: studio-credlife
+  description: "US SCMS credential lifecycle, cut to 120 s for the Studio specs."
+time:
+  duration_s: 120.0

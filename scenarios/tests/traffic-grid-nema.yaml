@@ -1,0 +1,9 @@
+# traffic-grid.yaml under NEMA dual-ring signal control.
+schema: v2xw/scenario/1
+meta:
+  base: traffic-grid.yaml
+  name: traffic-grid-nema
+  description: 'traffic-grid.yaml with NEMA signal control.'
+traffic:
+  signals:
+    control: nema

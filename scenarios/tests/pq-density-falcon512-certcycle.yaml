@@ -1,0 +1,13 @@
+# pq-density-falcon512.yaml with the NDSS 2024 partial-hybrid certificate cycle in place of
+# plain SDU fragmentation.
+schema: v2xw/scenario/1
+meta:
+  name: pq-density-falcon512-certcycle
+  description: >-
+    Hybrid Falcon-512 at the post-quantum density with the certificate-cycle fragmenter.
+  authors: [v2xw]
+  tags: [post-quantum, fragmentation, ndss2024]
+  base: pq-density-falcon512.yaml
+net:
+  fragmenter:
+    id: fragmenter/cert-cycle-partial-hybrid

@@ -1,0 +1,23 @@
+# Mini release run 10 (train): the train F2MD / VeReMi NextGen behaviours again (with
+# run 8, three vehicles each), and two credential attacks.
+schema: v2xw/scenario/1
+# Its own seed: no two runs share traffic, so a split by run is a split by traffic.
+seed: "0xD5_0010"
+meta: {base: base.yaml, name: dataset r10 f2md-train-b}
+time: {duration_s: 60.0}
+threats:
+  attackers:
+    - {id: threat/attacker/f2md/FeignedBraking, actor_ids: [30], schedule: {from_s: 28.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/PositionMirroring, actor_ids: [17], schedule: {from_s: 28.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/ConstSpeed, actor_ids: [7], schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/ConstSpeed, actor_ids: [40], schedule: {from_s: 20.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/NeighbourReplay, actor_ids: [58], schedule: {from_s: 28.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/NeighbourReplay, actor_ids: [28], schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/DoSDisruptive, actor_ids: [29], schedule: {from_s: 32.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/DoSDisruptive, actor_ids: [46], schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/f2md/DataReplaySybil, actor_ids: [49], schedule: {from_s: 20.0, to_s: 60.0}}
+    - {id: threat/attacker/legacy/InvalidSignature, actor_ids: [22], schedule: {from_s: 0.0, to_s: 60.0}}
+    - {id: threat/attacker/legacy/NotYetValid, actor_ids: [24], schedule: {from_s: 32.0, to_s: 60.0}}
+exporters:
+  - id: dataset
+    opts: {run_id: r10, split: train, tier: mini, instrumented_receivers: 10, heldout_attacks: [ReversedHeading, HeadingOffset]}

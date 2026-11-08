@@ -1,0 +1,365 @@
+/**
+ * Every control in the header, the transport bar, the settings panel and the viewport toolbar,
+ * pressed once against the real engine, with what it should do and what it did.
+ *
+ * The table this prints is the evidence the owner asked for ("every button, every setting, every
+ * feature works in the actual website"). A control that did not do what it says fails the test;
+ * the table is printed either way, so a failure shows every other result beside it.
+ *
+ * `lifecycle.spec.ts` covers pause, play, step, step back, go to start, stop and restart with
+ * their effect on the engine's clock and kernel; they are not repeated here.
+ */
+
+import { expect, test } from "@playwright/test";
+
+import { EngineProcess, closeSettings, open, openSettings, runToEnd, setField, status, writeScenarios } from "./support.js";
+
+const scenarios = writeScenarios();
+const engine = new EngineProcess(scenarios.a);
+
+test.beforeAll(async () => {
+  await engine.start();
+});
+test.afterAll(async () => {
+  await engine.stop();
+});
+
+interface Row {
+  control: string;
+  should: string;
+  did: string;
+  ok: boolean;
+}
+
+test("every control does what it says", async ({ page }) => {
+  const rows: Row[] = [];
+  const check = async (control: string, should: string, act: () => Promise<string>): Promise<void> => {
+    try {
+      rows.push({ control, should, did: await act(), ok: true });
+    } catch (err) {
+      rows.push({ control, should, did: `FAILED: ${(err instanceof Error ? err.message : String(err)).split("\n")[0]}`, ok: false });
+    }
+  };
+  const quick = { timeout: 15_000 };
+
+  await open(page);
+
+  // --- header -------------------------------------------------------------------------------------
+  const menu = async (item: string): Promise<void> => {
+    await page.getByTestId("app-menu-button").click();
+    await expect(page.getByTestId("app-menu")).toBeVisible(quick);
+    await page.getByTestId(item).click();
+  };
+  await check("header: menu → theme", "switch dark ↔ light", async () => {
+    const before = await page.evaluate(() => document.documentElement.dataset.theme);
+    await menu("theme-toggle");
+    const after = await page.evaluate(() => document.documentElement.dataset.theme);
+    expect(after).not.toBe(before);
+    await page.keyboard.press("Escape");
+    await menu("theme-toggle");
+    await page.keyboard.press("Escape");
+    return `data-theme ${before} → ${after} → back`;
+  });
+  await check("header: menu → Run details", "open the run's identity panel, and close it", async () => {
+    await menu("run-details-button");
+    await expect(page.getByTestId("run-details")).toBeVisible(quick);
+    await expect(page.getByTestId("engine-version")).not.toHaveText("—", quick);
+    await page.getByTestId("sheet-close").click();
+    await expect(page.getByTestId("run-details")).toHaveCount(0, quick);
+    return "opened (engine version shown), closed";
+  });
+  for (const [item, panel] of [
+    ["menu-runs", "panel-runs"],
+    ["menu-compare", "panel-compare"],
+    ["menu-commands", "panel-commands"],
+  ] as const) {
+    await check(`header: menu → ${item.slice(5)}`, "open that panel over the viewport; Escape closes it", async () => {
+      // The engine's command catalogue is on the menu in developer mode only (Header.tsx).
+      const dev = item === "menu-commands";
+      if (dev) {
+        await menu("dev-details-toggle");
+        await page.keyboard.press("Escape");
+      }
+      await menu(item);
+      await expect(page.getByTestId(panel)).toBeVisible(quick);
+      expect(page.url()).toContain(`#${item.slice(5)}`);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId(panel)).toHaveCount(0, quick);
+      if (dev) {
+        await menu("dev-details-toggle");
+        await page.keyboard.press("Escape");
+      }
+      return "opened (address says so), closed with Escape";
+    });
+  }
+  await check("header: Metrics", "open the measurements full screen, and close them", async () => {
+    await page.getByTestId("metrics-button").click();
+    await expect(page.getByTestId("metrics-panel")).toBeVisible(quick);
+    await expect(page.getByTestId("metrics-search")).toBeVisible(quick);
+    await page.getByTestId("metrics-close").click();
+    await expect(page.getByTestId("metrics-panel")).toBeHidden(quick);
+    return "opened, closed";
+  });
+  await check("header: settings gear and Ctrl/Cmd+,", "open and close the settings window", async () => {
+    await page.getByTestId("settings-button").click();
+    await expect(page.getByTestId("settings-window")).toBeVisible(quick);
+    await expect(page.getByTestId("settings-filter")).toBeFocused(quick);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("settings-window")).toHaveCount(0, quick);
+    await expect(page.getByTestId("settings-button"), "focus goes back to the gear").toBeFocused(quick);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
+    await expect(page.getByTestId("settings-window")).toBeVisible(quick);
+    // Ctrl/Cmd + F from anywhere in the window goes back to the search box.
+    await page.getByTestId("settings-view-json").focus();
+    await expect(page.getByTestId("settings-filter")).not.toBeFocused(quick);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+KeyF" : "Control+KeyF");
+    await expect(page.getByTestId("settings-filter")).toBeFocused(quick);
+    // The arrow keys walk the group tree: the first group, the next entry, then the last.
+    const groups = page.getByTestId("settings-tree-group");
+    await groups.first().focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(groups.first(), "ArrowDown leaves the first group").not.toBeFocused(quick);
+    await page.keyboard.press("End");
+    await expect(page.getByTestId("settings-tree").locator(".tree-item").last()).toBeFocused(quick);
+    await page.keyboard.press("Home");
+    await expect(page.getByTestId("settings-tree").locator(".tree-item").first()).toBeFocused(quick);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
+    await expect(page.getByTestId("settings-window")).toHaveCount(0, quick);
+    return "gear opens with the search focused; Esc closes and returns focus; the shortcut toggles; Ctrl/Cmd+F finds the search; arrows walk the tree";
+  });
+  await check("header: inspector toggle", "show and hide the inspector", async () => {
+    const before = await page.getByTestId("inspector-panel").count();
+    await page.getByTestId("inspector-toggle").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(before === 0 ? 1 : 0, quick);
+    await page.getByTestId("inspector-toggle").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(before, quick);
+    return `${before === 0 ? "hidden → shown → hidden" : "shown → hidden → shown"}`;
+  });
+  await check("header: menu → Developer mode", "show the renderer readouts over the viewport", async () => {
+    await expect(page.getByTestId("stats-chip")).toHaveCount(0, quick);
+    await menu("dev-details-toggle");
+    await expect(page.getByTestId("stats-chip")).toBeVisible(quick);
+    await expect(page.getByTestId("world-chip")).toBeVisible(quick);
+    await page.getByTestId("dev-details-toggle").click();
+    await expect(page.getByTestId("stats-chip")).toHaveCount(0, quick);
+    await page.keyboard.press("Escape");
+    return "off: no fps chip; on: fps and world chips; off again";
+  });
+  await check("header: scenario picker", "list the ready-made scenarios, then the cities", async () => {
+    await page.getByTestId("scenario-switcher").click();
+    await expect(page.getByTestId("scenario-picker")).toBeVisible(quick);
+    const n = await page.getByTestId("picker-scenario").count();
+    expect(n).toBeGreaterThanOrEqual(2);
+    const cities = await page.getByTestId("picker-city").count();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("scenario-picker")).toHaveCount(0, quick);
+    return `${n} scenarios and ${cities} cities listed`;
+  });
+  await check("header: primary action (Play on a paused run)", "start the paused run moving", async () => {
+    // At real-time speed, so the run is still moving when Pause is pressed: the harness starts
+    // the engine unthrottled, where a 6 s run is over before the button can change.
+    await page.getByTestId("speed").selectOption("1");
+    await expect.poll(async () => (await status(page)).speed, quick).toBe(1);
+    await expect(page.getByTestId("primary-action")).toHaveText("Play", quick);
+    await page.getByTestId("primary-action").click();
+    await expect.poll(async () => (await status(page)).state, quick).toBe("running");
+    await expect(page.getByTestId("primary-action")).toHaveText("Pause", quick);
+    await page.getByTestId("primary-action").click();
+    await expect.poll(async () => (await status(page)).state, quick).toBe("paused");
+    return "Play → running, Pause → paused";
+  });
+
+  // --- transport bar (the ones lifecycle.spec.ts does not press) ---------------------------------
+  await check("transport: step", "advance one mobility step and stop", async () => {
+    const before = (await status(page)).t_ns;
+    const stepButton = page.getByTestId("step");
+    await expect
+      .poll(async () => ((await stepButton.isEnabled()) ? "enabled" : await stepButton.getAttribute("title")), quick)
+      .toBe("enabled");
+    await stepButton.click();
+    await expect.poll(async () => (await status(page)).t_ns, quick).toBeGreaterThan(before);
+    const after = (await status(page)).t_ns;
+    expect(after - before, "one press of Step moved more than a second").toBeLessThanOrEqual(1_000_000_000);
+    expect((await status(page)).state).toBe("paused");
+    return `t ${before / 1e9} s → ${after / 1e9} s, still paused`;
+  });
+  await check("transport: one row", "hold play, step, speed, the clock and the timeline, and nothing else", async () => {
+    const bar = page.getByTestId("time-controls");
+    const buttons = await bar.locator(":scope > button").count();
+    const selects = await bar.locator(":scope > select").count();
+    // Play or pause, step and restart (678ebb2e); the speed.
+    expect(buttons).toBe(3);
+    await expect(bar.locator(':scope > button[data-testid="restart-run"]')).toHaveCount(1, quick);
+    expect(selects).toBe(1);
+    const box = await bar.boundingBox();
+    const play = await bar.locator(":scope > button").first().boundingBox();
+    const scrub = await page.getByTestId("scrub").boundingBox();
+    expect(box && play && scrub).toBeTruthy();
+    // One row: the timeline sits on the same line as the play button.
+    expect(Math.abs(scrub!.y + scrub!.height / 2 - (play!.y + play!.height / 2))).toBeLessThan(8);
+    return `${buttons} buttons, ${selects} select, ${Math.round(box!.height)} px tall`;
+  });
+  await check("header: menu → Restart", "rewind to t = 0 from the menu", async () => {
+    await page.getByTestId("step").click();
+    await expect.poll(async () => (await status(page)).t_ns, quick).toBeGreaterThan(0);
+    await menu("restart");
+    await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).toBeLessThan(1_000_000_000);
+    await page.getByTestId("pause").click({ timeout: 5_000 }).catch(() => {});
+    await expect.poll(async () => (await status(page)).state, quick).not.toBe("running");
+    return "rewound";
+  });
+  await check("transport: speed", "set the engine's multiple of real time", async () => {
+    await page.getByTestId("speed").selectOption("2");
+    await expect.poll(async () => (await status(page)).speed, quick).toBe(2);
+    await page.getByTestId("speed").selectOption("0");
+    await expect.poll(async () => (await status(page)).speed, quick).toBe(0);
+    return "2× then as fast as possible, confirmed by run.status";
+  });
+  await check("transport: timeline scrub", "move the run to the point clicked", async () => {
+    // The Restart row above rewound the run to t = 0 and held it: a click at the start has
+    // nowhere earlier to go, so the run first plays a few seconds (speed 0 is as fast as possible).
+    if ((await status(page)).t_ns < 2e9) {
+      await page.getByTestId("play").click();
+      await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).toBeGreaterThan(2e9);
+      await page.getByTestId("pause").click();
+      await expect.poll(async () => (await status(page)).state, quick).not.toBe("running");
+    }
+    const before = (await status(page)).t_ns;
+    const bar = page.getByTestId("scrub-range");
+    const box = await bar.boundingBox();
+    if (!box) throw new Error("no scrub bar");
+    await page.mouse.click(box.x + 2, box.y + box.height / 2);
+    await expect.poll(async () => (await status(page)).t_ns, quick).toBeLessThan(before);
+    return `t ${before / 1e9} s → ${(await status(page)).t_ns / 1e9} s`;
+  });
+
+  // --- settings panel ----------------------------------------------------------------------------
+  await check("settings: find a setting", "narrow the form to matching settings", async () => {
+    await openSettings(page);
+    const rows = page.getByTestId("setting");
+    // The search matches a setting's label, path, group, unit, note and help text
+    // (settings/model.ts matches). The row shows the help on one line and whole in its titles,
+    // so a kept row is judged by its pointer, its text and its titles. (An empty search shows one
+    // section and a search every section's matches, so the counts are not comparable.)
+    await page.getByTestId("settings-filter").fill("equipped");
+    await expect.poll(() => rows.count(), quick).toBeGreaterThan(0);
+    const pointers = await rows.evaluateAll((els) =>
+      els.map((e) => {
+        const titles = [e, ...e.querySelectorAll("[title]")].map((x) => x.getAttribute("title") ?? "").join(" ");
+        return { p: e.getAttribute("data-pointer") ?? "", t: `${e.getAttribute("data-pointer")} ${e.textContent} ${titles}`.toLowerCase() };
+      }),
+    );
+    expect(pointers.filter((x) => !x.t.includes("equip")).map((x) => x.p), "rows that do not match").toEqual([]);
+    await expect(page.locator('[data-testid="setting"][data-pointer="/time/duration_s"]')).toHaveCount(0, quick);
+    await page.getByTestId("settings-filter").fill("/time/duration_s");
+    await expect(page.locator('[data-testid="setting"][data-pointer="/time/duration_s"]')).toHaveCount(1, quick);
+    await page.getByTestId("settings-filter").fill("");
+    return `${pointers.length} rows match "equipped"; a row it does not name is gone, and found by its own pointer`;
+  });
+  await check("settings: Check", "have the engine validate the form", async () => {
+    await openSettings(page);
+    await page.getByTestId("validate").click();
+    await expect(page.getByTestId("validation-state")).toHaveText("ready to run", quick);
+    return "ready to run";
+  });
+  await check("settings: Discard", "put the form back", async () => {
+    await setField(page, "/time/duration_s", "5");
+    await expect(page.getByTestId("discard-edits")).toBeEnabled(quick);
+    await page.getByTestId("discard-edits").click();
+    await expect(page.getByTestId("discard-edits")).toBeDisabled(quick);
+    return "edit dropped; Apply and Discard disabled again";
+  });
+  await check("settings: Apply + Revert", "hold an edit for the next run, then withdraw it", async () => {
+    const running = (await status(page)).scenario_hash;
+    await setField(page, "/time/duration_s", "5");
+    await page.getByTestId("apply").click();
+    await expect(page.getByTestId("staged-note")).toBeVisible(quick);
+    expect((await status(page)).staged_hash).not.toBeNull();
+    await page.getByTestId("unstage").click();
+    await expect(page.getByTestId("staged-note")).toHaveCount(0, quick);
+    expect((await status(page)).staged_hash).toBeNull();
+    expect((await status(page)).scenario_hash).toBe(running);
+    return "held (staged hash set), withdrawn (none)";
+  });
+  await check("settings: load a ready-made scenario", "put it in the form; Run runs it", async () => {
+    await openSettings(page);
+    await page.getByTestId("presets").locator("summary").click();
+    await page.locator('[data-testid="preset-load"][data-preset="e2e-grid-b"]').click();
+    await expect(page.getByTestId("scenario-message")).toContainText("Loaded", quick);
+    const done = await runToEnd(page);
+    expect(done.t_end_ns).toBe(4_000_000_000);
+    await expect(page.getByTestId("header-scenario")).toHaveText("e2e-grid-b", quick);
+    return "e2e-grid-b ran (4 s), header names it";
+  });
+  await check("settings: Run", "apply unapplied edits and start a run", async () => {
+    await setField(page, "/time/duration_s", "3");
+    const done = await runToEnd(page);
+    expect(done.t_end_ns).toBe(3_000_000_000);
+    return "3 s run with the edit";
+  });
+
+  await closeSettings(page);
+
+  // --- viewport toolbar --------------------------------------------------------------------------
+  await check("viewport: overlays menu", "list the overlays and toggle one", async () => {
+    await page.getByTestId("overlays-button").click();
+    await expect(page.getByTestId("overlays-menu")).toBeVisible(quick);
+    const box = page.getByTestId("overlay-lane_markings").locator("input");
+    const before = await box.isChecked();
+    await box.click();
+    expect(await box.isChecked()).toBe(!before);
+    await box.click();
+    await page.getByTestId("overlays-button").click();
+    return `lane markings ${before} → ${!before} → ${before}`;
+  });
+  await check("viewport: camera mode", "change the view; a street-level view adopts a vehicle", async () => {
+    // The camera picker is a menu: each view has a name and a one-line hint (UI cleanup, 2026-10-06).
+    const pick = async (m: string): Promise<void> => {
+      await page.getByTestId("camera-mode").click();
+      await page.getByTestId(`camera-mode-${m}`).click();
+    };
+    const label = page.getByTestId("camera-mode-label");
+    await pick("free");
+    await expect(label).toHaveAttribute("data-mode", "free", quick);
+    await pick("chase");
+    const mode = await label.getAttribute("data-mode");
+    const follow = await page.getByTestId("follow-chip").innerText();
+    await pick("map");
+    await expect(label).toHaveAttribute("data-mode", "map", quick);
+    return `free ok; chase → ${mode} (${follow}); map ok`;
+  });
+  await check("viewport: key", "fold and unfold the legend", async () => {
+    const open = (await page.getByTestId("state-legend").count()) > 0;
+    await page.getByTestId("legend-toggle").click();
+    await expect(page.getByTestId("state-legend")).toHaveCount(open ? 0 : 1, quick);
+    await page.getByTestId("legend-toggle").click();
+    await expect(page.getByTestId("state-legend")).toHaveCount(open ? 1 : 0, quick);
+    return open ? "open → folded → open" : "folded → open → folded";
+  });
+  await check("viewport: HUD details", "open and close the vehicle overlay from the HUD", async () => {
+    // The Details button lives in the HUD's own header, which shows while a vehicle is followed and
+    // the overlay is closed (the overlay replaces the HUD while it is open).
+    const wasOpen = (await page.getByTestId("inspector-panel").count()) > 0;
+    if (wasOpen) await page.getByTestId("inspector-close").click();
+    if ((await page.getByTestId("hud-details").count()) === 0) {
+      await page.evaluate(() => window.__vwpStudio?.selectFirstActor());
+    }
+    await expect(page.getByTestId("hud-details")).toBeVisible(quick);
+    await page.getByTestId("hud-details").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(1, quick);
+    await expect(page.getByTestId("obu-hud")).toHaveCount(0, quick);
+    await page.getByTestId("inspector-close").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(0, quick);
+    await expect(page.getByTestId("hud-details")).toBeVisible(quick);
+    if (wasOpen) await page.getByTestId("inspector-toggle").click();
+    return "closed → open (HUD hidden) → closed (HUD back)";
+  });
+
+  const table = [
+    "| control | should | did | ok |",
+    "|---|---|---|---|",
+    ...rows.map((r) => `| ${r.control} | ${r.should} | ${r.did} | ${r.ok ? "yes" : "NO"} |`),
+  ].join("\n");
+  console.warn(table);
+  expect(rows.filter((r) => !r.ok), table).toEqual([]);
+});

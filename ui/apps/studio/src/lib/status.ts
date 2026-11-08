@@ -1,0 +1,399 @@
+/**
+ * What the Studio is doing, in one sentence, with the button that resolves it.
+ *
+ * Every state the app can be in is enumerated here — the seven connection states
+ * `@vwp/protocol`'s client publishes (`idle`, `connecting`, `handshaking`, `streaming`,
+ * `reconnecting`, `closed`, `failed`) crossed with the seven run states the engine reports on
+ * `run.status` (`idle`, `loading`, `running`, `paused`, `seeking`, `finished`, `error`), plus the
+ * two states that have no connection at all: a recording open from a file, and no engine found.
+ *
+ * It exists because the interface used to print the connection token and stop there. A run that had
+ * simply reached its end showed the word "closed" beside a Connect button that appeared dead — the
+ * engine knew perfectly well (`run.status` answers `state: "finished"`), the page had the
+ * information, and said none of it. The rule this module enforces is: name the state in words a
+ * researcher can act on, and put the action next to it.
+ *
+ * Pure, and deliberately so: it takes a snapshot and returns text, so the whole state table is
+ * checkable in a unit test without a socket, a server or a browser.
+ */
+
+import type { RunState, VwpConnectionState } from "@vwp/protocol";
+
+/** How loudly the state should read. `busy` is a transition nobody needs to act on. */
+export type StatusTone = "ok" | "busy" | "warn" | "err" | "idle";
+
+/** What the one button beside the sentence does. */
+export type StatusActionKind = "run" | "resume" | "pause" | "connect" | "none";
+
+export interface StatusAction {
+  /** Imperative and short: "Run", "Play", "Reconnect". */
+  readonly label: string;
+  readonly kind: StatusActionKind;
+  /** Why this is the next step, for the button's tooltip. */
+  readonly hint: string;
+}
+
+export interface StatusView {
+  readonly tone: StatusTone;
+  /** Two or three words, for the chip in the header. Sentence case, never a wire token. */
+  readonly chip: string;
+  /** One plain sentence: what is happening right now. */
+  readonly headline: string;
+  /** What to do next, or why nothing needs doing. Empty when the headline says it all. */
+  readonly detail: string;
+  /** The action that resolves this state, or `null` when there is nothing to press. */
+  readonly action: StatusAction | null;
+  /**
+   * True when the state deserves an explanation on top of the viewport rather than only a chip:
+   * anything that is not a run in normal motion.
+   */
+  readonly banner: boolean;
+}
+
+/** The snapshot {@link describeStatus} reads. Everything a caller already has in the store. */
+export interface StatusInput {
+  readonly connection: VwpConnectionState;
+  readonly runState: RunState;
+  /** True while a local recording drives the viewport; there is no run to control then. */
+  readonly replayOpen: boolean;
+  /** The recording's file name, for the sentence. */
+  readonly replayLabel?: string;
+  /** True once a `Hello` has been decoded, so the page has a world and a scenario. */
+  readonly hasHello: boolean;
+  /** The scenario's name, when one is known. */
+  readonly scenarioName?: string;
+  /** Where the engine was looked for: an origin, for the "nothing answered" sentence. */
+  readonly targetLabel?: string;
+  /** Whether the last probe of that target reached anything. */
+  readonly targetReachable?: boolean;
+  /** How long the run's span is, already formatted (e.g. "5m 00s"). */
+  readonly spanText?: string;
+  /** Where the clock is, already formatted. */
+  readonly clockText?: string;
+  /**
+   * True when the clock has not moved: an engine started `--paused` holds the run at 0 s, and a
+   * first-time user then sees "Paused" and an empty map with nothing saying that Play starts it.
+   */
+  readonly atStart?: boolean;
+  /** Reconnect attempts since the engine was last reached. */
+  readonly reconnectAttempts?: number;
+  /** Why the engine is in `error`, in its words, when it said. */
+  readonly failure?: string;
+  /**
+   * True when the engine holds staged settings (`run.status.staged_hash`): an edit applied in
+   * the settings window, or a setup the agent put there, which the next `run.start` runs.
+   * Play (`run.resume`) would carry on the run as it was and silently ignore them.
+   */
+  readonly staged?: boolean;
+}
+
+/**
+ * Whether the run on the engine has moved past its start, so a setting applied now differs from
+ * the one it is running with.
+ *
+ * Not yet when nothing is built (`idle`, `loading`) or when a run is built and held at 0 s without
+ * a step: an engine started `--paused` builds its run at load, and a change made then is simply
+ * what the first Run starts with (Run rebuilds from the staged settings; Play does the same while
+ * the clock is at 0). Saying "changes take effect when you restart" then, or "the paused run keeps
+ * its old settings", describes a run that never happened.
+ */
+export function runHasAdvanced(run: { readonly state: RunState; readonly tNs: number }): boolean {
+  if (run.state === "idle" || run.state === "loading") return false;
+  return run.tNs > 0 || run.state === "running";
+}
+
+/** What an applied edit says once the run has moved: it waits for a restart, which the note offers a button for. */
+export const RESTART_NOTE = "Changes take effect when you restart.";
+
+/** What an applied edit says before the run has started: there is nothing to restart. */
+export const APPLIED_NOTE = "Applied. Run starts with these settings.";
+
+/**
+ * The sentence an Apply answers with: `changed` settings differ from the run's, `advanced` is
+ * `runHasAdvanced` of the run on the engine, and `suffix` is any further note (edits this build ignores).
+ */
+export function appliedNote(changed: number, advanced: boolean, suffix = ""): string {
+  if (changed === 0) return `No change from the run on screen.${suffix}`;
+  return `${advanced ? RESTART_NOTE : APPLIED_NOTE}${suffix}`;
+}
+
+const RUN: StatusAction = {
+  label: "Run",
+  kind: "run",
+  hint: "Start the scenario from the beginning",
+};
+
+const RUN_AGAIN: StatusAction = {
+  label: "Run again",
+  kind: "run",
+  hint: "Rewind to the start and run the scenario again",
+};
+
+const PLAY: StatusAction = { label: "Play", kind: "resume", hint: "Let the clock advance again" };
+
+const RUN_STAGED: StatusAction = {
+  label: "Run",
+  kind: "run",
+  hint: "Start the scenario from the beginning with the changed settings",
+};
+
+const CONNECT: StatusAction = {
+  label: "Connect",
+  kind: "connect",
+  hint: "Look for an engine again and open a stream to it",
+};
+
+/**
+ * The sentence, and the button, for the state the app is in.
+ *
+ * Ordered by what the user is looking at, not by what the socket is doing: a recording open in the
+ * page owns the viewport whatever the connection is doing behind it, and a run that has finished is
+ * a finished run whether the engine kept the socket open or closed it afterwards.
+ */
+export function describeStatus(input: StatusInput): StatusView {
+  const { connection, runState } = input;
+
+  if (input.replayOpen) {
+    return {
+      tone: "ok",
+      chip: "Recording",
+      headline: `Showing ${input.replayLabel ?? "a recording"} from a file.`,
+      detail: "Drag the timeline to move through it. No engine is running and nothing is uploaded.",
+      action: null,
+      banner: false,
+    };
+  }
+
+  // A finished run is a finished run. The socket may be open (the engine stopped stepping) or
+  // closed — the protocol tells the client never to retry after "run complete", so the socket ends
+  // up closed and the client's own state token is the least informative thing on the page. Either
+  // way the honest sentence is the same one, and the action is to run it again, not to reconnect.
+  // `runState` only reaches "finished" from a `run.status` the engine answered, so this cannot
+  // fire before an engine has been reached.
+  if (runState === "finished") {
+    return {
+      tone: "ok",
+      chip: "Run finished",
+      headline: input.spanText
+        ? `The run reached the end of its ${input.spanText} of simulated time.`
+        : "The run reached the end of its simulated time.",
+      detail:
+        connection === "streaming"
+          ? "Press Run again to rewind to the start, or drag the timeline to look back over what happened."
+          : "The engine closed the stream because there was nothing left to send. Press Run again to rewind and start over.",
+      action: RUN_AGAIN,
+      banner: false,
+    };
+  }
+
+  /**
+   * Nothing has ever answered, so this is not a dropped connection.
+   *
+   * The client retries for ever, which meant a page opened with no engine running said
+   * "Reconnecting…" and offered nothing — implying a connection that had existed and would come
+   * back, when the probe had already found nothing at the address. When no run has ever arrived and
+   * the last probe reached nothing, the honest report is that there is no engine there, and the
+   * action is to start one and press Connect.
+   */
+  const neverReached = !input.hasHello && input.targetReachable === false;
+  if (neverReached && (connection === "connecting" || connection === "reconnecting" || connection === "closed")) {
+    return {
+      tone: "err",
+      chip: "No engine",
+      headline: input.targetLabel
+        ? `Nothing is answering at ${input.targetLabel}.`
+        : "No engine is answering.",
+      detail:
+        "Start the engine (v2xw-server) and press Connect. Run details, in the ⋯ menu, lists every address the page tried.",
+      action: CONNECT,
+      banner: true,
+    };
+  }
+
+  switch (connection) {
+    case "idle":
+      return {
+        tone: "idle",
+        chip: "Not connected",
+        headline: "Not connected to an engine yet.",
+        detail: "Press Connect to look for one.",
+        action: CONNECT,
+        banner: true,
+      };
+
+    case "connecting":
+      return {
+        tone: "busy",
+        chip: "Connecting",
+        headline: input.targetLabel
+          ? `Connecting to the engine at ${input.targetLabel}…`
+          : "Connecting to the engine…",
+        detail: "",
+        action: null,
+        banner: true,
+      };
+
+    case "handshaking":
+      return {
+        tone: "busy",
+        chip: "Loading",
+        headline: "Connected. Loading the world and the run's description…",
+        detail: "The streets appear first, then the vehicles.",
+        action: null,
+        banner: true,
+      };
+
+    case "reconnecting":
+      // It used to promise that "the stream resumes where it left off". That is true of a
+      // network blip and false of the case users actually hit — the simulator was stopped or
+      // restarted — where the page comes back to whatever the engine is serving now.
+      return {
+        tone: "warn",
+        chip: "Reconnecting",
+        headline:
+          (input.reconnectAttempts ?? 0) > 1
+            ? `Lost contact with the engine. Still trying (attempt ${input.reconnectAttempts})…`
+            : "Lost contact with the engine. Reconnecting…",
+        detail:
+          "If the simulator was stopped, start it again: this page reconnects by itself and shows whatever run it is serving. Nothing already on screen is lost in the meantime.",
+        action: null,
+        banner: true,
+      };
+
+    case "failed":
+      return {
+        tone: "err",
+        chip: "No engine",
+        headline: input.targetLabel
+          ? `No engine answered at ${input.targetLabel}.`
+          : "No engine answered.",
+        detail: "Start the engine, then press Connect. Run details, in the ⋯ menu, lists everywhere the page looked.",
+        action: CONNECT,
+        banner: true,
+      };
+
+    case "closed":
+      return {
+        tone: "warn",
+        chip: "Disconnected",
+        headline: input.hasHello
+          ? "The stream closed. What is on screen is the last thing the engine sent."
+          : "The stream closed before the run arrived.",
+        detail: "Press Connect to open it again.",
+        action: CONNECT,
+        banner: true,
+      };
+
+    case "streaming":
+      break;
+  }
+
+  switch (runState) {
+    case "running":
+      return {
+        tone: "ok",
+        chip: "Running",
+        headline: input.scenarioName ? `Running ${input.scenarioName}.` : "The run is playing.",
+        detail: "",
+        action: null,
+        banner: false,
+      };
+
+    case "paused":
+      // Settings changed since this run started: Play would carry on the old run and the
+      // change (the agent's "Ready in Settings. Press Run") would never take effect.
+      // Only once it has moved: a run held at 0 s has not started, and Run (or Play, which
+      // rebuilds a run at 0 s from staged settings) starts it with the new ones.
+      if (input.staged === true && input.atStart !== true) {
+        return {
+          tone: "idle",
+          chip: "Paused",
+          headline: "Settings changed since this run started.",
+          detail: "Press Run to start again with them; the paused run keeps its old settings.",
+          action: RUN_STAGED,
+          banner: true,
+        };
+      }
+      if (input.atStart === true) {
+        return {
+          tone: "idle",
+          chip: "Ready",
+          headline: input.scenarioName ? `Ready to run ${input.scenarioName}.` : "The scenario is loaded and ready.",
+          detail: `Press ${input.staged === true ? "Run" : "Play"} to start the run, or pick another scenario from the list beside the logo.`,
+          // With settings staged, Run builds the run from them; Play would start the one built at load.
+          action: input.staged === true ? RUN_STAGED : PLAY,
+          banner: true,
+        };
+      }
+      return {
+        tone: "ok",
+        chip: "Paused",
+        headline: input.clockText
+          ? `Paused at ${input.clockText} of simulated time.`
+          : "The run is paused.",
+        detail: "Press Play to carry on, or step forward one moment at a time.",
+        action: PLAY,
+        banner: false,
+      };
+
+    case "idle":
+      return {
+        tone: "idle",
+        chip: "Ready",
+        headline: input.scenarioName ? `Ready to run ${input.scenarioName}.` : "Connected to the engine. No run has been started yet.",
+        detail: "Press Run to start it, or pick another scenario from the list beside the logo.",
+        action: RUN,
+        banner: true,
+      };
+
+    case "loading":
+      return {
+        tone: "busy",
+        chip: "Starting",
+        headline: "The engine is loading the scenario…",
+        detail: "Vehicles appear once the first snapshot arrives.",
+        action: null,
+        banner: true,
+      };
+
+    case "seeking":
+      return {
+        tone: "busy",
+        chip: "Seeking",
+        headline: "Moving to a new point in simulated time…",
+        detail: "",
+        action: null,
+        banner: false,
+      };
+
+    case "error":
+      return {
+        tone: "err",
+        chip: "Engine error",
+        headline: "The engine stopped with an error and cannot continue this run.",
+        detail:
+          input.failure !== undefined
+            ? `It said: ${input.failure}. Press Run again to start over.`
+            : "The Log tab of the inspector has what it reported. Press Run again to start over.",
+        action: RUN_AGAIN,
+        banner: true,
+      };
+  }
+  // "finished" is handled above, before the connection is considered at all: the compiler knows
+  // this switch has covered every remaining run state.
+}
+
+/** The chip's colour class, matching the `pill` modifiers in `styles/app.css`. */
+export function toneClass(tone: StatusTone): string {
+  switch (tone) {
+    case "ok":
+      return "ok";
+    case "busy":
+    case "warn":
+      return "warn";
+    case "err":
+      return "err";
+    case "idle":
+      return "";
+  }
+}

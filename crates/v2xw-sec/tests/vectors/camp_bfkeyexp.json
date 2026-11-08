@@ -1,0 +1,70 @@
+{
+ "corpus": "camp-butterfly-expansion",
+ "source": {
+  "title": "CAMP SCMS crypto test vectors, bfkeyexp.txt",
+  "id": "S6",
+  "url": "https://github.com/conz27/crypto-test-vectors/blob/dd5014e6c3136895744f1fe73734fa3592f37bd4/bfkeyexp.txt",
+  "commit": "dd5014e6c3136895744f1fe73734fa3592f37bd4",
+  "sha256": "fd607e30b18e81ff5977357b28dd1e1cd08e8ca1c4a8bb11367d06436de18f12",
+  "licence": "none (repository has no licence file): values transcribed with citations, files not vendored",
+  "transcribed": "2026-10-16"
+ },
+ "parameters": "x_sign = 00000000 || i || j || 00000000, x_enc = FFFFFFFF || i || j || 00000000 (32-bit big-endian fields); f_int = (AES_k(x+1) XOR (x+1)) || (AES_k(x+2) XOR (x+2)) || (AES_k(x+3) XOR (x+3)); f = f_int mod n (P-256); expanded private = seed + f mod n, expanded public = seed_public + f*G",
+ "note": "bfkeyexp.txt labels h as \"Signing seed private key\" in the encryption half; it is the encryption seed private key.",
+ "vectors": [
+  {
+   "id": "bfkeyexp sign",
+   "cite": "CAMP bfkeyexp.txt lines 10-95; A at line 28, A_exp at line 100",
+   "kind": "signing",
+   "in": {
+    "i": 561871329,
+    "j": 17,
+    "key": "121d14216715e11d2d3787434a673b1b",
+    "seed_private": "d418760f0cb2dcb856bc3c7217ad3aa36db6742ae1db655a3d28df88cbbf84e1",
+    "seed_public_x": "ee9cc7fbd9edecea41f7c8bd258e8d2e988e75bd069addca1e5a38e534ac6818",
+    "seed_public_y": "5ae3c8d9fe0b1fc7438f29417c240f8bf81c358ec1a4d0c6e98d8edbcc714017"
+   },
+   "out": {
+    "x": "00000000217d79e10000001100000000",
+    "x1": "00000000217d79e10000001100000001",
+    "x2": "00000000217d79e10000001100000002",
+    "x3": "00000000217d79e10000001100000003",
+    "aes1": "e2fa3cee2898c48c9aec05d42dba31f9",
+    "aes2": "fcb039259766e299b321b8c780402a6c",
+    "aes3": "a9a7fd2d8414c0396a0326f1a19873de",
+    "f_int": "e2fa3cee09e5bd6d9aec05c52dba31f8fcb03925b61b9b78b321b8d680402a6ea9a7fd2da569b9d86a0326e0a19873dd",
+    "f": "79081ddd31ef9e5ea601250e584cd90fba13ee7b518e72a2db3aaaa158e12d5e",
+    "expanded_private": "4d2093ed3ea27b15fcbd61806ffa13b36ae367f88c52397824a9bf67283d8cee",
+    "expanded_public_x": "2b18f3d93c4df3d9d1490e3a9ba5a0de9cfa73eddb95408bc1f2bf60cb3cf313",
+    "expanded_public_y": "1a2ce511e0da86356329a5c22a36a8a53088dcb11a5a94fa903ef0087421666a"
+   }
+  },
+  {
+   "id": "bfkeyexp enc",
+   "cite": "CAMP bfkeyexp.txt lines 111-188; H at line 121, H_exp at line 193; i, j from lines 10-13",
+   "kind": "encryption",
+   "in": {
+    "i": 561871329,
+    "j": 17,
+    "key": "f9fce2371b4523c0a75fc352ba7ebd8d",
+    "seed_private": "4624a6f9f6bc6bd088a71ed97b3aee983b5cc2f574f64e96a531d2464137049f",
+    "seed_public_x": "121aa495c6b2c07a2b2daec36bd207d6620d7e6081050df5de3e9696868fcdca",
+    "seed_public_y": "46c31a1abea0bddaaaaefbba3afdbff1ac8d196bc313fc130926810c05503950"
+   },
+   "out": {
+    "x": "ffffffff217d79e10000001100000000",
+    "x1": "ffffffff217d79e10000001100000001",
+    "x2": "ffffffff217d79e10000001100000002",
+    "x3": "ffffffff217d79e10000001100000003",
+    "aes1": "0c94be1dc5e20b54e023430539c4d241",
+    "aes2": "00315f3b0ca0744f7e9924a33e3ebee9",
+    "aes3": "6e44dd46d2cf22d1c981074a15fcdedb",
+    "f_int": "f36b41e2e49f72b5e023431439c4d240ffcea0c42ddd0dae7e9924b23e3ebeeb91bb22b9f3b25b30c981075b15fcded8",
+    "f": "a1559b337d59834b32e364376c9915028e92d9392d89d4315bda481add3ba317",
+    "expanded_private": "e77a422d7415ef1bbb8a8310e7d4039ac9ef9c2ea28022c8010c1a611e72a7b6",
+    "expanded_public_x": "b568fd55a7114254118e7463e85459bdd3c091342625b4a929541151bb8286be",
+    "expanded_public_y": "ed8dbe22200353d316cc5c3d8f1f281d8bfb34a9e6e1dbfe2043d928c64b430b"
+   }
+  }
+ ]
+}

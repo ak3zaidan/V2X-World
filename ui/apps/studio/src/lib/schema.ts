@@ -1,0 +1,809 @@
+/**
+ * The scenario form: a field list flattened out of a JSON Schema, with units and help text.
+ *
+ * The engine is asked for the real schema first — `scenario.get {with_schema: true}` (§6.10) returns
+ * `scenario-1.json`, which is "published with help text and units for every
+ * field". When the engine does not supply one (the mock server accepts the parameter and returns no
+ * `schema` key), the form falls back to {@link PHASE1_FIELDS}, a hand-written description of the
+ * Phase 1 fields, and the panel says which of the two it is using.
+ *
+ * Values are addressed by RFC 6901 JSON Pointer, which is also what `scenario.set {patch}` takes, so
+ * an edit in the form is one patch operation with no translation layer.
+ */
+
+/**
+ * One value a closed set offers, as the engine publishes it (`x-options`): the value the document
+ * holds, the words a person reads, one sentence on what choosing it does, and whether this build
+ * accepts it (a value the schema names and the loader refuses is shown, disabled, with its reason).
+ */
+export interface Choice {
+  readonly value: string | number;
+  readonly label: string;
+  readonly description?: string;
+  readonly available: boolean;
+  /** `true` for the value the deployed US system uses, `false` for one it does not (a "not US" badge). */
+  readonly us?: boolean;
+}
+
+/** An SCMS sub-heading (`x-subgroup`): its order lives with the engine. */
+export interface Subgroup {
+  readonly id: string;
+  readonly label: string;
+  readonly order: number;
+  readonly blurb?: string;
+}
+
+/**
+ * The providers a deployment names: each preset's, and,
+ * under `custom`, the names the document's own provider list holds.
+ */
+export interface ProviderSets {
+  readonly presetPath: string;
+  readonly defaultPreset: string;
+  readonly customPath: string;
+  readonly byPreset: Readonly<Record<string, readonly string[]>>;
+}
+
+const dottedPointer = (dotted: string): string => `/${dotted.split(".").join("/")}`;
+
+/** The deployment preset `doc` names, or the default one. */
+export function presetIn(sets: ProviderSets, doc: unknown): string {
+  const raw = getPointer(doc, dottedPointer(sets.presetPath));
+  return typeof raw === "string" && raw !== "" ? raw : sets.defaultPreset;
+}
+
+/** The provider names `doc` deploys, home provider first. */
+export function providersIn(sets: ProviderSets, doc: unknown): string[] {
+  const ptr = dottedPointer;
+  const preset = presetIn(sets, doc);
+  if (preset !== "custom") return [...(sets.byPreset[preset] ?? [])];
+  const list = getPointer(doc, ptr(sets.customPath));
+  return Array.isArray(list)
+    ? list.map((p) => (p !== null && typeof p === "object" ? (p as Record<string, unknown>).name : undefined)).filter((n): n is string => typeof n === "string")
+    : [];
+}
+
+/** `provider-b/crlg` → provider-b and crlg; a bare `crlg` is the home provider's (the first). */
+export function splitComposed(value: unknown, separator: string, providers: readonly string[]): { provider: string; role: string } {
+  const text = typeof value === "string" ? value : "";
+  const cut = text.indexOf(separator);
+  return cut >= 0
+    ? { provider: text.slice(0, cut), role: text.slice(cut + separator.length) }
+    : { provider: providers[0] ?? "", role: text };
+}
+
+/** A provider and a role as the document writes them: bare for the home provider (the
+ * first), `provider/role` for any other (`crypto_config::failure_target`); `undefined` with no role. */
+export function joinComposed(provider: string, role: string, separator: string, providers: readonly string[]): string | undefined {
+  if (role === "") return undefined;
+  return provider === "" || provider === providers[0] ? role : `${provider}${separator}${role}`;
+}
+
+/** The `ProviderSets` a published node carries under `key`, or `undefined`. */
+export function providerSetsOf(node: unknown): ProviderSets | undefined {
+  if (node === null || typeof node !== "object") return undefined;
+  const o = node as Record<string, unknown>;
+  const by = o.by_preset;
+  if (typeof o.preset_path !== "string" || typeof o.custom_path !== "string" || by === null || typeof by !== "object") return undefined;
+  const byPreset: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(by as Record<string, unknown>)) {
+    if (Array.isArray(v)) byPreset[k] = v.filter((x): x is string => typeof x === "string");
+  }
+  return {
+    presetPath: o.preset_path,
+    defaultPreset: typeof o.default_preset === "string" ? o.default_preset : "",
+    customPath: o.custom_path,
+    byPreset,
+  };
+}
+
+/** When a field matters (`x-relevant-when`): the field at `path` holds one of `in`. */
+export interface RelevantWhen {
+  readonly path: string;
+  readonly in: readonly unknown[];
+  /** Applies whenever the value at `path` is none of these (`in` is then ignored). */
+  readonly notIn?: readonly unknown[];
+}
+
+/** A named value for a number (`x-presets`): "Rush hour", "5 minutes (SAE J2945/1)". */
+export interface NumberPreset {
+  readonly label: string;
+  readonly value: number;
+  readonly note?: string;
+}
+
+/** One field of a list element, for a list edited row by row (attackers, detectors, jammers). */
+/** What one element of a list of plain values is. */
+export type ScalarKind = "number" | "integer" | "string";
+
+/** The element kind of a row, when it is a plain number or string. */
+export function scalarKindOf(kind: string): ScalarKind | undefined {
+  return kind === "number" || kind === "integer" || kind === "string" ? kind : undefined;
+}
+
+/** A list's title without the `[]` the engine marks it with, and without a unit it repeats: "Position m[]" → "Position". */
+export function listLabel(title: string, unit: string | undefined): string {
+  const t = title.replace(/\[\]$/, "").trim();
+  return unit && t.endsWith(` ${unit}`) ? t.slice(0, -unit.length - 1) : t;
+}
+
+export interface ItemField {
+  /** The pointer inside the element: `/id`, `/fraction`, `/schedule/from_s`. */
+  readonly key: string;
+  readonly label: string;
+  /**
+   * `multi` is a list of values from a set (roles), edited as checkboxes; `scalars` a list of plain
+   * numbers or strings (a position, a list of names), edited as boxes.
+   */
+  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "map" | "multi" | "scalars";
+  /** For `scalars`: what one element is. */
+  readonly elemKind?: ScalarKind;
+  readonly unit?: string;
+  readonly help?: string;
+  readonly min?: number;
+  readonly max?: number;
+  readonly step?: number;
+  readonly choices?: readonly Choice[];
+  readonly choicesOpen?: boolean;
+  /** For a `map`: the keys it offers (`x-key-options`), and the fields of one value (key `""` for a leaf). */
+  readonly keyChoices?: readonly Choice[];
+  readonly keyOpen?: boolean;
+  readonly valueFields?: readonly ItemField[];
+  /** A `<provider><separator><role>` value (`x-options-compose`): a provider menu beside the role menu. */
+  readonly compose?: { readonly separator: string; readonly providers: ProviderSets };
+  /** A provider name, offered from the document's preset (`x-options-by-preset`). */
+  readonly providerNames?: ProviderSets;
+  /** The engine's `x-status` and note for the element field, when it published one. */
+  readonly status?: string;
+  readonly statusNote?: string;
+}
+
+/** A widget in the scenario form. */
+export interface FormField {
+  /** RFC 6901 JSON Pointer into the scenario document. */
+  readonly pointer: string;
+  readonly label: string;
+  readonly group: string;
+  /**
+   * `multi` is a list of strings from a closed set (message sets, applications), edited as
+   * checkboxes; `list` is a list of objects edited element by element.
+   */
+  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "multi" | "list" | "map" | "pair" | "scalars";
+  /** For `scalars` (a list of plain numbers or strings): what one element is. */
+  readonly elemKind?: ScalarKind;
+  readonly unit?: string;
+  readonly help?: string;
+  readonly options?: readonly string[];
+  /** The options in words, when the engine published them. */
+  readonly choices?: readonly Choice[];
+  /** Whether a value outside `choices` may be typed (a model id the registry does not list). */
+  readonly choicesOpen?: boolean;
+  /** Whether the field may be left unset, which means "the engine's default". */
+  readonly nullable?: boolean;
+  readonly presets?: readonly NumberPreset[];
+  /** For a `list`: the fields of one element, and what "Add" appends. */
+  readonly itemFields?: readonly ItemField[];
+  readonly itemTemplate?: unknown;
+  readonly min?: number;
+  readonly max?: number;
+  readonly step?: number;
+  /** For a `map`: the keys it offers and the fields of one value (a `""` key for a leaf value). */
+  readonly keyChoices?: readonly Choice[];
+  readonly keyOpen?: boolean;
+  readonly valueFields?: readonly ItemField[];
+  /** The SCMS sub-heading the engine files this field under. */
+  readonly subgroup?: Subgroup;
+  /** When the field matters; outside that it is drawn greyed with the reason, never hidden. */
+  readonly relevantWhen?: RelevantWhen;
+  /** What an empty box means, when unset is a choice of its own ("never"). */
+  readonly emptyText?: string;
+  /** What one element of a list is called on its Add button ("link", "failure"). */
+  readonly noun?: string;
+}
+
+/** The `x-subgroup` of a published node, or `undefined`. */
+export function subgroupOf(row: Record<string, unknown>): Subgroup | undefined {
+  const g = row["x-subgroup"];
+  if (g === null || typeof g !== "object") return undefined;
+  const o = g as Record<string, unknown>;
+  if (typeof o.id !== "string" || typeof o.label !== "string") return undefined;
+  const blurb = row["x-subgroup-blurb"];
+  return { id: o.id, label: o.label, order: typeof o.order === "number" ? o.order : 99, ...(typeof blurb === "string" ? { blurb } : {}) };
+}
+
+/** The `x-options-compose` of a published node, or `undefined`. */
+export function composeOf(row: Record<string, unknown>): ItemField["compose"] {
+  const c = row["x-options-compose"];
+  if (c === null || typeof c !== "object") return undefined;
+  const o = c as Record<string, unknown>;
+  const providers = providerSetsOf(o.providers);
+  return providers && typeof o.separator === "string" ? { separator: o.separator, providers } : undefined;
+}
+
+/** The `x-relevant-when` of a published node, or `undefined`. */
+export function relevantWhenOf(row: Record<string, unknown>): RelevantWhen | undefined {
+  const r = row["x-relevant-when"];
+  if (r === null || typeof r !== "object") return undefined;
+  const o = r as Record<string, unknown>;
+  return typeof o.path === "string" && Array.isArray(o.in) ? { path: o.path, in: o.in } : undefined;
+}
+
+/** The `x-options` rows of a published node, or `undefined`. */
+export function choicesOf(row: Record<string, unknown>): Choice[] | undefined {
+  const raw = row["x-options"];
+  if (!Array.isArray(raw)) return undefined;
+  const out: Choice[] = [];
+  for (const r of raw as unknown[]) {
+    if (r === null || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    const value = o.value;
+    if (typeof value !== "string" && typeof value !== "number") continue;
+    out.push({
+      value,
+      label: typeof o.label === "string" && o.label !== "" ? o.label : String(value),
+      ...(typeof o.description === "string" && o.description !== "" ? { description: o.description } : {}),
+      available: o.available !== false,
+      ...(typeof o.us === "boolean" ? { us: o.us } : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** The `x-presets` rows of a published node, or `undefined`. */
+export function presetsOf(row: Record<string, unknown>): NumberPreset[] | undefined {
+  const raw = row["x-presets"];
+  if (!Array.isArray(raw)) return undefined;
+  const out: NumberPreset[] = [];
+  for (const r of raw as unknown[]) {
+    if (r === null || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    if (typeof o.label !== "string" || typeof o.value !== "number") continue;
+    out.push({ label: o.label, value: o.value, ...(typeof o.note === "string" ? { note: o.note } : {}) });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** Read a JSON Pointer out of a document; `undefined` when any step is missing. */
+export function getPointer(doc: unknown, pointer: string): unknown {
+  if (pointer === "" || pointer === "/") return doc;
+  let cur: unknown = doc;
+  for (const rawPart of pointer.split("/").slice(1)) {
+    const part = rawPart.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (cur === null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+/** Write a JSON Pointer into a copy of `doc`, creating intermediate objects. */
+export function setPointer<T>(doc: T, pointer: string, value: unknown): T {
+  if (pointer === "" || pointer === "/") return value as T;
+  const parts = pointer.split("/").slice(1).map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"));
+  const root: Record<string, unknown> = { ...(doc as unknown as Record<string, unknown>) };
+  let cur = root;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = parts[i];
+    const next = cur[key];
+    cur[key] = next !== null && typeof next === "object" && !Array.isArray(next)
+      ? { ...(next as Record<string, unknown>) }
+      : {};
+    cur = cur[key] as Record<string, unknown>;
+  }
+  cur[parts[parts.length - 1]] = value;
+  return root as unknown as T;
+}
+
+interface JsonSchemaNode {
+  type?: string | string[];
+  title?: string;
+  description?: string;
+  unit?: string;
+  enum?: unknown[];
+  minimum?: number;
+  maximum?: number;
+  multipleOf?: number;
+  properties?: Record<string, JsonSchemaNode>;
+  items?: JsonSchemaNode;
+  [key: string]: unknown;
+}
+
+function kindOf(node: JsonSchemaNode): FormField["kind"] {
+  if (Array.isArray(node.enum) && node.enum.length > 0) return "enum";
+  const type = Array.isArray(node.type) ? node.type.find((t) => t !== "null") : node.type;
+  switch (type) {
+    case "integer": return "integer";
+    case "number": return "number";
+    case "boolean": return "boolean";
+    case "string": return "string";
+    default: return "json";
+  }
+}
+
+/** Title-case a property name: `duration_s` → `Duration s`. */
+function humanise(key: string): string {
+  const spaced = key.replace(/[_-]+/g, " ").trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * Flatten an object-typed JSON Schema into a form. Objects one level down become groups; anything
+ * deeper, and anything the form has no widget for, is offered as a JSON text area so no field of the
+ * engine's schema silently disappears.
+ */
+export function fieldsFromJsonSchema(schema: unknown, maxFields = 120): FormField[] {
+  const root = schema as JsonSchemaNode | null;
+  if (!root || typeof root !== "object" || !root.properties) return [];
+  const out: FormField[] = [];
+
+  const walk = (node: JsonSchemaNode, pointer: string, group: string, depth: number): void => {
+    if (out.length >= maxFields) return;
+    const props = node.properties;
+    if (!props) return;
+    for (const [key, child] of Object.entries(props)) {
+      if (out.length >= maxFields) return;
+      const childPointer = `${pointer}/${key.replace(/~/g, "~0").replace(/\//g, "~1")}`;
+      const type = Array.isArray(child.type) ? child.type.find((t) => t !== "null") : child.type;
+      if (type === "object" && child.properties && depth < 2) {
+        walk(child, childPointer, depth === 0 ? humanise(key) : `${group} · ${humanise(key)}`, depth + 1);
+        continue;
+      }
+      out.push({
+        pointer: childPointer,
+        label: child.title ?? humanise(key),
+        group: group === "" ? "General" : group,
+        kind: kindOf(child),
+        ...(typeof child.unit === "string" ? { unit: child.unit } : {}),
+        ...(typeof child.description === "string" ? { help: child.description } : {}),
+        ...(Array.isArray(child.enum) ? { options: child.enum.map(String) } : {}),
+        ...(typeof child.minimum === "number" ? { min: child.minimum } : {}),
+        ...(typeof child.maximum === "number" ? { max: child.maximum } : {}),
+        ...(typeof child.multipleOf === "number" ? { step: child.multipleOf } : {}),
+      });
+    }
+  };
+
+  walk(root, "", "", 0);
+  return out;
+}
+
+/**
+ * The standard scenario fields, used when the engine does not publish its own list.
+ *
+ * The help text is what a researcher needs to set the field, not where the field is specified. It
+ * used to cite a document section in half of these, which told the reader nothing they could act
+ * on — and worse, it implied the value would not make sense without reading that document.
+ *
+ * Every pointer is checked against the document a real engine serves on `scenario.get` —
+ * `scenarios/phase1-manhattan.yaml`, resolved. The list previously addressed `/traffic/actors`,
+ * `/time/step_ms`, `/world/source` as a string, `/world/bbox`, `/security/profile` and
+ * `/security/attackers/share`, none of which exist in that document, and it typed `/seed` as an
+ * integer against a value of `"0x000000c0ffee5eed"`. So two thirds of the form was blank against a
+ * scenario that configures every one of those things, and a blank box labelled "Attacker share"
+ * reads as "this scenario has no attackers in it" when what it means is that the form was looking
+ * in the wrong place. The seed — the one field that decides whether a result can be reproduced —
+ * showed as empty.
+ *
+ * Labels stay in the user's language and the pointer is what travels, so nothing is lost by a
+ * researcher not knowing that "fitted with radios" is spelt `equipped_fraction`.
+ */
+export const PHASE1_FIELDS: readonly FormField[] = [
+  { pointer: "/meta/name", label: "Name", group: "Description", kind: "string", help: "What this scenario is called. It appears in the header and in the run's own record." },
+  { pointer: "/meta/description", label: "Description", group: "Description", kind: "string" },
+  {
+    pointer: "/seed",
+    label: "Master seed",
+    group: "Description",
+    kind: "string",
+    help: "Two runs with the same seed and the same settings produce the same results. Every random choice in the run derives from this one number. Decimal, or hexadecimal with a 0x prefix.",
+  },
+
+  { pointer: "/time/t0", label: "Start date and time", group: "Time", kind: "string", unit: "UTC", help: "The real date and time that the start of the run stands for. It affects nothing in the simulation except what the clocks say." },
+  { pointer: "/time/duration_s", label: "Duration", group: "Time", kind: "number", unit: "s", min: 1, max: 86400, help: "How long the run lasts in simulated time. This is the length of the timeline under the map." },
+  { pointer: "/time/mobility_step_ms", label: "Mobility step", group: "Time", kind: "integer", unit: "ms", min: 10, max: 1000, step: 10, help: "How often every vehicle moves. Smaller is more accurate and more expensive; 100 ms is the usual choice." },
+
+  { pointer: "/world/source/kind", label: "Streets from", group: "World", kind: "enum", options: ["osm-xml", "osm-pbf", "sumo", "procedural", "json"], help: "Where the streets come from: imported from OpenStreetMap, taken from a traffic simulation, or generated." },
+  { pointer: "/world/source/path", label: "Map file", group: "World", kind: "string", help: "The file the streets are read from, when they are imported rather than generated." },
+  { pointer: "/world/source/bbox", label: "Area to import", group: "World", kind: "json", unit: "degrees", help: "The corners of the area to take from the map file, in latitude and longitude." },
+  { pointer: "/world/highway_preset", label: "Road rules", group: "World", kind: "string", help: "Which country's lane widths, speed limits and signal timings to assume wherever the map does not say." },
+  { pointer: "/world/buildings/enabled", label: "Buildings", group: "World", kind: "boolean", help: "Draw buildings, and let them block radio signals. Without this every vehicle has line of sight to every other." },
+
+  { pointer: "/actors/vehicles/demand/rate_veh_per_h", label: "Vehicles entering", group: "Traffic", kind: "number", unit: "per hour", min: 0, help: "How much traffic to inject. This is the main thing that decides how busy the network gets, and how heavy the run is to compute and to draw." },
+  { pointer: "/actors/vehicles/demand/kind", label: "How they arrive", group: "Traffic", kind: "string", help: "The model that decides when each vehicle appears — for example a Poisson process at the rate above." },
+  { pointer: "/actors/vehicles/equipped_fraction", label: "Fitted with radios", group: "Traffic", kind: "number", unit: "fraction", min: 0, max: 1, step: 0.01, help: "The share of vehicles carrying a communication unit. The rest are still traffic: they fill the roads and block signals, and send nothing." },
+  { pointer: "/actors/vru/pedestrians", label: "Pedestrians", group: "Traffic", kind: "integer", min: 0, help: "Walking road users. Counted separately because they move differently and are the hardest to detect." },
+  { pointer: "/actors/vru/cyclists", label: "Cyclists", group: "Traffic", kind: "integer", min: 0 },
+
+  { pointer: "/radio/rat", label: "Radio technology", group: "Radio", kind: "enum", options: ["dsrc-80211p", "lte-v2x-pc5", "nr-v2x-pc5"], help: "Which radio the vehicles use to talk to one another: 802.11p (DSRC), or the LTE or 5G NR sidelink (PC5)." },
+  { pointer: "/radio/tiers/phy", label: "Signal detail", group: "Radio", kind: "enum", options: ["abstract", "medium", "high"], help: "How carefully the radio signal itself is modelled. The most detailed setting also requires the most detailed channel-access model below." },
+  { pointer: "/radio/tiers/mac", label: "Channel-access detail", group: "Radio", kind: "enum", options: ["abstract", "medium", "high"], help: "How carefully vehicles taking turns on a shared channel is modelled." },
+  { pointer: "/radio/tiers/propagation", label: "Propagation detail", group: "Radio", kind: "enum", options: ["abstract", "medium", "high"], help: "How carefully the signal's path through the streets and around buildings is modelled." },
+
+  { pointer: "/security/envelope", label: "Message security", group: "Security", kind: "enum", options: ["ieee1609.2", "etsi-ts103097", "none"], help: "Which standard's signed message format the vehicles use, which is what lets a receiver tell a genuine message from a forged one." },
+  { pointer: "/security/signature", label: "Signature algorithm", group: "Security", kind: "enum", options: ["ecdsa-p256", "ecdsa-brainpool256", "ecdsa-p384", "sm2"] },
+  { pointer: "/security/crypto_mode", label: "Cryptography", group: "Security", kind: "enum", options: ["modeled", "real"], help: "“Modeled” charges the time and the bytes a signature costs without doing the arithmetic; “real” actually signs and verifies, which is slower and exactly right." },
+  { pointer: "/security/pseudonym_change/strategy", label: "Identity changes", group: "Security", kind: "enum", options: ["time", "distance", "c2c-cc", "mix-zone", "silent"], help: "How a vehicle decides when to switch to a fresh temporary identity, which is what stops it being followed from message to message: every five minutes (US, SAE J2945/1), every two kilometres (the NYC pilot), the European car makers' rule (C2C-CC: after 0.8–1.5 km, then 0.8 km plus 2–6 minutes, then every 10–35 km), inside a mix zone at a signalised junction, or never." },
+  { pointer: "/security/pseudonym_change/period_s", label: "…how often", group: "Security", kind: "number", unit: "s", min: 1, help: "With the “time” strategy, how long a vehicle keeps one identity before changing it." },
+  { pointer: "/security/pseudonym_change/distance_m", label: "…how far", group: "Security", kind: "number", unit: "m", min: 1, help: "With the “distance” strategy, how far a vehicle drives on one identity before changing it." },
+  { pointer: "/security/pseudonym_change/silent_period_s", label: "Silence after a change", group: "Security", kind: "json", help: "[min, max] seconds a vehicle stays silent after each identity change, so a listener loses it — and so do its neighbours' safety systems. For example [3, 13]. Leave empty for none." },
+  { pointer: "/security/verification_policy", label: "Verification order", group: "Security", kind: "string", help: "Which arriving messages a receiver checks first when more arrive than it can check in time." },
+
+  { pointer: "/messages/sets", label: "Messages sent", group: "Messages", kind: "json", help: "Which message types the vehicles broadcast — for example basic safety messages, ten times a second." },
+  { pointer: "/metrics", label: "Measurements", group: "Messages", kind: "json", help: "Which figures to compute — for example packet delivery ratio. Each one appears in the plots along the bottom of this page." },
+
+  { pointer: "/nodes/default_obu", label: "Hardware profile", group: "Hardware", kind: "string", help: "Which real on-board unit's timings, transmit power and queue sizes to use. Every number it affects carries a link back to its model card." },
+  { pointer: "/nodes/compute_tier", label: "Compute detail", group: "Hardware", kind: "enum", options: ["abstract", "medium", "high"], help: "How carefully the time a unit takes to do its own work is modelled." },
+
+  { pointer: "/weather/initial", label: "Weather", group: "Conditions", kind: "enum", options: ["clear", "rain", "snow", "fog"], help: "Rain and snow weaken the signal and change how people drive." },
+  { pointer: "/weather/intensity", label: "…how heavy", group: "Conditions", kind: "number", unit: "fraction", min: 0, max: 1, step: 0.05 },
+  { pointer: "/threats/attackers", label: "Attackers", group: "Conditions", kind: "json", help: "Misbehaving vehicles, and what each one does. Empty means none — an honest baseline to measure a detector against." },
+  { pointer: "/threats/jammers", label: "Jammers", group: "Conditions", kind: "json", help: "Transmitters whose purpose is to stop everyone else being heard." },
+  { pointer: "/threats/eavesdropper", label: "Eavesdropper", group: "Conditions", kind: "json", help: "A listener on poles at some of the signalised junctions, trying to follow vehicles across their identity changes. For example {\"id\": \"threat/observer/passive-privacy\", \"params\": {\"sniffer_fraction\": 0.25, \"range_m\": 200}}. Empty means it hears everything." },
+];
+
+/** A stable group order for the form, whichever source the fields came from. */
+export function groupsOf(fields: readonly FormField[]): string[] {
+  const seen: string[] = [];
+  for (const f of fields) if (!seen.includes(f.group)) seen.push(f.group);
+  return seen;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The engine's published settings surface
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Whether the engine acts on a field, as `crates/v2xw-engine`'s `KEY_STATUS` table says.
+ *
+ * The page never decides this itself: it is read off the `x-status` the engine publishes for every
+ * leaf, so a key someone wires changes what the form says the moment the engine is rebuilt.
+ */
+export type FieldStatus = "wired" | "partial" | "not-implemented" | "refused" | "descriptive" | "unknown";
+
+/** A form field with the engine's own statement of whether it changes the run. */
+export interface PublishedFormField extends FormField {
+  readonly status: FieldStatus;
+  /** The engine's sentence about what it does with the field. */
+  readonly statusNote: string;
+  /** True for a list or a map, edited as JSON because its elements have no fixed pointer. */
+  readonly collection: boolean;
+  /** The engine's dotted path for the field (`time.duration_s`), which is how a scenario file spells it. */
+  readonly path: string;
+  /** Whether the engine published a default, and what it is. A list or map has none to publish. */
+  readonly hasDefault: boolean;
+  readonly defaultValue?: unknown;
+  /** The engine's range in words, when it bounds the value (`(0, ∞)`). */
+  readonly range?: string;
+  /** `basic` for what a newcomer sets, `advanced` for model internals (`x-level`). */
+  readonly level?: "basic" | "advanced";
+  /** What the setting is in the real world, in one sentence (`x-explain`). */
+  readonly explain?: string;
+  /** The range to start in, in words (`x-recommended`). */
+  readonly recommended?: string;
+}
+
+/** One row of the published field index, or one node of the published schema. */
+export interface PublishedRow {
+  readonly [key: string]: unknown;
+}
+
+function statusOf(value: unknown): FieldStatus {
+  return value === "wired" || value === "partial" || value === "not-implemented" || value === "refused" || value === "descriptive"
+    ? value
+    : "unknown";
+}
+
+/** Every schema node that carries an `x-pointer`, by pointer — the first one wins. */
+function schemaIndex(schema: unknown): Map<string, PublishedRow> {
+  const out = new Map<string, PublishedRow>();
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    const row = node as PublishedRow;
+    const pointer = row["x-pointer"];
+    if (typeof pointer === "string" && !out.has(pointer)) out.set(pointer, row);
+    for (const child of Object.values(row)) walk(child);
+  };
+  walk(schema);
+  return out;
+}
+
+function kindOfRow(row: PublishedRow): ItemField["kind"] {
+  if (Array.isArray(row.enum) && row.enum.length > 0) return "enum";
+  switch (row.kind) {
+    case "integer": return "integer";
+    case "number": return "number";
+    case "boolean": return "boolean";
+    case "enum": return "enum";
+    case "string": return "string";
+    default: return "json";
+  }
+}
+
+/**
+ * The settings form, built from the engine's published field index (`scenario.get {with_schema}`
+ * `fields`) and its schema.
+ *
+ * Three kinds of row come out of it:
+ *
+ *  * **a leaf** at a fixed pointer, with the widget its type calls for;
+ *  * **a collection** — a list or a map, whose element leaves the engine publishes under `/-/` or
+ *    `/*` because an element has no fixed pointer — edited as one JSON value at the collection's
+ *    own pointer, carrying the collection's status;
+ *  * **a choice of variant** for a tagged union such as `world.source`, whose tag is not a leaf of
+ *    any variant but is what picks between them.
+ *
+ * Every row carries the engine's `x-status`, which is the point: a field the engine does not act on
+ * is marked in the form, not silently accepted.
+ */
+export function fieldsFromPublished(
+  fields: readonly PublishedRow[],
+  schema: unknown,
+  doc: unknown,
+): PublishedFormField[] {
+  const index = schemaIndex(schema);
+  const out: PublishedFormField[] = [];
+  const seen = new Set<string>();
+  const push = (field: PublishedFormField): void => {
+    if (seen.has(field.pointer)) return;
+    seen.add(field.pointer);
+    out.push(field);
+  };
+  const fromRow = (
+    row: PublishedRow,
+    pointer: string,
+    collection: boolean,
+    kind: FormField["kind"],
+  ): PublishedFormField => ({
+    pointer,
+    label: typeof row.title === "string" ? row.title : humanise(pointer.split("/").pop() ?? pointer),
+    group: typeof row["x-group"] === "string" ? row["x-group"] : "Other",
+    kind,
+    ...(typeof row.unit === "string" && row.unit !== "" ? { unit: row.unit } : {}),
+    ...(typeof row.description === "string" ? { help: row.description } : {}),
+    ...(kind === "enum" && Array.isArray(row.enum) ? { options: row.enum.map(String) } : {}),
+    ...(kind === "enum" && !Array.isArray(row.enum) && choicesOf(row) ? { options: (choicesOf(row) ?? []).map((c) => String(c.value)) } : {}),
+    ...(kind === "enum" && choicesOf(row) ? { choices: choicesOf(row), choicesOpen: row["x-options-open"] === true } : {}),
+    ...(presetsOf(row) ? { presets: presetsOf(row) } : {}),
+    // An `Option` is marked on the schema node, after its leaf row was indexed.
+    ...(row["x-nullable"] === true || index.get(pointer)?.["x-nullable"] === true ? { nullable: true } : {}),
+    ...(typeof row.minimum === "number" ? { min: row.minimum } : {}),
+    ...(typeof row.exclusiveMinimum === "number" ? { min: row.exclusiveMinimum } : {}),
+    ...(typeof row.maximum === "number" ? { max: row.maximum } : {}),
+    ...(typeof row["x-step"] === "number" ? { step: row["x-step"] } : {}),
+    ...(subgroupOf(row) ? { subgroup: subgroupOf(row) } : {}),
+    ...(relevantWhenOf(row) ? { relevantWhen: relevantWhenOf(row) } : {}),
+    status: statusOf(row["x-status"]),
+    statusNote: typeof row["x-status-note"] === "string" ? row["x-status-note"] : "",
+    collection,
+    path: pathOfPointer(pointer),
+    hasDefault: Object.prototype.hasOwnProperty.call(row, "default") && pointer === row["x-pointer"],
+    ...(Object.prototype.hasOwnProperty.call(row, "default") && pointer === row["x-pointer"] ? { defaultValue: row.default } : {}),
+    ...(typeof row["x-range"] === "string" ? { range: row["x-range"] } : {}),
+    ...(row["x-level"] === "basic" || row["x-level"] === "advanced" ? { level: row["x-level"] } : {}),
+    ...(typeof row["x-explain"] === "string" ? { explain: row["x-explain"] } : {}),
+    ...(typeof row["x-recommended"] === "string" ? { recommended: row["x-recommended"] } : {}),
+  });
+
+  // What a list's element rows say about it: a list of strings from a closed set becomes
+  // checkboxes, a list of objects whose fields are leaves becomes a row-by-row editor. A map whose
+  // keys the engine publishes (`x-key-options`) becomes a row per key, at the top level and inside
+  // a list element (a provider's servers).
+  const multi = new Map<string, { choices: Choice[]; open: boolean }>();
+  const items = new Map<string, ItemField[]>();
+  const maps = new Map<string, ItemField[]>();
+  const nested = new Map<string, Map<string, ItemField[]>>();
+  const itemFieldOf = (row: PublishedRow, rel: string): ItemField => {
+    const choices = choicesOf(row);
+    return {
+      key: rel,
+      label: typeof row.title === "string" ? row.title : humanise(rel.split("/").pop() ?? rel),
+      kind: kindOfRow(row),
+      ...(typeof row.unit === "string" && row.unit !== "" ? { unit: row.unit } : {}),
+      ...(typeof row.description === "string" ? { help: row.description } : {}),
+      ...(typeof row.minimum === "number" ? { min: row.minimum } : {}),
+      ...(typeof row.exclusiveMinimum === "number" ? { min: row.exclusiveMinimum } : {}),
+      ...(typeof row.maximum === "number" ? { max: row.maximum } : {}),
+      ...(typeof row["x-step"] === "number" ? { step: row["x-step"] } : {}),
+      ...(choices ? { choices, choicesOpen: row["x-options-open"] === true } : {}),
+      ...(composeOf(row) ? { compose: composeOf(row) } : {}),
+      ...(providerSetsOf(row["x-options-by-preset"]) ? { providerNames: providerSetsOf(row["x-options-by-preset"]) } : {}),
+      ...(typeof row["x-status"] === "string" ? { status: row["x-status"] } : {}),
+      ...(typeof row["x-status-note"] === "string" ? { statusNote: row["x-status-note"] } : {}),
+    };
+  };
+  /** The map at `mapPointer` as a field, when the engine publishes its keys (`x-key-options`). */
+  const mapFieldOf = (mapPointer: string, rel: string, valueFields: readonly ItemField[]): ItemField | undefined => {
+    const node = index.get(mapPointer);
+    const keyChoices = node ? choicesOf({ "x-options": node["x-key-options"] }) : undefined;
+    if (!node || !keyChoices) return undefined;
+    return {
+      key: rel,
+      label: typeof node.title === "string" ? node.title : humanise(rel.split("/").pop() ?? rel),
+      kind: "map",
+      ...(typeof node.description === "string" ? { help: node.description } : {}),
+      keyChoices,
+      keyOpen: node["x-key-options-open"] === true,
+      valueFields,
+    };
+  };
+  for (const row of fields) {
+    const pointer = row["x-pointer"];
+    if (typeof pointer !== "string" || pointer === "") continue;
+    const cut = pointer.search(/\/[-*](\/|$)/);
+    if (cut >= 0) {
+      const root = pointer.slice(0, cut);
+      const rootRow = index.get(root) ?? row;
+      push(fromRow({ ...rootRow, "x-group": rootRow["x-group"] ?? row["x-group"] }, root, true, "json"));
+      const rel = pointer.slice(cut + 2);
+      const deeper = rel.search(/\/[-*](\/|$)/);
+      if (pointer.charAt(cut + 1) === "*") {
+        // A map's value: a leaf (`rel` empty) or a field of a struct, however deep; a list or map
+        // inside the value stays in that value's own JSON.
+        if (deeper < 0) {
+          const list = maps.get(root) ?? [];
+          list.push(itemFieldOf(row, rel));
+          maps.set(root, list);
+        }
+        continue;
+      }
+      if (deeper >= 0) {
+        // A map inside a list element (`providers[].components`): one level, leaf or struct values.
+        const mapRel = rel.slice(0, deeper);
+        const inner = rel.slice(deeper + 2);
+        // A list of plain values inside an element (a unit's `position_m`, its `roles`): checkboxes
+        // when the engine lists the values, boxes otherwise. It used to fall into "Other fields" JSON.
+        const elem = scalarKindOf(kindOfRow(row)) ?? (kindOfRow(row) === "enum" ? "string" : undefined);
+        if (rel.charAt(deeper + 1) === "-" && inner === "" && !mapRel.includes("/-") && elem !== undefined) {
+          const base = itemFieldOf(row, mapRel);
+          const label = listLabel(base.label, base.unit);
+          const list = items.get(root) ?? [];
+          list.push(base.choices ? { ...base, label, kind: "multi" } : { ...base, label, kind: "scalars", elemKind: elem });
+          items.set(root, list);
+          continue;
+        }
+        if (rel.charAt(deeper + 1) === "*" && !/\/[-*](\/|$)/.test(inner)) {
+          const byMap = nested.get(root) ?? new Map<string, ItemField[]>();
+          const list = byMap.get(mapRel) ?? [];
+          list.push(itemFieldOf(row, inner));
+          byMap.set(mapRel, list);
+          nested.set(root, byMap);
+        }
+        continue;
+      }
+      const choices = choicesOf(row);
+      if (rel === "" && choices && (row.kind === "enum" || row.kind === "string")) {
+        multi.set(root, { choices, open: row["x-options-open"] === true });
+      } else if (rel !== "") {
+        const list = items.get(root) ?? [];
+        list.push(itemFieldOf(row, rel));
+        items.set(root, list);
+      }
+      continue;
+    }
+    // A tagged union's tag sits beside its variants' leaves; offer it where its first leaf is.
+    for (const [unionPointer, node] of index) {
+      if (typeof node["x-tag"] !== "string" || !Array.isArray(node["x-variants"])) continue;
+      if (!pointer.startsWith(`${unionPointer}/`)) continue;
+      const name = typeof node.title === "string" ? node.title : humanise(unionPointer.split("/").pop() ?? "");
+      const variantChoices = choicesOf({ "x-options": node["x-variant-options"] });
+      push({
+        ...fromRow(node, `${unionPointer}/${node["x-tag"]}`, false, "enum"),
+        label: `${name}: kind`,
+        options: (node["x-variants"] as unknown[]).map(String),
+        ...(variantChoices ? { choices: variantChoices, choicesOpen: false } : {}),
+      });
+    }
+    // A block whose every key the engine publishes as a field of its own (`x-typed-children`,
+    // `detection.ma.params`) is edited through those fields, not as JSON.
+    if (row["x-typed-children"] === true) continue;
+    push(fromRow(row, pointer, false, kindOfRow(row)));
+  }
+
+  // Upgrade the lists the element rows describe. A list of objects is edited row by row only when
+  // one of its fields is a choice (a model id): that is the case — attackers, detectors, jammers —
+  // where typing JSON was the problem, and every other field of the element is still shown.
+  for (let i = 0; i < out.length; i++) {
+    const f = out[i];
+    if (!f.collection) continue;
+    const m = multi.get(f.pointer);
+    if (m) {
+      out[i] = { ...f, kind: "multi", choices: m.choices, choicesOpen: m.open };
+      continue;
+    }
+    const mapValues = maps.get(f.pointer);
+    const asMap = mapValues ? mapFieldOf(f.pointer, "", mapValues) : undefined;
+    if (asMap) {
+      out[i] = { ...f, kind: "map", keyChoices: asMap.keyChoices, keyOpen: asMap.keyOpen, valueFields: asMap.valueFields };
+      continue;
+    }
+    // A map whose keys come from the document (`nodes.per_class`, by vehicle class) keeps its
+    // value's fields, so the window can offer the keys it finds.
+    if (mapValues) out[i] = { ...f, valueFields: mapValues };
+    // A `[from, to]` pair (`x-pair`): two number boxes with the element's unit and range.
+    const pairNode = index.get(f.pointer);
+    if (pairNode?.["x-pair"] === true) {
+      const el = fields.find((r) => r["x-pointer"] === `${f.pointer}/-`);
+      out[i] = {
+        ...f,
+        kind: "pair",
+        ...(el && typeof el.minimum === "number" ? { min: el.minimum } : {}),
+        ...(el && typeof el.maximum === "number" ? { max: el.maximum } : {}),
+        ...(el && typeof el.unit === "string" && el.unit !== "" ? { unit: el.unit } : {}),
+      };
+      continue;
+    }
+    // A list of plain numbers or names (`mobility.route_files`, `threats.compromised_rsus`): one box
+    // per element rather than a JSON array.
+    const elRow = fields.find((r) => r["x-pointer"] === `${f.pointer}/-`);
+    const elKind = elRow ? scalarKindOf(kindOfRow(elRow)) : undefined;
+    if (elRow && elKind && !choicesOf(elRow) && !items.has(f.pointer)) {
+      out[i] = {
+        ...f,
+        kind: "scalars",
+        elemKind: elKind,
+        label: listLabel(f.label, f.unit),
+        ...(typeof elRow.unit === "string" && elRow.unit !== "" && f.unit === undefined ? { unit: elRow.unit } : {}),
+      };
+      continue;
+    }
+    const inner = nested.get(f.pointer);
+    const innerMaps = inner
+      ? [...inner].map(([rel, vf]) => mapFieldOf(`${f.pointer}/-${rel}`, rel, vf)).filter((x): x is ItemField => x !== undefined)
+      : [];
+    const fieldsOf = [...(items.get(f.pointer) ?? []), ...innerMaps];
+    if (fieldsOf.length > 0 && fieldsOf.some((x) => x.choices !== undefined)) {
+      const template = index.get(f.pointer)?.["x-item-template"];
+      out[i] = { ...f, kind: "list", itemFields: fieldsOf, ...(template !== undefined ? { itemTemplate: template } : {}) };
+    }
+  }
+
+  // A top-level section the index has no leaf for (a plain list of names, say) is still a setting.
+  if (doc !== null && typeof doc === "object") {
+    for (const key of Object.keys(doc as Record<string, unknown>)) {
+      const pointer = `/${key}`;
+      if (out.some((f) => f.pointer === pointer || f.pointer.startsWith(`${pointer}/`))) continue;
+      push(fromRow(index.get(pointer) ?? {}, pointer, true, "json"));
+    }
+  }
+  return out;
+}
+
+/** A JSON Pointer as the dotted path a scenario file uses: `/time/duration_s` → `time.duration_s`. */
+export function pathOfPointer(pointer: string): string {
+  return pointer
+    .split("/")
+    .slice(1)
+    .map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"))
+    .join(".");
+}
+
+/** The pointers at which `a` and `b` differ, down to the leaves, sorted. */
+export function changedPointers(a: unknown, b: unknown, at = ""): string[] {
+  const isObject = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  if (isObject(a) && isObject(b)) {
+    const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
+    return keys.flatMap((k) => changedPointers(a[k], b[k], `${at}/${k.replace(/~/g, "~0").replace(/\//g, "~1")}`));
+  }
+  return JSON.stringify(a) === JSON.stringify(b) ? [] : [at === "" ? "/" : at];
+}
+
+/**
+ * Like {@link changedPointers}, but a block the one side lacks entirely is still split into its
+ * leaves, so a first edit under `security.scms` is "providers changed", not "security.scms changed"
+ * (which no field owns, so no row showed it as edited).
+ */
+export function changedLeaves(a: unknown, b: unknown): string[] {
+  const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  const expand = (p: string): string[] => {
+    const x = getPointer(a, p);
+    const y = getPointer(b, p);
+    if (!((x === undefined && isObject(y)) || (y === undefined && isObject(x)))) return [p];
+    const inner = changedPointers(isObject(x) ? x : {}, isObject(y) ? y : {}, p).filter((q) => q !== p);
+    return inner.length === 0 ? [p] : inner.flatMap(expand);
+  };
+  return changedPointers(a, b).flatMap(expand);
+}

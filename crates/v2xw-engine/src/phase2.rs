@@ -1,0 +1,13787 @@
+//! The security lifecycle and the backend: credentials, pseudonyms, misbehaviour
+//! reporting, the Misbehaviour Authority's decision, revocation and CRL distribution.
+//!
+//! This module is a *path*, not a feature list: a vehicle detects another one
+//! lying about its position, files a misbehaviour report, the report crosses the
+//! vehicle's backend link to the Misbehaviour Authority, the authority decides on
+//! sustained evidence, the PCA and both Linkage Authorities identify the device, the CRL
+//! Generator issues on its cadence, the list is distributed by cellular download and by
+//! roadside broadcast, and every vehicle that installs it stops trusting the liar. This
+//! module wires that path across the crates that model each piece and **reimplements
+//! none of them**:
+//!
+//! | Piece | Whose | What this module does with it |
+//! |---|---|---|
+//! | the attacker | [`v2xw_threat::LegacyAttacker`] | calls `act` on the outgoing claim before it is signed |
+//! | the detector suite | [`v2xw_threat::Legacy12`] | feeds it the messages the node's own runtime delivered |
+//! | the report | [`v2xw_threat::MisbehaviourReport`] | builds one `from_verdict`, at most once a second per subject per reporter |
+//! | the access leg | [`crate::backend::BackendAccess`] | cellular Uu, roadside relay, or none |
+//! | the backend | [`v2xw_proto::ScmsRun`] | run **in lockstep** with the engine's clock: RA shuffles, PCA and LA lookups, CRL cadence |
+//! | the decision | [`v2xw_threat::CorroboratedMa`] (default) or [`v2xw_threat::LegacyWindow`] | `detection.ma`: independent corroborated events over time, or the legacy persistence gate |
+//! | the CRL | [`v2xw_sec::linkage::CrlLinkageEntry`] | installs it in the receiving node's own `CrlGate` |
+//! | enforcement | [`v2xw_node::stores::CrlGate`] | the node's own revocation check does the rest |
+//!
+//! # Why honest traffic used to be revoked
+//!
+//! The Phase 2 wiring took the authority's decision itself: whenever it held two reports
+//! about two pseudonyms it asked the Linkage Authorities whether they belonged to one
+//! device, and revoked if they did. The Linkage Authorities answer *linkage*, not
+//! *guilt*: two honest receivers reporting one honest vehicle across a pseudonym change —
+//! a Gauss–Markov GNSS burst of 3 s at six times the nominal noise is exactly that, and
+//! the legacy engine says its burst length was chosen to be shorter than "the revocation
+//! persistence gate" — is correctly linked, and was revoked. The persistence gate is the
+//! legacy authority's `threat/ma/legacy-window` (k = 3 trusted reporters, reports in 4
+//! distinct seconds spanning at least 3.0 s inside a 15 s window; `PipelineConfig`
+//! `report_threshold_k`, `revoke_min_seconds`, `revoke_persist_s`, `revoke_window_s`), and
+//! it ships in `v2xw-threat` — it was simply not on this path. It is now: the decision is
+//! the pipeline's, and the backend only carries it out.
+//!
+//! # Why honest traffic was still revoked, and the second fix (2026-09-30)
+//!
+//! With the persistence gate in place, the shipped `revocation-latency.yaml` with its
+//! attackers removed still revoked 21 honest vehicles in 300 s at 6,000 veh/h, and
+//! `phase2-manhattan` one (honest node 28: eight reporters flagged one burst between 257.1
+//! and 257.9 s). Two things were wrong, and both are fixed here:
+//!
+//! 1. **The detector judged every message against a constant 5 m confidence.** A BSM
+//!    states its own accuracy (J2735 `PositionalAccuracy`) and a CAM its own confidence
+//!    ellipse; the detector host now joins each message's stated accuracy back by
+//!    `(signer, generation time)` ([`broadcast_accuracy_95_m`]) and the suite's tolerance
+//!    is that. A receiver in an urban canyon states a wider ellipse and is judged by it.
+//! 2. **The authority counted one event heard by many as many pieces of evidence.** Eight
+//!    receivers of one GNSS burst met "three reporters, four distinct seconds, a 3 s span"
+//!    by themselves. The default authority is now `threat/ma/corroborated`
+//!    ([`v2xw_threat::CorroboratedMa`]): reports about one pseudonym are correlated into
+//!    events, an event counts when two independent trusted reporters witnessed it, and
+//!    revocation takes several such events sustained over time. The legacy gate stays
+//!    selectable for parity with the legacy corpus.
+//!
+//! A benign GNSS burst still gets reported — a real receiver under-reports its error in a
+//! multipath spike, and a real fleet's detectors fire on it — and that is the honest
+//! behaviour: what must not follow is a revocation.
+//!
+//! # What the detectors check, and against what (2026-10-06)
+//!
+//! Every check that compares positions allows for the confidence each message states
+//! (CaTch, Kamel et al., IEEE WCNC 2019): the motion checks through the stated 95 %
+//! radius, the heading check through the bearing error two stated radii imply over the
+//! longest straight baseline the sender's own headings describe (up to 10 s), and the
+//! map check through the stated disc. Each receiver holds a map of the motor-vehicle
+//! lanes ([`RoadMap`]), as F2MD's position-plausibility check assumes, so a position
+//! lie that stays self-consistent (the legacy `ConstPosOffset`) is visible at all. A PSM
+//! sender is checked as a vulnerable road user. The authority's reporter budget is a
+//! rate inside its window, not a run-long count, so a receiver that follows one liar
+//! stays a witness against the next.
+//!
+//! # The joints, stated
+//!
+//! **1. The air credential is the SCMS credential (this joint is closed).** Each
+//! vehicle signs with the implicit certificate the ACA issued in its batch and the key
+//! `d = e·b + r` it derived from its download ([`ProvisionedCred::key`],
+//! `ObuRuntime::install_credential`), so the digest on the air, the linkage value a CRL
+//! revokes and the certificate bytes are the protocol's own. A receiver reads the linkage
+//! value out of the certificate it verified against; no side channel carries it. Where no
+//! protocol flow issues a credential the same ACA issues one without the flows
+//! ([`crate::credentials`]).
+//!
+//! **2. The subject lookup.** A report names a certificate by its digest; the engine maps
+//! digest → `(node, i, j)` from what it provisioned, standing in for the PCA's own table.
+//! The PCA's *service time* for that lookup is charged by the backend.
+//!
+//! **3. Pre-run provisioning.** A vehicle on the road already holds its pool, so each
+//! vehicle's first batches are provisioned *before* the run on a scratch kernel
+//! ([`v2xw_proto::ScmsRun::preload`]) — real butterfly expansion, real LA and PCA state —
+//! and the run's own backend clock starts clean. Top-ups during the run are real in-run
+//! flows over the vehicle's access link.
+//!
+//! **4. The access leg of multi-message flows.** A report's upload and a CRL download are
+//! carried packet by packet by the vehicle's own Uu model or relay. A top-up's exchange
+//! (request, acknowledgement, batch polls) runs inside the backend kernel over a link set
+//! to the access's nominal latency and capacity at the instant it starts.
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use v2xw_core::geom::Vec3;
+use v2xw_core::ids::{ActorId, NodeId};
+use v2xw_core::time::{Duration, SimTime};
+use v2xw_proto::net::Transport;
+use v2xw_proto::scms::governance::ElectorReplacementPq;
+use v2xw_proto::scms::mbr::{self, MbrQueue};
+
+use crate::report_records::Fate;
+use v2xw_proto::scms::run::{ScmsRun, crl_bytes};
+use v2xw_proto::stage::{FlowRun, StageId};
+use v2xw_proto::view::{BackendView, EdgeTracker};
+use v2xw_proto::{RevocationLatency, ScmsParams};
+use v2xw_sec::linkage::{CrlLinkageEntry, LinkageValue};
+use v2xw_threat::{
+    AttackKind, Attacker, AttackerView, DetectorParams, Emission, Evidence, HonestClaim, Legacy12,
+    LegacyAttacker, LegacyAttackerParams, LegacyWindow, MaAction, MaParams, MisbehaviourReport,
+    NoMap, ObservedKind, ObservedMessage, SelfBelief, StationType, ThreatCtx, VerificationState,
+};
+use v2xw_world::World;
+
+use crate::backend::{AccessKind, BackendAccess, Backhaul};
+use crate::error::{EngineError, Result};
+use crate::scenario::Scenario;
+
+/// One decision `Phase2::ingest_arrivals` returns: the subject's node, if any, the
+/// subject's digest, the report's flow run and the decision time.
+type Decided = (Option<NodeId>, String, FlowRun, SimTime);
+
+/// The CRL a joiner is handed before the run: version, entries and the signed lists.
+type PrerunCrl = (u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>);
+
+/// The protocol id a scenario names in `actors.backend.protocol` or `security.protocol`.
+pub const CAMP_SCMS: &str = v2xw_proto::CAMP_SCMS_ID;
+
+/// The ETSI ITS PKI's protocol id. Recognised so it can be refused by name.
+pub const ETSI_PKI: &str = "protocol/etsi/ts102941";
+
+/// The detector suite's id, as `detection.local` names it.
+pub const LEGACY_12: &str = "detect/legacy-12";
+
+/// Whether a report's evidence time (`st_tend`, the accused message's `generationTime`
+/// on its sender's clock) is plausible against the report's own generation time (the
+/// reporter's clock): not after it by more than the relevance window's future tolerance,
+/// and not older than the longest maximum age of the window
+/// ([`v2xw_node::rxval::GenerationTimeWindow::default`]). A report with no evidence
+/// time (`st_tend == 0` from a source that sets none) is not judged here.
+#[must_use]
+pub fn evidence_time_plausible(r: &MisbehaviourReport) -> bool {
+    let w = v2xw_node::rxval::GenerationTimeWindow::default();
+    let (ev, made) = (r.st_tend, r.generation_time);
+    if ev == 0 {
+        return true;
+    }
+    ev <= made.saturating_add(w.max_future_ns) && made.saturating_sub(ev) <= w.max_age_ns
+}
+
+/// Whether the MA takes report `r` as evidence: the two set-asides of `ingest_arrivals`
+/// (a report whose only reason is a failed signature; an implausible evidence time).
+fn ma_accepts(r: &MisbehaviourReport) -> bool {
+    !r.reason_codes.iter().all(|c| c == SIGNATURE_VERIFICATION) && evidence_time_plausible(r)
+}
+
+/// The strict US misbehaviour profile's id ([SM-MBR] v1.0 §2.3 PSID-0x20 subtypes and
+/// default thresholds, `v2xw_threat::us_mbr`), as `detection.local` names it.
+pub const US_SM_MBR: &str = "detect/us-sm-mbr";
+
+/// The ETSI TS 103 759 observation suite's id (`v2xw_threat::ts103759`: classes 1-5,
+/// F2MD-style checks, the Kalman, envelope and box checks, its own fusion and
+/// scoring modes), as `detection.local` names it. Listed alone: it is a whole suite.
+pub const TS_103_759: &str = "detect/ts103759";
+
+/// Whether a scenario that names no local detector runs [`US_SM_MBR`]: its
+/// credential protocol is the SCMS and its deployment is the US one
+/// ([`Deployment::is_us`]). [SM-MBR] §2.3: a US OBU detects and files the PSID-0x20
+/// subtypes, so under the US system the empty list means the US profile. Any other run
+/// (ETSI, the CAMP reference, a non-US deployment, no credential protocol) keeps the empty
+/// list's meaning: no local detector. A deployment that does not build is not the US one
+/// here; the loader names its own error.
+///
+/// [`Deployment::is_us`]: v2xw_proto::scms::deployment::Deployment::is_us
+#[must_use]
+pub fn us_default_detector(scenario: &Scenario) -> bool {
+    let protocol = scenario
+        .actors
+        .backend
+        .protocol
+        .clone()
+        .or_else(|| scenario.security.protocol.as_ref().map(|c| c.id.clone()));
+    scenario.detection.local.is_empty()
+        && protocol.as_deref() == Some(CAMP_SCMS)
+        && deployment_of(scenario, true).is_ok_and(|d| d.is_us())
+}
+
+/// The local detector suite a scenario's receivers run, by its `detection.local` id
+/// ([`LEGACY_12`], [`US_SM_MBR`], [`TS_103_759`]), or `""` when they run none: what
+/// [`Phase2Report::local_suite`] names.
+#[must_use]
+pub fn local_suite_id(scenario: &Scenario) -> &'static str {
+    let local = &scenario.detection.local;
+    if local.iter().any(|c| c.id == TS_103_759) {
+        TS_103_759
+    } else if local.iter().any(|c| c.id == US_SM_MBR) || us_default_detector(scenario) {
+        US_SM_MBR
+    } else if local.is_empty() {
+        ""
+    } else {
+        LEGACY_12
+    }
+}
+
+/// One receiver's local misbehaviour detector: the research suite or the US profile.
+#[derive(Debug, Clone)]
+enum LocalSuite {
+    Research(Box<Legacy12>),
+    Us(Box<v2xw_threat::us_mbr::UsSmMbr>),
+    Ts(Box<v2xw_threat::ts103759::Ts103759Suite>),
+}
+
+/// What one suite made of one message: the legacy verdict (typed on the corpus's check
+/// enum) or the TS 103 759 suite's own (`v2xw_threat::ts103759`, "Why this suite does not
+/// implement Detector").
+enum LocalVerdict {
+    Legacy(v2xw_threat::Verdict),
+    Ts(v2xw_threat::ts103759::TsVerdict),
+}
+
+impl LocalVerdict {
+    fn fired(&self) -> bool {
+        match self {
+            LocalVerdict::Legacy(v) => v.fired(),
+            LocalVerdict::Ts(v) => v.fired(),
+        }
+    }
+
+    fn subject(&self) -> &str {
+        match self {
+            LocalVerdict::Legacy(v) => &v.subject,
+            LocalVerdict::Ts(v) => &v.subject,
+        }
+    }
+
+    fn fired_ids(&self) -> Vec<&'static str> {
+        match self {
+            LocalVerdict::Legacy(v) => v.fired.iter().map(|o| o.detector.as_str()).collect(),
+            LocalVerdict::Ts(v) => v.fired.iter().map(|o| o.check.as_str()).collect(),
+        }
+    }
+
+    /// The report this verdict files, in the one wire shape both suites share.
+    fn report(
+        &self,
+        id: String,
+        node: NodeId,
+        reporter: String,
+        evidence: &v2xw_threat::report::Evidence,
+    ) -> Option<MisbehaviourReport> {
+        match self {
+            LocalVerdict::Legacy(v) => {
+                MisbehaviourReport::from_verdict(id, node, reporter, v, evidence)
+            }
+            LocalVerdict::Ts(v) => {
+                let reasons: Vec<(String, f64)> = v
+                    .fired
+                    .iter()
+                    .map(|o| (o.check.as_str().to_string(), o.score))
+                    .collect();
+                MisbehaviourReport::from_named_checks(
+                    id,
+                    node,
+                    reporter,
+                    v.subject.clone(),
+                    &reasons,
+                    &v.columns(),
+                    evidence,
+                )
+            }
+        }
+    }
+}
+
+impl LocalSuite {
+    /// Drops what this suite holds about a sender that will never be heard again. The US
+    /// profile needs none of this: it ages its senders out itself (`UsSmMbr`'s sweep).
+    fn forget_subject(&mut self, digest: &[u8; 8]) {
+        match self {
+            Self::Research(s) => s.forget_subject(digest),
+            Self::Us(_) => {}
+            Self::Ts(s) => s.forget_subject(digest),
+        }
+    }
+
+    fn on_message(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        env: &dyn v2xw_threat::obs::LocalEnvironment,
+        x: &v2xw_threat::ts103759::CrossCheckInputs<'_>,
+    ) -> LocalVerdict {
+        match self {
+            LocalSuite::Research(d) => {
+                LocalVerdict::Legacy(v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env))
+            }
+            LocalSuite::Us(d) => {
+                LocalVerdict::Legacy(v2xw_threat::Detector::on_message(&mut **d, ctx, me, m, env))
+            }
+            LocalSuite::Ts(d) => LocalVerdict::Ts(d.check(ctx, me, m, env, x)),
+        }
+    }
+
+    /// The generation times of the BSMs a report on `m` is about, oldest first, as this
+    /// suite judged them: the US profile's consecutive pair (its previous BSM from that
+    /// certificate, when consecutive, and `m`), read before `m` is judged. The research
+    /// suite keeps no per-certificate predecessor, so only `m` is named and the evidence
+    /// adds the BSM the certificate put on the air just before it.
+    fn judged_times(&self, m: &ObservedMessage) -> (Option<SimTime>, SimTime) {
+        let prev = match self {
+            LocalSuite::Research(_) | LocalSuite::Ts(_) => None,
+            LocalSuite::Us(d) => d.consecutive_before(m),
+        };
+        (prev, m.claimed_generation_time)
+    }
+}
+
+/// The check id of a failed signature verification (`DetectorId::SignatureVerification`).
+const SIGNATURE_VERIFICATION: &str =
+    v2xw_threat::detect::DetectorId::SignatureVerification.as_str();
+
+/// The authority pipeline's id, as `detection.ma` names it.
+pub const MA_LEGACY_WINDOW: &str = v2xw_threat::ma::MODEL_ID;
+
+/// The id of the authority pipeline that decides on independent evidence over time, and
+/// the one a scenario runs when `detection.ma` is not set.
+pub const MA_CORROBORATED: &str = v2xw_threat::ma_corroborate::MODEL_ID;
+
+/// The authority pipelines this build ships, by id.
+pub const MA_PIPELINES: [&str; 2] = [MA_CORROBORATED, MA_LEGACY_WINDOW];
+
+/// The Misbehaviour Authority's decision pipeline, whichever the scenario chose.
+#[derive(Debug, Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing the large variant would add an indirection at every use for no measured gain"
+)]
+pub(crate) enum MaHost {
+    /// `threat/ma/legacy-window`: the legacy persistence gate, kept for parity with the
+    /// legacy corpus.
+    Legacy(LegacyWindow),
+    /// `threat/ma/corroborated`: reports correlated into events, revocation on
+    /// independent corroborated events over time.
+    Corroborated(v2xw_threat::CorroboratedMa),
+    /// `security.scms.ma_policy` (or a provider's own): a declarative policy,
+    /// [`crate::ma_policy::PolicyMa`].
+    Policy(Box<crate::ma_policy::PolicyMa>),
+    /// A rule the host program supplies (`Engine::attach_ma_policy`), decided
+    /// once per step over the step's evidence ([`crate::ma_hook`]).
+    External(crate::ma_hook::ExternalMa),
+}
+
+impl MaHost {
+    fn ingest_evidence(&mut self, r: &MisbehaviourReport, at: SimTime) -> Option<MaAction> {
+        match self {
+            MaHost::Legacy(m) => m.ingest_evidence(r, at),
+            MaHost::Corroborated(m) => m.ingest_evidence(r, at),
+            MaHost::Policy(m) => m.ingest_evidence(r, at),
+            MaHost::External(m) => m.ingest_evidence(&r.report_id),
+        }
+    }
+
+    fn id(&self) -> &str {
+        match self {
+            MaHost::Legacy(_) => MA_LEGACY_WINDOW,
+            MaHost::Corroborated(_) => MA_CORROBORATED,
+            MaHost::Policy(_) => crate::ma_policy::MODEL_ID,
+            MaHost::External(m) => m.id(),
+        }
+    }
+
+    /// The threshold this pipeline decides at (U3a), its limits by name in its own units.
+    fn threshold(&self) -> v2xw_proto::scms::run::MaThreshold {
+        let n = |v: usize| v as f64;
+        let values: Vec<(&'static str, f64)> = match self {
+            MaHost::Legacy(m) => {
+                let p = m.params();
+                vec![
+                    ("report_threshold_k", n(p.report_threshold_k)),
+                    ("revoke_min_seconds", n(p.revoke_min_seconds)),
+                    ("revoke_persist_s", p.revoke_persist_s),
+                    ("revoke_window_s", p.revoke_window_s),
+                ]
+            }
+            MaHost::Corroborated(m) => {
+                let p = m.params();
+                vec![
+                    ("event_window_s", p.event_window_s),
+                    ("event_min_reporters", n(p.event_min_reporters)),
+                    ("min_events", n(p.min_events)),
+                    ("window_s", p.window_s),
+                    ("min_reporters", n(p.min_reporters)),
+                ]
+            }
+            MaHost::Policy(m) => {
+                let p = m.params();
+                vec![
+                    ("event_window_s", p.event_window_s),
+                    ("event_min_reporters", n(p.event_min_reporters)),
+                    ("min_events", n(p.min_events)),
+                    ("min_score", p.min_score),
+                    ("min_reports", n(p.min_reports)),
+                    ("min_distinct_reporters", n(p.min_distinct_reporters)),
+                    ("window_s", p.window_s),
+                ]
+            }
+            // A host program's rule publishes no limits the engine can read.
+            MaHost::External(_) => Vec::new(),
+        };
+        v2xw_proto::scms::run::MaThreshold {
+            rule: self.id().to_string(),
+            values: values.into_iter().filter(|(_, v)| v.is_finite()).collect(),
+        }
+    }
+
+    fn subjects(&self) -> usize {
+        match self {
+            MaHost::Legacy(m) => m.subjects(),
+            MaHost::Corroborated(m) => m.subjects(),
+            MaHost::Policy(m) => m.subjects(),
+            MaHost::External(m) => m.subjects(),
+        }
+    }
+
+    /// The corroborated events the authority holds about one pseudonym right now (the
+    /// corroborating pipeline only).
+    fn corroborated_events(&self, subject: &str) -> Option<u32> {
+        match self {
+            MaHost::Legacy(_) => None,
+            MaHost::Corroborated(m) => Some(m.summary(subject).corroborated_events),
+            MaHost::Policy(m) => m.corroborated_events(subject),
+            MaHost::External(_) => None,
+        }
+    }
+
+    fn peak_unrevoked_events(&self) -> Option<u32> {
+        match self {
+            MaHost::Legacy(_) => None,
+            MaHost::Corroborated(m) => Some(m.peak_unrevoked_events()),
+            MaHost::Policy(m) => m.peak_unrevoked_events(),
+            MaHost::External(_) => None,
+        }
+    }
+
+    fn trust_infrastructure(&mut self, digest: String) {
+        match self {
+            MaHost::Legacy(m) => m.trust_infrastructure(digest),
+            MaHost::Corroborated(m) => m.trust_infrastructure(digest),
+            MaHost::Policy(m) => m.trust_infrastructure(digest),
+            MaHost::External(m) => m.trust_infrastructure(digest),
+        }
+    }
+
+    /// The pipeline `detection.ma` names, with its parameters; the corroborating one
+    /// when the key is absent.
+    pub(crate) fn from_scenario(scenario: &Scenario) -> Result<MaHost> {
+        // `security.scms.ma_policy`: `None` is today's MA.
+        if let Some(policy) = crate::ma_policy::host(scenario)? {
+            return Ok(MaHost::Policy(Box::new(policy)));
+        }
+        let Some(choice) = &scenario.detection.ma else {
+            return Ok(MaHost::Corroborated(v2xw_threat::CorroboratedMa::defaults()));
+        };
+        let empty = serde_json::Map::new();
+        let map = choice.params.as_object().unwrap_or(&empty);
+        // Every refusal names the key it is about (`detection.ma.params.<key>`), so the page
+        // marks the setting rather than the whole block, and says what the key must be. The
+        // two-pipeline rewrite (mbd track) had reported unknown keys against
+        // `detection.ma.params` and accepted a negative `revoke_window_s`; the robustness
+        // track's Check tests pin both.
+        let bad = |key: &str, value: &serde_json::Value, must: &str| {
+            conflict(
+                &format!("detection.ma.params.{key}"),
+                format!("is {value}; it must be {must}"),
+            )
+        };
+        let count = |key: &str, value: &serde_json::Value| {
+            value
+                .as_u64()
+                .filter(|v| *v >= 1)
+                .map(|v| usize::try_from(v).unwrap_or(usize::MAX))
+                .ok_or_else(|| bad(key, value, "a whole number of at least 1"))
+        };
+        let whole_u32 = |key: &str, value: &serde_json::Value| {
+            value
+                .as_u64()
+                .map(|v| u32::try_from(v).unwrap_or(u32::MAX))
+                .ok_or_else(|| bad(key, value, "a whole number, 0 or more"))
+        };
+        let seconds = |key: &str, value: &serde_json::Value| {
+            value
+                .as_f64()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .ok_or_else(|| bad(key, value, "a number of seconds above 0"))
+        };
+        let seconds_or_zero = |key: &str, value: &serde_json::Value| {
+            value
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .ok_or_else(|| bad(key, value, "a number of seconds, 0 or more"))
+        };
+        let flag = |key: &str, value: &serde_json::Value| {
+            value
+                .as_bool()
+                .ok_or_else(|| bad(key, value, "true or false"))
+        };
+        let unknown = |other: &str, takes: &[&str]| {
+            conflict(
+                &format!("detection.ma.params.{other}"),
+                format!(
+                    "'{other}' is not a parameter of {}; it takes {}. Remove the key or \
+                     correct its spelling",
+                    choice.id,
+                    takes.join(", ")
+                ),
+            )
+        };
+        // The ranges the settings form shows (`validate::BOUNDS`), checked after the
+        // type checks below so a wrong type keeps its own message.
+        let in_range = || -> Result<()> {
+            for (key, value) in map {
+                let path = format!("detection.ma.params.{key}");
+                if let (Some(b), Some(v)) =
+                    (crate::scenario::validate::bound_of(&path), value.as_f64())
+                    && !b.admits(v)
+                {
+                    return Err(bad(key, value, &format!("in {}", b.describe())));
+                }
+            }
+            Ok(())
+        };
+        match choice.id.as_str() {
+            MA_LEGACY_WINDOW => {
+                let mut p = MaParams::default();
+                for (key, value) in map {
+                    match key.as_str() {
+                        "report_threshold_k" => p.report_threshold_k = count(key, value)?,
+                        "revoke_min_seconds" => p.revoke_min_seconds = count(key, value)?,
+                        "revoke_persist_s" => p.revoke_persist_s = seconds_or_zero(key, value)?,
+                        "revoke_window_s" => p.revoke_window_s = seconds_or_zero(key, value)?,
+                        "defence" => p.defence = flag(key, value)?,
+                        "reputation_max" => p.reputation_max = whole_u32(key, value)?,
+                        "report_budget" => p.report_budget = whole_u32(key, value)?,
+                        other => return Err(unknown(other, MA_LEGACY_PARAM_KEYS)),
+                    }
+                }
+                in_range()?;
+                Ok(MaHost::Legacy(LegacyWindow::new(p)))
+            }
+            MA_CORROBORATED => {
+                let mut p = v2xw_threat::CorroborationParams::default();
+                for (key, value) in map {
+                    match key.as_str() {
+                        "event_window_s" => p.event_window_s = seconds(key, value)?,
+                        "event_min_reporters" => p.event_min_reporters = count(key, value)?,
+                        "min_events" => p.min_events = count(key, value)?,
+                        "window_s" => p.window_s = seconds(key, value)?,
+                        "min_reporters" => p.min_reporters = count(key, value)?,
+                        "defence" => p.defence = flag(key, value)?,
+                        "reputation_max" => p.reputation_max = whole_u32(key, value)?,
+                        "report_budget" => p.report_budget = whole_u32(key, value)?,
+                        other => return Err(unknown(other, MA_CORROBORATED_PARAM_KEYS)),
+                    }
+                }
+                in_range()?;
+                Ok(MaHost::Corroborated(v2xw_threat::CorroboratedMa::new(p)))
+            }
+            other => Err(conflict(
+                "detection.ma",
+                format!(
+                    "'{other}' is not an authority pipeline this build ships; one of: {}",
+                    MA_PIPELINES.join(", ")
+                ),
+            )),
+        }
+    }
+}
+
+/// The parameters `threat/ma/legacy-window` takes (`detection.ma.params`).
+pub const MA_LEGACY_PARAM_KEYS: &[&str] = &[
+    "report_threshold_k",
+    "revoke_min_seconds",
+    "revoke_persist_s",
+    "revoke_window_s",
+    "defence",
+    "reputation_max",
+    "report_budget",
+];
+
+/// The parameters `threat/ma/corroborated` takes (`detection.ma.params`).
+pub const MA_CORROBORATED_PARAM_KEYS: &[&str] = &[
+    "event_window_s",
+    "event_min_reporters",
+    "min_events",
+    "window_s",
+    "min_reporters",
+    "defence",
+    "reputation_max",
+    "report_budget",
+];
+
+/// How the SCMS's device numbering is kept clear of the engine's.
+pub const SCMS_DEVICE_BASE: u32 = 1_000_000;
+
+/// The mast height a roadside unit's antenna stands at above its ground position, metres.
+pub const RSU_MAST_HEIGHT_M: f64 = 6.0;
+
+/// The hardware profile a roadside unit runs on when the scenario names none.
+pub const DEFAULT_RSU_PROFILE: &str = "rsu/commsignia-its-rs4";
+
+/// How often a reporter may report one subject again, by default: the legacy engine
+/// reported every step its detectors fired, at `PipelineConfig.dt` = 1.0 s.
+pub const REPORT_INTERVAL_S: f64 = 1.0;
+
+/// How often a cellular vehicle asks the CRL Store for the current list, by default.
+///
+/// **ASSUMPTION inside a cited bound** (scms-constants.md). CAMP has the device fetch "as often
+/// as possible but no later than once a week" [CAMP122 §3 item 10] and "on every RA
+/// connection" [PRIMER pp.5, 8]; neither prints an interval, which an OEM configures. One
+/// hour is well inside the weekly bound and is the profile's own polling granularity for
+/// the RA (`ra-minWait` 1 h, [SMP] §2.1.21 Table 3); a scenario that measures revocation
+/// latency states its own.
+pub const CRL_FETCH_INTERVAL_S: f64 = 3_600.0;
+
+/// The bytes of the RA's answer to a conditional CRL poll when the device's copy is
+/// current: HTTP 412 with no body.
+///
+/// [SMP] §4.3.2 and §4.3.1: the composite CRL (6.3.5.8) and the information status
+/// (6.3.5.14) are fetched with `If-Modified-Since`, and 412 means "already current".
+/// **ASSUMPTION** (scms-constants.md): a minimal HTTP/1.1 response, `HTTP/1.1 412 Precondition
+/// Failed` (34 B with CRLF), a `Date:` header (37 B), `Content-Length: 0` (19 B) and the
+/// blank line (2 B): 92 B. Like the 200 answer, its TLS record framing is not charged here.
+pub const CRL_NOT_MODIFIED_BYTES: u32 = 92;
+
+/// The CRL store's download path: an unauthenticated `GET` at `https://<MA>:8894/
+/// download-crl/` ([CAMP122] §6.2.3), conditional on the copy's time
+/// (`If-Modified-Since`, [SMP] §4.3.2). The 1609.2.1 composite-CRL path is paywalled and
+/// UNCONFIRMED, so the CAMP one stands for it, as for every EE-RA path (B9a).
+pub const CRL_STORE_PATH: &str = "/download-crl/";
+
+/// The RA's information-status download path (1609.2.1 §6.3.5.14, `If-Modified-Since`).
+/// **ASSUMPTION** (scms-constants.md `info_status_path`): no published CAMP table names it and
+/// the 1609.2.1 string is UNCONFIRMED; a path beside Table 79's `/download/info`.
+pub const INFO_STATUS_PATH: &str = "/download/info-status";
+
+/// The bytes of an `If-Modified-Since` header: the name, `: `, an IMF-fixdate and CRLF.
+fn if_modified_since() -> v2xw_proto::scms::http::Header {
+    v2xw_proto::scms::http::Header {
+        name: "If-Modified-Since",
+        value_len: v2xw_proto::scms::http::IMF_FIXDATE_BYTES,
+    }
+}
+
+/// How often a roadside unit with the `crl` role repeats the list it holds, by default.
+///
+/// **Cited bound, ASSUMED mechanism** (scms-constants.md). No document specifies a roadside
+/// CRL broadcast (the Primer names the path, p.5; TS 102 941 Annex D.3 gives the delta
+/// CTL no rate). A US RSU repeats a back-office message as Store and Repeat, whose
+/// `TxInterval` allows 1 to 5 seconds [USDOT RSU Specification v4.1, 2016, Appendix C,
+/// p.117]; 5 s is the longest the RSU allows, the smallest share of the channel.
+pub const CRL_BROADCAST_INTERVAL_S: f64 = 5.0;
+
+/// Whether the engine puts an attack kind on the air; a scenario naming one it does not
+/// is refused (see [`unrendered`]).
+#[must_use]
+pub fn renders_on_air(kind: AttackKind) -> bool {
+    unrendered(kind).is_none()
+}
+
+/// Every attacker kind of the catalogue by name, with why the engine refuses it (`None`
+/// for a kind it renders on the air). The agent's settings search reads this rather than
+/// a copied list, so a kind that becomes runnable shows up without an edit elsewhere.
+#[must_use]
+pub fn attack_kinds() -> Vec<(&'static str, Option<&'static str>)> {
+    AttackKind::ALL
+        .iter()
+        .map(|k| (k.as_str(), unrendered(*k)))
+        .collect()
+}
+
+/// The keys `threats.attackers[].params` accepts, with the kind that uses each one
+/// (`None`: every kind; only the Sybil keys are refused on another kind). The same set the params parser below matches; the agent lists
+/// it so "5 Sybil ghosts" lands on `params.sybil_ghosts` (F2MD `SybilVehNumber`).
+pub const ATTACKER_PARAMS: [(&str, Option<&str>); 33] = [
+    ("intensity", None),
+    ("dt_s", None),
+    ("magnitude_scale", None),
+    ("dos_burst", None),
+    ("delay_s", Some("DelayedMessages")),
+    ("expired_cert_lag_s", Some("ExpiredCert")),
+    ("not_yet_valid_lead_s", Some("NotYetValid")),
+    ("const_pos_offset_m", Some("ConstPosOffset")),
+    ("random_pos_half_range_m", Some("RandomPos")),
+    ("teleport_dx_m", Some("Teleport")),
+    ("teleport_dy_m", Some("Teleport")),
+    ("teleport_period_s", Some("Teleport")),
+    ("sine_pos_amplitude_m", Some("SineWavePos")),
+    ("sine_pos_omega_rad_s", Some("SineWavePos")),
+    ("const_speed_offset_mps", Some("ConstSpeedOffset")),
+    ("random_speed_max_mps", Some("RandomSpeed")),
+    ("stop_and_go_speed_mps", Some("StopAndGo")),
+    ("heading_offset_deg", Some("HeadingOffset")),
+    ("replay_lag_samples", Some("DataReplay")),
+    ("slow_drift_ramp_mps", Some("SlowDrift")),
+    ("slow_drift_max_rate_mps", Some("SlowDrift")),
+    ("along_road_offset_m", Some("AlongRoadOffset")),
+    ("disruptive_pos_half_range_m", Some("Disruptive")),
+    ("disruptive_speed_up_mps", Some("Disruptive")),
+    ("disruptive_speed_down_mps", Some("Disruptive")),
+    ("disruptive_heading_deg", Some("Disruptive")),
+    (
+        "pos_speed_inconsistent_drop_mps",
+        Some("PosSpeedInconsistent"),
+    ),
+    ("pos_heading_swing_m", Some("PosHeadingInconsistent")),
+    ("pos_heading_omega_rad_s", Some("PosHeadingInconsistent")),
+    ("eventual_stop_delay_s", Some("EventualStop")),
+    ("eventual_stop_base_speed_mps", Some("EventualStop")),
+    ("sybil_ghosts", Some("Sybil")),
+    ("sybil_jitter_m", Some("Sybil")),
+];
+
+/// Why the engine cannot render an attack kind on the air, or `None` when it can.
+///
+/// The host applies an attacker's claimed position, speed, heading and generation time,
+/// a forged signature and a certificate outside its validity window. What the kinds below
+/// change is none of those, and an attack that is counted as lying while nothing it does
+/// reaches a receiver reads as an attack nobody detected; so they are refused by name.
+pub(crate) fn unrendered(kind: AttackKind) -> Option<&'static str> {
+    match kind {
+        AttackKind::DoS | AttackKind::DoSRandom => Some(
+            "a flood is extra transmissions per generation interval, and the host sends one \
+             frame per generation",
+        ),
+        AttackKind::VruImpersonation | AttackKind::VruPositionSpoof => Some(
+            "it changes the declared station type, which a BSM does not carry; the host does \
+             not switch a vehicle to sending PSMs",
+        ),
+        AttackKind::FakeHazard => Some("the host does not send an attacker's event messages"),
+        AttackKind::SelectiveDrop => Some("a vehicle here relays nothing for it to drop"),
+        _ => None,
+    }
+}
+
+/// How far a receiver's map search looks for a road, metres: a claim farther than this
+/// from every motor-vehicle lane scores as this far, which is several times the map
+/// check's tolerance, so the cap never turns a firing check into a quiet one.
+const MAP_SEARCH_M: f64 = 100.0;
+
+/// A receiver's map of the road network: the world's motor-vehicle lanes.
+///
+/// The position-plausibility check of the F2MD framework (Kamel et al., *Simulation
+/// framework for misbehavior detection in vehicular networks*, IEEE T-VT 69(6), 2020)
+/// asks whether a claimed position lies on a road of the receiver's own map; a
+/// navigation-grade map of the streets is what a production vehicle carries. The
+/// distance is to the nearest motor-vehicle lane's edge (its centreline less half its
+/// width), so a claim anywhere on the carriageway is on the road.
+struct RoadMap<'a> {
+    world: &'a World,
+    vehicles: v2xw_world::model::ClassMask,
+}
+
+impl<'a> RoadMap<'a> {
+    fn new(world: &'a World) -> Self {
+        Self {
+            world,
+            vehicles: Self::vehicles(),
+        }
+    }
+
+    /// The classes whose lanes are "the road" to the map check: motor vehicles.
+    fn vehicles() -> v2xw_world::model::ClassMask {
+        use v2xw_world::model::ClassMask;
+        ClassMask::CAR
+            .union(ClassMask::TRUCK)
+            .union(ClassMask::BUS)
+            .union(ClassMask::MOTO)
+            .union(ClassMask::EMERGENCY)
+    }
+}
+
+impl v2xw_threat::obs::LocalEnvironment for RoadMap<'_> {
+    fn distance_to_road_m(&self, x_m: f64, y_m: f64) -> f64 {
+        self.world
+            .nearest_lane_within(Vec3::new(x_m, y_m, 0.0), MAP_SEARCH_M, Some(self.vehicles))
+            .map_or(MAP_SEARCH_M, |hit| {
+                let half = 0.5 * self.world.lane(hit.pos.lane).width_m;
+                (hit.distance_m - half).max(0.0)
+            })
+    }
+}
+
+/// One provider's end-entity counters for its Backend-view `ee` entity (U7): what its
+/// devices had refused, deleted or never sent. The run report sums them over providers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct EeTally {
+    /// Top-ups the RA refused because the device is on its blocklist.
+    topups_refused_blocklisted: u64,
+    /// Detections that never became a report the device could send (OF-2).
+    reports_not_filed: u64,
+    /// Relayed reports the network layer refused at its MTU.
+    reports_refused_mtu: u64,
+    /// Store deletions (quota, then age) of the provider's devices that left the run.
+    retired_evicted: u64,
+    retired_expired: u64,
+}
+
+/// The SCMS device id of an engine node.
+fn device_of(node: NodeId) -> NodeId {
+    NodeId::new(SCMS_DEVICE_BASE + node.index())
+}
+
+/// An application certificate's signing key for the node: the certificate, `d` from
+/// the device's own download, and the ACA that issued it (the current one, or the one a
+/// root rollover superseded).
+fn app_cred_key(
+    pki: &v2xw_proto::scms::pdu::ScmsPki,
+    c: &v2xw_proto::scms::run::appcert::InstalledApp,
+) -> Option<std::sync::Arc<v2xw_sec::credential::ImplicitKey>> {
+    let aca = pki
+        .in_role(&pki.aca)
+        .into_iter()
+        .find(|a| {
+            matches!(&c.cred.cert.0.issuer,
+                v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(h)
+                    if h.0[..] == a.id8()[..])
+        })
+        .unwrap_or(&pki.aca);
+    Some(std::sync::Arc::new(c.cred.implicit_key(&aca.cert)?))
+}
+
+/// The link-layer source address a pseudonym is sent under: six octets of its digest,
+/// with the locally-administered bit set and the group bit clear (IEEE 802 §8.2), so the
+/// address changes exactly when the certificate does.
+#[must_use]
+pub fn l2_address(digest: &[u8]) -> [u8; 6] {
+    let mut a = [0u8; 6];
+    for (k, b) in a.iter_mut().enumerate() {
+        *b = digest.get(k + 2).copied().unwrap_or(0);
+    }
+    a[0] = (a[0] & 0xFC) | 0x02;
+    a
+}
+
+/// One credential the SCMS provisioning issued, as the engine installs it on the air.
+#[derive(Debug, Clone)]
+pub struct ProvisionedCred {
+    /// The i-period.
+    pub i: u32,
+    /// The index within the period.
+    pub j: u32,
+    /// The linkage value the certificate's `linkageData` carries.
+    pub lv: LinkageValue,
+    /// The start of the certificate's validity window.
+    pub valid_from: SimTime,
+    /// Its end.
+    pub valid_until: SimTime,
+    /// What the device derived from its download on the real 1609.2.1 path: the implicit
+    /// certificate the ACA issued, the ACA's certificate and `d = e·b + r`. `None`
+    /// on the paths that issue no SPDU (the ETSI tickets, the modelled explicit path under
+    /// a hybrid or KEM scheme): those are issued by [`crate::credentials`] instead, keeping
+    /// this linkage value.
+    pub key: Option<std::sync::Arc<v2xw_sec::credential::ImplicitKey>>,
+}
+
+/// One RSU application certificate the SCMS issued, as the engine installs it.
+#[derive(Debug, Clone)]
+pub struct RsuAppCred {
+    /// Its local period (the i-period on the real calendar).
+    pub period: u32,
+    /// The start of its validity, run time.
+    pub valid_from: SimTime,
+    /// Its end (exclusive): the period's start plus 169 h.
+    pub valid_until: SimTime,
+    /// The certificate, its issuing ACA and `d`, from the unit's own download.
+    pub key: std::sync::Arc<v2xw_sec::credential::ImplicitKey>,
+    /// Issued before the run.
+    pub preloaded: bool,
+}
+
+/// A roadside unit's place in the application-certificate cycle.
+#[derive(Debug, Clone, Default)]
+struct RsuCycle {
+    handed: usize,
+    /// The composite CRL version the unit last installed.
+    /// The sum of the publication counts of the lists it installed: a re-issue at
+    /// `nextCrl` with no new entry is fetched too (edge-case package, item 5).
+    crl_serial: u64,
+    crl_version: u32,
+    /// The CTL sequence the unit installed (0: the factory one), as `NodeSec::ctl_seq`.
+    ctl_seq: u32,
+    /// As `NodeSec::ctl_trust`.
+    ctl_trust: Option<Box<v2xw_proto::scms::governance::DeviceTrust>>,
+    withheld_seen: u64,
+    starved: bool,
+    starved_since: Option<SimTime>,
+    starved_last: SimTime,
+    /// The digest of the unit's last `node.credentials` record (0: none yet).
+    cred_digest: u64,
+    /// The application certificates a `node.credentials` record already carried.
+    certs_carried: std::collections::BTreeSet<[u8; 8]>,
+    /// The application certificates the unit has signed with (each one active in a
+    /// record): the row's `history`, as a vehicle's pseudonyms are.
+    certs_used: std::collections::BTreeSet<[u8; 8]>,
+}
+
+/// One roadside unit the scenario declared.
+#[derive(Debug, Clone)]
+pub struct RsuSpec {
+    /// Where it stands, world-local metres — the antenna phase centre.
+    pub position: Vec3,
+    /// What it does: `crl`, `report-forward`, `provisioning-proxy`, …
+    pub roles: Vec<String>,
+    /// Its hardware profile id.
+    pub profile: String,
+    /// Its backhaul.
+    pub backhaul: Backhaul,
+}
+
+impl RsuSpec {
+    /// Whether this unit carries a role.
+    #[must_use]
+    pub fn has_role(&self, role: &str) -> bool {
+        self.roles.iter().any(|r| r == role)
+    }
+}
+
+/// The credential lifecycle's parameters (`security.protocol`).
+#[derive(Debug, Clone, Copy)]
+pub struct LifecycleParams {
+    /// The backend deployment's parameters.
+    pub scms: ScmsParams,
+    /// The PSIDs a vulnerable road user's personal device requests its pseudonym
+    /// certificates for: the VRU message it signs (the J2735 PSM, PSID 0x27
+    /// `psid-vulnerable-road-users-safety-applications`, SAE J2945/9; the VAM's ITS-AID on
+    /// the ETSI stack) and the misbehaviour report (0x26, [SM-MBR] §1), which its reports
+    /// are signed under. A vehicle's profile (`scms.pdu.pseudonym_psids`) does not list
+    /// the PSM, so a vehicle OBU cannot sign one that verifies. **Assumption**: no SCMS
+    /// Manager document publishes the PSM device's permission profile; EE Requirements
+    /// v2.04 p.12 names "PSM devices" as device group 1, which this models.
+    pub vru_psids: v2xw_proto::scms::params::PsidList,
+    /// Certificates per i-period (`certs_per_period`, 20 [CAMP-EE Table 2.1.2.6.2]).
+    pub jmax: u32,
+    /// i-periods a vehicle holds at the start (`pool_periods`).
+    pub pool_periods: u32,
+    /// A vehicle asks for the next period when fewer than this many periods, counting the
+    /// current one, remain in its pool (`topup_below_periods`).
+    pub topup_below_periods: u32,
+    /// How often a cellular vehicle polls the CRL Store.
+    pub crl_fetch_interval: Duration,
+    /// Under `security.scms.crl_poll: info-status`, a cellular vehicle polls the RA's
+    /// information status (1609.2.1 §6.3.5.14) and fetches the composite CRL only when it
+    /// holds an older list, instead of polling the composite conditionally.
+    pub info_status_poll: bool,
+    /// How often a `crl` unit repeats the list.
+    pub crl_broadcast_interval: Duration,
+    /// ETSI only: top up with one butterfly authorization request and a batch download
+    /// (TS 102 941 V2 §6.2.3.5) instead of one standard request per ticket.
+    pub etsi_butterfly: bool,
+    /// How often the backend's state is published for the Backend view.
+    pub view_interval: Duration,
+    /// When the EAC decides the home provider's root rollover (`root_rollover_at_s`):
+    /// a new root, ICA and component certificates, and a CTL adding the new root,
+    /// published at the SLA deadline (3 business days, Provider Req. v1.1 §3.4.11).
+    pub root_rollover_at: Option<SimTime>,
+    /// When the EAC removes the superseded root (`root_removal_at_s`): a CTL without it,
+    /// published within 48 h (Elector Policy v1.0 §2.2.4).
+    pub root_removal_at: Option<SimTime>,
+    /// When the EAC removes the first peer provider's root (`peer_root_removal_at_s`;
+    /// edge-case package, item 8): a CTL without it, published within 48 h. Devices that
+    /// install it refuse whatever that provider certified, and RAs stop serving its CRL.
+    pub peer_root_removal_at: Option<SimTime>,
+    /// When the provider decides to revoke the SCMS component `component_revoked` names
+    /// (`component_revoked_at_s`). The role and the provider are read from the
+    /// typed fields by [`Phase2::build`] ([`component_revocation_of`]).
+    pub component_revoked_at: Option<SimTime>,
+    /// `eac_review: elector-policy`: the three governance times above are
+    /// requests. Each is logged as `eac-request` when it comes, and its vote is taken at
+    /// [`review_vote_at`] (10 Eastern business days for an addition, 24 h for a removal).
+    /// Off: the times are the votes.
+    ///
+    /// [`review_vote_at`]: v2xw_proto::scms::governance::review_vote_at
+    pub eac_review: bool,
+    /// When the first peer provider gives notice of its termination
+    /// (`root_termination_notice_at_s`): its root cannot leave the trust list
+    /// before 365 days have run ([SM-PROV] §3.5.6), so a `peer_root_removal_at_s` vote
+    /// before then is refused.
+    pub root_termination_notice_at: Option<SimTime>,
+    /// When the EAC replaces the first approved elector (`elector_replacement_at_s`; its
+    /// transition CTL is signed as `elector_replacement_pq` says).
+    pub elector_replacement_at: Option<SimTime>,
+    /// When the EAC adds a new provider's root to the trust list (`root_addition_at_s`).
+    pub root_addition_at: Option<SimTime>,
+    /// The longest an elector may go without signing before the Board holds a Test
+    /// Ballot (`test_ballot_interval_days`; Elector Policy v1.0 §1.1: at least
+    /// yearly). `None` (the default, or 0 days) schedules none.
+    pub test_ballot_interval: Option<SimTime>,
+    /// A vehicle clock's believed-minus-true offset, ns (`clock_skew_s`; item 2): a GNSS
+    /// time error or a free-running clock held at that error. 0 is a true clock.
+    pub clock_skew_ns: i64,
+    /// The share of vehicles whose clock carries `clock_skew_s` (`clock_skew_share`,
+    /// default 1), chosen by a fixed hash of the node index.
+    pub clock_skew_share: f64,
+    /// `modelled_reports` (default 0): a vehicle detection that cannot be filed as a real
+    /// SM-MBR v1.1 report (no subtype maps its checks, no evidence heard, nothing to sign
+    /// it with) still goes to the MA as a sized-only report on the modelled path, for
+    /// studies of the research detectors. **Not the US deployment**: there, a report that
+    /// cannot be encoded, signed and encrypted has no bytes and so no upload; by default such a
+    /// detection is
+    /// counted in [`Phase2Report::reports_not_filed`] and never leaves the device.
+    pub modelled_reports: bool,
+    /// The device misbehaviour-report store's policy ([SM-MBR] §2.2): quota, subtype
+    /// weights, daily multiplier and the Eastern hour it applies at.
+    pub report_store: ReportStorePolicy,
+}
+
+/// The [SM-MBR] §2.2 on-device report store's settings (`report_store_quota_bytes`,
+/// `report_daily_multiplier`, `report_decay_hour_et`, `report_weight_*`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReportStorePolicy {
+    /// The device-specific storage quota, bytes (§2.2 leaves it to the device;
+    /// ASSUMPTION [`REPORT_STORE_QUOTA_BYTES`]). 0 keeps nothing.
+    pub quota_bytes: u64,
+    /// The Eastern hour of the daily re-weighting (§2.2: 5 am).
+    pub decay_hour_et: u32,
+    /// Each subtype's `initialWeight` and the `DailyMultiplier` (§2.3.1: 1.0 and 0.9).
+    pub weights: mbr::SubtypeWeights,
+}
+
+impl Default for ReportStorePolicy {
+    fn default() -> Self {
+        ReportStorePolicy {
+            quota_bytes: REPORT_STORE_QUOTA_BYTES,
+            decay_hour_et: mbr::DECAY_HOUR_ET,
+            weights: mbr::SubtypeWeights::default(),
+        }
+    }
+}
+
+impl LifecycleParams {
+    /// The standing CRL's size (`crl_background_entries`), when the scenario sets one:
+    /// the typed `security.scms.lifecycle` field or its `security.protocol.params`
+    /// spelling, the typed field winning (`lifecycle_param`).
+    fn background_entries(scenario: &Scenario) -> u32 {
+        lifecycle_param(scenario, "crl_background_entries")
+            .map_or(0, |v| v.round().clamp(0.0, 1.0e6) as u32)
+    }
+}
+
+/// The US i-period: one week, 10,080 minutes [CAMP-EE §2.1.5.3.2; SMP §2.1.17 Table 2].
+pub const US_I_PERIOD_S: u64 = 7 * 86_400;
+
+fn secs(v: f64) -> Duration {
+    Duration::from_nanos((v * 1e9).round().max(0.0) as u64)
+}
+
+impl LifecycleParams {
+    /// The parameters a scenario states, over the cited defaults.
+    ///
+    /// # Errors
+    /// [`EngineError::Scenario`] for a key this build does not read or a value out of range.
+    #[allow(
+        clippy::field_reassign_with_default,
+        reason = "reads as the default with the one setting the case changes"
+    )]
+    pub fn from_scenario(scenario: &Scenario) -> Result<LifecycleParams> {
+        let mut scms = ScmsParams {
+            master_seed: scenario.seed,
+            // A run publishes the CRL on the deployment's cadence: that wait is part of
+            // what revocation costs, and `crl_cadence_s: 0` turns it
+            // off.
+            publish_on_cadence: true,
+            ..ScmsParams::default()
+        };
+        // Every Time32 the SCMS puts in a certificate or a CRL is read on the scenario's
+        // own wall clock (`pdu.t0_unix_s`, set from `time.t0` below with the calendar):
+        // the receivers refuse a message generated outside its signer's validity.
+        // The pseudonym certificates permit every PSID the fleet signs under —
+        // what the scenario's vehicles send (an emergency vehicle's SRM included) and
+        // the misbehaviour report — so a receiver checking the SPDU PSID against
+        // `appPermissions` refuses no honest message.
+        {
+            let etsi = crate::wiring::etsi_facilities(scenario);
+            let s = crate::wiring::vehicle_services(
+                scenario,
+                v2xw_mobility::classes::VehicleClass::Emergency,
+            );
+            let mut psids = vec![
+                v2xw_msg::registry::psid(v2xw_msg::MsgType::Bsm, etsi),
+                v2xw_msg::registry::psid(v2xw_msg::MsgType::Mbr, etsi),
+            ];
+            for (on, m) in [
+                (s.bsm, v2xw_msg::MsgType::Bsm),
+                (s.cam, v2xw_msg::MsgType::Cam),
+                (s.denm, v2xw_msg::MsgType::Denm),
+                (s.cpm, v2xw_msg::MsgType::Cpm),
+                (s.srm, v2xw_msg::MsgType::Srm),
+            ] {
+                if on {
+                    psids.push(v2xw_msg::registry::psid(m, etsi));
+                }
+            }
+            scms.pdu.pseudonym_psids = v2xw_proto::scms::params::PsidList::of(&psids);
+        }
+        // A personal device signs its VRU message and its reports, and nothing a vehicle
+        // signs (handsets provisioned from the
+        // vehicles' profile had every PSM refused `psid-not-permitted`).
+        let vru_psids = {
+            let etsi = crate::wiring::etsi_facilities(scenario);
+            let vru_msg = if etsi {
+                v2xw_msg::MsgType::Vam
+            } else {
+                v2xw_msg::MsgType::Psm
+            };
+            v2xw_proto::scms::params::PsidList::of(&[
+                v2xw_msg::registry::psid(vru_msg, etsi),
+                v2xw_msg::registry::psid(v2xw_msg::MsgType::Mbr, etsi),
+            ])
+        };
+        let mut p = LifecycleParams {
+            scms,
+            vru_psids,
+            jmax: scms.certs_per_period,
+            pool_periods: v2xw_proto::scms::DEVICE_POOL_PERIODS,
+            topup_below_periods: 1,
+            crl_fetch_interval: secs(CRL_FETCH_INTERVAL_S),
+            info_status_poll: scenario
+                .security
+                .scms
+                .as_ref()
+                .and_then(|s| s.crl_poll.as_deref())
+                == Some("info-status"),
+            crl_broadcast_interval: secs(CRL_BROADCAST_INTERVAL_S),
+            etsi_butterfly: false,
+            view_interval: secs(BACKEND_VIEW_INTERVAL_S),
+            root_rollover_at: None,
+            root_removal_at: None,
+            peer_root_removal_at: None,
+            component_revoked_at: None,
+            eac_review: false,
+            root_termination_notice_at: None,
+            elector_replacement_at: None,
+            root_addition_at: None,
+            test_ballot_interval: None,
+            clock_skew_ns: 0,
+            clock_skew_share: 1.0,
+            modelled_reports: false,
+            report_store: ReportStorePolicy::default(),
+        };
+        let map = lifecycle_map(scenario);
+        for (key, value) in &map {
+            let v = value.as_f64().ok_or_else(|| {
+                conflict(
+                    &format!("security.protocol.params.{key}"),
+                    format!("must be a number, got {value}"),
+                )
+            })?;
+            if !(v.is_finite() && v >= 0.0) {
+                return Err(conflict(
+                    &format!("security.protocol.params.{key}"),
+                    format!("must be a finite number ≥ 0, got {v}"),
+                ));
+            }
+            match key.as_str() {
+                "i_period_s" => p.scms.i_period = secs(v.max(1.0)),
+                "cert_lifetime_s" => p.scms.cert_lifetime = secs(v.max(1.0)),
+                "certs_per_period" => {
+                    p.jmax = (v.round() as u32).clamp(1, 60);
+                    p.scms.certs_per_period = p.jmax;
+                }
+                "pool_periods" => p.pool_periods = (v.round() as u32).clamp(1, 64),
+                "topup_below_periods" => p.topup_below_periods = (v.round() as u32).min(64),
+                "cert_shuffle_window_s" => p.scms.shuffle_window = secs(v),
+                "report_shuffle_window_s" => p.scms.report_shuffle_window = secs(v),
+                "cert_shuffle_threshold" => {
+                    p.scms.shuffle_threshold = (v.round() as u32).max(1);
+                }
+                "report_shuffle_threshold" => {
+                    p.scms.report_shuffle_threshold = (v.round() as u32).max(1);
+                }
+                "crl_cadence_s" => {
+                    p.scms.crl_cadence = secs(v);
+                    p.scms.publish_on_cadence = v > 0.0;
+                }
+                "crl_fetch_interval_s" => p.crl_fetch_interval = secs(v.max(0.1)),
+                "crl_broadcast_interval_s" => p.crl_broadcast_interval = secs(v.max(0.1)),
+                "first_batch_delay_s" => p.scms.first_batch_delay = secs(v),
+                "download_poll_interval_s" => p.scms.download_poll_interval = secs(v.max(0.1)),
+                // SCMS-522/523: the EE's retry of an unanswered RA request (0 s or 0 per
+                // hour turns it off).
+                "ee_retry_timeout_s" => p.scms.ee_retry_timeout = secs(v),
+                "ee_retry_max_per_hour" => p.scms.ee_retry_max_per_hour = v.round() as u32,
+                "max_download_polls" => p.scms.max_download_polls = (v.round() as u32).max(1),
+                "download_request_tolerance_s" => p.scms.download_request_tolerance = secs(v),
+                "ma_max_open_cases" => p.scms.ma.max_open_cases = (v.round() as u32).max(1),
+                "enrolment_lifetime_s" => p.scms.enrolment_lifetime = secs(v.max(1.0)),
+                "reenrol_lead_s" => p.scms.reenrol_lead = secs(v),
+                "reenrol_download_delay_s" => p.scms.reenrol_download_delay = secs(v),
+                "max_periods_ahead" => {
+                    p.scms.max_periods_ahead = (v.round() as u32).max(1);
+                }
+                "etsi_butterfly" => p.etsi_butterfly = v >= 0.5,
+                "root_rollover_at_s" => p.root_rollover_at = Some(secs(v).as_nanos()),
+                "root_removal_at_s" => p.root_removal_at = Some(secs(v).as_nanos()),
+                "peer_root_removal_at_s" => {
+                    p.peer_root_removal_at = Some(secs(v).as_nanos());
+                }
+                "component_revoked_at_s" => {
+                    p.component_revoked_at = Some(secs(v).as_nanos());
+                }
+                "root_termination_notice_at_s" => {
+                    p.root_termination_notice_at = Some(secs(v).as_nanos());
+                }
+                "elector_replacement_at_s" => {
+                    p.elector_replacement_at = Some(secs(v).as_nanos());
+                }
+                "root_addition_at_s" => p.root_addition_at = Some(secs(v).as_nanos()),
+                // 0 days schedules no ballot (the menu's "Off").
+                "test_ballot_interval_days" => {
+                    p.test_ballot_interval =
+                        (v.round() >= 1.0).then(|| secs(v.round() * 86_400.0).as_nanos());
+                }
+                "clock_skew_s" => p.clock_skew_ns = (v * 1e9).round() as i64,
+                "clock_skew_share" => p.clock_skew_share = v.clamp(0.0, 1.0),
+                "modelled_reports" => p.modelled_reports = v >= 0.5,
+                // [SM-MBR] §2.2 / §2.3.1: the device report store.
+                "report_store_quota_bytes" => {
+                    p.report_store.quota_bytes = v.round().min(1.0e12) as u64;
+                }
+                "report_daily_multiplier" => {
+                    p.report_store.weights.daily_multiplier = v.min(1.0);
+                }
+                "report_decay_hour_et" => {
+                    p.report_store.decay_hour_et = (v.round() as u32).min(23);
+                }
+                "report_weight_random_position" => p.report_store.weights.random_position = v,
+                "report_weight_constant_position" => {
+                    p.report_store.weights.constant_position = v;
+                }
+                "report_weight_max_speed" => p.report_store.weights.max_speed = v,
+                "report_weight_max_acceleration" => p.report_store.weights.max_acceleration = v,
+                "report_weight_brake_acceleration" => {
+                    p.report_store.weights.brake_acceleration = v;
+                }
+                // The revocations already on the home provider's CRL when the run
+                // starts (read by `Phase2::new`, `ScmsRun::seed_standing_crl`).
+                "crl_background_entries" => {}
+                // The MA operator's review before a revocation is carried out (gap row
+                // 28): the CV-pilot manual MA by default (8 h, an assumption,
+                // `MaMode::ManualReview`); 0 is the automatic MA.
+                "ma_review_s" => {
+                    p.scms.ma.mode = if v > 0.0 {
+                        v2xw_proto::scms::params::MaMode::ManualReview { review: secs(v) }
+                    } else {
+                        v2xw_proto::scms::params::MaMode::Automatic
+                    };
+                }
+                other => {
+                    return Err(conflict(
+                        "security.protocol.params",
+                        format!(
+                            "'{other}' is not a lifecycle parameter; allowed: {}",
+                            LIFECYCLE_KEYS.join(", ")
+                        ),
+                    ));
+                }
+            }
+        }
+        // A CRL Generator renews its list by `nextCrl` even with nothing new to revoke,
+        // or every receiver stops trusting the CRACA two weeks later (edge-case package,
+        // item 5; `CrlIssuance::reissue`).
+        p.scms.crl.reissue = true;
+        // The deployment's clock (G8): every `Time32` a PDU carries
+        // is derived from the scenario's own `time.t0`, and on the real weekly grid the
+        // i-period counts from the US epoch, 2015-01-06 04:00 EST, so a
+        // run starting 2026-10-16 provisions i = 614. A compressed grid (`i_period_s`
+        // other than one week, which validation admits only under `time.calendar:
+        // compressed`) keeps i-period 0 at the run's start: its numbers are not
+        // the deployment's, and the manifest and the run report say so.
+        if let Ok(wall) = v2xw_core::time::WallClock::parse_rfc3339(&scenario.time.t0) {
+            p.scms.pdu.t0_unix_s = wall.t0_unix_s();
+        }
+        // The PKI view publishes every SPDU's bytes; the publisher drops them
+        // again once a `pki.flow` record carries them (`Phase2::publish_pki`).
+        p.scms.pdu.keep_bytes = pki_view_of(scenario);
+        if scenario.time.calendar.is_real()
+            && p.scms.i_period == v2xw_core::time::Duration::from_secs(US_I_PERIOD_S)
+        {
+            p.scms.calendar_epoch_unix_s =
+                Some(v2xw_proto::scms::governance::US_IPERIOD_EPOCH_UNIX_S);
+        } else if !map.contains_key("ma_review_s") {
+            // A compressed calendar compresses the MA's operator with it: an 8-hour
+            // review in a run whose week lasts a minute would only hide the protocol.
+            // On the real calendar the CV-pilot manual review is the default (owner
+            // decision); `ma_review_s` sets either explicitly.
+            p.scms.ma.mode = v2xw_proto::scms::params::MaMode::Automatic;
+        }
+        if p.scms.cert_lifetime < p.scms.i_period {
+            return Err(conflict(
+                "security.protocol.params.cert_lifetime_s",
+                "is shorter than i_period_s, which would leave a gap between two periods' \
+                 certificates in which a vehicle can sign with nothing (CAMP-EE §2.1.5.3.2 \
+                 makes the lifetime an hour longer than the period)"
+                    .to_string(),
+            ));
+        }
+        // The governance words have no `security.protocol.params`
+        // spelling: read from the typed fields only, as `component_revoked` is.
+        if let Some(l) = scenario
+            .security
+            .scms
+            .as_ref()
+            .and_then(|x| x.lifecycle.as_ref())
+        {
+            if let Some(w) = l.ctl_genesis_sequence.as_deref()
+                && !CTL_GENESIS_SEQUENCES.contains(&w)
+            {
+                return Err(conflict(
+                    "security.scms.lifecycle.ctl_genesis_sequence",
+                    format!("is '{w}'; one of {}", CTL_GENESIS_SEQUENCES.join(", ")),
+                ));
+            }
+            if let Some(w) = l.eac_review.as_deref()
+                && !EAC_REVIEWS.contains(&w)
+            {
+                return Err(conflict(
+                    "security.scms.lifecycle.eac_review",
+                    format!("is '{w}'; one of {}", EAC_REVIEWS.join(", ")),
+                ));
+            }
+            if let Some(w) = l.elector_replacement_pq.as_deref()
+                && ElectorReplacementPq::from_key(w).is_none()
+            {
+                return Err(conflict(
+                    "security.scms.lifecycle.elector_replacement_pq",
+                    format!("is '{w}'; one of {}", ELECTOR_REPLACEMENT_PQ.join(", ")),
+                ));
+            }
+            p.scms.ctl_genesis_sequence = l.genesis_sequence();
+            p.scms.elector_replacement_pq = l
+                .elector_replacement_pq
+                .as_deref()
+                .and_then(ElectorReplacementPq::from_key)
+                .unwrap_or_default();
+            p.eac_review = l.board_review();
+        }
+        Ok(p)
+    }
+
+    /// The i-period `t` falls in.
+    #[must_use]
+    pub fn period_at(&self, t: SimTime) -> u32 {
+        self.scms.period_at(t)
+    }
+
+    /// The instant i-period `i` begins: the inverse of [`LifecycleParams::period_at`].
+    #[must_use]
+    pub fn period_start(&self, i: u32) -> SimTime {
+        self.scms.period_start(i)
+    }
+
+    /// When a device whose pool reaches `last_period` asks for its next batch: the start
+    /// of the period at which only `topup_below_periods` periods remain, the condition
+    /// the backend step tests ([`Phase2::topups_due`]'s `remaining <= below`). `None` when
+    /// top-ups are turned off (`topup_below_periods: 0`).
+    #[must_use]
+    pub fn topup_at(&self, last_period: u32) -> Option<SimTime> {
+        let below = self.topup_below_periods;
+        (below > 0).then(|| self.period_start(last_period.saturating_add(1).saturating_sub(below)))
+    }
+}
+
+/// The home provider's CRL publication rule on the real calendar: under the US
+/// presets the CRL Generator publishes at the next business-day slot after a change, the
+/// "within 1 business day" SLA ([SM-PROV] §3.4.9), in real Eastern time
+/// with the federal holidays observed (`v2xw_proto::scms::calendar`); `camp-reference`
+/// keeps the fixed daily cadence, and `on-decision` publishes at once. An explicit
+/// `crl_cadence_s`, and every compressed calendar, keep the cadence the scenario states —
+/// a business day has no meaning on a grid whose week lasts a minute.
+fn apply_crl_publication(
+    scenario: &Scenario,
+    deployment: &v2xw_proto::scms::deployment::Deployment,
+    p: &mut ScmsParams,
+) {
+    apply_crl_publication_of(scenario, deployment, 0, p);
+}
+
+/// Provider `k`'s CRL publication rule on its run's parameters `p` (each
+/// provider's CRL Generator follows its own rule).
+fn apply_crl_publication_of(
+    scenario: &Scenario,
+    deployment: &v2xw_proto::scms::deployment::Deployment,
+    k: usize,
+    p: &mut ScmsParams,
+) {
+    use v2xw_proto::scms::deployment::CrlPublication;
+    let explicit = lifecycle_param(scenario, "crl_cadence_s").is_some();
+    if explicit || p.calendar_epoch_unix_s.is_none() {
+        return;
+    }
+    match deployment.providers.get(k).map(|h| h.crl_publication) {
+        Some(CrlPublication::SlaOneBusinessDay) => p.crl.business_day_sla = true,
+        Some(CrlPublication::OnDecision) => p.publish_on_cadence = false,
+        Some(CrlPublication::Cadence) | None => {}
+    }
+}
+
+/// The lifecycle keys a scenario states: `security.protocol.params`, with every field of
+/// `security.scms.lifecycle` written over it (the typed, published field wins).
+#[must_use]
+pub fn lifecycle_map(scenario: &Scenario) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = scenario
+        .security
+        .protocol
+        .as_ref()
+        .and_then(|c| c.params.as_object())
+        .cloned()
+        .unwrap_or_default();
+    if let Some(l) = scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.lifecycle.as_ref())
+    {
+        for (k, v) in l.entries() {
+            map.insert(k.to_string(), serde_json::json!(v));
+        }
+    }
+    map
+}
+
+/// One lifecycle key's stated value ([`lifecycle_map`]), `None` when the scenario leaves
+/// it at the model's default.
+#[must_use]
+pub fn lifecycle_param(scenario: &Scenario, key: &str) -> Option<f64> {
+    lifecycle_map(scenario)
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+}
+
+/// What every `security.scms.lifecycle` field stands for when it is left out, on the
+/// real calendar: the model's own defaults ([`ScmsParams::default`] and the engine's
+/// fleet constants), read from the code so the published number cannot drift from the
+/// one a run uses. `crl_cadence_s` has none: absent, each provider follows its own
+/// publication rule (the US presets' one-business-day SLA).
+#[must_use]
+pub fn lifecycle_defaults() -> Vec<(&'static str, serde_json::Value)> {
+    use serde_json::json;
+    let p = ScmsParams::default();
+    let st = ReportStorePolicy::default();
+    let s = |d: Duration| json!(d.as_nanos() as f64 / 1e9);
+    let review = match p.ma.mode {
+        v2xw_proto::scms::params::MaMode::ManualReview { review } => s(review),
+        v2xw_proto::scms::params::MaMode::Automatic => json!(0.0),
+    };
+    vec![
+        ("i_period_s", s(p.i_period)),
+        ("cert_lifetime_s", s(p.cert_lifetime)),
+        ("certs_per_period", json!(p.certs_per_period)),
+        ("pool_periods", json!(v2xw_proto::scms::DEVICE_POOL_PERIODS)),
+        ("topup_below_periods", json!(1)),
+        ("max_periods_ahead", json!(p.max_periods_ahead)),
+        ("cert_shuffle_threshold", json!(p.shuffle_threshold)),
+        ("cert_shuffle_window_s", s(p.shuffle_window)),
+        (
+            "report_shuffle_threshold",
+            json!(p.report_shuffle_threshold),
+        ),
+        ("report_shuffle_window_s", s(p.report_shuffle_window)),
+        ("first_batch_delay_s", s(p.first_batch_delay)),
+        ("download_poll_interval_s", s(p.download_poll_interval)),
+        ("max_download_polls", json!(p.max_download_polls)),
+        (
+            "download_request_tolerance_s",
+            s(p.download_request_tolerance),
+        ),
+        ("enrolment_lifetime_s", s(p.enrolment_lifetime)),
+        ("reenrol_lead_s", s(p.reenrol_lead)),
+        ("reenrol_download_delay_s", s(p.reenrol_download_delay)),
+        ("crl_fetch_interval_s", json!(CRL_FETCH_INTERVAL_S)),
+        ("crl_broadcast_interval_s", json!(CRL_BROADCAST_INTERVAL_S)),
+        ("ma_review_s", review),
+        ("ma_max_open_cases", json!(p.ma.max_open_cases)),
+        ("report_store_quota_bytes", json!(st.quota_bytes)),
+        (
+            "report_daily_multiplier",
+            json!(st.weights.daily_multiplier),
+        ),
+        ("report_decay_hour_et", json!(st.decay_hour_et)),
+        (
+            "report_weight_random_position",
+            json!(st.weights.random_position),
+        ),
+        (
+            "report_weight_constant_position",
+            json!(st.weights.constant_position),
+        ),
+        ("report_weight_max_speed", json!(st.weights.max_speed)),
+        (
+            "report_weight_max_acceleration",
+            json!(st.weights.max_acceleration),
+        ),
+        (
+            "report_weight_brake_acceleration",
+            json!(st.weights.brake_acceleration),
+        ),
+        // The keys that were `security.protocol.params`-only. The root
+        // events have none: absent, they never happen. The rest are `from_scenario`'s
+        // starting values.
+        ("ee_retry_timeout_s", s(p.ee_retry_timeout)),
+        ("ee_retry_max_per_hour", json!(p.ee_retry_max_per_hour)),
+        ("crl_background_entries", json!(0)),
+        ("clock_skew_s", json!(0.0)),
+        ("clock_skew_share", json!(1.0)),
+        ("modelled_reports", json!(false)),
+        // Absent, no component is revoked (its time has none, as the root events).
+        ("component_revoked", json!(COMPONENT_NONE)),
+        // Gov C-10, G-2, G-10: by date, no review, no ballot. The notice has none:
+        // absent, no provider gives one.
+        ("ctl_genesis_sequence", json!(CTL_GENESIS_SEQUENCES[0])),
+        ("eac_review", json!(EAC_REVIEWS[0])),
+        // Gov G-11: classical keys.
+        ("elector_replacement_pq", json!(ELECTOR_REPLACEMENT_PQ[0])),
+        ("test_ballot_interval_days", json!(0)),
+    ]
+}
+
+/// `security.scms.lifecycle.component_revoked`'s "no component revoked".
+pub const COMPONENT_NONE: &str = "none";
+
+/// The SCMS components `security.scms.lifecycle.component_revoked` may name,
+/// [`COMPONENT_NONE`] first: the roles `v2xw_proto::scms::run::component_authority`
+/// resolves to a certificate of the provider's PKI.
+pub const COMPONENT_ROLES: [&str; 9] = [
+    COMPONENT_NONE,
+    "ica",
+    "pca",
+    "ra",
+    "eca",
+    "la1",
+    "la2",
+    "ma",
+    "crlg",
+];
+
+/// `security.scms.lifecycle.ctl_genesis_sequence`: `auto` reads the genesis
+/// CTL's sequence from the run's date as the production series stands (1 from
+/// 2025-07-16, 0 before); `0` and `1` state it.
+pub const CTL_GENESIS_SEQUENCES: [&str; 3] = ["auto", "0", "1"];
+
+/// `security.scms.lifecycle.eac_review`: `none` takes the governance times as
+/// the votes; `elector-policy` takes them as requests the Board reviews first.
+pub const EAC_REVIEWS: [&str; 2] = ["none", "elector-policy"];
+
+/// `security.scms.lifecycle.elector_replacement_pq`: `off` replaces an elector
+/// with classical keys only; `dual` signs the transition CTL with the outgoing P-384 key
+/// and the incoming ML-DSA-65 key ([`ElectorReplacementPq`]'s keys, `off` first).
+pub const ELECTOR_REPLACEMENT_PQ: [&str; 2] = ["off", "dual"];
+
+/// A component revocation a scenario schedules: which component, whose, when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentRevocationPlan {
+    /// The role ([`COMPONENT_ROLES`], never [`COMPONENT_NONE`]).
+    pub role: String,
+    /// The provider, as its index in the deployment (0: the home provider).
+    pub provider: usize,
+    /// When the provider decides it.
+    pub at: SimTime,
+}
+
+/// The component revocation `security.scms.lifecycle.component_revoked*` schedules, if
+/// any, against the deployment's provider names (in deployment order).
+///
+/// # Errors
+/// [`EngineError::Scenario`] for a role outside [`COMPONENT_ROLES`], a provider the
+/// deployment does not run, or a role with no `component_revoked_at_s` (the loader says
+/// the same, so the page marks the field).
+pub fn component_revocation_of(
+    scenario: &Scenario,
+    params: &LifecycleParams,
+    providers: &[String],
+) -> Result<Option<ComponentRevocationPlan>> {
+    let Some(l) = scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.lifecycle.as_ref())
+    else {
+        return Ok(None);
+    };
+    let Some(role) = l.component_role() else {
+        return Ok(None);
+    };
+    if !COMPONENT_ROLES.contains(&role) {
+        return Err(conflict(
+            "security.scms.lifecycle.component_revoked",
+            format!("is '{role}'; one of {}", COMPONENT_ROLES.join(", ")),
+        ));
+    }
+    let provider = match l.component_revoked_provider.as_deref() {
+        None => 0,
+        Some(name) => providers.iter().position(|p| p == name).ok_or_else(|| {
+            conflict(
+                "security.scms.lifecycle.component_revoked_provider",
+                format!(
+                    "is '{name}', which the deployment does not run; one of {}",
+                    providers.join(", ")
+                ),
+            )
+        })?,
+    };
+    let at = params.component_revoked_at.ok_or_else(|| {
+        conflict(
+            "security.scms.lifecycle.component_revoked_at_s",
+            "is needed with component_revoked: when the provider decides the revocation"
+                .to_string(),
+        )
+    })?;
+    Ok(Some(ComponentRevocationPlan {
+        role: role.to_string(),
+        provider,
+        at,
+    }))
+}
+
+/// The lifecycle keys `security.protocol.params` accepts (and `security.scms.lifecycle`
+/// publishes, except the ETSI and governance-event keys).
+pub const LIFECYCLE_KEYS: [&str; 45] = [
+    "report_store_quota_bytes",
+    "report_daily_multiplier",
+    "report_decay_hour_et",
+    "report_weight_random_position",
+    "report_weight_constant_position",
+    "report_weight_max_speed",
+    "report_weight_max_acceleration",
+    "report_weight_brake_acceleration",
+    "i_period_s",
+    "cert_lifetime_s",
+    "certs_per_period",
+    "pool_periods",
+    "topup_below_periods",
+    "cert_shuffle_window_s",
+    "report_shuffle_window_s",
+    "cert_shuffle_threshold",
+    "report_shuffle_threshold",
+    "crl_cadence_s",
+    "crl_fetch_interval_s",
+    "crl_broadcast_interval_s",
+    "first_batch_delay_s",
+    "download_poll_interval_s",
+    "ee_retry_timeout_s",
+    "ee_retry_max_per_hour",
+    "max_download_polls",
+    "download_request_tolerance_s",
+    "ma_max_open_cases",
+    "enrolment_lifetime_s",
+    "reenrol_lead_s",
+    "reenrol_download_delay_s",
+    "max_periods_ahead",
+    "etsi_butterfly",
+    "ma_review_s",
+    "root_rollover_at_s",
+    "root_removal_at_s",
+    "crl_background_entries",
+    "peer_root_removal_at_s",
+    "component_revoked_at_s",
+    "root_termination_notice_at_s",
+    "elector_replacement_at_s",
+    "root_addition_at_s",
+    "test_ballot_interval_days",
+    "clock_skew_s",
+    "clock_skew_share",
+    "modelled_reports",
+];
+
+/// How often, in simulated seconds, the backend's state is published on `backend.state`
+/// for the Backend view: often enough to watch a queue fill, rarely enough that a
+/// five-minute run records a few hundred snapshots.
+pub const BACKEND_VIEW_INTERVAL_S: f64 = 1.0;
+
+/// An armed attacker: the model, and the window it is allowed to act in.
+struct AttackerSlot {
+    model: Box<dyn Attacker>,
+    id: String,
+    from: SimTime,
+    to: SimTime,
+    /// The beacons this attacker received, latest last, kept only for a behaviour that
+    /// restates a neighbour's claim (`v2xw_threat::F2mdKind::replays_neighbours`): what
+    /// its own radio heard and its own stack verified, nothing else.
+    heard: Option<VecDeque<v2xw_threat::ObservedMessage>>,
+    /// `threat/attacker/insider/ReportPoisoning`: the insider that files false reports.
+    /// Its beacons are the honest stack's; it acts on the reporting path instead.
+    insider: Option<Insider>,
+}
+
+/// An insider report poisoner on its reporting path ([`Phase2::detect`]).
+#[derive(Debug)]
+struct Insider {
+    model: v2xw_threat::ReportPoisoner,
+    /// The actor it rides, for its `gt.attack.action` records.
+    actor: ActorId,
+    /// When it may file next: once per report interval, as an honest reporter files
+    /// about one subject.
+    next_file: SimTime,
+}
+
+/// The scenario id of the insider report poisoner (`v2xw_threat::poison`).
+pub const INSIDER_POISONER_ID: &str = "threat/attacker/insider/ReportPoisoning";
+
+/// How long an attacker keeps what it heard, s: VeReMi NextGen's 5 s replay look-back.
+const HEARD_WINDOW_S: f64 = 5.0;
+
+/// The most beacons an attacker keeps.
+const HEARD_MAX: usize = 512;
+
+/// What the scenario asked for, before any node exists to be it.
+#[derive(Debug, Clone)]
+struct AttackerSpec {
+    id: String,
+    params: LegacyAttackerParams,
+    /// `threat/attacker/evasion/BenignClassMimic`: the disguise worn over the payload.
+    disguise: Option<v2xw_threat::Disguise>,
+    /// `threat/attacker/f2md/<Kind>`: the F2MD / VeReMi NextGen behaviour, which replaces
+    /// the legacy rendering (`params` is then unused).
+    f2md: Option<v2xw_threat::F2mdParams>,
+    /// [`INSIDER_POISONER_ID`]: the insider's parameters (`params` is then unused).
+    poison: Option<v2xw_threat::PoisonParams>,
+    count: Option<u32>,
+    fraction: Option<f64>,
+    actor_ids: BTreeSet<u32>,
+    from: SimTime,
+    to: SimTime,
+}
+
+/// The revocation, once the backend has issued it.
+#[derive(Debug, Clone)]
+pub struct Revocation {
+    /// The CRL entry the CRL Generator issued.
+    pub entry: CrlLinkageEntry,
+    /// The detection-to-revocation decomposition, to the first vehicle that enforced.
+    pub stages: Vec<(StageId, SimTime)>,
+    /// Detection to first enforcement.
+    pub latency: Duration,
+    /// The CRL's size when this entry was published, bytes.
+    pub bytes: u32,
+    /// Which engine node was revoked.
+    pub subject: NodeId,
+    /// The certificate the authority decided on, hex.
+    pub subject_digest: String,
+}
+
+/// One CRL version a provider's CRL Store published.
+#[derive(Debug, Clone)]
+struct CrlVersion {
+    /// When it was published.
+    at: SimTime,
+    /// Its version: the store's entry count.
+    version: u32,
+    /// Its entries.
+    entries: Vec<CrlLinkageEntry>,
+    /// The signed CRLs its CRL Generator issued: the current CRACA's, then each one a
+    /// root rollover superseded (empty with the PDU layer off).
+    secured: Vec<std::sync::Arc<[u8]>>,
+    /// The CRL Store's publication count: a re-issue at `nextCrl` has the same entries
+    /// and a higher count.
+    serial: u32,
+}
+
+/// The internet leg a device's backend message crosses after its access leg: the
+/// scenario's city to the provider's region (ASSUMPTION, see
+/// [`v2xw_proto::scms::deployment::Deployment::city_latency`]), added to whatever the
+/// access model answers for a device link. Backend-internal links are untouched.
+#[derive(Debug)]
+struct InternetLeg {
+    inner: v2xw_proto::net::SharedOracle,
+    extra: Duration,
+}
+
+impl v2xw_proto::net::PathOracle for InternetLeg {
+    fn carry(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        link: &v2xw_proto::Link,
+        bytes: u32,
+        at: SimTime,
+    ) -> Option<SimTime> {
+        let base = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|mut o| o.carry(from, to, link, bytes, at));
+        if link.transport == Transport::BackendNet {
+            return base;
+        }
+        Some(
+            base.unwrap_or_else(|| link.delay(bytes).after(at))
+                .saturating_add(self.extra.as_nanos()),
+        )
+    }
+}
+
+/// A decision waiting for, or being carried out by, the backend.
+#[derive(Debug, Clone)]
+struct Case {
+    /// The provider whose MA decides (the one that issued the accused certificate).
+    provider: usize,
+    /// The accused device by the engine's map (ground truth, records only).
+    subject: Option<NodeId>,
+    subject_digest: String,
+    /// The triggering report's backend run.
+    report_run: FlowRun,
+    /// The resolution and CRL-issuance runs, once started.
+    runs: Option<(FlowRun, FlowRun)>,
+    /// The entry, once issued, and the CRL version (entry count) it first appears in.
+    entry: Option<(CrlLinkageEntry, u32)>,
+    stamps_emitted: BTreeSet<(u8, SimTime)>,
+    enforced_first: Option<SimTime>,
+    /// Every vehicle that has installed the entry, in install order, with the instant
+    /// (the PKI view's per-vehicle `enforced` stamps).
+    enforcers: Vec<(NodeId, SimTime)>,
+    /// Whether the MA closed the case because both LAs named a chain it had already
+    /// decided: counted once in `decisions_linked`.
+    linked: bool,
+}
+
+/// An ETSI decision carried out as the EA's blocklist.
+#[derive(Debug, Clone)]
+struct Block {
+    subject: NodeId,
+    subject_digest: String,
+    run: FlowRun,
+    detected: SimTime,
+    decided: SimTime,
+    blocked: Option<SimTime>,
+}
+
+/// A test hook on [`Phase2::truth_subject`], the engine's ground-truth join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TruthHook {
+    /// The map as provisioned.
+    None,
+    /// The map names no device.
+    Forgotten,
+    /// The map names a device of another provider.
+    OtherProvider,
+}
+
+/// A report on its way to the authority, keyed by its backend run.
+#[derive(Debug, Clone)]
+struct InFlightReport {
+    report: MisbehaviourReport,
+    /// The accused device by the engine's map: ground truth for the records and the run
+    /// report only. The MA learns the subject from the report itself; `None`
+    /// when the map names no device.
+    subject: Option<NodeId>,
+}
+
+/// A device's misbehaviour-report store, [SM-MBR] §2.2 ([`MbrQueue`]): each report
+/// weighted 1.0, multiplied by 0.9 every day at 05:00 Eastern; uploaded highest weight
+/// first (newer first on ties); over the quota the lowest weight is deleted (older first);
+/// unsent reports older than a week are deleted.
+#[derive(Debug, Clone)]
+struct ReportStore(MbrQueue<(MisbehaviourReport, SimTime)>);
+
+/// The device's report-storage quota, bytes. [SM-MBR] §2.2 leaves it device-specific;
+/// **assumption**: 64 KiB, 58 reports at the reference report's 1,119 B
+/// ([`report_bytes`]).
+pub const REPORT_STORE_QUOTA_BYTES: u64 = 64 * 1024;
+
+impl Default for ReportStore {
+    fn default() -> Self {
+        ReportStore(MbrQueue::new(REPORT_STORE_QUOTA_BYTES))
+    }
+}
+
+impl ReportStore {
+    /// Applies the scenario's store policy (quota and re-weighting hour).
+    fn configure(&mut self, p: &ReportStorePolicy) {
+        self.0.quota = p.quota_bytes;
+        self.0.decay_hour_et = p.decay_hour_et;
+    }
+}
+
+/// A stored report taken out for an upload attempt ([`Phase2::take_outbox`]): its place
+/// in the store, so that if the upload is not confirmed it goes back as the same report
+/// ([`MbrQueue::reinsert`]) rather than as a new one at its initial weight.
+#[derive(Debug, Clone, Copy)]
+struct TakenReport {
+    weight: f64,
+    multiplier: f64,
+    seq: u64,
+    created_unix: i64,
+    size: u64,
+}
+
+/// What the dataset records keep on the MA side (`crate::dataset_records`).
+#[derive(Debug, Default)]
+#[allow(
+    clippy::type_complexity,
+    reason = "a one-off tuple read where it is built; an alias would hide its fields"
+)]
+struct DatasetMa {
+    /// The MA rule's id (`detection.ma.id`).
+    rule: String,
+    /// Each built report's digest, size, path and evidence digests, by report id.
+    built: BTreeMap<String, crate::dataset_records::ReportFateDataset>,
+    /// The reports each MA received about each subject certificate: `(report digest,
+    /// reporter certificate, time received)`.
+    held: BTreeMap<(usize, String), Vec<(String, String, SimTime)>>,
+    /// CRL entries already written, by `(provider, case subject)`.
+    crl_written: BTreeSet<(usize, String)>,
+    /// `ma.crl_entry` rows waiting for the engine.
+    crl: Vec<crate::dataset_records::CrlEntry>,
+    /// `node.report_built` rows waiting for the engine.
+    built_log: Vec<crate::dataset_records::ReportBuilt>,
+}
+
+/// The report records' buffers (`security.scms.report_records`): drained by the engine
+/// each backend step ([`Phase2::take_report_records`]).
+#[derive(Debug, Default)]
+struct ReportLog {
+    fates: Vec<crate::report_records::ReportFate>,
+    received: Vec<crate::report_records::MaReceived>,
+    /// Reports already logged as stored.
+    stored: BTreeSet<String>,
+    /// When each SCMS vehicle joined and left.
+    joined: BTreeMap<NodeId, SimTime>,
+    left: BTreeMap<NodeId, SimTime>,
+    /// Each report's judged BSM `secMark`, ms within the minute: what the MA reads from
+    /// the evidence BSMs the report carries ([SM-MBR] §2.3.1.2.1), for `ma.received`.
+    secmark: BTreeMap<String, u16>,
+}
+
+/// How many of each certificate's latest signed BSMs on the air are kept, with their
+/// `generationTime`, so a report can attach the very BSMs its reporter judged
+/// ([`judged_bsms`]). Four: a receiver judges a BSM within its verification time of the
+/// frame's arrival (milliseconds), so at 10 Hz the judged pair is among the last four.
+const EVIDENCE_BSMS: usize = 4;
+
+/// The signed BSMs a report attaches, from `ring` (one certificate's latest BSMs on the
+/// air, oldest first, each with the `generationTime` it claims): the BSM generated at `at`
+/// that the reporter judged, preceded by the one generated at `prev` it was compared
+/// with. With `prev` unnamed (a suite that keeps no predecessor) the BSM on the air just
+/// before the judged one stands for it. Empty when the judged BSM is no longer on hand,
+/// and only the judged one when its predecessor is not: a report then has no evidence of
+/// its own to attach, rather than someone else's.
+fn judged_bsms(
+    ring: &VecDeque<(SimTime, Vec<u8>)>,
+    prev: Option<SimTime>,
+    at: SimTime,
+) -> Vec<Vec<u8>> {
+    judged_entries(ring, prev, at)
+        .into_iter()
+        .map(|k| ring[k].1.clone())
+        .collect()
+}
+
+/// The `generationTime` of the earliest BSM [`judged_bsms`] attaches: the start of the
+/// report's evidence window (its end is the judged BSM's own).
+fn judged_start(
+    ring: &VecDeque<(SimTime, Vec<u8>)>,
+    prev: Option<SimTime>,
+    at: SimTime,
+) -> Option<SimTime> {
+    judged_entries(ring, prev, at).first().map(|&k| ring[k].0)
+}
+
+/// The positions in `ring` of the BSMs [`judged_bsms`] attaches, oldest first.
+fn judged_entries(
+    ring: &VecDeque<(SimTime, Vec<u8>)>,
+    prev: Option<SimTime>,
+    at: SimTime,
+) -> Vec<usize> {
+    let Some(i) = ring.iter().rposition(|(t, _)| *t == at) else {
+        return Vec::new();
+    };
+    let before = match prev {
+        Some(p) => ring.iter().take(i).rposition(|(t, _)| *t == p),
+        None => i.checked_sub(1),
+    };
+    before.into_iter().chain(std::iter::once(i)).collect()
+}
+
+/// The reports of `held` (`(digest, reporter, time received)`) an MA had received by
+/// `t`: what a decision at `t` cites.
+fn received_by(held: &[(String, String, SimTime)], t: SimTime) -> Vec<&(String, String, SimTime)> {
+    held.iter().filter(|h| h.2 <= t).collect()
+}
+
+/// Puts `ma.crl_entry` rows in issue order (stable: one CRL's entries keep theirs).
+fn in_issue_order(crl: &mut [crate::dataset_records::CrlEntry]) {
+    crl.sort_by_key(|e| e.t_issued);
+}
+
+/// One vehicle's security and backend state.
+#[derive(Debug, Clone, Default)]
+struct NodeSec {
+    access: Option<AccessKind>,
+    /// Reports waiting for connectivity, with the instant each was detected.
+    outbox: ReportStore,
+    /// Reports taken from `outbox` for an upload not yet confirmed, by report id.
+    taken: BTreeMap<String, TakenReport>,
+    reports_uploaded: u32,
+    crl_version: u32,
+    /// The CRL entries this vehicle holds, so a list arriving in several frames, or by two
+    /// paths, is installed once.
+    crl_installed: Vec<CrlLinkageEntry>,
+    next_crl_fetch: SimTime,
+    crl_fetch_in_flight: bool,
+    /// The sum of the publication counts of the lists this vehicle installed, and of the
+    /// ones its poll in flight asked for: a re-issue with no new entry is fetched too.
+    crl_serial: u64,
+    crl_serial_asked: u64,
+    /// The publication count (summed over the providers' lists, re-issues included) of the
+    /// composite CRL this vehicle holds whole: its `node.security` `crl_version`. Read by
+    /// the record only (not the entry count).
+    crl_held_serial: u64,
+    /// It joined holding a list newer than the `t0` ones, fetched on its RA
+    /// connection before it was switched on.
+    crl_at_join: bool,
+    /// The CTL sequence this vehicle installed (0: the factory one). The composite CRL
+    /// file carries the home CTL (IEEE 1609.2.1 `CompositeCrlSpdu`), so a newer CTL is
+    /// fetched, and installed, with the next download (edge-case package, item 8).
+    ctl_seq: u32,
+    /// The RA state the information status this vehicle last received stood for
+    /// ([`Phase2::status_fingerprint`]): its `If-Modified-Since`.
+    status_seen: Option<(u32, u64, u32)>,
+    /// The device's own trust store once it has installed a CTL after the factory one
+    /// (`None`: still the factory trust, [`Phase2::factory_trust`]).
+    ctl_trust: Option<Box<v2xw_proto::scms::governance::DeviceTrust>>,
+    topup: Option<FlowRun>,
+    /// ETSI: the ticket count at which the requested top-up is complete.
+    etsi_target: Option<u32>,
+    /// The last i-period this vehicle holds certificates for.
+    last_period: u32,
+    changes_seen: u32,
+    active_digest: Option<[u8; 8]>,
+    self_revoked: bool,
+    starved: bool,
+    /// When this vehicle's enrolment certificate expires.
+    enrolment_until: SimTime,
+    /// A successor enrolment in flight.
+    reenrol: Option<FlowRun>,
+    /// The RA refused it as blocklisted: it asks for nothing more.
+    blocked: bool,
+    /// ETSI butterfly: the i-period of a batch waiting at the EA, and whether its
+    /// download has been asked for.
+    etsi_batch: Option<(u32, bool)>,
+    /// ETSI: when this station next asks the Distribution Centre for the ECTL and the
+    /// CA-CRL, and the fetch in flight.
+    next_trust_fetch: SimTime,
+    /// The fetch in flight, with the ECTL and CA-CRL sequences held when it started.
+    trust_fetch: Option<(FlowRun, u32, u32)>,
+    /// When the top-up, the successor enrolment and the trust-list fetch in flight were
+    /// started, for the per-exchange latency.
+    topup_started: SimTime,
+    /// See [`NodeSec::topup_started`].
+    reenrol_started: SimTime,
+    /// See [`NodeSec::topup_started`].
+    trust_started: SimTime,
+    /// The node step at which the current spell without a valid pseudonym began, and the
+    /// last starved step seen.
+    starved_since: Option<SimTime>,
+    /// See [`NodeSec::starved_since`].
+    starved_last: SimTime,
+    /// The device is switched off (a timeline `outage`): it polls no CRL, asks for no
+    /// top-up or successor enrolment and receives no broadcast list until it is back on,
+    /// as a parked car with its OBU powered down. Its timers keep their due times, so it
+    /// catches up at its first backend step after power returns.
+    powered_off: bool,
+    /// The relay upload's retransmission timer: no report goes on the air to a unit
+    /// before it, unless in the same look as the attempt that armed it.
+    relay_retry_at: SimTime,
+    /// The look (backend step) of the last relayed attempt.
+    relay_look_at: Option<SimTime>,
+    /// Consecutive relayed looks no unit confirmed: the timer doubles with each.
+    relay_unacked: u32,
+}
+
+/// RFC 6298 §2.1: a TCP sender's first retransmission timeout, 1 s. A relayed report is
+/// an upload over the unit's IP service, so an unconfirmed one goes again after it.
+const RELAY_RTO_INITIAL: Duration = Duration::from_secs(1);
+
+/// RFC 6298 §2.5: the timeout doubles per unconfirmed attempt up to a maximum of at least
+/// 60 s; 64 s here (six doublings).
+const RELAY_RTO_MAX_DOUBLINGS: u32 = 6;
+
+/// Serde's skip test for a counter that is new and zero on every run it does not concern.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_count(n: &u64) -> bool {
+    *n == 0
+}
+
+/// One TS 103 759 tally ([`Phase2Report::ts_checks`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TsCheckCount {
+    /// Messages judged.
+    pub evaluated: u64,
+    /// Messages scored at or above 1 (before the fusion gate).
+    pub exceeded: u64,
+    /// Messages on which the check fired (after the gate).
+    pub fired: u64,
+}
+
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
+}
+
+/// Counters the run report carries for this path.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Phase2Report {
+    /// How many roadside units were created.
+    pub rsus: u64,
+    /// Roadside units in the SCMS application-certificate cycle: each holds
+    /// only weekly certificates its provider's ACA issued and renews them over its own
+    /// backhaul.
+    pub rsus_in_cert_cycle: u64,
+    /// RSU application certificates installed before the run (this week's, and next
+    /// week's for a unit whose backhaul was up).
+    pub rsu_app_certs_preloaded: u64,
+    /// RSU application certificates renewed during the run, over the unit's backhaul.
+    pub rsu_app_certs_renewed: u64,
+    /// RSU application certificates the node refused to install.
+    pub rsu_app_certs_refused: u64,
+    /// OBU identification certificates emergency vehicles held when they joined:
+    /// the month they joined in, and the next one when its request time had
+    /// passed.
+    pub ident_certs_preloaded: u64,
+    /// OBU identification certificates renewed during the run, over the vehicle's
+    /// cellular link.
+    pub ident_certs_renewed: u64,
+    /// OBU identification certificates a vehicle's unit refused to install.
+    pub ident_certs_refused: u64,
+    /// Emergency vehicles whose identification certificates the MA revoked
+    /// ([`Phase2::revoke_identification`]).
+    pub ident_revocations: u64,
+    /// SRMs an emergency vehicle had due and did not send because none of its
+    /// identification certificates was valid (an SRM is never signed under a
+    /// pseudonym once the vehicle holds one).
+    pub srm_unsigned_no_ident: u64,
+    /// Roadside units that held no valid application certificate at some step: they
+    /// sign no SPaT, MAP or CRL frame then (the starvation the Wyoming pilot reported).
+    pub rsus_starved: u64,
+    /// Roadside-unit steps spent without a valid application certificate.
+    pub rsu_starved_steps: u64,
+    /// Time the starving units spent without one, summed over units, ns.
+    pub rsu_starved_ns: u64,
+    /// Messages roadside units had due and did not send for want of a valid
+    /// certificate (SPaT and MAP; [CAMP-EE §2.2.10.2]: no unsigned transmission).
+    pub rsu_messages_withheld: u64,
+    /// CRL frames a starving unit could not sign and so did not broadcast.
+    pub rsu_crl_frames_withheld: u64,
+    /// CRL `GET`s roadside units in the certificate cycle sent up their lines.
+    pub rsu_crl_requests: u64,
+    /// Their bytes on the line.
+    pub rsu_crl_request_bytes: u64,
+    /// Composite CRLs roadside units fetched from their RA over the backhaul and
+    /// installed after verifying every signed CRL themselves.
+    pub rsu_crls_installed: u64,
+    /// Composite CRLs a roadside unit refused (a CRL that did not verify).
+    pub rsu_crls_refused: u64,
+    /// Received envelopes that would not parse at all.
+    pub spdu_parse_failures: u64,
+    /// Received envelopes that parsed but whose signature did not verify.
+    pub spdu_signature_failures: u64,
+    /// How many received messages landed in each node verification state.
+    pub verification_states: std::collections::BTreeMap<String, u64>,
+    /// How many times each detector fired, by detector id.
+    pub verdicts_by_detector: std::collections::BTreeMap<String, u64>,
+    /// `detect/ts103759` only, per check id and then per sender class (`honest`, or the
+    /// attacker model id while that sender was attacking when it generated the message):
+    /// the messages the check ran on, scored at or above 1, and fired after the fusion
+    /// gate. The class is ground truth for the run report; no detector reads it.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ts_checks:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, TsCheckCount>>,
+    /// `detect/ts103759` only, per sender class: the messages judged, those on which any
+    /// check scored at or above 1, and those on which any check fired (the per-message
+    /// level F2MD and VeReMi-Ext publish).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ts_messages: std::collections::BTreeMap<String, TsCheckCount>,
+    /// How many nodes were armed as attackers.
+    pub attackers: u64,
+    /// How many outgoing claims an attacker falsified.
+    pub falsified_claims: u64,
+    /// Sybil ghost frames put on the air: each a genuine SPDU signed under one of the
+    /// attacker's concurrent pseudonyms, with its certificate attached.
+    pub ghost_frames: u64,
+    /// Delivered messages the local detectors did not check: ones that state nothing
+    /// about their sender's motion (relayed reports, CRLs, P2PCD responses, WSAs), ones
+    /// from a revoked signer (unless `judge_revoked`), and ones the verification policy
+    /// delivered unverified.
+    pub messages_not_checked: u64,
+    /// How many messages the local detectors checked.
+    pub messages_checked: u64,
+    /// How many detector verdicts fired.
+    pub verdicts_fired: u64,
+    /// How many misbehaviour reports the vehicles generated, filed or not (see
+    /// [`Phase2Report::reports_not_filed`]): a detection becomes a report here, before the
+    /// device encodes, signs and stores it, so a report that never left the device is
+    /// counted too.
+    pub reports_sent: u64,
+    /// Of those, uploaded over a cellular modem.
+    pub reports_uploaded_cellular: u64,
+    /// Of those, delivered through a relaying roadside unit: put on the air and taken
+    /// onto a `report-forward` unit's backhaul. A relayed report no unit decodes stays in
+    /// the device's store and goes again (the upload is TCP over the unit's IP service,
+    /// confirmed or retried, [SM-MBR] §2.2). Before this it counted every report put on
+    /// the air within the geometric `relay_range_m`, heard or not, and dropped it.
+    pub reports_uploaded_relay: u64,
+    /// Reports roadside units filed themselves, straight onto their backhaul.
+    pub reports_from_rsus: u64,
+    /// Reports still in an outbox at the end of the run, for want of connectivity.
+    pub reports_unsent: u64,
+    /// Reports a device's store deleted to stay within its quota ([SM-MBR] §2.2).
+    pub reports_evicted: u64,
+    /// Reports a device's store deleted unsent after a week.
+    pub reports_expired: u64,
+    /// Reports sent as real US misbehaviour reports (SM-MBR v1.1: signed under PSID
+    /// 0x26 with the reporter's pseudonym, encrypted to the MA, uploaded with an
+    /// enrolment-signed `Download-Req`), their evidence the accused's own signed BSMs.
+    pub reports_mbr_real: u64,
+    /// Of those, the reports whose judged BSM was no longer the accused certificate's
+    /// latest on the air when the report was built: the ones the old evidence rule (the
+    /// certificate's last BSMs on the air) would have attached the wrong BSMs to.
+    pub reports_evidence_moved_on: u64,
+    /// Reports whose detection has no PSID-0x20 type and subtype in the v1.1 object
+    /// set (or ObsImplausible, off by default), sent on the modelled path.
+    pub reports_mbr_unmapped: u64,
+    /// Reports the MA set aside because their evidence does not verify: the only reason
+    /// given was the accused's bad signature, which proves nothing about the certificate
+    /// holder (anyone can attach a digest to a forged frame).
+    pub reports_evidence_unverifiable: u64,
+    /// Reports the MA set aside because their evidence's own `generationTime` is
+    /// implausible against the report's: evidence stamped after the report that carries
+    /// it (beyond the 40 ms future tolerance), or older than any receiver accepts
+    /// ([`v2xw_node::rxval::MAX_AGE_S`]). Such evidence is what a sender with a wrong
+    /// clock produces, and judging its kinematics would revoke an honest device.
+    pub reports_evidence_time_implausible: u64,
+    /// Of those, the evidence stamped after the report (the accused's clock ahead, or the
+    /// reporter's behind); the rest are evidence older than any receiver accepts.
+    pub reports_evidence_after_report: u64,
+    /// The largest lead of an evidence time over its report's, ns, among the refused.
+    pub evidence_lead_max_ns: u64,
+    /// The largest lag of an evidence time behind its report's, ns, among the refused.
+    pub evidence_lag_max_ns: u64,
+    /// Reports a device could not secure (no evidence heard, no certificate or key),
+    /// sent on the modelled path; see `scms.state.pdu_rejections` for the backend's.
+    pub reports_mbr_unsecured: u64,
+    /// Times a vehicle kept a report in its store because no pseudonym certificate of
+    /// its was valid when it would have signed it ([`Phase2::report_waits_for_signer`]).
+    pub reports_held_for_signer: u64,
+    /// Vehicle reports that never left the device (OF-2): with the SCMS PDU layer on and
+    /// `modelled_reports` off, a detection the device cannot encode, sign and encrypt as
+    /// an SM-MBR v1.1 report has no upload. A subset of [`Phase2Report::reports_sent`].
+    pub reports_not_filed: u64,
+    /// [`Phase2Report::reports_not_filed`] by reason.
+    pub reports_not_filed_by: BTreeMap<String, u64>,
+    /// Relayed reports the device's stack could not put on the air because the signed
+    /// SDU exceeds the network layer's MTU and the scenario's fragmenter does not split
+    /// whole SDUs (under post-quantum signatures with `fragmenter/none`, WSMP
+    /// has no fragmentation). Not counted as uploaded; the report is lost.
+    pub reports_refused_mtu: u64,
+    /// EAC decisions the run scheduled and took (root rollover, root removal).
+    pub gov_decisions: u64,
+    /// CTLs the governance entities published during the run (after the genesis CTL).
+    pub ctls_published: u64,
+    /// CTL changes the SCMS Manager Board received as requests and reviewed before its
+    /// vote (`eac_review: elector-policy`; each logged as `eac-request`).
+    pub gov_requests: u64,
+    /// Termination notices a provider gave (`root_termination_notice_at_s`).
+    pub gov_termination_notices: u64,
+    /// Root removals the EAC refused because the provider's 365-day termination notice
+    /// had not run out ([SM-PROV] §3.5.6).
+    pub gov_root_removals_refused: u64,
+    /// Test Ballots held (`test_ballot_interval_days`; Elector Policy v1.0
+    /// §1.1), each logged as `eac-test-ballot`.
+    pub gov_test_ballots: u64,
+    /// Publications the CRL Generators deferred because every `indexWithinI` of the
+    /// i-period was spent (proto H10, ASSUMPTION: coalesced into one list issued at the
+    /// next i-period with index 0), summed over providers.
+    pub crl_index_exhausted: u64,
+    /// Device and LOP requests the RAs measured for their acknowledgement delay
+    /// (arrival to answer, the wait for a server included), summed over
+    /// providers.
+    pub ra_ack_requests: u64,
+    /// Of those, the ones answered later than 1 s ([CAMP122] §5.2.8.3 SCMS-521).
+    /// Measured, never enforced: no deployed RA figure exists.
+    pub ra_ack_over_1s: u64,
+    /// The 99th-percentile acknowledgement delay over every provider's RA, ms (the upper
+    /// bound of its histogram bucket, capped by the longest delay; 0 with nothing
+    /// measured).
+    pub ra_ack_p99_ms: u64,
+    /// [`Phase2Report::reports_mbr_unsecured`] by reason.
+    pub reports_mbr_unsecured_by: BTreeMap<String, u64>,
+    /// Reports an MA shared with the provider that issued the accused certificate
+    /// (inter-provider report sharing).
+    pub reports_shared: u64,
+    /// Reports an MA held about another provider's certificate and could neither
+    /// resolve nor share (`ma_report_sharing: false`).
+    pub reports_foreign_unresolvable: u64,
+    /// SCMS devices each provider enrolled, by provider name (the seeded fleet split).
+    pub devices_by_provider: BTreeMap<String, u64>,
+    /// CRL entries each provider's CRL Generator issued, by provider name.
+    pub revocations_by_provider: BTreeMap<String, u64>,
+    /// Reports that reached a reporter's privacy proxy, by `"<reporter's provider><-<the
+    /// accused's provider>"`.
+    pub reports_by_provider: BTreeMap<String, u64>,
+    /// Messages receivers verified, by `"<receiver's provider><-<signer's provider>"`.
+    pub verified_by_provider: BTreeMap<String, u64>,
+    /// Messages receivers refused because a CRL revoked the signer, keyed the same way.
+    pub revoked_by_provider: BTreeMap<String, u64>,
+    /// Reports the access link lost.
+    pub reports_lost: u64,
+    /// Relayed report frames a unit decoded after the report's upload was already
+    /// confirmed (a retransmission sent before the confirmation): discarded by the
+    /// upload's session, not forwarded a second time.
+    pub reports_relay_duplicates: u64,
+    /// How many reached the Location Obscurer Proxy.
+    pub reports_received: u64,
+    /// How many the authority ingested, after the RA's shuffle.
+    pub reports_at_ma: u64,
+    /// How many revocation decisions the authority's pipeline took.
+    pub ma_revoke_decisions: u64,
+    /// How many investigations the backend opened.
+    pub cases_opened: u64,
+    /// How many ended without an entry.
+    pub cases_unresolved: u64,
+    /// How many CRL entries the backend issued.
+    pub crls_issued: u64,
+    /// How many CRL versions the CRL Store published.
+    pub crl_versions_published: u64,
+    /// Component revocations a provider decided
+    /// (`security.scms.lifecycle.component_revoked`): each puts one SCMS component
+    /// certificate on a series-2 or series-256 hash
+    /// CRL.
+    pub component_revocations: u64,
+    /// Scheduled component revocations the provider's PKI could not put on a list (the
+    /// S2X ICA; the PDU layer off): see `first_backend_error`.
+    pub component_revocations_refused: u64,
+    /// The component certificates on the providers' signed component CRLs (series 2 and
+    /// 256) at the end of the run, summed over providers
+    /// ([`ScmsRun::crl_component_entries`]). 0 unless a component was revoked.
+    pub crl_component_entries: u64,
+    /// How many CRL frames roadside units put on the air.
+    pub crl_broadcasts: u64,
+    /// Roadside CRL frames refused at the network layer's MTU (a post-quantum signature
+    /// and certificate with no SDU fragmenter): not broadcast, not counted above.
+    pub crl_frames_refused_mtu: u64,
+    /// How many CRL downloads cellular vehicles completed.
+    pub crl_downloads: u64,
+    /// Conditional CRL polls the RA answered with HTTP 412 (the copy is current; [SMP]
+    /// §4.3.2): each a request and a 92 B answer on the cellular link. Under
+    /// `security.scms.crl_poll: info-status` these are the information-status polls
+    /// answered 412: the composite is then fetched only when something changed.
+    pub crl_polls_not_modified: u64,
+    /// Composite CRL polls whose request and answer both crossed the cellular link,
+    /// with the bytes each way: the framed conditional `GET` up, the framed
+    /// `200` (with the composite) or `412` down. The information-status leg of a
+    /// `crl_poll: info-status` poll is not in them.
+    #[serde(skip_serializing_if = "is_zero_count")]
+    pub crl_polls_answered: u64,
+    /// See `crl_polls_answered`.
+    #[serde(skip_serializing_if = "is_zero_count")]
+    pub crl_poll_bytes_up: u64,
+    /// See `crl_polls_answered`.
+    #[serde(skip_serializing_if = "is_zero_count")]
+    pub crl_poll_bytes_down: u64,
+    /// Information-status polls (`security.scms.crl_poll: info-status`), each a
+    /// request put on the cellular link (some are lost).
+    #[serde(skip_serializing_if = "is_zero_count")]
+    pub info_status_polls: u64,
+    /// Polls the RA answered with its signed status (the rest that reached it were
+    /// HTTP 412). Each is a `CertificateManagementInformationStatusSpdu` the RA logged.
+    #[serde(skip_serializing_if = "is_zero_count")]
+    pub info_status_sent: u64,
+    /// Issued revocations whose publication the run horizon cut off.
+    pub crl_past_horizon: u64,
+    /// How many node installations of a CRL entry.
+    pub crls_installed: u64,
+    /// How many of those installations come from the list a device held when it joined:
+    /// a device switched on after a publication fetched that list on its RA
+    /// connection before the run saw it, so neither distribution path delivered it.
+    pub crls_installed_at_join: u64,
+    /// How many of the revoked receptions were refused by a vehicle that joined holding a
+    /// list newer than the `t0` ones.
+    pub revoked_receptions_at_join: u64,
+    /// How many receptions the installed CRL caused to be classified revoked, on every
+    /// node (vehicles and roadside units).
+    pub revoked_receptions: u64,
+    /// The part of `revoked_receptions` on roadside units: under the SCMS a unit installs
+    /// its RA's composite CRL over its own backhaul, a path that reaches no
+    /// vehicle.
+    pub rsu_revoked_receptions: u64,
+    /// Detection to the first vehicle enforcing, ns, for the first revocation.
+    pub revocation_latency_ns: u64,
+    /// That revocation's stages, `(stage, ns since detection)`.
+    pub revocation_stages: Vec<(String, u64)>,
+    /// Certificate top-ups started.
+    pub topups_started: u64,
+    /// Top-ups whose batch was installed.
+    pub topups_completed: u64,
+    /// Under `net.rsu_ip.air: sch`: relayed flows (top-up, re-enrolment, trust fetch) cut
+    /// off when the vehicle's service-channel transfer gave up, and dropped so the vehicle
+    /// starts again at its next contact.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub relayed_flows_cut_off: u64,
+    /// Certificates installed by top-ups.
+    pub certs_topped_up: u64,
+    /// Top-ups the RA refused: blocklisted, or the enrolment certificate had expired.
+    pub topups_refused: u64,
+    /// Of those, refused because the enrolment was blocklisted (passive revocation).
+    pub topups_refused_blocklisted: u64,
+    /// Top-ups still in flight when their vehicle drove out of the simulated area. The
+    /// device's flow carries on in the backend (the RA, PCA and LOP still do the work), but
+    /// the vehicle is gone, so the install is never seen here: `topups_started` is
+    /// `topups_completed + topups_refused + topups_left_area + topups_in_flight`. FB3's
+    /// 27 of 1,800 top-ups that "did not complete" were these.
+    #[serde(skip_serializing_if = "is_zero_count")]
+    pub topups_left_area: u64,
+    /// Successor enrolments started, completed and refused.
+    pub reenrolments_started: u64,
+    /// See [`Phase2Report::reenrolments_started`].
+    pub reenrolments_completed: u64,
+    /// See [`Phase2Report::reenrolments_started`].
+    pub reenrolments_refused: u64,
+    /// CRL frames a vehicle discarded because their entries were not the CRL
+    /// Generator's signed list (a compromised roadside unit's forgery).
+    pub crl_frames_rejected: u64,
+    /// ETSI: fetches of the ECTL and the CA-CRL from the Distribution Centre that
+    /// completed, and of those, how many installed a newer list.
+    pub trust_fetches: u64,
+    /// See [`Phase2Report::trust_fetches`]. US: the newer CTLs vehicles and roadside
+    /// units installed with a composite CRL download (edge-case package, item 8).
+    pub trust_lists_installed: u64,
+    /// Trust anchors devices dropped on installing a CTL that no longer approves them.
+    pub trust_anchors_removed: u64,
+    /// CTLs a device refused: fewer than `quorum` valid elector signatures from the
+    /// electors its installed CTL trusts, or another series or an older sequence.
+    pub trust_lists_refused: u64,
+    /// Signature checks devices made on the CTLs they were offered (elector P-384
+    /// signatures and the self-signatures of the roots they carry).
+    pub trust_list_verifications: u64,
+    /// Signed CRLs inside a composite CRL download that a device could not verify and
+    /// skipped, keeping the rest of the download; their entries are not installed.
+    pub crls_skipped_unverifiable: u64,
+    /// Entries a device dropped because only a CRL it could not verify carried them.
+    pub crl_entries_unverifiable: u64,
+    /// Vehicles whose clock carries `clock_skew_s` (edge-case package, item 2).
+    pub clock_skewed_nodes: u64,
+    /// Roadside units under an attacker's control (`threats.compromised_rsus`).
+    pub compromised_rsus: u64,
+    /// Relayed reports a compromised unit dropped instead of forwarding.
+    pub rsu_reports_suppressed: u64,
+    /// Relayed reports a compromised unit re-targeted at an innocent subject.
+    pub rsu_reports_poisoned: u64,
+    /// CRL frames a compromised unit put on the air with fabricated entries.
+    pub rsu_crl_frames_forged: u64,
+    /// Pseudonym changes, all vehicles.
+    pub pseudonym_changes: u64,
+    /// Links the passive observer claimed across a pseudonym change: at a decision whose
+    /// new pseudonym belongs to a vehicle it had heard under another one (ground truth).
+    pub privacy_links_claimed: u64,
+    /// The observer's decisions made across a pseudonym change (the changes it could have
+    /// bridged: it heard the vehicle before and after), the denominator of linkability.
+    pub privacy_changes_heard: u64,
+    /// Links it claimed where no pseudonym had changed: the new pseudonym is the first it
+    /// heard from that vehicle (one entering its coverage), linked to someone else's
+    /// track. Always wrong; the observer cannot tell the two cases apart.
+    pub privacy_links_spurious: u64,
+    /// Of those, links between two pseudonyms of one vehicle (the ground-truth join).
+    pub privacy_links_correct: u64,
+    /// Safety frames the eavesdropper read (all of them without `threats.eavesdropper`).
+    pub privacy_frames_read: u64,
+    /// New pseudonyms the eavesdropper heard for the first time: its linkage decisions.
+    pub privacy_link_decisions: u64,
+    /// The anonymity-set sizes |Ψ| of those decisions, summed (mean = sum / decisions).
+    pub privacy_anonymity_set_sum: u64,
+    /// The degrees of anonymity d of those decisions, summed, in millionths.
+    pub privacy_degree_micro_sum: u64,
+    /// Vehicles the eavesdropper followed at all (ground truth): whose frames it read and
+    /// attributed to one continuous track for some time.
+    pub privacy_tracked_vehicles: u64,
+    /// Of those, the vehicles it followed correctly across at least one pseudonym change.
+    pub privacy_followed_across_change: u64,
+    /// Over the followed vehicles, the longest time each was followed correctly — its
+    /// tracking duration, within one pseudonym and across correctly linked changes —
+    /// summed and at its largest, ns.
+    pub privacy_tracked_sum_ns: u64,
+    /// See [`Phase2Report::privacy_tracked_sum_ns`].
+    pub privacy_tracked_max_ns: u64,
+    /// Safety frames withheld by a silent period after a pseudonym change.
+    pub pseudonym_silenced_frames: u64,
+    /// Pseudonym changes the engine asked for under `c2c-cc` or `mix-zone`.
+    pub pseudonym_changes_requested: u64,
+    /// Vehicles that at some instant held no usable certificate and could not sign.
+    pub vehicles_starved: u64,
+    /// Node steps a vehicle spent unable to sign for want of a certificate.
+    pub starved_node_steps: u64,
+    /// Certificate availability: simulated time vehicles spent with no valid pseudonym,
+    /// summed over vehicles, ns (measured between node steps).
+    pub cert_unavailable_ns: u64,
+    /// The longest single spell one vehicle spent with no valid pseudonym, ns.
+    pub cert_unavailable_max_ns: u64,
+    /// The access legs.
+    pub access: crate::backend::AccessReport,
+    /// Distinct armed attackers the backend revoked (ground truth).
+    pub revoked_attackers: u64,
+    /// Distinct honest devices the backend revoked (ground truth): false revocations.
+    pub revoked_honest: u64,
+    /// Revocations issued for a device an earlier one had already revoked: two of its
+    /// pseudonyms decided before the first case reached the list. Counted once above.
+    pub revocations_repeated: u64,
+    /// Decisions about a certificate the published list already revoked.
+    pub decisions_already_covered: u64,
+    /// Cases the MA closed because the chain was already decided: both linkage
+    /// authorities named a chain pair a revoking case had already named, so the device is
+    /// revoked once. Under the ETSI model, verdicts about an already-decided
+    /// device by the engine's map (modelled).
+    pub decisions_linked: u64,
+    /// The most corroborated events any pseudonym the authority did not revoke reached
+    /// (`threat/ma/corroborated` only): the margin an honest fleet leaves to the threshold.
+    pub ma_peak_unrevoked_events: u64,
+    /// Vehicles unable to sign: the pre-run provisioning left them with no pseudonym
+    /// certificate at all, so they join with an empty store and send nothing signed
+    /// (their due messages are each node's `tx_uncredentialed`).
+    pub vehicles_unprovisioned: u64,
+    /// Receptions the live nodes' revocation gates refused for a certificate period
+    /// outside their plausibility window, at the end of the run (classified `Invalid`).
+    pub crl_period_refusals: u64,
+    /// Checked messages whose stated positional accuracy the detector used.
+    pub accuracy_stated: u64,
+    /// Checked messages that stated their accuracy "unavailable".
+    pub accuracy_unavailable: u64,
+    /// Checked messages the accuracy join had no entry for (a modelling gap, expected 0).
+    pub accuracy_unjoined: u64,
+    /// Reports filed whose subject was an armed attacker (ground truth, run report only):
+    /// the report-level true positives.
+    pub reports_about_attackers: u64,
+    /// Reports filed whose subject was honest (ground truth): report-level false positives.
+    pub reports_about_honest: u64,
+    /// Distinct attackers at least one report named (ground truth): detection recall's
+    /// numerator.
+    pub attackers_reported: u64,
+    /// Distinct honest vehicles at least one report named (ground truth).
+    pub honest_reported: u64,
+    /// Revocation decisions the authority took about an honest device (ground truth),
+    /// counted at the decision and before the backend carried it out.
+    pub decisions_honest: u64,
+    /// Per attacker the authority decided to revoke: its attack onset (the first action
+    /// that changed bytes on the air) to the earliest report about it at or after the
+    /// onset, ns, in decision order. No sample for an attacker reported only before it.
+    pub onset_to_detection_ns: Vec<u64>,
+    /// Per attacker the authority decided to revoke: the first report about it to the
+    /// authority's decision, ns, in decision order.
+    pub detection_to_decision_ns: Vec<u64>,
+    /// Backend deliveries the protocol kernel refused (modelling defects).
+    pub backend_errors: u64,
+    /// The first of them, for the report.
+    pub first_backend_error: String,
+    /// The `security.signature` scheme the credential system ran, and its mode
+    /// (`classical`, `hybrid`, `post-quantum`).
+    pub signature_scheme: String,
+    /// See [`Phase2Report::signature_scheme`].
+    pub signature_mode: String,
+    /// The `security.kem` scheme.
+    pub kem_scheme: String,
+    /// The local detector suite every receiver ran (`detect/legacy-12`,
+    /// `detect/us-sm-mbr`, `detect/ts103759`), or empty when none ran. An empty
+    /// `detection.local` under the US system runs `detect/us-sm-mbr`.
+    pub local_suite: String,
+    /// Per committee role (`pca`, `crl`, `linkage`): sessions, rounds, bytes, restarts,
+    /// timeouts, invalid shares, failures and latency (`v2xw_proto::threshold::session`).
+    pub committees:
+        std::collections::BTreeMap<String, v2xw_proto::threshold::session::CommitteeStats>,
+    /// Committee sessions that failed for good, by role: certificates never issued, CRLs
+    /// never signed, revocations never resolved.
+    pub committee_failures: std::collections::BTreeMap<String, u64>,
+    /// Backend deliveries dropped because their receiver was offline
+    /// (`actors.backend.failures`).
+    pub backend_deliveries_dropped: u64,
+    /// Random outages per server (`actors.backend.availability`), by name: the
+    /// home provider's role (`ra`), `<provider>/<role>` for another provider's. Empty
+    /// unless a server runs the two-state model.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub backend_outages: BTreeMap<String, u64>,
+    /// The time those outages kept each server down, ms, by the same names.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub backend_downtime_ms: BTreeMap<String, u64>,
+    /// Messages one SCMS component sent another while that one was down, held in the
+    /// sender's queue and delivered on a retry once it was back (`v2xw_proto::fault`).
+    pub backend_deliveries_held: u64,
+    /// A down component's own scheduled jobs, run when it restarted.
+    pub backend_timers_deferred: u64,
+    /// EE requests to the RA sent again because no answer came within
+    /// `ee_retry_timeout_s` ([CAMP122] SCMS-522), summed over every provider's devices.
+    pub ee_retries: u64,
+    /// Retries held back by the SCMS-523 cap (`ee_retry_max_per_hour` in 60 minutes).
+    pub ee_retries_capped: u64,
+    /// Second answers to a request sent twice, which the device dropped.
+    pub ee_duplicate_answers: u64,
+    /// Butterfly requests the RA received again byte for byte and acknowledged again.
+    pub ra_retransmissions_reacked: u64,
+    /// One row per armed attacker, in node order (ground truth, for the evaluation only):
+    /// how long it lied, what the fleet reported about it and what the authority made of
+    /// it, so a missed attacker can be told apart from one that was barely on the air.
+    pub attacker_outcomes: Vec<AttackerOutcome>,
+}
+
+/// What became of one armed attacker (ground truth, for the evaluation only).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AttackerOutcome {
+    /// The engine node.
+    pub node: u32,
+    /// The attack model it ran.
+    pub attack: String,
+    /// Its attack onset, ns: its first action that changed bytes on the air, the onset
+    /// `time_to_detect` uses (it was the first falsified claim by the per-message label
+    /// rule, which can come hours later).
+    pub onset_ns: Option<u64>,
+    /// Its first falsified claim by the per-message label rule, ns.
+    pub first_falsified_ns: Option<u64>,
+    /// Its last falsified claim, ns: with the onset, how long it was on the air lying.
+    pub last_falsified_ns: Option<u64>,
+    /// Falsified claims it signed.
+    pub falsified_claims: u64,
+    /// The first report any receiver filed about it, ns.
+    pub first_reported_ns: Option<u64>,
+    /// The earliest report about it at or after its onset, ns: the detection
+    /// `onset_to_detection_ns` and `time_to_detect` measure to.
+    pub first_detected_ns: Option<u64>,
+    /// Reports filed about it.
+    pub reports: u64,
+    /// Distinct pseudonyms of its that those reports named.
+    pub pseudonyms_reported: u64,
+    /// Reports about it that reached the authority.
+    pub reports_at_ma: u64,
+    /// The most corroborated events the authority held about any one of its pseudonyms
+    /// inside the decision window.
+    pub peak_events: u32,
+    /// The authority's revocation decision, ns.
+    pub decided_ns: Option<u64>,
+}
+
+/// The PKI view's records one backend tick produced.
+#[derive(Debug, Default)]
+pub struct PkiTick {
+    /// `pki.state`.
+    pub state: Option<v2xw_proto::scms::pki_view::PkiState>,
+    /// `pki.flow`.
+    pub flows: Vec<v2xw_proto::scms::pki_view::PkiFlow>,
+    /// `pki.case`.
+    pub cases: Vec<v2xw_proto::scms::pki_view::PkiCase>,
+    /// `pki.knowledge`.
+    pub knowledge: Vec<v2xw_proto::scms::pki_view::Knowledge>,
+}
+
+/// `pki.knowledge` is published every this many backend views: what an entity holds
+/// changes slowly and each record lists rows.
+pub const KNOWLEDGE_EVERY: u32 = 10;
+
+/// The longest a `backend.state`, `pki.state` or `pki.knowledge` snapshot that has not
+/// changed goes unrepeated, simulated seconds.
+///
+/// Each is a whole snapshot, and a reader takes the newest at or before an instant (the
+/// server's `inspect.trust`, the Studio's Backend and PKI views), so one equal to the last
+/// written adds nothing but its time. On Q (two days, the PKI view on) writing every one
+/// was 591 MB of JSON over 11,004 backend ticks and most of a 453 s second fast-forward,
+/// with the backend idle. An unchanged snapshot is now
+/// written again only when this long has passed since the last, so the newest snapshot's
+/// time, and what changes with time alone (a CRL's age, a credential's expiry), is never
+/// more than this stale; every change is written at the view it happens in.
+pub const VIEW_KEYFRAME_S: u64 = 300;
+
+/// The last snapshots written, for [`VIEW_KEYFRAME_S`].
+#[derive(Debug, Default)]
+struct LastViews {
+    backend: Option<BackendView>,
+    pki: Option<v2xw_proto::scms::pki_view::PkiState>,
+    knowledge: BTreeMap<(String, String), v2xw_proto::scms::pki_view::Knowledge>,
+}
+
+/// Whether a snapshot taken at `now` repeats `last` and the keyframe is not yet due:
+/// `same` compares them with the time fields aligned.
+fn repeats<T>(last: Option<&T>, at: impl Fn(&T) -> SimTime, now: SimTime, same: bool) -> bool {
+    last.is_some_and(|l| same && now < at(l).saturating_add(VIEW_KEYFRAME_S * 1_000_000_000))
+}
+
+/// Rows per list in a `pki.knowledge` record (totals are uncapped).
+pub const KNOWLEDGE_ROWS: usize = 64;
+
+/// What the engine does after a backend step: records to write and changes to apply.
+#[derive(Debug, Default)]
+pub struct BackendTick {
+    /// Revocation stages to write on `proto.revocation`.
+    pub stages: Vec<crate::sec_records::ProtoRevocation>,
+    /// Reports the authority ingested.
+    pub ma_reports: Vec<v2xw_threat::records::MaReportRecord>,
+    /// Its decisions.
+    pub ma_decisions: Vec<v2xw_threat::records::MaDecisionRecord>,
+    /// A new CRL version was published at the store (its entry count).
+    pub published: Option<u32>,
+    /// Certificates a completed top-up installs, per node.
+    pub installs: Vec<(NodeId, Vec<ProvisionedCred>, u64)>,
+    /// Credential events to write on `sec.cert`: `(node, event)` — `topup-refused`,
+    /// `reenrolled`, `reenrol-refused`.
+    pub events: Vec<(NodeId, &'static str)>,
+    /// The backend's state, when it is due for publication.
+    pub view: Option<BackendView>,
+    /// The PKI view's records, when it is on: the trust domain's state on the
+    /// view's cadence, the messages, stage stamps and SPDUs since the last tick, the case
+    /// board's transitions and, every [`KNOWLEDGE_EVERY`] views, what each entity holds.
+    pub pki: PkiTick,
+    /// Backend-network and backhaul bytes moved since the last tick:
+    /// `(t, bucket, bytes, node)`. The sidelink's own bytes are not here: a relayed
+    /// report's air hop is a frame on `node.tx` like any other.
+    pub bytes: Vec<(
+        SimTime,
+        v2xw_metrics::channels::ByteBucket,
+        u64,
+        Option<NodeId>,
+    )>,
+}
+
+/// The Phase 2 state of one run.
+pub struct Phase2 {
+    /// One SCMS run per provider of the deployment, in deployment order: the
+    /// home provider's first. Read through [`Phase2::home`], [`Phase2::run_of`] and
+    /// [`Phase2::run_of_mut`], never by index at a call site.
+    runs: Vec<ScmsRun>,
+    /// Which provider serves each SCMS device (by its device id), from the seeded fleet
+    /// split ([`v2xw_proto::scms::deployment::Deployment::provider_of`]).
+    device_provider: BTreeMap<NodeId, usize>,
+    /// The scenario seed the fleet split is drawn under (the one roadside units use).
+    fleet_seed: u64,
+    /// Every CRL version each provider's CRL Store published: when, its entry count, its
+    /// entries and the signed CRL. A provider's RA serves every provider's latest CRL
+    /// once the inter-provider link has carried it (the composite CRL of
+    /// 1609.2.1 §6.3.5.7).
+    crl_feeds: Vec<Vec<CrlVersion>>,
+    /// The lists every provider published at `t0`, which a device holds when it
+    /// joins before its RA serves anything newer: it was on the road before the run and
+    /// fetched them within the week ([`Phase2::prerun_crl`]). Their entry count, the sum
+    /// of the stores' serials, the entries and the signed CRLs.
+    prerun_crl: (u32, u64, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>),
+    /// The backend's clock at its last step.
+    backend_now: SimTime,
+    /// Per provider, the internet leg from the scenario's city to its region that a
+    /// device's backend message crosses after its access leg (zero under `flat`).
+    internet_legs: Vec<Duration>,
+    /// The ETSI ITS PKI, when `security.protocol` selects it; `scms` then carries nothing.
+    etsi: Option<v2xw_proto::etsi::ts102941::EtsiRun>,
+    /// ETSI decisions, carried out as blocklistings.
+    blocks: Vec<Block>,
+    params: LifecycleParams,
+    access: BackendAccess,
+    creds: BTreeMap<NodeId, Vec<ProvisionedCred>>,
+    by_digest: BTreeMap<[u8; 8], (NodeId, u32, u32)>,
+    /// Test hooks on the truth join ([`Phase2::forget_digest_map_for_test`],
+    /// [`Phase2::misattribute_providers_for_test`]).
+    truth_hook: TruthHook,
+    rsus: Vec<RsuSpec>,
+    rsu_nodes: Vec<NodeId>,
+    /// The SCMS (`protocol/scms/camp`) runs this backend: roadside units then join the
+    /// application-certificate cycle.
+    camp: bool,
+    /// Per roadside unit in that cycle: how many of its installed certificates the
+    /// engine has handed to the node, and its starvation spell.
+    rsu_cycle: BTreeMap<NodeId, RsuCycle>,
+    /// Roadside units outside the application-certificate cycle that still fetch the
+    /// composite CRL over their backhaul: the post-quantum profile's units, which have no
+    /// 1609.2.1 PDU layer to join the cycle with. Each holds the composite CRL version and
+    /// publication serial it last installed. The CRL is modelled there as it is for the
+    /// vehicles (no signed bytes exist to verify), and the entries go into the unit's gate.
+    rsu_crl_modelled: BTreeMap<NodeId, (u32, u64)>,
+    /// Emergency vehicles hold OBU identification certificates and sign their SRMs under
+    /// them ([CAMP122] Table 1 row 44): the SCMS run with its PDU layer, the US
+    /// message set (not ETSI facilities) and `deployment.options.identification_certs`
+    /// on. The pseudonym certificates then permit no SRM.
+    identification: bool,
+    /// Per emergency vehicle in the identification-certificate cycle: how many of its
+    /// installed certificates the engine has handed to the node.
+    ident_cycle: BTreeMap<NodeId, usize>,
+    /// `crl_delivery: mbms`: when the eMBMS carousel next repeats the current list.
+    mbms_next: SimTime,
+    /// The encoded size of each composite CRL a device has been served, by (provider,
+    /// home CTL sequence, CRL count, their total bytes): encoding a 10,000-entry list for
+    /// every download would cost more than the run.
+    composite_sizes: BTreeMap<(usize, u32, usize, usize), u32>,
+    specs: Vec<AttackerSpec>,
+    attackers: BTreeMap<NodeId, AttackerSlot>,
+    detectors: BTreeMap<NodeId, LocalSuite>,
+    detector_params: DetectorParams,
+    /// The strict US profile's thresholds when `detection.local` names it, or names
+    /// nothing under the US system ([`us_default_detector`]); else the research
+    /// suite runs.
+    us_profile: Option<v2xw_threat::us_mbr::UsMbrParams>,
+    /// The TS 103 759 suite's thresholds when `detection.local` names it.
+    ts_profile: Option<v2xw_threat::ts103759::Ts103759Params>,
+    detection_on: bool,
+    /// Whether the detectors read each message's stated accuracy (`true`, the default) or
+    /// the legacy constant 5 m (`detection.local[].params.use_stated_accuracy: 0`, kept to
+    /// reproduce the runs before 2026-09-30).
+    stated_accuracy: bool,
+    /// Whether the research suite judges a message its receiver refused on the CRL
+    /// (`false`, the default;
+    /// `detection.local[].params.judge_revoked: 1` turns it on). A revoked
+    /// sender's BSM has been dropped by the security layer (IEEE 1609.2 §5.1: a message
+    /// whose signer is on a CRL is not valid, so the application never consumes it), and
+    /// misbehaviour detection reads authenticated, accepted BSMs ([SM-MBR] §2.3). Judged,
+    /// the suite scored it a failed signature, though the signature verified, and filed a
+    /// report about a device already revoked (`C2M`: 347
+    /// `signatureVerification` reports about a revoked SlowDrift attacker). The US
+    /// profile judges only verified BSMs either way.
+    judge_revoked: bool,
+    /// Whether each receiver checks a claimed position against its own map of the road
+    /// network (`true`, the default; `detection.local[].params.use_map: 0` is a receiver
+    /// with no map, whose `mapOffRoad` check cannot fire).
+    map_check: bool,
+    report_interval: Duration,
+    /// One Misbehaviour Authority per provider, in deployment order.
+    ma: Vec<MaHost>,
+    vehicles: u64,
+    /// When each (reporter, subject) pair was last filed.
+    filed: BTreeMap<(NodeId, String), SimTime>,
+    /// When each receiver last ran its suite on each sender.
+    checked_at: BTreeMap<(NodeId, [u8; 8]), SimTime>,
+    /// The next sweep of the rate-limit stamps and the join tables ([`Phase2::prune_tables`]).
+    next_table_prune: SimTime,
+    /// Vehicles retired since that sweep, with when.
+    retired_since_prune: Vec<(SimTime, NodeId)>,
+    /// Whether [`Phase2::prune_tables`] runs; always, outside a test.
+    table_prune: bool,
+    forwarded: BTreeSet<String>,
+    in_flight: BTreeMap<(usize, FlowRun), InFlightReport>,
+    /// Test hook ([`Phase2::share_unverified_for_test`]): share real reports without
+    /// their bytes, so the receiving MA does not re-verify them.
+    share_unverified: bool,
+    /// Test hook ([`Phase2::forge_brake_acceleration_for_test`]): every BSM a detector
+    /// judges reads as brakes on at +0.5 m/s².
+    forge_brakes: bool,
+    /// The home root a scheduled rollover superseded (`root_removal_at_s` removes it).
+    superseded_root: Option<[u8; 32]>,
+    /// The PDU PKI followed a published root rollover since the engine last looked
+    /// ([`Phase2::take_pki_changeover`]).
+    pki_changeover: bool,
+    /// (roadside unit, case subject) pairs whose CRL entry the unit has installed: one
+    /// `rsu_installed` row each ([`Phase2::rsu_crl_records`]).
+    rsu_case_installs: BTreeSet<(NodeId, String)>,
+    /// The CTL sequence every device holds from the factory (the one in force when the
+    /// governance first ran); a device installs a newer one with its next composite CRL.
+    factory_ctl_seq: Option<u32>,
+    /// The trust every device leaves the factory with: the bootstrap elector
+    /// certificates and quorum (Profile §2.1.15) and the CTLs in force then, each
+    /// installed by its predecessor's quorum. A device checks a newer CTL against it.
+    factory_trust: Option<v2xw_proto::scms::governance::DeviceTrust>,
+    /// The peer provider whose root `peer_root_removal_at_s` removed.
+    removed_peer: Option<usize>,
+    /// The component revocation the scenario schedules and the provider has not yet
+    /// decided (`security.scms.lifecycle.component_revoked*`).
+    component_revocation: Option<ComponentRevocationPlan>,
+    /// Under `eac_review: elector-policy`: which of the three governance times
+    /// (rollover, removal, peer removal) the Board has received as a request, its time
+    /// then replaced by the vote's.
+    eac_requested: [bool; 5],
+    /// The next Test Ballot instant and the governance log length it was
+    /// read at: a ballot is due once an elector has gone `test_ballot_interval` without
+    /// signing, which changes only when the log does.
+    test_ballot_at: Option<(usize, Option<SimTime>)>,
+    /// Whether the scenario sets an availability or service-time key, so the
+    /// report names each server's outages.
+    service_models: bool,
+    /// The last signed BSMs on the air per signer digest, with their `generationTime`,
+    /// from which a report takes the ones its reporter judged ([`judged_bsms`]).
+    evidence: BTreeMap<[u8; 8], VecDeque<(SimTime, Vec<u8>)>>,
+    /// The hash of the last BSM of a pseudonym whose ring went with its vehicle
+    /// ([`Phase2::prune_tables`]), which is all a report built later reads of it.
+    evidence_final: BTreeMap<[u8; 8], u64>,
+    /// Per report id, the signed BSMs its reporter judged, taken when it was generated:
+    /// the evidence its SM-MBR attaches whenever it is built ([`Phase2::real_mbr`]).
+    judged_evidence: BTreeMap<String, Vec<Vec<u8>>>,
+    /// The ids of the reports an insider forged (`insider_reports`): ground truth for
+    /// their `pki.report_fate` rows only.
+    forged_reports: BTreeSet<String>,
+    stage_cursor: Vec<usize>,
+    step_cursor: Vec<usize>,
+    queue: Vec<VecDeque<Case>>,
+    cases: Vec<Case>,
+    /// Each provider's last published CRL version (its store's entry count).
+    published: Vec<u32>,
+    /// Per provider, the CRL Store publication count last published.
+    published_serial: Vec<u32>,
+    /// Per provider, the CRL Store publication count its standing list had when the run
+    /// began (`ScmsRun::seed_standing_crl`): a feed version at or below it was published
+    /// before `t0`, so it had crossed every inter-provider link before the run and every
+    /// RA serves it from the start (IEEE 1609.2.1 §6.3.5.8: the composite carries every
+    /// CTL-listed CRACA's `SecuredCrl`).
+    seeded_serial: Vec<u32>,
+    broadcast_version: u32,
+    nodes: BTreeMap<NodeId, NodeSec>,
+    revocation: Option<Revocation>,
+    report: Phase2Report,
+    /// The passive privacy observer: every safety frame on the air, linked across
+    /// pseudonym changes by kinematics.
+    observer: v2xw_threat::PrivacyObserver,
+    /// Its link claims since the last backend step, for the recorder.
+    link_claims: Vec<v2xw_threat::records::PrivacyLinkClaim>,
+    /// The fold of the backend's wire log into edges, for the Backend view.
+    tracker: EdgeTracker,
+    /// The same for every other provider's run, in deployment order from provider 1.
+    peer_trackers: Vec<EdgeTracker>,
+    /// `threats.compromised_rsus`: the attack each compromised unit runs, by the unit's
+    /// index in `actors.rsus`, with its active window.
+    compromised_specs: BTreeMap<usize, (v2xw_threat::RsuAttackParams, SimTime, SimTime)>,
+    /// The compromised units, once they exist, by node.
+    compromised: BTreeMap<NodeId, v2xw_threat::CompromisedRsu>,
+    /// Which node each compromised unit's spec belongs to, before its model is built.
+    compromised_nodes: BTreeMap<NodeId, usize>,
+    /// When the backend's state is next published.
+    next_view: SimTime,
+    /// The PKI view's publisher, when `security.scms.pki_view` is on and an SCMS
+    /// runs: what each record has already carried.
+    pki: Option<v2xw_proto::scms::pki_view::PkiTracker>,
+    /// The report records (`security.scms.report_records`), when on.
+    report_log: Option<ReportLog>,
+    /// The dataset exporter's MA-side state (`crate::dataset_records`), when the scenario
+    /// names that exporter: it also turns the report records on.
+    dataset: Option<Box<DatasetMa>>,
+    /// Views published, for the knowledge cadence.
+    views: u32,
+    /// The last `backend.state`, `pki.state` and `pki.knowledge` records written, with
+    /// when, so an unchanged snapshot is not written again ([`VIEW_KEYFRAME_S`]).
+    last_views: LastViews,
+    /// Ground truth for the run report only, never read by a decision: each attacker's
+    /// first falsified claim, each subject's first report, each subject's decision.
+    first_falsified: BTreeMap<NodeId, SimTime>,
+    /// Per attacker, its first action that changed bytes on the air: the attack onset,
+    /// as `time_to_detect` reads it from `gt.attack.action`.
+    first_on_air: BTreeMap<NodeId, SimTime>,
+    /// Per attacker, its earliest report at or after that onset.
+    first_detected: BTreeMap<NodeId, SimTime>,
+    first_reported: BTreeMap<NodeId, SimTime>,
+    decided: BTreeMap<NodeId, SimTime>,
+    /// Per attacker (ground truth, run report only): `(last falsified claim, falsified
+    /// claims)`, reports filed about it and the pseudonyms they named, reports about it
+    /// at the authority, and the most corroborated events it reached.
+    attacker_lies: BTreeMap<NodeId, (SimTime, u64)>,
+    attacker_reports: BTreeMap<NodeId, (u64, BTreeSet<[u8; 8]>)>,
+    attacker_at_ma: BTreeMap<NodeId, u64>,
+    attacker_peak_events: BTreeMap<NodeId, u32>,
+    /// Per (provider, accused pseudonym): the earliest-detected report the MA took as
+    /// evidence, `(detection time, its backend run)`. A case's decomposition starts at it
+    /// (`detect`: the local detector fires), not at the report whose
+    /// arrival completed the evidence: under a corroborating MA that report can be tens of
+    /// seconds younger than the first detection (10.7-24.4 s on a corroborating MA).
+    first_evidence: BTreeMap<(usize, String), (SimTime, FlowRun)>,
+    /// The devices a revocation has been issued or decided for (ground truth, run report
+    /// only), so a device two of whose pseudonyms were decided is counted once.
+    revoked_devices: BTreeSet<NodeId>,
+    /// When each device that left the run left, in leaving order: with the devices still
+    /// present, the population a published CRL had to reach (the PKI view's "enforced by
+    /// n of N", whose N is every device present at any instant since publication).
+    retired_at: Vec<SimTime>,
+    /// The store deletions (quota, then age) of the devices that left the run: a retired
+    /// device's `MbrQueue` counters leave with it, and the run report's
+    /// `reports_evicted` / `reports_expired` sum the devices present plus these.
+    retired_store_deletions: (u64, u64),
+    /// Per provider (index of [`Phase2::runs`]): the end-entity counters the Backend
+    /// view's `ee` entity of that provider shows (U7), each also summed in the run
+    /// report.
+    ee_tally: Vec<EeTally>,
+    /// The devices the ETSI model's authority has decided to block, by the engine's map
+    /// (modelled; the US MA links by chain identifiers, `MaState::decided_chains`).
+    ma_decided_devices: BTreeSet<NodeId>,
+    /// The positional accuracy each safety message stated on the air, as a 95 % radius in
+    /// metres, by signer and generation time: `None` when the message said "unavailable".
+    /// `v2xw_node::VerifiedMessage` does not carry it, so the detector host joins it back
+    /// by `(signer, generation time)`, which is what the message itself carries.
+    broadcast_accuracy: BTreeMap<[u8; 8], VecDeque<(SimTime, Option<f64>)>>,
+    /// The frame fields the TS 103 759 suite's box and Kalman checks read that
+    /// `VerifiedMessage` does not carry (the BSM's J2735 `VehicleSize`, a CAM's vehicle
+    /// length and width, and the reference point the message's standard puts its
+    /// position at), joined back as `broadcast_accuracy` is. Kept only when that suite
+    /// runs.
+    broadcast_frame: BTreeMap<[u8; 8], VecDeque<(SimTime, v2xw_threat::FrameExtras)>>,
+    /// The ground-truth side of the eavesdropper's chains, for the run report only: by the
+    /// pseudonym at a chain's end, the vehicle it is truly following and since when.
+    privacy_chains: BTreeMap<[u8; 8], (Option<NodeId>, SimTime)>,
+    /// Per vehicle, the longest it was followed correctly, ns.
+    privacy_tracked: BTreeMap<NodeId, u64>,
+    /// The vehicles followed correctly across at least one change.
+    privacy_across: BTreeSet<NodeId>,
+    /// Ground truth, for the run report only: per vehicle, the pseudonym the observer last
+    /// made a decision on, so a decision is known to follow a change or not.
+    privacy_heard: BTreeMap<NodeId, [u8; 8]>,
+}
+
+/// The position confidence the detector host used for every message before it read each
+/// message's own (`use_stated_accuracy: 0`).
+pub const LEGACY_CONFIDENCE_M: f64 = 5.0;
+
+/// How many recent messages per signer the accuracy join keeps: three seconds at 10 Hz,
+/// far longer than any delivery takes.
+const ACCURACY_JOIN_DEPTH: usize = 32;
+
+/// How often [`Phase2::prune_tables`] walks its tables.
+const TABLE_PRUNE_PERIOD: Duration = Duration::from_secs(60);
+
+/// How far behind `now` a reception may still be processed: the sweep keeps a stamp this much
+/// past its interval. Far above a verification queue's delay.
+const TABLE_PRUNE_MARGIN: Duration = Duration::from_secs(60);
+
+/// How long a silent signer's statements and a retired vehicle's chains are kept.
+const JOIN_RETENTION: Duration = Duration::from_secs(120);
+
+/// What [`Phase2::evidence_final`] keeps of a BSM: the first eight octets of its SHA-256.
+fn evidence_hash(bsm: &[u8]) -> u64 {
+    let h = v2xw_core::hash::sha256(bsm);
+    u64::from_le_bytes([h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]])
+}
+
+/// The 95 % horizontal accuracy radius a safety message states on the air, metres, as
+/// its receiver decodes it; `None` when it states "unavailable".
+///
+/// * A **BSM** carries J2735 `PositionalAccuracy`, whose `semiMajor` is one standard
+///   deviation in 0.05 m steps (254 = 12.70 m or more, 255 = unavailable). The receiver
+///   scales it to 95 % by the Rayleigh factor.
+/// * A **CAM** carries ETSI `PosConfidenceEllipse`, whose `semiMajorConfidence` is already
+///   the 95 % semi-axis, in centimetres (4094 = out of range, 4095 = unavailable).
+///
+/// Computed from the belief through the encoders' own quantisers rather than by decoding
+/// the payload again: the value is the one the octets carry (the codec tests round-trip
+/// it), without a second decode of every frame.
+#[must_use]
+pub fn broadcast_accuracy_95_m(
+    msg_type: v2xw_msg::MsgType,
+    belief: &v2xw_core::PositionEstimate,
+) -> Option<f64> {
+    stated_accuracy_95_m(msg_type, belief.semi_major_m)
+}
+
+/// [`broadcast_accuracy_95_m`] for a 95 % radius the sender states, `semi_major_m`, which
+/// is its own estimate unless it lies about it (`v2xw_threat::attack_evasion`).
+#[must_use]
+pub fn stated_accuracy_95_m(msg_type: v2xw_msg::MsgType, semi_major_m: f64) -> Option<f64> {
+    use v2xw_msg::j2735::bsm;
+    match msg_type {
+        // A VAM states its position confidence as a CAM does (the ETSI ReferencePosition).
+        v2xw_msg::MsgType::Cam | v2xw_msg::MsgType::Vam => {
+            let cm = v2xw_msg::units::semi_axis_length(semi_major_m);
+            (cm < 4095).then(|| f64::from(cm) / 100.0)
+        }
+        _ => bsm::semi_axis_sigma_m(bsm::semi_axis_accuracy_from_95(semi_major_m))
+            .map(|sigma| sigma * bsm::RADIUS_95_PER_SIGMA),
+    }
+}
+
+impl core::fmt::Debug for Phase2 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Phase2")
+            .field("rsus", &self.rsus.len())
+            .field("attackers", &self.attackers.len())
+            .field("detectors", &self.detectors.len())
+            .field("cases", &self.cases.len())
+            .field("revoked", &self.revocation.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// `detection.local`: the local detector suite's parameters and the report interval, as the
+/// run reads them. Shared with the loader (`crate::scenario::validate`), so a key or value
+/// the run would refuse is refused at Check rather than when the run is built.
+///
+/// # Errors
+/// [`EngineError::Scenario`] naming the detector id, the key or the value.
+pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
+    // The heading check allows for the bearing error the stated accuracies imply
+    // (`Legacy12::heading_bounded`), and the map check for the stated confidence disc.
+    // `heading_bearing_bound: 0` and `offroad_confidence_bound: 0` restore the legacy
+    // checks, as `use_stated_accuracy: 0` restores the constant 5 m and `use_map: 0`
+    // turns the map check off.
+    let mut detector_params = DetectorParams {
+        heading_bearing_bound: true,
+        offroad_confidence_bound: true,
+        ..DetectorParams::default()
+    };
+    let mut report_interval = secs(REPORT_INTERVAL_S);
+    let mut stated_accuracy = true;
+    // Off by default: a CRL-refused BSM never reaches misbehaviour detection.
+    let mut judge_revoked = false;
+    let mut map_check = true;
+    // Under the US system an empty list is the US profile at its defaults.
+    let default_us = us_default_detector(scenario);
+    let mut us_profile: Option<v2xw_threat::us_mbr::UsMbrParams> =
+        default_us.then(v2xw_threat::us_mbr::UsMbrParams::default);
+    let mut ts_profile: Option<v2xw_threat::ts103759::Ts103759Params> = None;
+    for (i, choice) in scenario.detection.local.iter().enumerate() {
+        let us = choice.id == US_SM_MBR;
+        if choice.id == TS_103_759 {
+            if scenario.detection.local.len() > 1 {
+                return Err(conflict(
+                    &format!("detection.local[{i}]"),
+                    format!("{TS_103_759} is a whole suite: list it alone"),
+                ));
+            }
+            let mut p = v2xw_threat::ts103759::Ts103759Params::default();
+            if let Some(map) = choice.params.as_object() {
+                for (key, value) in map {
+                    let field = format!("detection.local[{i}].params.{key}");
+                    if let Some(label) = value.as_str() {
+                        let ok = match key.as_str() {
+                            "environment" => v2xw_threat::ts103759::RadioEnvironment::parse(label)
+                                .map(|e| p = p.clone().with_environment(e))
+                                .is_some(),
+                            "beacon_profile" => v2xw_threat::ts103759::BeaconProfile::parse(label)
+                                .map(|b| p = p.clone().with_beacon_profile(b))
+                                .is_some(),
+                            _ => p.apply_label(key, label),
+                        };
+                        if !ok {
+                            return Err(conflict(
+                                &field,
+                                format!(
+                                    "is {value}; environment takes highway, rural, suburban \
+                                     or urban, beacon_profile bsm-j2945-1, cam-en302637-2 or \
+                                     f2md-veremi-1hz, fusion consecutive, windowed-mean or \
+                                     leaky-bucket, scoring threshold or catch, and every \
+                                     other parameter a number"
+                                ),
+                            ));
+                        }
+                        continue;
+                    }
+                    let v = value
+                        .as_f64()
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .ok_or_else(|| {
+                            conflict(
+                                &field,
+                                format!("is {value}; it must be a finite number, 0 or more"),
+                            )
+                        })?;
+                    match key.as_str() {
+                        "report_interval_s" => report_interval = secs(v),
+                        "use_stated_accuracy" => stated_accuracy = v != 0.0,
+                        "use_map" => map_check = v != 0.0,
+                        "judge_revoked" => judge_revoked = v != 0.0,
+                        _ if p.apply(key, v) => {}
+                        _ => {
+                            return Err(conflict(
+                                &field,
+                                format!(
+                                    "'{key}' is not a parameter of {TS_103_759}; it takes \
+                                     {}, environment, beacon_profile, {}, {}",
+                                    HOST_PARAM_KEYS.join(", "),
+                                    v2xw_threat::ts103759::LABEL_KEYS.join(", "),
+                                    v2xw_threat::ts103759::PARAM_KEYS.join(", ")
+                                ),
+                            ));
+                        }
+                    }
+                }
+            } else if !choice.params.is_null() {
+                return Err(conflict(
+                    &format!("detection.local[{i}].params"),
+                    format!(
+                        "is {}; it must be an object of parameter names and values",
+                        choice.params
+                    ),
+                ));
+            }
+            ts_profile = Some(p);
+            continue;
+        }
+        if choice.id != LEGACY_12 && !us {
+            return Err(conflict(
+                &format!("detection.local[{i}]"),
+                format!(
+                    "this build ships three local detector suites, {LEGACY_12} (the research \
+                     suite), {US_SM_MBR} (the strict US profile) and {TS_103_759} (the ETSI \
+                     TS 103 759 observations); got {}",
+                    choice.id
+                ),
+            ));
+        }
+        if us {
+            if scenario.detection.local.len() > 1 {
+                return Err(conflict(
+                    &format!("detection.local[{i}]"),
+                    format!("{US_SM_MBR} is a whole profile: list it alone"),
+                ));
+            }
+            let mut p = v2xw_threat::us_mbr::UsMbrParams::default();
+            if let Some(map) = choice.params.as_object() {
+                for (key, value) in map {
+                    let field = format!("detection.local[{i}].params.{key}");
+                    // The two choice parameters by name (Paper 1 item C).
+                    if let Some(name) = value.as_str() {
+                        if !p.apply_str(key, name) {
+                            return Err(conflict(
+                                &field,
+                                format!(
+                                    "is {value}; reading takes v1_0 or asn1_v1_1, time_base \
+                                     takes generation_time or secmark, consecutive takes \
+                                     msg_count or received, max_accel_reading takes \
+                                     accel-set or speed-difference, and every other \
+                                     parameter a number"
+                                ),
+                            ));
+                        }
+                        continue;
+                    }
+                    let v = value
+                        .as_f64()
+                        .or_else(|| value.as_bool().map(|b| if b { 1.0 } else { 0.0 }))
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .ok_or_else(|| {
+                            conflict(
+                                &field,
+                                format!("is {value}; it must be a finite number, 0 or more"),
+                            )
+                        })?;
+                    if key == "report_interval_s" {
+                        report_interval = secs(v);
+                    } else if !p.apply(key, v) {
+                        return Err(conflict(
+                            &field,
+                            format!(
+                                "'{key}' is not a parameter of {US_SM_MBR}; it takes \
+                                 report_interval_s, {}",
+                                v2xw_threat::us_mbr::PARAM_KEYS.join(", ")
+                            ),
+                        ));
+                    } else if let Some((lo, hi)) = v2xw_threat::us_mbr::range(key)
+                        && !(lo..=hi).contains(&v)
+                    {
+                        return Err(conflict(
+                            &field,
+                            format!("is {value}; it takes {lo} to {hi}"),
+                        ));
+                    }
+                }
+            } else if !choice.params.is_null() {
+                return Err(conflict(
+                    &format!("detection.local[{i}].params"),
+                    format!(
+                        "is {}; it must be an object of parameter names and values",
+                        choice.params
+                    ),
+                ));
+            }
+            us_profile = Some(p);
+            continue;
+        }
+        if let Some(map) = choice.params.as_object() {
+            for (key, value) in map {
+                let field = format!("detection.local[{i}].params.{key}");
+                if !HOST_PARAM_KEYS.contains(&key.as_str())
+                    && !DETECTOR_PARAM_KEYS.contains(&key.as_str())
+                {
+                    return Err(conflict(
+                        &field,
+                        format!(
+                            "'{key}' is not a parameter of {LEGACY_12}; it takes \
+                             {}, {}. Remove the key or correct its spelling",
+                            HOST_PARAM_KEYS.join(", "),
+                            DETECTOR_PARAM_KEYS.join(", ")
+                        ),
+                    ));
+                }
+                let v = value
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .ok_or_else(|| {
+                        conflict(
+                            &field,
+                            format!("is {value}; it must be a finite number, 0 or more"),
+                        )
+                    })?;
+                if key == "report_interval_s" {
+                    report_interval = secs(v);
+                } else if key == "use_stated_accuracy" {
+                    stated_accuracy = v != 0.0;
+                } else if key == "use_map" {
+                    map_check = v != 0.0;
+                } else if key == "judge_revoked" {
+                    judge_revoked = v != 0.0;
+                } else if !apply_detector_param(&mut detector_params, key, v) {
+                    // `DETECTOR_PARAM_KEYS` names a key this function does not read: the
+                    // list and the reader disagree, and the loader test over the list fails.
+                    return Err(conflict(
+                        &field,
+                        format!("'{key}' is listed but not read by {LEGACY_12}"),
+                    ));
+                }
+            }
+        } else if !choice.params.is_null() {
+            return Err(conflict(
+                &format!("detection.local[{i}].params"),
+                format!(
+                    "is {}; it must be an object of parameter names and values",
+                    choice.params
+                ),
+            ));
+        }
+    }
+    Ok(DetectionParams {
+        detector_params,
+        report_interval,
+        stated_accuracy,
+        judge_revoked,
+        map_check,
+        us_profile,
+        ts_profile,
+        default_us,
+    })
+}
+
+/// What [`detection_params`] reads from `detection.local`.
+pub(crate) struct DetectionParams {
+    pub detector_params: DetectorParams,
+    pub report_interval: Duration,
+    /// Whether the detectors take a message's stated accuracy (`use_stated_accuracy`).
+    pub stated_accuracy: bool,
+    /// Whether the research suite judges CRL-refused messages (`judge_revoked`).
+    pub judge_revoked: bool,
+    /// Whether the map-bound check runs (`use_map`).
+    pub map_check: bool,
+    /// The strict US profile's thresholds, when `detection.local` names it.
+    pub us_profile: Option<v2xw_threat::us_mbr::UsMbrParams>,
+    /// The TS 103 759 suite's thresholds, when `detection.local` names it.
+    pub ts_profile: Option<v2xw_threat::ts103759::Ts103759Params>,
+    /// Whether the receivers run the US profile because the list is empty under the US
+    /// system ([`us_default_detector`]).
+    pub default_us: bool,
+}
+
+/// The keys `detection.local[].params` accepts that the host reads rather than the suite.
+pub const HOST_PARAM_KEYS: [&str; 4] = [
+    "report_interval_s",
+    "use_stated_accuracy",
+    "use_map",
+    "judge_revoked",
+];
+
+/// The keys `detection.local[].params` accepts besides `report_interval_s`: exactly the
+/// names [`apply_detector_param`] reads.
+pub const DETECTOR_PARAM_KEYS: [&str; 16] = [
+    "consistency_threshold_m",
+    "heading_threshold_deg",
+    "detector_lag_s",
+    "z_threshold",
+    "min_consecutive",
+    "sybil_min_certs",
+    "sybil_cell_m",
+    "art_max_m",
+    "max_accel_mps2",
+    "stale_max_s",
+    "heading_min_speed_mps",
+    "heading_min_disp_m",
+    "heading_bearing_bound",
+    "offroad_confidence_bound",
+    "heading_straight_tol_deg",
+    "heading_baseline_max_s",
+];
+
+/// The detector-suite parameters `detection.local[].params` may override, by name.
+fn apply_detector_param(p: &mut DetectorParams, key: &str, v: f64) -> bool {
+    match key {
+        "consistency_threshold_m" => p.consistency_threshold_m = v,
+        "heading_threshold_deg" => p.heading_threshold_deg = v,
+        "detector_lag_s" => p.detector_lag_s = v,
+        "z_threshold" => p.z_threshold = v,
+        "min_consecutive" => p.min_consecutive = v.round().max(1.0) as u32,
+        "sybil_min_certs" => p.sybil_min_certs = v.round().max(1.0) as u32,
+        "sybil_cell_m" => p.sybil_cell_m = v,
+        "art_max_m" => p.art_max_m = v,
+        "max_accel_mps2" => p.max_accel_mps2 = v,
+        "stale_max_s" => p.stale_max_s = v,
+        "heading_min_speed_mps" => p.heading_min_speed_mps = v,
+        "heading_min_disp_m" => p.heading_min_disp_m = v,
+        "heading_bearing_bound" => p.heading_bearing_bound = v != 0.0,
+        "offroad_confidence_bound" => p.offroad_confidence_bound = v != 0.0,
+        "heading_straight_tol_deg" => p.heading_straight_tol_deg = v,
+        "heading_baseline_max_s" => p.heading_baseline_max_s = v,
+        _ => return false,
+    }
+    true
+}
+
+impl Phase2 {
+    /// The sizes of the collections this path keeps, by name, for a long run's growth
+    /// census ([`crate::Engine::census`]). A diagnostic: nothing reads it back.
+    pub fn census(&self, out: &mut Vec<(&'static str, u64)>) {
+        let n = |v: usize| v as u64;
+        out.push(("scms.providers", n(self.runs.len())));
+        let st = &self.home().state;
+        let k = &self.home().kernel;
+        out.extend([
+            ("p2.creds_nodes", n(self.creds.len())),
+            ("p2.creds_total", n(self.creds.values().map(Vec::len).sum())),
+            ("p2.by_digest", n(self.by_digest.len())),
+            ("p2.detectors", n(self.detectors.len())),
+            ("p2.filed", n(self.filed.len())),
+            ("p2.checked_at", n(self.checked_at.len())),
+            ("p2.rsu_crl_modelled", n(self.rsu_crl_modelled.len())),
+            ("p2.forwarded", n(self.forwarded.len())),
+            ("p2.in_flight", n(self.in_flight.len())),
+            ("p2.queue", n(self.queue.len())),
+            ("p2.cases", n(self.cases.len())),
+            ("p2.nodes", n(self.nodes.len())),
+            ("p2.link_claims", n(self.link_claims.len())),
+            ("p2.judged_evidence", n(self.judged_evidence.len())),
+            ("p2.broadcast_accuracy", n(self.broadcast_accuracy.len())),
+            ("p2.evidence", n(self.evidence.len())),
+            ("p2.privacy_chains", n(self.privacy_chains.len())),
+            ("p2.privacy_tracked", n(self.privacy_tracked.len())),
+            ("p2.privacy_heard", n(self.privacy_heard.len())),
+            ("p2.blocks", n(self.blocks.len())),
+            ("scms.devices", n(st.devices.len())),
+            (
+                "scms.device_creds",
+                n(st.devices.values().map(|d| d.credentials.len()).sum()),
+            ),
+            (
+                "scms.device_crl",
+                n(st.devices.values().map(|d| d.crl.len()).sum()),
+            ),
+            ("scms.ra_requests", n(st.ra.requests.len())),
+            ("scms.ra_enrolled", n(st.ra.enrolled.len())),
+            ("scms.pca_issued", n(st.pca.issued.len())),
+            ("scms.la0_chains", n(st.la[0].chains.len())),
+            ("scms.ma_reports", n(st.ma.reports.len())),
+            ("scms.crlg_entries", n(st.crlg.entries.len())),
+            ("scms.crl_store_entries", n(st.crl_store.entries.len())),
+            // Every provider's, since the two keys above are the home provider's alone: a
+            // revocation under provider-b's CRACA leaves them at 0.
+            (
+                "scms.crlg_entries_all",
+                n(self.runs.iter().map(|r| r.state.crlg.entries.len()).sum()),
+            ),
+            (
+                "scms.crl_store_entries_all",
+                n(self
+                    .runs
+                    .iter()
+                    .map(|r| r.state.crl_store.entries.len())
+                    .sum()),
+            ),
+            ("scms.issued_enrolment", n(st.issued_enrolment.len())),
+            ("scms.kernel_stages", n(k.stages.stamps().len())),
+            ("scms.kernel_steps", n(k.steps.len())),
+            ("scms.kernel_ops", n(k.ops.len())),
+        ]);
+        if let Some(etsi) = self.etsi.as_ref() {
+            out.extend([
+                ("etsi.enrolled", n(etsi.enrolled.len())),
+                ("etsi.tickets", n(etsi.tickets.len())),
+            ]);
+        }
+    }
+
+    /// Builds the Phase 2 state a scenario declared, or `None` when it declared none.
+    ///
+    /// # Errors
+    /// [`EngineError::Scenario`] when the scenario names a protocol, a detector, an
+    /// attacker model, a pipeline, a link model or a world site this build does not have.
+    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::field_reassign_with_default,
+        reason = "reads as the default with the one setting the case changes"
+    )]
+    pub fn build(scenario: &Scenario, world: &World) -> Result<Option<Phase2>> {
+        let protocol = scenario
+            .actors
+            .backend
+            .protocol
+            .clone()
+            .or_else(|| scenario.security.protocol.as_ref().map(|c| c.id.clone()));
+        let wants_backend = protocol.is_some();
+        if scenario.security.scms.is_some() && protocol.as_deref() != Some(CAMP_SCMS) {
+            return Err(conflict(
+                "security.scms",
+                format!(
+                    "describes an SCMS deployment, and this run's credential protocol is \
+                     {}; set security.protocol to {CAMP_SCMS} or remove security.scms",
+                    protocol.as_deref().unwrap_or("none")
+                ),
+            ));
+        }
+        let wants_rsus = !scenario.actors.rsus.is_empty();
+        let wants_threats = !scenario.threats.attackers.is_empty();
+        let wants_detection = !scenario.detection.local.is_empty();
+        if !(wants_backend || wants_rsus || wants_threats || wants_detection) {
+            return Ok(None);
+        }
+
+        if let (Some(a), Some(b)) = (
+            scenario.actors.backend.protocol.as_ref(),
+            scenario.security.protocol.as_ref(),
+        ) && *a != b.id
+        {
+            return Err(conflict(
+                "security.protocol",
+                format!(
+                    "names {} but actors.backend.protocol names {a}; one deployment runs one \
+                     credential protocol",
+                    b.id
+                ),
+            ));
+        }
+        if let Some(protocol) = &protocol
+            && protocol != CAMP_SCMS
+            && protocol != ETSI_PKI
+        {
+            return Err(conflict(
+                "security.protocol",
+                format!(
+                    "{protocol} is not a credential protocol this build ships; \
+                     {CAMP_SCMS} or {ETSI_PKI}"
+                ),
+            ));
+        }
+
+        // The host's defaults differ from the suite's legacy ones in two places, both the
+        // confidence-range tolerance of CaTch (Kamel et al. 2019); see `detection_params`.
+        let DetectionParams {
+            detector_params,
+            report_interval,
+            stated_accuracy,
+            judge_revoked,
+            map_check,
+            us_profile,
+            ts_profile,
+            default_us,
+        } = detection_params(scenario)?;
+        let ma = MaHost::from_scenario(scenario)?;
+
+        let access = BackendAccess::from_scenario(scenario)?;
+
+        let mut rsus = Vec::new();
+        for spec in &scenario.actors.rsus {
+            let position = match (spec.site, spec.position_m) {
+                (Some(site), None) => {
+                    let site = world.sites.get(site as usize).ok_or_else(|| {
+                        conflict(
+                            "actors.rsus[].site",
+                            format!(
+                                "site {site} does not exist: this world has {} \
+                                 infrastructure site(s). The OSM importer produces none, so a \
+                                 scenario on an imported city states `position_m` instead; \
+                                 the procedural generator produces one site per junction \
+                                 with `rsu_at_junctions: true`.",
+                                world.sites.len()
+                            ),
+                        )
+                    })?;
+                    site.antenna_position()
+                }
+                (None, Some(p)) => Vec3::new(p[0], p[1], p[2] + RSU_MAST_HEIGHT_M),
+                _ => {
+                    return Err(conflict(
+                        "actors.rsus[]",
+                        "a roadside unit stands either at a world `site` or at an explicit \
+                         `position_m`; give exactly one",
+                    ));
+                }
+            };
+            rsus.push(RsuSpec {
+                position,
+                roles: spec.roles.clone(),
+                // The Commsignia ITS-RS4 by default: of the two RSU profiles that ship it is
+                // the one whose datasheet publishes a verification rate (>2,000/s).
+                // The Cohda MK5 RSU brief publishes no compute figure at all, so a unit on
+                // it could price no verification and dropped every frame it heard as a
+                // verification-queue overflow — it received, but it never saw a message.
+                profile: spec
+                    .profile
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_RSU_PROFILE.to_string()),
+                backhaul: access
+                    .backhaul_with(spec.backhaul.as_deref(), spec.backhaul_params.as_ref())?,
+            });
+        }
+
+        let mut specs = Vec::new();
+        // An `attack.wave` on the timeline is the schedule of every population it names
+        // (`crate::timeline::attack_windows`): the population acts inside the wave and not
+        // outside it. The threat crate's `AttackSchedule` carries one window, which is why
+        // `validate` refuses a population named by two waves.
+        let waves = crate::timeline::attack_windows(scenario);
+        let playground = playground_of(world);
+        for (population, a) in scenario.threats.attackers.iter().enumerate() {
+            let f2md = f2md_params(&a.id, &a.params, playground)?;
+            let poison = poison_params(&a.id, &a.params)?;
+            let evasion = evasion_params(&a.id, &a.params)?;
+            let kind = match &evasion {
+                _ if f2md.is_some() || poison.is_some() => Some(AttackKind::ConstPos),
+                Some((k, _, _)) => Some(*k),
+                None => {
+                    a.id.strip_prefix("threat/attacker/legacy/")
+                        .and_then(AttackKind::parse)
+                }
+            };
+            let kind = kind.ok_or_else(|| {
+                conflict(
+                    "threats.attackers[].id",
+                    format!(
+                        "{} is not an attacker this build ships: the legacy family is \
+                                 `threat/attacker/legacy/<Kind>`, e.g. \
+                                 threat/attacker/legacy/ConstPos, the evasion family \
+                                 `threat/attacker/evasion/BenignClassMimic`, and the insider \
+                                 report poisoner `threat/attacker/insider/ReportPoisoning`",
+                        a.id
+                    ),
+                )
+            })?;
+            if let Some(why) = unrendered(kind) {
+                return Err(conflict(
+                    "threats.attackers[].id",
+                    format!(
+                        "{} is in the catalogue, but this engine does not put it on the air \
+                         yet: {why}. Running it would count lies nobody could hear.",
+                        a.id
+                    ),
+                ));
+            }
+            let (params, disguise) = match evasion {
+                _ if f2md.is_some() || poison.is_some() => (LegacyAttackerParams::new(kind), None),
+                Some((_, d, p)) => (p, Some(d)),
+                None => (attacker_params(kind, &a.params)?, None),
+            };
+            let horizon = (scenario.time.duration_s * 1e9).round().max(0.0) as u64;
+            let (from, to) = match (waves.get(&population), &a.schedule) {
+                (Some((from_s, to_s)), _) => (
+                    (from_s * 1e9).round().max(0.0) as u64,
+                    (to_s * 1e9).round().max(0.0) as u64,
+                ),
+                (None, Some(w)) => (
+                    (w.from_s * 1e9).round().max(0.0) as u64,
+                    (w.to_s * 1e9).round().max(0.0) as u64,
+                ),
+                (None, None) => (0, horizon),
+            };
+            specs.push(AttackerSpec {
+                id: a.id.clone(),
+                params,
+                disguise,
+                f2md,
+                poison,
+                count: a.count,
+                fraction: a.fraction,
+                actor_ids: a.actor_ids.iter().copied().collect(),
+                from,
+                to,
+            });
+        }
+
+        let compromised_specs = compromised_rsu_specs(scenario)?;
+        let params = LifecycleParams::from_scenario(scenario)?;
+        let mut scms_params = params.scms;
+        apply_backend_net(scenario, &mut scms_params)?;
+        // A hybrid `security.signature` is the credential system's scheme too: every
+        // certificate and every signed backend message carries the post-quantum half, and
+        // every entity pays for it (`v2xw_proto::hybrid`).
+        // A post-quantum `security.kem` wraps every key encrypted to the PCA or a device;
+        // `security.threshold` puts committees in place of single authorities; and
+        // `actors.backend.failures` takes servers down (`crate::crypto_config`).
+        let kem = crate::crypto_config::kem_spec(scenario);
+        let hybrid = v2xw_proto::HybridScheme::from_signature(&scenario.security.signature)
+            .map(|h| h.with_kem(kem.as_ref()));
+        scms_params.hybrid = hybrid;
+        scms_params.kem = kem;
+        scms_params.threshold = crate::crypto_config::threshold_deployment(scenario)?;
+        let deployment = deployment_of(scenario, protocol.as_deref() == Some(CAMP_SCMS))?;
+        // Under the US message set, a privileged vehicle signs its SRM with an
+        // OBU identification certificate ([CAMP122] Table 1 row 44: PSIDs BSM and
+        // `traffic-signal-request`), so the pseudonym certificates every vehicle holds
+        // permit no SRM, and a receiver refuses one signed under a pseudonym
+        // (`psid-not-permitted`, IEEE 1609.2 §5.2).
+        let identification = protocol.as_deref() == Some(CAMP_SCMS)
+            && !crate::wiring::etsi_facilities(scenario)
+            && deployment.options.identification_certs;
+        if identification {
+            let srm = v2xw_msg::registry::psid(v2xw_msg::MsgType::Srm, false);
+            let kept: Vec<u64> = scms_params
+                .pdu
+                .pseudonym_psids
+                .as_slice()
+                .iter()
+                .copied()
+                .filter(|p| *p != srm)
+                .collect();
+            scms_params.pdu.pseudonym_psids = v2xw_proto::scms::params::PsidList::of(&kept);
+        }
+        // The rules every provider starts from, before its own CRL publication rule.
+        let base_params = scms_params;
+        apply_crl_publication(scenario, &deployment, &mut scms_params);
+        let mut scms = ScmsRun::new_deployed(scms_params, 0, deployment).map_err(|e| {
+            conflict(
+                "actors.backend",
+                format!("the SCMS deployment refused to start: {e}"),
+            )
+        })?;
+        apply_backend_topology(scenario, &mut scms)?;
+        // Each failure goes to the run of the provider that hosts its node: that run
+        // delivers to the node (its own flows, and the MA-to-MA reports other providers
+        // share with it), so its fault plan is the one that must hold them. Before this a
+        // failure could only name the home provider's servers.
+        let faults = crate::crypto_config::backend_faults(scenario, &scms)?;
+        let fault_of = |k: usize| -> Vec<v2xw_proto::fault::Fault> {
+            faults
+                .iter()
+                .filter(|(p, _)| *p == k)
+                .map(|(_, f)| *f)
+                .collect()
+        };
+        scms.set_faults(fault_of(0));
+        // One run per provider: every other provider's run is built from the
+        // home one, on the same CTL, electors and clock, under its own PKI and seed.
+        let mut runs = Vec::with_capacity(scms.state.deployment.providers.len());
+        for k in 1..scms.state.deployment.providers.len() {
+            let mut peer = ScmsRun::new_peer(&scms, k).map_err(|e| {
+                conflict(
+                    "security.scms.deployment",
+                    format!("provider {k}'s backend refused to start: {e}"),
+                )
+            })?;
+            peer.set_faults(fault_of(k));
+            runs.push(peer);
+        }
+        runs.insert(0, scms);
+        // Under modelled signatures the evidence's BSM signatures are the modelled
+        // backend's tokens, so every MA checks them as a modelled receiver does.
+        let modelled_sigs =
+            scenario.security.crypto_mode == crate::scenario::CryptoModeSpec::Modeled;
+        for r in &mut runs {
+            r.set_evidence_signatures_modelled(modelled_sigs);
+        }
+        // Server capacity per role, on every provider's run.
+        crate::scms_topology::apply_capacity(scenario, &mut runs)?;
+        // Random outages and service-time variation, after the failures and
+        // the capacity (each replaces what this sets). Off unless a key is set.
+        crate::crypto_config::apply_service_models(
+            scenario,
+            &mut runs,
+            scenario.seed,
+            scenario.time.horizon_ns(),
+        );
+        // Per provider: its own CRL publication rule, and its own MA mode when
+        // the scenario names one for it (`providers[].ma_mode`; otherwise the run-wide
+        // `ma_review_s` rule applies to every provider).
+        let explicit_ma: BTreeSet<String> = scenario
+            .security
+            .scms
+            .as_ref()
+            .and_then(|s| s.deployment.as_ref())
+            .map(|d| {
+                d.providers
+                    .iter()
+                    .filter(|p| p.ma_mode.is_some())
+                    .map(|p| p.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (k, run) in runs.iter_mut().enumerate() {
+            let p = &mut run.state.params;
+            p.crl.business_day_sla = base_params.crl.business_day_sla;
+            p.publish_on_cadence = base_params.publish_on_cadence;
+            let deployment = run.state.deployment.clone();
+            apply_crl_publication_of(scenario, &deployment, k, &mut run.state.params);
+            if let Some(prov) = deployment.providers.get(k)
+                && explicit_ma.contains(&prov.name)
+            {
+                run.state.params.ma.mode = prov.ma_mode;
+            }
+        }
+        // The MA policy's decision mode, where a policy states one.
+        crate::ma_policy::apply_decision(scenario, &mut runs)?;
+        // Every CRACA's CRL exists before the run: the real deployment has
+        // published weekly since long before `t0` ([1609.2] `nextCrl`; a device stops
+        // trusting a CRACA two weeks past it, [CAMP122] Table 67 `overdue_CRL_tolerance`),
+        // so each provider's CRL Generator signs its list at `t0`, empty when nothing
+        // stands on it, and renews it on its `nextCrl` from then on. Before this a
+        // Generator published nothing until its first revocation, so the overdue rule
+        // could never act on a CRACA that had not revoked in the run. The home
+        // provider's list also carries the revocations of earlier years
+        // (`crl_background_entries`, default 0), so every download is charged their
+        // encoded bytes and every receiver checks against them. Seeded after each
+        // provider's publication rule is set, so the renewal follows that rule.
+        let standing = LifecycleParams::background_entries(scenario);
+        for (k, run) in runs.iter_mut().enumerate() {
+            run.seed_standing_crl(if k == 0 { standing } else { 0 });
+        }
+        let prerun_crl = {
+            let entries: Vec<CrlLinkageEntry> = runs
+                .iter()
+                .flat_map(|r| r.state.crl_store.entries.iter().copied())
+                .collect();
+            (
+                u32::try_from(entries.len()).unwrap_or(u32::MAX),
+                runs.iter()
+                    .map(|r| u64::from(r.state.crl_store.versions))
+                    .sum(),
+                entries,
+                runs.iter()
+                    .filter_map(|r| r.state.crl_store.secured.as_ref())
+                    .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+                    .collect(),
+            )
+        };
+        let seeded_serial: Vec<u32> = runs.iter().map(|r| r.state.crl_store.versions).collect();
+        // The deployment sets the elector count and quorum and, under the region model,
+        // the intra-region backend latency.
+        let params = LifecycleParams {
+            scms: runs[0].state.params,
+            ..params
+        };
+        let etsi = if protocol.as_deref() == Some(ETSI_PKI) {
+            let ep = v2xw_proto::etsi::ts102941::EtsiParams {
+                decide_on_report: false,
+                at_validity: params.scms.cert_lifetime,
+                butterfly_batch: params.jmax,
+                hybrid,
+                kem,
+                ..v2xw_proto::etsi::ts102941::EtsiParams::default()
+            };
+            let mut run = v2xw_proto::etsi::ts102941::EtsiRun::new(ep).map_err(|e| {
+                conflict(
+                    "security.protocol",
+                    format!("the ETSI deployment refused to start: {e}"),
+                )
+            })?;
+            // The TLM's ECTL and the Root CA's CA-CRL exist before any station asks for
+            // them: both are signed once, at the start, and served by the Distribution
+            // Centre to every station that fetches (TS 102 941 §6.3).
+            run.issue_trust_lists(0);
+            Some(run)
+        } else {
+            None
+        };
+        // Every message of every backend flow rides the run's access model: the kernels
+        // ask the carrier for each one's arrival (`backend::Carrier`).
+        // Under the region latency model each provider's device legs also cross the
+        // internet from the scenario's city to that provider's region (ASSUMPTION).
+        for (k, run) in runs.iter_mut().enumerate() {
+            let leg =
+                run.state
+                    .deployment
+                    .city_latency(k, world.origin.lat_deg, world.origin.lon_deg);
+            match leg {
+                Some(extra) => {
+                    run.set_path_oracle(std::sync::Arc::new(std::sync::Mutex::new(InternetLeg {
+                        inner: access.oracle(),
+                        extra,
+                    })))
+                }
+                None => run.set_path_oracle(access.oracle()),
+            }
+        }
+        let providers = runs.len();
+        let component_revocation = {
+            let names: Vec<String> = runs
+                .first()
+                .map(|r| {
+                    r.state
+                        .deployment
+                        .providers
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            component_revocation_of(scenario, &params, &names)?
+        };
+        let internet_legs: Vec<Duration> = (0..providers)
+            .map(|k| {
+                runs[0]
+                    .state
+                    .deployment
+                    .city_latency(k, world.origin.lat_deg, world.origin.lon_deg)
+                    .unwrap_or(Duration::ZERO)
+            })
+            .collect();
+        let mut etsi = etsi;
+        if let Some(e) = etsi.as_mut() {
+            e.set_path_oracle(access.oracle());
+        }
+        Ok(Some(Phase2 {
+            runs,
+            device_provider: BTreeMap::new(),
+            fleet_seed: scenario.seed,
+            crl_feeds: vec![Vec::new(); providers],
+            prerun_crl,
+            backend_now: 0,
+            internet_legs,
+            etsi,
+            blocks: Vec::new(),
+            params,
+            access,
+            creds: BTreeMap::new(),
+            by_digest: BTreeMap::new(),
+            truth_hook: TruthHook::None,
+            rsus,
+            rsu_nodes: Vec::new(),
+            camp: protocol.as_deref() == Some(CAMP_SCMS),
+            rsu_cycle: BTreeMap::new(),
+            rsu_crl_modelled: BTreeMap::new(),
+            identification,
+            ident_cycle: BTreeMap::new(),
+            mbms_next: 0,
+            composite_sizes: BTreeMap::new(),
+            specs,
+            attackers: BTreeMap::new(),
+            detectors: BTreeMap::new(),
+            detector_params,
+            us_profile,
+            ts_profile,
+            // Under the US system an empty `detection.local` runs SM-MBR.
+            detection_on: wants_detection || default_us,
+            stated_accuracy,
+            judge_revoked,
+            // A world with no motor-vehicle lane (a fixture, an empty extract) gives the
+            // receivers no map rather than one on which every claim is off the road.
+            map_check: map_check
+                && world
+                    .roads
+                    .lanes()
+                    .iter()
+                    .any(|l| l.admits(RoadMap::vehicles())),
+            report_interval,
+            // A provider with its own `ma_policy` hosts it.
+            ma: crate::ma_policy::hosts(scenario, ma, providers)?,
+            vehicles: 0,
+            filed: BTreeMap::new(),
+            checked_at: BTreeMap::new(),
+            next_table_prune: 0,
+            retired_since_prune: Vec::new(),
+            table_prune: true,
+            forwarded: BTreeSet::new(),
+            in_flight: BTreeMap::new(),
+            share_unverified: false,
+            forge_brakes: false,
+            evidence: BTreeMap::new(),
+            evidence_final: BTreeMap::new(),
+            judged_evidence: BTreeMap::new(),
+            forged_reports: BTreeSet::new(),
+            superseded_root: None,
+            pki_changeover: false,
+            rsu_case_installs: BTreeSet::new(),
+            factory_ctl_seq: None,
+            factory_trust: None,
+            removed_peer: None,
+            component_revocation,
+            eac_requested: [false; 5],
+            test_ballot_at: None,
+            service_models: crate::crypto_config::service_models_set(scenario),
+            stage_cursor: vec![0; providers],
+            step_cursor: vec![0; providers],
+            queue: vec![VecDeque::new(); providers],
+            cases: Vec::new(),
+            published: vec![0; providers],
+            published_serial: vec![0; providers],
+            seeded_serial,
+            broadcast_version: 0,
+            nodes: BTreeMap::new(),
+            revocation: None,
+            report: Phase2Report {
+                signature_scheme: scenario.security.signature.clone(),
+                signature_mode: v2xw_sec::scheme::signature(&scenario.security.signature)
+                    .map_or("classical", |x| x.mode.as_str())
+                    .to_string(),
+                kem_scheme: scenario.security.kem.clone(),
+                local_suite: local_suite_id(scenario).to_string(),
+                ..Phase2Report::default()
+            },
+            observer: v2xw_threat::PrivacyObserver::cited_defaults(NodeId::new(u32::MAX)),
+            link_claims: Vec::new(),
+            tracker: EdgeTracker::default(),
+            peer_trackers: Vec::new(),
+            next_view: 0,
+            pki: pki_view_of(scenario).then(v2xw_proto::scms::pki_view::PkiTracker::default),
+            report_log: (report_records_of(scenario)
+                || crate::dataset_records::dataset_requested(scenario))
+            .then(ReportLog::default),
+            dataset: crate::dataset_records::dataset_requested(scenario).then(|| {
+                Box::new(DatasetMa {
+                    rule: scenario
+                        .detection
+                        .ma
+                        .as_ref()
+                        .map(|m| m.id.clone())
+                        .unwrap_or_default(),
+                    ..DatasetMa::default()
+                })
+            }),
+            views: 0,
+            last_views: LastViews::default(),
+            compromised_specs,
+            compromised: BTreeMap::new(),
+            compromised_nodes: BTreeMap::new(),
+            first_falsified: BTreeMap::new(),
+            first_on_air: BTreeMap::new(),
+            first_detected: BTreeMap::new(),
+            first_reported: BTreeMap::new(),
+            decided: BTreeMap::new(),
+            attacker_lies: BTreeMap::new(),
+            attacker_reports: BTreeMap::new(),
+            attacker_at_ma: BTreeMap::new(),
+            attacker_peak_events: BTreeMap::new(),
+            first_evidence: BTreeMap::new(),
+            revoked_devices: BTreeSet::new(),
+            retired_at: Vec::new(),
+            retired_store_deletions: (0, 0),
+            ee_tally: Vec::new(),
+            ma_decided_devices: BTreeSet::new(),
+            broadcast_accuracy: BTreeMap::new(),
+            broadcast_frame: BTreeMap::new(),
+            privacy_chains: BTreeMap::new(),
+            privacy_tracked: BTreeMap::new(),
+            privacy_across: BTreeSet::new(),
+            privacy_heard: BTreeMap::new(),
+        }))
+    }
+
+    /// The lifecycle parameters in force.
+    #[must_use]
+    pub fn params(&self) -> &LifecycleParams {
+        &self.params
+    }
+
+    /// The home provider's SCMS run (read-only): its components' state, every emitted
+    /// SPDU and refusal, the governance entities and the stage log, for the tests and
+    /// for an attack study that inspects what the backend saw. Every provider's run is
+    /// [`Phase2::scms_runs`], a node's own [`Phase2::scms_of_node`].
+    #[must_use]
+    pub fn scms(&self) -> &ScmsRun {
+        self.home()
+    }
+
+    /// Every provider's SCMS run, in deployment order.
+    #[must_use]
+    pub fn scms_runs(&self) -> &[ScmsRun] {
+        &self.runs
+    }
+
+    /// Each provider's MA, in deployment order (`crate::ma_hook::attach`).
+    pub(crate) fn ma_hosts_mut(&mut self) -> &mut [MaHost] {
+        &mut self.ma
+    }
+
+    /// Every vehicle's top-up still open, as `(provider, flow run, when it began)`: what a
+    /// test reads to see that no request an outage dropped was left unanswered.
+    #[must_use]
+    pub fn open_topups(&self) -> Vec<(usize, FlowRun, SimTime)> {
+        self.nodes
+            .iter()
+            .filter_map(|(node, n)| {
+                n.topup.map(|run| {
+                    (
+                        self.provider_of_device(device_of(*node)),
+                        run,
+                        n.topup_started,
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The providers' names, in deployment order (empty without a provider run).
+    pub(crate) fn provider_names(&self) -> Vec<String> {
+        self.runs
+            .first()
+            .map(|r| {
+                r.state
+                    .deployment
+                    .providers
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The run of the provider that serves `node` (a vehicle once provisioned, or a
+    /// roadside unit in the certificate cycle); `None` before.
+    #[must_use]
+    pub fn scms_of_node(&self, node: NodeId) -> Option<&ScmsRun> {
+        self.provider_of_node(node).map(|k| &self.runs[k])
+    }
+
+    /// The provider (index in the deployment) that serves `node`'s vehicle, once it is
+    /// provisioned; `None` before.
+    #[must_use]
+    pub fn provider_of_node(&self, node: NodeId) -> Option<usize> {
+        self.device_provider.get(&device_of(node)).copied()
+    }
+
+    /// The home provider's run: the one the SCMS Manager's governance decisions are
+    /// taken on, and the one every node's trust bundle is read from.
+    fn home(&self) -> &ScmsRun {
+        &self.runs[0]
+    }
+
+    /// The provider serving SCMS device `device` (0 until it is assigned).
+    fn provider_of_device(&self, device: NodeId) -> usize {
+        self.device_provider.get(&device).copied().unwrap_or(0)
+    }
+
+    /// What provider `k`'s Backend-view `ee` entity shows of its own devices (U7, BUILD-
+    /// STATUS L1-7, L1-13, L2-7): the vehicles it serves now, its blocklisted top-ups,
+    /// and its devices' reports deleted from the store (quota, age), never filed, and
+    /// refused at the MTU. Summed over providers they are the run report's counters.
+    fn ee_counters(&self, k: usize) -> [(&'static str, u64); 6] {
+        let t = self.ee_tally.get(k).copied().unwrap_or_default();
+        let mine = || {
+            self.nodes
+                .iter()
+                .filter(move |(n, _)| self.provider_of_device(device_of(**n)) == k)
+                .map(|(_, s)| s)
+        };
+        [
+            ("vehicles", mine().count() as u64),
+            ("topups_refused_blocklisted", t.topups_refused_blocklisted),
+            (
+                "reports_evicted",
+                t.retired_evicted + mine().map(|n| n.outbox.0.evicted).sum::<u64>(),
+            ),
+            (
+                "reports_expired",
+                t.retired_expired + mine().map(|n| n.outbox.0.expired).sum::<u64>(),
+            ),
+            ("reports_not_filed", t.reports_not_filed),
+            ("reports_refused_mtu", t.reports_refused_mtu),
+        ]
+    }
+
+    /// The vehicles (and personal devices) the backend serves now, ascending.
+    #[must_use]
+    pub fn vehicle_nodes(&self) -> Vec<NodeId> {
+        self.nodes.keys().copied().collect()
+    }
+
+    /// The `ee` counters of the provider serving `node` (U7).
+    fn ee_tally_of(&mut self, node: NodeId) -> &mut EeTally {
+        let k = self.provider_of_device(device_of(node));
+        if self.ee_tally.len() <= k {
+            self.ee_tally.resize(k + 1, EeTally::default());
+        }
+        &mut self.ee_tally[k]
+    }
+
+    /// The run of the provider serving SCMS device `device`.
+    fn run_of(&self, device: NodeId) -> &ScmsRun {
+        &self.runs[self.provider_of_device(device)]
+    }
+
+    /// The run of the provider serving SCMS device `device`, mutably.
+    fn run_of_mut(&mut self, device: NodeId) -> &mut ScmsRun {
+        let k = self.provider_of_device(device);
+        &mut self.runs[k]
+    }
+
+    /// The roadside units to create, in declaration order.
+    pub fn rsu_specs(&self) -> &[RsuSpec] {
+        &self.rsus
+    }
+
+    /// Records the node id the engine gave one roadside unit; `app_psids` are the PSIDs of
+    /// the applications it runs ([`crate::wiring::rsu_app_psids`]), which its application
+    /// certificate is requested for.
+    pub fn note_rsu(&mut self, node: NodeId, app_psids: &[u64]) {
+        let index = self.rsu_nodes.len();
+        self.rsu_nodes.push(node);
+        self.report.rsus += 1;
+        if let Some(spec) = self.rsus.get(index) {
+            self.access.register_rsu(node, spec.backhaul, spec.position);
+        }
+        if self.compromised_specs.contains_key(&index) {
+            self.compromised_nodes.insert(node, index);
+            self.report.compromised_rsus += 1;
+        }
+        self.join_rsu_cycle(node, index, app_psids);
+    }
+
+    /// Puts roadside unit `node` into its provider's application-certificate cycle:
+    /// enrolled and issued this week's certificate before the run (and next
+    /// week's when its backhaul is up), then renewing weekly over its own backhaul line.
+    /// Only under the SCMS with its PDU layer; otherwise the unit keeps the factory
+    /// certificate (`wiring::bootstrap_credentials`).
+    fn join_rsu_cycle(&mut self, node: NodeId, index: usize, app_psids: &[u64]) {
+        if !self.camp || self.etsi.is_some() {
+            return;
+        }
+        // The post-quantum profile has no PDU layer (no PQ encoding is standardised), so
+        // the unit cannot join the cycle; it still fetches the CRL as every end entity
+        // does (1609.2.1 §6.3.5.7), modelled as the vehicles' is, so that a unit refuses
+        // a revoked sender under PQ as it does under P-256.
+        if self.home().state.pki.is_none() {
+            self.rsu_crl_modelled.insert(node, (0, 0));
+            return;
+        }
+        let Some(spec) = self.rsus.get(index) else {
+            return;
+        };
+        let bh = spec.backhaul;
+        let device = device_of(node);
+        // The seeded fleet split, the same draw the factory used for this unit.
+        let k = self
+            .home()
+            .state
+            .deployment
+            .provider_of(self.fleet_seed, u64::from(node.index()));
+        self.device_provider.insert(device, k);
+        let now = self.backend_now;
+        let run = &mut self.runs[k];
+        run.add_rsu_with(
+            device,
+            v2xw_proto::Link {
+                latency: bh.latency,
+                bandwidth_bps: bh.bandwidth_bps,
+                transport: Transport::RsuBackhaul,
+            },
+        );
+        if !bh.connected {
+            run.set_backhaul_outage(device, now, SimTime::MAX);
+        }
+        // The certificate permits what the unit's applications sign: SPaT and MAP, the
+        // signal status it answers requests with, its own CPMs. With SPaT/MAP alone every
+        // receiver refused a unit's SSM and CPM (1609.2 §5.2, `psid-not-permitted`), and
+        // on the ETSI stack its SPATEM/MAPEM too (ITS-AIDs 137/138, not 0x82).
+        run.set_app_psids(device, app_psids);
+        if let Err(e) = run.preload_app_cert(
+            device,
+            v2xw_proto::scms::appcert::AppCertKind::RsuApplication,
+            now,
+            bh.connected,
+        ) {
+            self.report.backend_errors += 1;
+            if self.report.first_backend_error.is_empty() {
+                self.report.first_backend_error =
+                    format!("roadside unit {node:?}'s pre-run certificate: {e}");
+            }
+        }
+        self.rsu_cycle.insert(node, RsuCycle::default());
+        self.report.rsus_in_cert_cycle += 1;
+    }
+
+    /// Whether roadside unit `node` signs only with certificates from the cycle.
+    #[must_use]
+    pub fn rsu_in_cert_cycle(&self, node: NodeId) -> bool {
+        self.rsu_cycle.contains_key(&node)
+    }
+
+    /// The application certificates the SCMS installed since the engine last asked, per
+    /// roadside unit (or for `only`), for the engine to put into each node.
+    pub fn rsu_app_installs(&mut self, only: Option<NodeId>) -> Vec<(NodeId, Vec<RsuAppCred>)> {
+        let mut out = Vec::new();
+        let nodes: Vec<NodeId> = self
+            .rsu_cycle
+            .keys()
+            .copied()
+            .filter(|n| only.is_none_or(|o| o == *n))
+            .collect();
+        for node in nodes {
+            let device = device_of(node);
+            let handed = self.rsu_cycle[&node].handed;
+            let run = self.run_of(device);
+            let Some(pki) = run.state.pki.as_ref() else {
+                continue;
+            };
+            let all = run.app_installed(device);
+            if all.len() <= handed {
+                continue;
+            }
+            let creds: Vec<RsuAppCred> = all[handed..]
+                .iter()
+                .filter_map(|c| {
+                    Some(RsuAppCred {
+                        period: c.cred.period,
+                        valid_from: c.from,
+                        valid_until: c.until,
+                        key: app_cred_key(pki, c)?,
+                        preloaded: c.at == 0,
+                    })
+                })
+                .collect();
+            let n = all.len();
+            if let Some(c) = self.rsu_cycle.get_mut(&node) {
+                c.handed = n;
+            }
+            for c in &creds {
+                if c.preloaded {
+                    self.report.rsu_app_certs_preloaded += 1;
+                } else {
+                    self.report.rsu_app_certs_renewed += 1;
+                }
+            }
+            out.push((node, creds));
+        }
+        out
+    }
+
+    /// Whether emergency vehicles hold OBU identification certificates in this run:
+    /// the SCMS with its PDU layer under the US message set, with
+    /// `security.scms.deployment.options.identification_certs` on (the default).
+    #[must_use]
+    pub fn identification_on(&self) -> bool {
+        self.identification && self.etsi.is_none() && self.home().state.pki.is_some()
+    }
+
+    /// Issues an emergency vehicle its OBU identification certificates before it joins
+    /// ([CAMP122] Table 1 row 44): the month `now` falls in, and the next one
+    /// when its request time is already past (the vehicle's cellular link was up before
+    /// the run), through the real request, ACA issuance and download, signed with the
+    /// enrolment certificate [`Phase2::provision`] gave it. The cycle then renews each
+    /// month in the run ([`Phase2::identification_installs`]). Nothing happens unless
+    /// [`Phase2::identification_on`], or for a vehicle the SCMS did not provision.
+    pub fn provision_identification(&mut self, node: NodeId, now: SimTime) {
+        if !self.identification_on() {
+            return;
+        }
+        let device = device_of(node);
+        if !self.device_provider.contains_key(&device)
+            || !self
+                .run_of(device)
+                .state
+                .devices
+                .get(&device)
+                .is_some_and(|d| d.enrolment_credential.is_some())
+        {
+            return;
+        }
+        let run = self.run_of_mut(device);
+        if let Err(e) = run.preload_app_cert(
+            device,
+            v2xw_proto::scms::appcert::AppCertKind::ObuIdentification,
+            now,
+            true,
+        ) {
+            self.note_backend_error(&e);
+            return;
+        }
+        self.ident_cycle.insert(node, 0);
+    }
+
+    /// The identification certificates the SCMS installed since the engine last asked,
+    /// per emergency vehicle (or for `only`), for the engine to put into each node's
+    /// identification slot (`wiring::install_identification_certs`). Counts
+    /// `ident_certs_preloaded` and `ident_certs_renewed`.
+    pub fn identification_installs(
+        &mut self,
+        only: Option<NodeId>,
+    ) -> Vec<(NodeId, Vec<crate::wiring::IdentificationCred>)> {
+        let mut out = Vec::new();
+        let nodes: Vec<NodeId> = self
+            .ident_cycle
+            .keys()
+            .copied()
+            .filter(|n| only.is_none_or(|o| o == *n))
+            .collect();
+        for node in nodes {
+            let device = device_of(node);
+            let handed = self.ident_cycle[&node];
+            let run = self.run_of(device);
+            let Some(pki) = run.state.pki.as_ref() else {
+                continue;
+            };
+            let all = run.app_installed(device);
+            if all.len() <= handed {
+                continue;
+            }
+            let mut preloaded = 0u64;
+            let creds: Vec<crate::wiring::IdentificationCred> = all[handed..]
+                .iter()
+                .filter_map(|c| {
+                    preloaded += u64::from(c.at == 0);
+                    Some(crate::wiring::IdentificationCred {
+                        valid_from: c.from,
+                        valid_until: c.until,
+                        key: app_cred_key(pki, c)?,
+                    })
+                })
+                .collect();
+            let n = all.len();
+            self.ident_cycle.insert(node, n);
+            self.report.ident_certs_preloaded += preloaded;
+            self.report.ident_certs_renewed += (n - handed) as u64 - preloaded;
+            out.push((node, creds));
+        }
+        out
+    }
+
+    /// Identification certificates a vehicle's unit refused to install (the import
+    /// check `d·G = e·P_U + Q_ACA`).
+    pub fn note_ident_refused(&mut self, n: u64) {
+        self.report.ident_certs_refused += n;
+    }
+
+    /// The MA withdraws emergency vehicle `node`'s privilege at `at` (acceptance test
+    /// 4): every unexpired identification certificate its provider's ACA issued it goes
+    /// on the series-3 hash CRL at each publication from `at`, and the RA issues it no
+    /// more ([`ScmsRun::revoke_identification`]). Its pseudonyms are untouched (the proto
+    /// layer's labelled ASSUMPTION).
+    ///
+    /// # Errors
+    /// The vehicle holds no identification certificate, or its provider's PKI cannot list
+    /// one (the PDU layer off, no series-3 signer).
+    pub fn revoke_identification(&mut self, node: NodeId, at: SimTime) -> Result<()> {
+        if !self.ident_cycle.contains_key(&node) {
+            return Err(conflict(
+                "phase2.revoke_identification",
+                format!("{node:?} holds no identification certificate"),
+            ));
+        }
+        let device = device_of(node);
+        self.run_of_mut(device)
+            .revoke_identification(device, at)
+            .map_err(|e| conflict("phase2.revoke_identification", e.to_string()))?;
+        self.report.ident_revocations += 1;
+        Ok(())
+    }
+
+    /// The signer digest (`HashedId8`) of every identification certificate handed to an
+    /// emergency vehicle so far, with the vehicle: how a receiver's log names the
+    /// requester of an SRM signed under one.
+    #[must_use]
+    pub fn identification_signers(&self) -> BTreeMap<[u8; 8], NodeId> {
+        let mut out = BTreeMap::new();
+        for (node, handed) in &self.ident_cycle {
+            let device = device_of(*node);
+            for c in self
+                .run_of(device)
+                .app_installed(device)
+                .iter()
+                .take(*handed)
+            {
+                if let Ok(d) = v2xw_sec::sig1609::cert_hashed_id8(&c.cred.cert) {
+                    out.insert(d, *node);
+                }
+            }
+        }
+        out
+    }
+
+    /// `node.credentials` for roadside unit `node`: the
+    /// application certificates its provider issued it, one cell per i-period (`j` 0),
+    /// each certificate's bytes the first time a record carries it, written when the set
+    /// or a state changes. `device` is `rsu/<node>`, so a reader keeps units apart from
+    /// vehicles. `None` when the PKI view is off, under ETSI, or nothing changed. Before,
+    /// no record carried a unit's certificate: the response is sealed to the unit and
+    /// recorded without its plaintext, and `node.credentials` was vehicles only.
+    pub fn rsu_credentials(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+    ) -> Option<v2xw_proto::scms::pki_view::NodeCredentials> {
+        use v2xw_proto::scms::pki_view::{CredCell, NodeCredentials, PKI_VIEW_SCHEMA};
+        if self.etsi.is_some() || self.pki.is_none() || !self.rsu_cycle.contains_key(&node) {
+            return None;
+        }
+        let device = device_of(node);
+        let run = self.run_of(device);
+        let installed = run.app_installed(device);
+        if installed.is_empty() {
+            return None;
+        }
+        let current_i = run.state.params.period_at(now);
+        let provider = v2xw_proto::scms::pki_view::provider_label(run);
+        let cycle = self.rsu_cycle.get(&node)?;
+        let mut held = Vec::with_capacity(installed.len());
+        for c in installed {
+            let Ok(id8) = v2xw_sec::sig1609::cert_hashed_id8(&c.cred.cert) else {
+                continue;
+            };
+            // The certificate of the current i-period signs now: `active`, as a
+            // vehicle's pseudonym in use (the `node.credentials` contract: `active` is
+            // marked in the grid and in the history).
+            let state = if now < c.from {
+                "downloaded"
+            } else if now >= c.until {
+                "expired"
+            } else if c.cred.period == current_i {
+                "active"
+            } else {
+                "valid"
+            };
+            // The bytes only of a certificate no record has carried yet.
+            let coer = (!cycle.certs_carried.contains(&id8))
+                .then(|| v2xw_sec::cert::canonical_coer(&c.cred.cert).ok())
+                .flatten();
+            held.push((c.cred.period, id8, state, coer));
+        }
+        let mut b = Vec::with_capacity(32 + held.len() * 24);
+        b.extend_from_slice(b"v2xw/rsu.credentials/1");
+        b.extend_from_slice(&current_i.to_be_bytes());
+        for (i, id8, state, _) in &held {
+            b.extend_from_slice(&i.to_be_bytes());
+            b.extend_from_slice(id8);
+            b.extend_from_slice(state.as_bytes());
+        }
+        let d = v2xw_core::hash::sha256(&b);
+        let digest = u64::from_be_bytes([d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]]).max(1);
+        if cycle.cred_digest == digest {
+            return None;
+        }
+        let hex = |b: &[u8]| v2xw_core::hash::hex_encode(b);
+        let mut certificates = BTreeMap::new();
+        let mut cells = Vec::with_capacity(held.len());
+        let mut active = None;
+        let c = self.rsu_cycle.get_mut(&node)?;
+        c.cred_digest = digest;
+        for (i, id8, state, coer) in held {
+            if let Some(coer) = coer {
+                c.certs_carried.insert(id8);
+                certificates.insert(hex(&id8), hex(&coer));
+            }
+            if state == "active" {
+                active = Some(hex(&id8));
+                c.certs_used.insert(id8);
+            }
+            cells.push(CredCell {
+                i,
+                j: 0,
+                state: state.to_string(),
+                id8: Some(hex(&id8)),
+                used: c.certs_used.contains(&id8),
+            });
+        }
+        let history = c.certs_used.iter().map(|d| hex(d)).collect();
+        Some(NodeCredentials {
+            schema: PKI_VIEW_SCHEMA,
+            t: now,
+            node: node.index(),
+            device: format!("rsu/{}", node.index()),
+            provider,
+            enrolled: true,
+            enrolment: None,
+            current_i,
+            jmax: 1,
+            active,
+            cells,
+            history,
+            ctl_sequence: None,
+            revoked: false,
+            certificates,
+            departed: false,
+        })
+    }
+
+    /// Counts certificates a roadside unit refused to install.
+    pub fn note_rsu_app_refused(&mut self, n: u64) {
+        self.report.rsu_app_certs_refused += n;
+    }
+
+    /// One roadside-unit step at `now`: whether the unit held a valid application
+    /// certificate. Opens or closes a starvation spell.
+    /// `withheld` is the node's running count of messages it had due and could not sign.
+    pub fn note_rsu_cert(&mut self, node: NodeId, now: SimTime, valid: bool, withheld: u64) {
+        let Some(c) = self.rsu_cycle.get_mut(&node) else {
+            return;
+        };
+        self.report.rsu_messages_withheld += withheld.saturating_sub(c.withheld_seen);
+        c.withheld_seen = c.withheld_seen.max(withheld);
+        if valid {
+            if c.starved_since.take().is_some() {
+                self.report.rsu_starved_ns += now.saturating_sub(c.starved_last);
+            }
+            return;
+        }
+        self.report.rsu_starved_steps += 1;
+        if !c.starved {
+            c.starved = true;
+            self.report.rsus_starved += 1;
+        }
+        if c.starved_since.is_some() {
+            self.report.rsu_starved_ns += now.saturating_sub(c.starved_last);
+        } else {
+            c.starved_since = Some(now);
+        }
+        c.starved_last = now;
+    }
+
+    /// The roadside units in the cycle whose RA now serves a newer composite CRL than
+    /// they installed, and whose backhaul is up: each fetches it (1609.2.1 §6.3.5.7,
+    /// as any end entity) and installs what it verifies.
+    #[must_use]
+    pub fn rsu_crls_due(&self) -> Vec<NodeId> {
+        let connected = |n: NodeId| self.rsu_spec_of(n).is_some_and(|s| s.backhaul.connected);
+        let mut due: Vec<NodeId> = self
+            .rsu_cycle
+            .iter()
+            .filter(|(n, c)| {
+                connected(**n)
+                    && (self.crl_version_for(**n) > c.crl_version
+                        || self.crl_serial_for(**n) > c.crl_serial
+                        || self.ctl_newer_than(c.ctl_seq))
+            })
+            .map(|(n, _)| *n)
+            .collect();
+        due.extend(
+            self.rsu_crl_modelled
+                .iter()
+                .filter(|(n, (version, serial))| {
+                    connected(**n)
+                        && (self.crl_version_for(**n) > *version
+                            || self.crl_serial_for(**n) > *serial)
+                })
+                .map(|(n, _)| *n),
+        );
+        due.sort_unstable();
+        due
+    }
+
+    /// Whether roadside unit `node` fetches a modelled CRL (the post-quantum profile:
+    /// outside the certificate cycle, no signed CRL bytes to verify).
+    #[must_use]
+    pub fn rsu_crl_is_modelled(&self, node: NodeId) -> bool {
+        self.rsu_crl_modelled.contains_key(&node)
+    }
+
+    /// The sum of the publication counts of the lists `node`'s RA serves now.
+    #[must_use]
+    pub fn crl_serial_for(&self, node: NodeId) -> u64 {
+        let h = self.provider_of_device(device_of(node));
+        self.visible_versions(h)
+            .iter()
+            .map(|(_, v)| u64::from(v.serial))
+            .sum()
+    }
+
+    /// The version of the composite CRL `node`'s RA serves now.
+    #[must_use]
+    pub fn crl_version_for(&self, node: NodeId) -> u32 {
+        let h = self.provider_of_device(device_of(node));
+        self.visible_versions(h)
+            .iter()
+            .fold(0u32, |a, (_, v)| a.saturating_add(v.version))
+    }
+
+    /// Roadside unit `node` installed (or refused) composite CRL `version`, whose lists'
+    /// publication counts summed to `serial` when its RA served the file
+    /// ([`Phase2::crl_serial_for`] at the fetch, not at its landing: a list published while
+    /// the download was on the line is not in the file, and the unit fetches it next).
+    pub fn note_rsu_crl_request(&mut self, bytes: u32) {
+        self.report.rsu_crl_requests += 1;
+        self.report.rsu_crl_request_bytes += u64::from(bytes);
+    }
+
+    /// A unit's CRL download landed: `installed`, or refused by its own check.
+    pub fn note_rsu_crl(&mut self, node: NodeId, version: u32, serial: u64, installed: bool) {
+        if let Some(c) = self.rsu_cycle.get_mut(&node) {
+            c.crl_version = c.crl_version.max(version);
+            c.crl_serial = c.crl_serial.max(serial);
+        }
+        if let Some((v, s)) = self.rsu_crl_modelled.get_mut(&node) {
+            *v = (*v).max(version);
+            *s = (*s).max(serial);
+        }
+        if installed {
+            self.report.rsu_crls_installed += 1;
+        } else {
+            self.report.rsu_crls_refused += 1;
+        }
+    }
+
+    /// The `proto.revocation` rows of roadside unit `node` installing the verified
+    /// composite CRL `version` that holds `entries`: one `rsu_installed` row for each
+    /// revocation case whose entry the unit holds for the first time, with the list's
+    /// size and version. A unit enforces the list on what it receives as a vehicle does
+    /// (`rsu_revoked_receptions`); until this, no record showed a unit installing one.
+    pub fn rsu_crl_records(
+        &mut self,
+        node: NodeId,
+        version: u32,
+        entries: &[CrlLinkageEntry],
+        now: SimTime,
+    ) -> Vec<crate::sec_records::ProtoRevocation> {
+        let size = u64::from(crl_bytes(&self.home().state.sizes, version).bytes());
+        let mut out = Vec::new();
+        for case in &self.cases {
+            let Some((entry, _)) = case.entry.as_ref() else {
+                continue;
+            };
+            if !entries.contains(entry)
+                || !self
+                    .rsu_case_installs
+                    .insert((node, case.subject_digest.clone()))
+            {
+                continue;
+            }
+            out.push(crate::sec_records::ProtoRevocation::stage(
+                now,
+                "rsu_installed",
+                &case.subject_digest,
+                Some(size),
+                Some(u64::from(version)),
+                Some(node),
+            ));
+        }
+        out
+    }
+
+    /// Counts CRL frames a roadside unit could not sign.
+    pub fn note_rsu_withheld(&mut self, crl_frames: u64) {
+        self.report.rsu_crl_frames_withheld += crl_frames;
+    }
+
+    /// The intervals in `[from, to)` in which roadside unit `node` held no valid
+    /// application certificate, from the SCMS's own record (ground truth).
+    #[must_use]
+    pub fn rsu_starvation(
+        &self,
+        node: NodeId,
+        from: SimTime,
+        to: SimTime,
+    ) -> Vec<(SimTime, SimTime)> {
+        let device = device_of(node);
+        self.run_of(device).app_starvation(device, from, to)
+    }
+
+    /// Whether `node` is a roadside unit under an attacker's control.
+    #[must_use]
+    pub fn is_compromised(&self, node: NodeId) -> bool {
+        self.compromised_nodes.contains_key(&node)
+    }
+
+    /// The catalogue name of what a compromised roadside unit does (`FalseCrl`,
+    /// `SuppressForwardedReports`, `PoisonForwardedReports`, ...): the dataset's ground
+    /// truth `attack_id` for the unit. `None` for every other node.
+    #[must_use]
+    pub fn compromised_attack_of(&self, node: NodeId) -> Option<&'static str> {
+        let index = self.compromised_nodes.get(&node)?;
+        self.compromised_specs
+            .get(index)
+            .map(|(p, _, _)| p.kind.as_str())
+    }
+
+    /// The compromised unit's model, built the first time the unit acts, with the
+    /// certificate digest it signs under (the credentials every receiver trusts).
+    fn compromised_model(
+        &mut self,
+        node: NodeId,
+        own_digest: &str,
+    ) -> Option<&mut v2xw_threat::CompromisedRsu> {
+        let index = *self.compromised_nodes.get(&node)?;
+        if !self.compromised.contains_key(&node) {
+            let (params, from, to) = self.compromised_specs.get(&index)?.clone();
+            let mut params = params;
+            params.own_cert_digest = own_digest.to_string();
+            let schedule = v2xw_threat::capability::AttackSchedule {
+                from,
+                to,
+                ..v2xw_threat::capability::AttackSchedule::default()
+            };
+            self.compromised.insert(
+                node,
+                v2xw_threat::CompromisedRsu::new(node, params, schedule),
+            );
+        }
+        self.compromised.get_mut(&node)
+    }
+
+    /// A report a roadside unit is about to forward to the authority, after the unit has
+    /// had its say: an honest unit forwards it, a compromised one may drop it or replace
+    /// it with a forgery that frames a vehicle it has heard.
+    /// `None` means the report goes no further.
+    pub fn rsu_forward(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        rsu: NodeId,
+        own_digest: &str,
+        report: &MisbehaviourReport,
+        now: SimTime,
+    ) -> Option<MisbehaviourReport> {
+        let Some(model) = self.compromised_model(rsu, own_digest) else {
+            return Some(report.clone());
+        };
+        if !v2xw_threat::Attacker::schedule(model).active_at(now, 0.0, 0.0) {
+            return Some(report.clone());
+        }
+        match model.on_forward(ctx, report, now).0 {
+            v2xw_threat::ForwardDecision::Forward => Some(report.clone()),
+            v2xw_threat::ForwardDecision::Drop => {
+                self.report.rsu_reports_suppressed += 1;
+                None
+            }
+            v2xw_threat::ForwardDecision::Replace(forged) => {
+                self.report.rsu_reports_poisoned += 1;
+                // The forgery arrives as the unit's own report, and the authority trusts
+                // infrastructure: that is the attack.
+                for ma in &mut self.ma {
+                    ma.trust_infrastructure(forged.reporter_cert_digest.clone());
+                }
+                Some(*forged)
+            }
+        }
+    }
+
+    /// A compromised unit with `FalseCrl` adds fabricated entries to the CRL frame it is
+    /// about to broadcast. It holds no CRL Generator key, so the frame no longer verifies
+    /// and every receiver discards it. Returns whether the frame was altered.
+    pub fn forge_crl_frame(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        rsu: NodeId,
+        own_digest: &str,
+        now: SimTime,
+        frame: &mut Vec<CrlLinkageEntry>,
+    ) -> bool {
+        let Some(model) = self.compromised_model(rsu, own_digest) else {
+            return false;
+        };
+        if model.kind() != v2xw_threat::RsuAttackKind::FalseCrl
+            || !v2xw_threat::Attacker::schedule(model).active_at(now, 0.0, 0.0)
+        {
+            return false;
+        }
+        let n = model.params().fabricated_entries.round().max(1.0) as u32;
+        let mut rng = ctx.rng(
+            v2xw_core::rng::RngDomain::Attack,
+            v2xw_core::rng::EntityRef::Node(rsu),
+        );
+        for _ in 0..n {
+            let mut a = [0u8; 16];
+            let mut b = [0u8; 16];
+            rng.fill_bytes(&mut a);
+            rng.fill_bytes(&mut b);
+            frame.push(CrlLinkageEntry {
+                i: self.params.period_at(now),
+                la_id1: v2xw_sec::linkage::LaId(1),
+                la_id2: v2xw_sec::linkage::LaId(2),
+                ls1_i: v2xw_sec::linkage::LinkageSeed::new(a),
+                ls2_i: v2xw_sec::linkage::LinkageSeed::new(b),
+                jmax: self.params.jmax,
+                max_forward: v2xw_sec::linkage::DEFAULT_MAX_FORWARD_PERIODS,
+            });
+        }
+        drop(rng);
+        self.report.rsu_crl_frames_forged += 1;
+        true
+    }
+
+    /// Lets a compromised unit note the senders it hears, which is where a poisoner picks
+    /// its victims from.
+    pub fn compromised_hears(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        rsu: NodeId,
+        own_digest: &str,
+        me: &SelfBelief,
+        heard: &[ObservedMessage],
+    ) {
+        if heard.is_empty() {
+            return;
+        }
+        let Some(model) = self.compromised_model(rsu, own_digest) else {
+            return;
+        };
+        let view = AttackerView {
+            own_rx: heard,
+            own_credentials: &[],
+            crl_revocations_seen: None,
+            own_belief: *me,
+            honest: v2xw_threat::HonestClaim {
+                x_m: me.x_m,
+                y_m: me.y_m,
+                speed_mps: 0.0,
+                heading_rad: 0.0,
+            },
+            believed_time: me.believed_time,
+        };
+        v2xw_threat::Attacker::observe(model, ctx, &view);
+    }
+
+    /// The roadside units' node ids.
+    pub fn rsu_nodes(&self) -> &[NodeId] {
+        &self.rsu_nodes
+    }
+
+    /// The unit `node` is, if it is one.
+    #[must_use]
+    pub fn rsu_spec_of(&self, node: NodeId) -> Option<&RsuSpec> {
+        let index = self.rsu_nodes.iter().position(|n| *n == node)?;
+        self.rsus.get(index)
+    }
+
+    /// Whether `node` is a roadside unit that carries `role`.
+    ///
+    /// A unit that declares no role at all carries every one of them.
+    #[must_use]
+    pub fn rsu_has_role(&self, node: NodeId, role: &str) -> bool {
+        self.rsu_spec_of(node)
+            .is_some_and(|s| s.has_role(role) || s.roles.is_empty())
+    }
+
+    /// The roadside units that carry `role`, in declaration order.
+    #[must_use]
+    pub fn rsus_with_role(&self, role: &str) -> Vec<NodeId> {
+        self.rsu_nodes
+            .iter()
+            .copied()
+            .filter(|n| self.rsu_has_role(*n, role))
+            .collect()
+    }
+
+    /// The counters, mutably, for the engine to fold node-local totals into.
+    pub fn report_mut(&mut self) -> &mut Phase2Report {
+        &mut self.report
+    }
+
+    /// How many CRL entries nodes have installed so far.
+    #[must_use]
+    pub fn crls_installed(&self) -> u64 {
+        self.report.crls_installed
+    }
+
+    /// The counters this path accumulated during the run, with the access legs' own.
+    pub fn report(&self) -> Phase2Report {
+        let mut r = self.report.clone();
+        r.access = self.access.report_now();
+        let st = &self.home().state;
+        r.committees = st
+            .committees
+            .stats
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect();
+        r.committee_failures = st
+            .threshold_failures
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect();
+        r.backend_deliveries_dropped = self.runs.iter().map(|x| x.state.faults.dropped).sum();
+        if self.service_models {
+            for (k, run) in self.runs.iter().enumerate() {
+                let provider = run
+                    .state
+                    .deployment
+                    .providers
+                    .get(k)
+                    .map_or_else(String::new, |p| p.name.clone());
+                for (node, name) in crate::crypto_config::hosted_names(run, k) {
+                    let n = run.state.faults.outages(node);
+                    if n == 0 {
+                        continue;
+                    }
+                    let key = if k == 0 {
+                        name
+                    } else {
+                        format!("{provider}/{name}")
+                    };
+                    let down = run.state.faults.downtime(node).as_nanos() / 1_000_000;
+                    r.backend_outages.insert(key.clone(), n);
+                    r.backend_downtime_ms.insert(key, down);
+                }
+            }
+        }
+        r.backend_deliveries_held = self.runs.iter().map(|x| x.state.faults.held).sum();
+        let gov = &self.home().state.gov.counters;
+        r.gov_root_removals_refused = u64::from(gov.early_root_removal_refused);
+        r.gov_test_ballots = u64::from(gov.test_ballots);
+        r.crl_index_exhausted = self
+            .runs
+            .iter()
+            .map(|x| u64::from(x.state.crlg.index_exhausted))
+            .sum();
+        let acks = self.ra_acks();
+        r.ra_ack_requests = acks.count;
+        r.ra_ack_over_1s = acks.over_1s;
+        r.ra_ack_p99_ms = acks.p99_ms();
+        r.backend_timers_deferred = self
+            .runs
+            .iter()
+            .map(|x| x.state.faults.deferred_timers)
+            .sum();
+        for run in &self.runs {
+            for d in run.state.devices.values() {
+                r.ee_retries += u64::from(d.ee_retries);
+                r.ee_retries_capped += u64::from(d.ee_retries_capped);
+                r.ee_duplicate_answers += u64::from(d.duplicate_answers);
+            }
+            r.ra_retransmissions_reacked += u64::from(run.state.ra.retransmissions_reacked);
+        }
+        r.reports_unsent = self.nodes.values().map(|n| n.outbox.0.len() as u64).sum();
+        r.crl_component_entries = self
+            .runs
+            .iter()
+            .map(|x| u64::from(x.crl_component_entries()))
+            .sum();
+        // Every device's deletions, the ones that left the run included (before, a
+        // vehicle that drove out took its count with it: 17 of 228 quota deletions in the
+        // `scms-audit-mbpipe` run).
+        r.reports_evicted = self.retired_store_deletions.0
+            + self.nodes.values().map(|n| n.outbox.0.evicted).sum::<u64>();
+        r.reports_expired = self.retired_store_deletions.1
+            + self.nodes.values().map(|n| n.outbox.0.expired).sum::<u64>();
+        r
+    }
+
+    /// The first revocation, once a vehicle has enforced it.
+    pub fn revocation(&self) -> Option<&Revocation> {
+        self.revocation.as_ref()
+    }
+
+    /// The access legs.
+    pub fn access(&self) -> &BackendAccess {
+        &self.access
+    }
+
+    /// The access legs, mutably.
+    pub fn access_mut(&mut self) -> &mut BackendAccess {
+        &mut self.access
+    }
+
+    /// Whether a cellular modem has a serving cell at `pos`.
+    #[must_use]
+    pub fn uu_coverage(&self, pos: Vec3, t: SimTime) -> bool {
+        self.access.uu_coverage(pos, t)
+    }
+
+    /// A vehicle's backend access.
+    #[must_use]
+    pub fn access_kind(&self, node: NodeId) -> AccessKind {
+        self.nodes
+            .get(&node)
+            .and_then(|n| n.access)
+            .unwrap_or(AccessKind::Offline)
+    }
+
+    /// Whether a relaying unit (one with `role`, and a connected backhaul) is within the
+    /// relay radius of `pos`, and which.
+    #[must_use]
+    pub fn relay_in_range(&self, pos: Vec3, role: &str) -> Option<NodeId> {
+        self.relay_in_range_among(pos, role, None)
+    }
+
+    /// [`ScmsPhase2::relay_in_range`], restricted to `among` when it is given: under
+    /// `net.rsu_ip.air: sch` the units whose WSA the vehicle verified.
+    pub fn relay_in_range_among(
+        &self,
+        pos: Vec3,
+        role: &str,
+        among: Option<&[NodeId]>,
+    ) -> Option<NodeId> {
+        let range = self.access.relay_range_m();
+        self.rsu_nodes
+            .iter()
+            .copied()
+            .zip(self.rsus.iter())
+            .find(|(n, s)| {
+                s.backhaul.connected
+                    && self.rsu_has_role(*n, role)
+                    && among.is_none_or(|a| a.contains(n))
+                    && s.position.distance(Vec3::new(pos.x, pos.y, s.position.z)) <= range
+            })
+            .map(|(n, _)| n)
+    }
+
+    /// Enrols and provisions one vehicle before the run and gives it its access.
+    ///
+    /// The pool is `pool_periods` i-periods of `certs_per_period` certificates starting
+    /// at the period `now` falls in — what a vehicle on the road holds — provisioned by
+    /// the real flows on a scratch kernel ([`ScmsRun::preload`], joint 3).
+    ///
+    /// `vru`: the device is a vulnerable road user's personal device, which requests its
+    /// certificates under its own permission profile ([`LifecycleParams::vru_psids`]).
+    pub fn provision(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+        rng: &v2xw_core::rng::RngRegistry,
+        vru: bool,
+    ) -> Vec<ProvisionedCred> {
+        let relay = self.rsus.iter().any(|s| {
+            s.backhaul.connected
+                && (s.roles.is_empty()
+                    || s.has_role("provisioning-proxy")
+                    || s.has_role("report-forward"))
+        });
+        let kind = self.access.assign(rng, node, relay);
+        let device = device_of(node);
+        if let Some(log) = self.report_log.as_mut() {
+            log.joined.entry(node).or_insert(now);
+        }
+        let start = self.params.period_at(now);
+        if let Some(etsi) = self.etsi.as_mut() {
+            // Authorization tickets: `certs_per_period` a week — the C2C-CC profile's 20
+            // parallel tickets [TR 103 415 Table A.2] under the EU policy's cap of 100
+            // [EUCP §7.2.1] — with no linkage value, because nothing ever revokes one
+            // (TS 102 941 §6.1.4 NOTE 4).
+            etsi.preload(device, self.params.jmax * self.params.pool_periods);
+            let out: Vec<ProvisionedCred> = (start..start + self.params.pool_periods)
+                .flat_map(|i| {
+                    let (from, until) = self.params.scms.validity(i);
+                    (0..self.params.jmax).map(move |j| ProvisionedCred {
+                        i,
+                        j,
+                        lv: LinkageValue::new([0u8; 9]),
+                        valid_from: from,
+                        valid_until: until,
+                        key: None,
+                    })
+                })
+                .collect();
+            self.nodes.insert(
+                node,
+                NodeSec {
+                    access: Some(kind),
+                    last_period: start + self.params.pool_periods.saturating_sub(1),
+                    next_crl_fetch: SimTime::MAX,
+                    enrolment_until: SimTime::MAX,
+                    // A station checks the Distribution Centre when it joins, then on the
+                    // fetch interval.
+                    next_trust_fetch: now,
+                    ..NodeSec::default()
+                },
+            );
+            self.creds.insert(node, out.clone());
+            return out;
+        }
+        // The seeded fleet split: the same draw that assigns a roadside unit's
+        // application certificate, so a vehicle is enrolled, provisioned, reported and
+        // revoked by one provider for its whole life.
+        let k = self
+            .home()
+            .state
+            .deployment
+            .provider_of(self.fleet_seed, u64::from(node.index()));
+        self.device_provider.insert(device, k);
+        if vru {
+            self.runs[k].set_device_psids(device, self.params.vru_psids);
+        }
+        // A vehicle on the road holds an enrolment certificate issued some time before the
+        // run — at the factory or at its last renewal — so its remaining validity is
+        // uniform over the lifetime, drawn from the vehicle's own keyed stream. With the
+        // default six years almost no run sees a renewal; a compressed lifetime does.
+        // The age is stated before the pre-run enrolment, so the one certificate the
+        // device's ECA exchange issues, the DCM registers and every Download-Req is signed
+        // by carries it as a back-dated start with the whole lifetime (OF-1). The start
+        // cannot precede the ECA's own, which can leave the certificate younger than drawn.
+        let lifetime = self.params.scms.enrolment_lifetime.as_nanos().max(1);
+        let u = rng
+            .checkout(
+                v2xw_core::rng::RngDomain::Backend,
+                v2xw_core::rng::EntityRef::custom("phase2/enrolment-age", u64::from(node.index())),
+            )
+            .f64();
+        let remaining = ((u * lifetime as f64) as u64).clamp(1, lifetime);
+        let aged = self.runs[k].age_enrolment(device, now.saturating_add(remaining));
+        let until = aged.valid_until;
+        let remaining = until.saturating_sub(now);
+        // The pre-run exchanges run when that certificate began (never before 0): a vehicle
+        // joining mid-run whose certificate started after 0 was enrolled and asked for its
+        // pool then, so the RA sees a certificate inside its validity.
+        let preloaded = self.runs[k].preload_at(
+            device,
+            aged.valid_from.min(now),
+            start,
+            self.params.pool_periods,
+            self.params.jmax,
+        );
+        if let Err(e) = &preloaded {
+            // A refused pre-run pool is a backend failure, not a quiet empty pool: the
+            // device joins unable to sign. Every provider-b pool failed this
+            // way with `aca/1` and nothing in the report said so.
+            self.report.vehicles_unprovisioned += 1;
+            self.note_backend_error(e);
+        }
+        if preloaded.is_err() {
+            self.nodes.insert(
+                node,
+                NodeSec {
+                    access: Some(kind),
+                    ..NodeSec::default()
+                },
+            );
+            return Vec::new();
+        }
+        let out = self.creds_of_device(device, 0);
+        if out.is_empty() {
+            // The pre-run provisioning flows finished without an error and without a
+            // single certificate for this device (a refusal, or an outage on the pool's
+            // path, `ScmsRun::preload_at`). It joins with an empty store and cannot sign;
+            // counted so the gap is visible. The 2026-09-30 cause on
+            // `credential-lifecycle` (joiners just past a period boundary, the RA's
+            // request shuffle) was fixed by `750e7956`.
+            self.report.vehicles_unprovisioned += 1;
+        }
+        let last = start + self.params.pool_periods.saturating_sub(1);
+        // A vehicle already inside its renewal lead re-enrolled before the run (the
+        // request goes out `reenrol_lead` before expiry): it holds the successor,
+        // which starts when the current certificate ends, with no overlap.
+        let mut enrolment_until = until;
+        if remaining <= self.params.scms.reenrol_lead.as_nanos() {
+            enrolment_until = until.saturating_add(lifetime);
+            self.run_of_mut(device).set_successor_enrolment(
+                device,
+                v2xw_proto::scms::msg::EnrolmentCert {
+                    generation: 1,
+                    valid_from: until,
+                    valid_until: enrolment_until,
+                },
+            );
+        }
+        self.nodes.insert(
+            node,
+            NodeSec {
+                access: Some(kind),
+                last_period: last,
+                next_crl_fetch: now,
+                enrolment_until,
+                ..NodeSec::default()
+            },
+        );
+        self.creds.insert(node, out.clone());
+        out
+    }
+
+    /// The device's credentials at period `from_i` and later.
+    ///
+    /// On the real path each carries what the device derived from its download:
+    /// the implicit certificate, the issuing ACA's certificate, and the signing key
+    /// `d = e·b_ij + r` from the device's own caterpillar. Nothing about the device's
+    /// seeds or the LAs crosses: only the certificate, its issuer and `d`.
+    fn creds_of_device(&self, device: NodeId, from_i: u32) -> Vec<ProvisionedCred> {
+        let run = self.run_of(device);
+        let Some(dev) = run.state.devices.get(&device) else {
+            return Vec::new();
+        };
+        let pki = run.state.pki.as_ref();
+        // One copy of each issuing ACA's certificate for the device's whole batch, not
+        // one per pseudonym certificate: it was deep-cloned 40 times a device (11 MB of
+        // a 400-node run's 258 MB live heap). The same certificate, shared.
+        let mut issuers: Vec<([u8; 8], std::sync::Arc<v2xw_msg::sec_types::Certificate>)> =
+            Vec::new();
+        dev.credentials
+            .iter()
+            .filter(|((i, _), _)| *i >= from_i)
+            .map(|(&(i, j), c)| {
+                let (from, until) = self.params.scms.validity(i);
+                let key = match (c.implicit.as_ref(), dev.caterpillar.as_ref(), pki) {
+                    (Some(imp), Some(cat), Some(pki)) => pki.by_id8(&imp.aca_id8).map(|aca| {
+                        let id = imp.aca_id8;
+                        let issuer = match issuers.iter().find(|(k, _)| *k == id) {
+                            Some((_, a)) => std::sync::Arc::clone(a),
+                            None => {
+                                let a = std::sync::Arc::new(aca.cert.clone());
+                                issuers.push((id, std::sync::Arc::clone(&a)));
+                                a
+                            }
+                        };
+                        std::sync::Arc::new(v2xw_sec::credential::ImplicitKey::new(
+                            std::sync::Arc::clone(&imp.certificate),
+                            issuer,
+                            cat.signing_private_implicit(i, j, &imp.e, &imp.r),
+                        ))
+                    }),
+                    _ => None,
+                };
+                ProvisionedCred {
+                    i,
+                    j,
+                    lv: c.lv,
+                    valid_from: from,
+                    valid_until: until,
+                    key,
+                }
+            })
+            .collect()
+    }
+
+    /// The SCMS run's ACA as an issuer, for the credentials no protocol flow issues
+    /// ([`crate::credentials`]); `None` when the run has no PDU layer.
+    #[must_use]
+    pub fn aca_issuer(&self) -> Option<v2xw_sec::credential::ImplicitIssuer> {
+        let pki = self.home().state.pki.as_ref()?;
+        let d = pki.aca.private?;
+        v2xw_sec::credential::ImplicitIssuer::new(pki.aca.cert.clone(), d).ok()
+    }
+
+    /// The trust a device of this run installs: the PKI's root as the
+    /// CTL-approved root and every component certificate as the local certificate chain
+    /// file. Empty with the PDU layer off.
+    ///
+    /// The governance entities (`v2xw_proto::scms::governance`) sign their CTL over their
+    /// own root key set; until the deployment topology puts the PDU layer's root
+    /// on that CTL, the device installs the issuing root directly (labelled assumption).
+    #[must_use]
+    pub fn trust_bundle(
+        &self,
+    ) -> (
+        Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+        Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    ) {
+        let Some(pki) = self.home().state.pki.as_ref() else {
+            return (Vec::new(), Vec::new());
+        };
+        // Every provider whose root the CTL approves: its root as a
+        // trust anchor and its components in the chain file, so a device verifies
+        // another provider's pseudonyms and application certificates. A provider off
+        // the CTL contributes nothing, and whatever it certifies does not verify.
+        let st = &self.home().state;
+        let on_ctl = |label: &str| {
+            st.gov
+                .root_of(label)
+                .is_some_and(|r| st.gov.ctl.roots.contains(&r))
+        };
+        let mut pkis = vec![pki];
+        pkis.extend(
+            st.peer_pki
+                .iter()
+                .filter(|(label, _)| on_ctl(label))
+                .map(|(_, p)| p),
+        );
+        // A root a rollover superseded stays a trust anchor while the CTL approves it,
+        // and its hierarchy stays in the chain file: what it certified is valid until it
+        // expires (Provider Req. §3.5.4).
+        let approved = |c: &v2xw_msg::sec_types::Certificate| {
+            v2xw_sec::sig1609::cert_hashed_id32(c).is_ok_and(|h| st.gov.ctl.roots.contains(&h))
+        };
+        let self_signed = |c: &v2xw_msg::sec_types::Certificate| {
+            matches!(
+                c.0.issuer,
+                v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::R_self(_)
+            )
+        };
+        let roots = pkis
+            .iter()
+            .flat_map(|p| {
+                core::iter::once(&p.root.cert).chain(
+                    p.retired
+                        .iter()
+                        .map(|a| &a.cert)
+                        .filter(|c| self_signed(c) && approved(c)),
+                )
+            })
+            .map(|c| std::sync::Arc::new(c.clone()))
+            .collect();
+        let cas = pkis
+            .iter()
+            .flat_map(|p| {
+                p.all()
+                    .into_iter()
+                    .chain(p.extra.iter())
+                    .chain(p.retired.iter())
+            })
+            .map(|a| std::sync::Arc::new(a.cert.clone()))
+            .collect();
+        (roots, cas)
+    }
+
+    /// Every provider's chain file, in deployment order (the home provider first, as
+    /// [`Phase2::provider_issuers`]): the CA certificates of that provider alone, empty
+    /// for a provider whose root is not on the CTL. What a device's chain file holds under
+    /// `security.scms.chain_file: home-provider`.
+    #[must_use]
+    pub fn provider_chain_files(
+        &self,
+    ) -> Vec<Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>> {
+        let st = &self.home().state;
+        let Some(home) = st.pki.as_ref() else {
+            return Vec::new();
+        };
+        let on_ctl = |label: &str| {
+            st.gov
+                .root_of(label)
+                .is_some_and(|r| st.gov.ctl.roots.contains(&r))
+        };
+        let file = |p: &v2xw_proto::scms::pdu::ScmsPki| {
+            p.all()
+                .into_iter()
+                .chain(p.extra.iter())
+                .chain(p.retired.iter())
+                .map(|a| std::sync::Arc::new(a.cert.clone()))
+                .collect::<Vec<_>>()
+        };
+        core::iter::once(file(home))
+            .chain(
+                st.peer_pki
+                    .iter()
+                    .map(|(label, p)| if on_ctl(label) { file(p) } else { Vec::new() }),
+            )
+            .collect()
+    }
+
+    /// Every provider's ACA as an issuer, in deployment order (the home provider first):
+    /// the issuer [`crate::credentials::CredentialFactory`] uses for a device assigned to
+    /// that provider. Empty without a PDU layer.
+    #[must_use]
+    pub fn provider_issuers(&self) -> Vec<v2xw_sec::credential::ImplicitIssuer> {
+        let st = &self.home().state;
+        let Some(home) = st.pki.as_ref() else {
+            return Vec::new();
+        };
+        core::iter::once(home)
+            .chain(st.peer_pki.iter().map(|(_, p)| p))
+            .filter_map(|p| {
+                v2xw_sec::credential::ImplicitIssuer::new(p.aca.cert.clone(), p.aca.private?).ok()
+            })
+            .collect()
+    }
+
+    /// The deployment this run's backend was built from.
+    #[must_use]
+    pub fn deployment(&self) -> &v2xw_proto::scms::deployment::Deployment {
+        &self.home().state.deployment
+    }
+
+    /// The current signed CRL the CRL Generator distributes (series 1, full), as the
+    /// bytes a store or an RSU relays unchanged. `None` with the PDU layer off.
+    #[must_use]
+    pub fn secured_crl(&self) -> Option<std::sync::Arc<[u8]>> {
+        self.home()
+            .state
+            .crlg
+            .secured
+            .as_ref()
+            .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+    }
+
+    /// Drops every relayed flow whose service-channel transfer gave up: the
+    /// message that failed never arrives, so the flow would stay in flight for ever. A
+    /// device that loses its RSU mid-download tries again when it is next in range of one
+    /// (USDOT RSU Specification v4.1 §2.2: "request ... within range of one RSU and
+    /// receive them when in range of another"), which is the next time its top-up,
+    /// re-enrolment or trust fetch falls due with a unit it verified a WSA from.
+    pub fn abort_cut_off_flows(&mut self) {
+        for node in self.access.take_sch_failures() {
+            let Some(n) = self.nodes.get_mut(&node) else {
+                continue;
+            };
+            let cut = n.topup.take().is_some() as u64
+                + n.reenrol.take().is_some() as u64
+                + n.trust_fetch.take().is_some() as u64;
+            self.report.relayed_flows_cut_off += cut;
+        }
+    }
+
+    /// Forgets a vehicle that left the run at `now`.
+    pub fn retire(&mut self, node: NodeId, now: SimTime) {
+        self.access.retire(node);
+        self.ident_cycle.remove(&node);
+        if let Some(n) = self.nodes.remove(&node) {
+            self.retired_at.push(now);
+            if n.topup.is_some() {
+                self.report.topups_left_area += 1;
+            }
+            self.retired_store_deletions.0 += n.outbox.0.evicted;
+            self.retired_store_deletions.1 += n.outbox.0.expired;
+            let t = self.ee_tally_of(node);
+            t.retired_evicted += n.outbox.0.evicted;
+            t.retired_expired += n.outbox.0.expired;
+            // Its unsent reports leave with it; they are counted as unsent here because
+            // the vehicle took them out of the run.
+            self.report.reports_lost += n.outbox.0.len() as u64;
+            if self.report_log.is_some() {
+                let left: Vec<_> = n
+                    .outbox
+                    .0
+                    .iter()
+                    .map(|e| (e.item.0.clone(), Some(e.weight)))
+                    .collect();
+                for (r, w) in left {
+                    self.log_fate(now, node, &r, Fate::LeftWithDevice, w);
+                }
+            }
+        }
+        if let Some(log) = self.report_log.as_mut() {
+            log.left.insert(node, now);
+        }
+        self.retired_since_prune.push((now, node));
+        // Its own detector suite and the rate-limit stamps of what it checked go too: a
+        // node id is never reused, and nothing but the node's own receptions reads them.
+        // Kept, every vehicle that ever drove held its suite (every pseudonym it had heard,
+        // and its co-location census) for the rest of the run.
+        self.detectors.remove(&node);
+        let checked: Vec<(NodeId, [u8; 8])> = self
+            .checked_at
+            .range((node, [0u8; 8])..=(node, [0xffu8; 8]))
+            .map(|(k, _)| *k)
+            .collect();
+        for key in checked {
+            self.checked_at.remove(&key);
+        }
+    }
+
+    /// **A test hook.** Turns [`Phase2::prune_tables`] off, to show a run with it and a run
+    /// without it record the same thing.
+    #[doc(hidden)]
+    pub fn set_table_prune(&mut self, on: bool) {
+        self.table_prune = on;
+    }
+
+    /// Drops what a rate limiter and the join tables can no longer use, once per
+    /// [`TABLE_PRUNE_PERIOD`]; nothing read later changes, only memory.
+    ///
+    /// - **`checked_at`, `filed`:** a stamp older than its interval gates nothing, so a real
+    ///   device's rate limiter forgets it; kept, the roadside units held every pseudonym they
+    ///   ever heard, 12,496 entries by 09:00 of the Manhattan day.
+    /// - **`broadcast_accuracy`, `broadcast_frame`:** each message's own statement, joined at
+    ///   its reception. A signer silent for [`JOIN_RETENTION`] has nothing in flight (far
+    ///   past any delivery and any verifier's freshness window).
+    /// - **`privacy_chains`:** the true vehicle behind a pseudonym at a track's end. A retired
+    ///   vehicle's pseudonyms are never heard again, and a link from one to a live vehicle's
+    ///   is scored as wrong with or without the entry.
+    /// - **The research and TS 103 759 suites' per-sender state and `evidence`:** a real
+    ///   receiver ages a sender out on silence. Here that is done only where the silence is
+    ///   certain to last, for the pseudonyms of a vehicle that has left, so no verdict moves;
+    ///   kept, a roadside unit held a history and four signed BSMs per pseudonym it ever heard.
+    ///   A report built later still compares against the ring's last BSM, kept as a hash
+    ///   ([`Phase2::evidence_final`]).
+    ///
+    /// Not pruned: `by_digest`, the truth join of a certificate that was on the air. A report
+    /// naming it can reach the authority long after its vehicle has left, and the case
+    /// resolves through it; it is 20 B of data per pseudonym used, what the PCA's own records
+    /// cost in the real system.
+    fn prune_tables(&mut self, now: SimTime) {
+        if !self.table_prune || now < self.next_table_prune {
+            return;
+        }
+        self.next_table_prune = TABLE_PRUNE_PERIOD.after(now);
+        let horizon = now.saturating_sub(TABLE_PRUNE_MARGIN.as_nanos());
+        let interval = secs(self.detector_params.generation_interval_s);
+        self.checked_at.retain(|_, t| interval.after(*t) > horizon);
+        let report_interval = self.report_interval;
+        self.filed
+            .retain(|_, t| report_interval.after(*t) > horizon);
+        let silent = now.saturating_sub(JOIN_RETENTION.as_nanos());
+        self.broadcast_accuracy
+            .retain(|_, q| q.back().is_some_and(|(t, _)| *t > silent));
+        self.broadcast_frame
+            .retain(|_, q| q.back().is_some_and(|(t, _)| *t > silent));
+        let ready = self
+            .retired_since_prune
+            .partition_point(|&(t, _)| t <= silent);
+        if ready > 0 {
+            let gone: BTreeSet<NodeId> = self
+                .retired_since_prune
+                .drain(..ready)
+                .map(|(_, n)| n)
+                .collect();
+            self.privacy_chains
+                .retain(|_, (owner, _)| !owner.is_some_and(|o| gone.contains(&o)));
+            let digests: Vec<[u8; 8]> = self
+                .by_digest
+                .iter()
+                .filter(|(_, (n, ..))| gone.contains(n))
+                .map(|(d, _)| *d)
+                .collect();
+            for d in &digests {
+                if let Some(ring) = self.evidence.remove(d)
+                    && let Some((_, last)) = ring.back()
+                {
+                    self.evidence_final.insert(*d, evidence_hash(last));
+                }
+            }
+            for suite in self.detectors.values_mut() {
+                for d in &digests {
+                    suite.forget_subject(d);
+                }
+            }
+            // A vehicle's signing keys leave with it; the truth join reads only (i, j, lv).
+            for node in &gone {
+                if let Some(creds) = self.creds.get_mut(node) {
+                    for c in creds.iter_mut() {
+                        c.key = None;
+                    }
+                }
+            }
+            if self.etsi.is_none() {
+                let mut on_air: BTreeMap<NodeId, BTreeSet<(u32, u32)>> = BTreeMap::new();
+                for (n, i, j) in self.by_digest.values() {
+                    if gone.contains(n) {
+                        on_air.entry(*n).or_default().insert((*i, *j));
+                    }
+                }
+                let none = BTreeSet::new();
+                for node in &gone {
+                    let device = device_of(*node);
+                    let k = self.provider_of_device(device);
+                    self.runs[k].forget_left_device(device, on_air.get(node).unwrap_or(&none));
+                }
+            }
+        }
+    }
+
+    /// Registers the air digest one provisioned credential is carried under (joint 2).
+    pub fn note_digest(
+        &mut self,
+        node: NodeId,
+        digest: &v2xw_msg::sec_types::HashedId8,
+        i: u32,
+        j: u32,
+    ) -> bool {
+        self.by_digest
+            .insert(digest_key(digest), (node, i, j))
+            .is_none()
+    }
+
+    /// Arms this node as an attacker if the scenario's selection rule names it.
+    pub fn arm_attacker(&mut self, ctx: &mut dyn ThreatCtx, node: NodeId, actor: ActorId) -> bool {
+        let index = self.vehicles;
+        self.vehicles += 1;
+        for spec in &self.specs {
+            let selected = if !spec.actor_ids.is_empty() {
+                spec.actor_ids.contains(&actor.index())
+            } else if let Some(count) = spec.count {
+                index < u64::from(count)
+            } else if let Some(fraction) = spec.fraction {
+                ctx.rng(
+                    v2xw_core::rng::RngDomain::Attack,
+                    v2xw_core::rng::EntityRef::Node(node),
+                )
+                .bool(fraction)
+            } else {
+                false
+            };
+            if !selected {
+                continue;
+            }
+            let schedule = v2xw_threat::AttackSchedule {
+                from: spec.from,
+                to: spec.to,
+                ..v2xw_threat::AttackSchedule::default()
+            };
+            let payload = LegacyAttacker::new(
+                node,
+                spec.params.clone(),
+                v2xw_threat::Capabilities::insider(self.params.jmax),
+                schedule.clone(),
+                Vec::new(),
+            );
+            let model: Box<dyn v2xw_threat::Attacker> = match (&spec.f2md, spec.disguise) {
+                (Some(p), _) => Box::new(v2xw_threat::F2mdAttacker::new(
+                    node,
+                    p.clone(),
+                    v2xw_threat::Capabilities::insider(self.params.jmax),
+                    schedule.clone(),
+                )),
+                (None, Some(d)) => Box::new(v2xw_threat::BenignClassMimic::new(payload, d)),
+                (None, None) => Box::new(payload),
+            };
+            let heard = spec
+                .f2md
+                .as_ref()
+                .filter(|p| p.kind.replays_neighbours())
+                .map(|_| VecDeque::new());
+            let insider = spec.poison.as_ref().map(|p| Insider {
+                model: v2xw_threat::ReportPoisoner::new(
+                    node,
+                    p.clone(),
+                    v2xw_threat::Capabilities::insider(self.params.jmax),
+                    schedule.clone(),
+                ),
+                actor,
+                next_file: 0,
+            });
+            self.attackers.insert(
+                node,
+                AttackerSlot {
+                    model,
+                    id: spec.id.clone(),
+                    from: spec.from,
+                    to: spec.to,
+                    heard,
+                    insider,
+                },
+            );
+            self.report.attackers += 1;
+            return true;
+        }
+        if self.detection_on {
+            let suite = self.local_suite();
+            self.detectors.insert(node, suite);
+        }
+        false
+    }
+
+    /// Gives a roadside unit the local detector suite, when the scenario runs one.
+    ///
+    /// A unit verifies every frame it hears (`verify-all`, `wiring::build_rsu`) and the
+    /// legacy authority counts it as trusted infrastructure — "never rate-limited or
+    /// distrusted" (run.py `trusted()`, `LegacyWindow::trust_infrastructure`) — so a unit
+    /// is a reporter like a vehicle, whose reports go straight onto its backhaul.
+    pub fn arm_rsu_detector(&mut self, node: NodeId) {
+        if self.detection_on {
+            let suite = self.local_suite();
+            self.detectors.insert(node, suite);
+        }
+    }
+
+    /// A new receiver's detector: the US profile when the scenario names it, else the
+    /// research suite.
+    fn local_suite(&self) -> LocalSuite {
+        if let Some(p) = &self.ts_profile {
+            return LocalSuite::Ts(Box::new(v2xw_threat::ts103759::Ts103759Suite::new(
+                p.clone(),
+            )));
+        }
+        match &self.us_profile {
+            Some(p) => LocalSuite::Us(Box::new(v2xw_threat::us_mbr::UsSmMbr::new(p.clone()))),
+            None => LocalSuite::Research(Box::new(Legacy12::new(self.detector_params.clone()))),
+        }
+    }
+
+    /// Counts one Sybil ghost frame `node` handed to the access layer at `at`.
+    ///
+    /// A ghost frame is a lie (a vehicle that does not exist), so it opens and extends the
+    /// attacker's falsification window like a falsified claim of its own: before
+    /// 2026-10-25 a Sybil attacker's outcome had no onset and 0 falsified claims however
+    /// many ghosts it sent, so its time to detect and revoke were never measured
+    /// (SYM10: 19,212 ghost frames, 5 attackers revoked, onset none).
+    pub fn note_ghost_frame(&mut self, node: NodeId, at: SimTime) {
+        self.report.falsified_claims += 1;
+        self.first_falsified.entry(node).or_insert(at);
+        let lies = self.attacker_lies.entry(node).or_insert((at, 0));
+        lies.0 = lies.0.max(at);
+        lies.1 += 1;
+        self.report.ghost_frames += 1;
+    }
+
+    /// Whether the local detector suite runs in this scenario.
+    #[must_use]
+    pub fn detection_on(&self) -> bool {
+        self.detection_on
+    }
+
+    /// Notes the positional accuracy a safety message states, as it goes on the air (see
+    /// [`broadcast_accuracy_95_m`]).
+    pub fn note_broadcast_accuracy(
+        &mut self,
+        signer: [u8; 8],
+        generated: SimTime,
+        accuracy_95_m: Option<f64>,
+    ) {
+        let q = self.broadcast_accuracy.entry(signer).or_default();
+        if q.len() >= ACCURACY_JOIN_DEPTH {
+            q.pop_front();
+        }
+        q.push_back((generated, accuracy_95_m));
+    }
+
+    /// Whether the TS 103 759 suite runs, so the host keeps the frame fields it reads.
+    #[must_use]
+    pub fn wants_frame_extras(&self) -> bool {
+        self.detection_on && self.ts_profile.is_some()
+    }
+
+    /// Notes the frame fields the TS 103 759 suite reads (vehicle size and the
+    /// position's reference point), as the safety message goes on the air.
+    pub fn note_broadcast_frame(
+        &mut self,
+        signer: [u8; 8],
+        generated: SimTime,
+        frame: v2xw_threat::FrameExtras,
+    ) {
+        let q = self.broadcast_frame.entry(signer).or_default();
+        if q.len() >= ACCURACY_JOIN_DEPTH {
+            q.pop_front();
+        }
+        q.push_back((generated, frame));
+    }
+
+    /// The accuracy a received message stated: `Some(None)` for "unavailable", `None` when
+    /// the join has nothing (a frame that was never noted).
+    fn accuracy_of(
+        joined: &BTreeMap<[u8; 8], VecDeque<(SimTime, Option<f64>)>>,
+        signer: &[u8; 8],
+        generated: SimTime,
+    ) -> Option<Option<f64>> {
+        joined
+            .get(signer)?
+            .iter()
+            .rev()
+            .find(|(t, _)| *t == generated)
+            .map(|(_, a)| *a)
+    }
+
+    /// Keeps what an attacker that restates its neighbours heard: the verified beacons
+    /// delivered to it, for [`HEARD_WINDOW_S`], at most [`HEARD_MAX`].
+    fn note_heard(&mut self, node: NodeId, delivered: &[v2xw_node::VerifiedMessage]) {
+        let Some(heard) = self.attackers.get_mut(&node).and_then(|s| s.heard.as_mut()) else {
+            return;
+        };
+        for m in delivered {
+            let (Some(signer), Some(pos)) = (&m.signer, m.claimed_pos) else {
+                continue;
+            };
+            if !matches!(m.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+                || m.verification != v2xw_node::stores::VerificationState::Verified
+            {
+                continue;
+            }
+            heard.push_back(ObservedMessage {
+                signer: digest_key(signer),
+                kind: ObservedKind::Beacon,
+                received_at: m.received_at,
+                claimed_generation_time: m.claimed_generation_time,
+                claimed_x_m: pos.x,
+                claimed_y_m: pos.y,
+                claimed_speed_mps: m.claimed_speed_mps,
+                claimed_heading_rad: m.claimed_heading_rad,
+                claimed_pos_confidence_m: 0.0,
+                repetitions: 1,
+                cert_valid_from: 0,
+                cert_valid_to: SimTime::MAX,
+                station_type: StationType::Vehicle,
+                bsm: m.bsm,
+                verification: v2xw_threat::VerificationState::Valid,
+            });
+        }
+        let latest = heard.back().map_or(0, |m| m.received_at);
+        let window = secs(HEARD_WINDOW_S).as_nanos();
+        while heard.len() > HEARD_MAX
+            || heard
+                .front()
+                .is_some_and(|m| latest.saturating_sub(m.received_at) > window)
+        {
+            heard.pop_front();
+        }
+    }
+
+    /// Whether this node is an armed attacker.
+    #[must_use]
+    pub fn is_attacker(&self, node: NodeId) -> bool {
+        self.attackers.contains_key(&node)
+    }
+
+    /// Whether this node is an insider report poisoner ([`INSIDER_POISONER_ID`]), whose
+    /// attack is on the reporting path.
+    #[must_use]
+    pub fn is_insider(&self, node: NodeId) -> bool {
+        self.attackers
+            .get(&node)
+            .is_some_and(|s| s.insider.is_some())
+    }
+
+    /// The attacker model id `node` runs (`threat/attacker/...`), when it is an attacker.
+    #[must_use]
+    pub fn attacker_id(&self, node: NodeId) -> Option<&str> {
+        self.attackers.get(&node).map(|s| s.id.as_str())
+    }
+
+    /// The name of the SCMS provider serving `node`'s device, when it has been assigned
+    /// one (the dataset's `gt.device.provider`).
+    #[must_use]
+    pub fn provider_name_of(&self, node: NodeId) -> Option<String> {
+        let k = *self.device_provider.get(&device_of(node))?;
+        self.provider_names().get(k).cloned()
+    }
+
+    /// Lets an attacker edit the claim that is about to be signed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn falsify(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        node: NodeId,
+        actor: ActorId,
+        believed_time: SimTime,
+        signer: [u8; 8],
+        honest: HonestClaim,
+        belief: SelfBelief,
+        cert: (SimTime, SimTime),
+        msg: u64,
+        own_credentials: &[[u8; 8]],
+        accel_long_mps2: Option<f64>,
+    ) -> Option<Emission> {
+        let slot = self.attackers.get_mut(&node)?;
+        // The insider's beacons are its honest stack's: its attack is on the reporting
+        // path (`detect`).
+        if believed_time < slot.from || believed_time >= slot.to || slot.insider.is_some() {
+            return None;
+        }
+        let rx: &[v2xw_threat::ObservedMessage] = slot
+            .heard
+            .as_mut()
+            .map_or(&[][..], |h| &*h.make_contiguous());
+        let view = AttackerView {
+            own_rx: rx,
+            own_credentials,
+            crl_revocations_seen: None,
+            own_belief: belief,
+            honest,
+            believed_time,
+        };
+        let mut out = Emission::honest(signer, honest, believed_time, cert.0, cert.1);
+        out.accel_long_mps2 = accel_long_mps2;
+        let actions = slot.model.act(ctx, &view, &mut out);
+        if actions.is_empty() {
+            return Some(out);
+        }
+        let id = slot.id.clone();
+        v2xw_threat::log_actions(ctx, believed_time, actor, &id, &actions, Some(msg));
+        if actions.iter().any(|a| a.changed_bytes_on_air()) {
+            self.first_on_air.entry(node).or_insert(believed_time);
+        }
+        // The stated acceleration is a field the legacy label rule has no term for: an
+        // edit above 0.5 m/s² (VeReMi NextGen's accelerationMultiplication label floor) is
+        // a falsified claim too.
+        let accel_lie = match (accel_long_mps2, out.accel_long_mps2) {
+            (Some(a), Some(b)) => (a - b).abs() > 0.5,
+            _ => false,
+        };
+        if accel_lie
+            || v2xw_threat::is_falsified(&honest, &out, believed_time, StationType::Vehicle)
+        {
+            self.report.falsified_claims += 1;
+            self.first_falsified.entry(node).or_insert(believed_time);
+            let lies = self.attacker_lies.entry(node).or_insert((believed_time, 0));
+            lies.0 = lies.0.max(believed_time);
+            lies.1 += 1;
+        }
+        Some(out)
+    }
+
+    /// Runs the local detector suite over what one node's runtime delivered, returning any
+    /// report the node decided to file.
+    ///
+    /// A reporter files about one subject at most once per `report_interval` (the legacy
+    /// engine filed on every 1 s step its detectors fired): the authority's persistence
+    /// gate needs evidence in several distinct seconds, and one report per pair ever could
+    /// not give it that, while one per message would flood the uplink.
+    // Public signature: bundling the arguments would change the API.
+    #[allow(clippy::too_many_arguments)]
+    pub fn detect(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        world: &World,
+        node: NodeId,
+        me: &SelfBelief,
+        reporter_digest: Option<String>,
+        delivered: &[v2xw_node::VerifiedMessage],
+        own: Option<v2xw_threat::OwnFootprint>,
+    ) -> Vec<MisbehaviourReport> {
+        self.note_heard(node, delivered);
+        if self.is_insider(node) {
+            return self.insider_reports(ctx, me, reporter_digest, delivered);
+        }
+        let Some(detector) = self.detectors.get_mut(&node) else {
+            return Vec::new();
+        };
+        // Only the research suite is rate-limited to one check per sender per second; the
+        // US profile and the TS 103 759 suite are defined on every message.
+        let rate_limited = self.us_profile.is_none() && self.ts_profile.is_none();
+        let interval = secs(self.detector_params.generation_interval_s);
+        let mut out = Vec::new();
+        let mut truths: Vec<(String, SimTime)> = Vec::new();
+        let mut heard: Vec<ObservedMessage> = Vec::new();
+        let compromised = self.compromised_nodes.contains_key(&node);
+        let map = RoadMap::new(world);
+        let env: &dyn v2xw_threat::obs::LocalEnvironment =
+            if self.map_check { &map } else { &NoMap };
+        for m in delivered {
+            let Some(signer) = &m.signer else { continue };
+            // Misbehaviour detection reads safety messages: the US checks are defined on
+            // the BSM ([SM-MBR] §2.3, application PSID 0x20) and the suite's on a station's
+            // own claims. A relayed misbehaviour report, a CRL, a P2PCD response or a WSA
+            // states no position, speed or heading of its sender, so it is not checked.
+            // Checked as a vehicle's beacon with no stated accuracy, an uploaded report
+            // drew verdicts against its own uploader (a handset's upload was judged by the
+            // vehicle map check), so reports bred reports.
+            if matches!(
+                m.msg_type,
+                v2xw_msg::MsgType::Mbr
+                    | v2xw_msg::MsgType::Crl
+                    | v2xw_msg::MsgType::P2pcd
+                    | v2xw_msg::MsgType::Wsa
+            ) {
+                self.report.messages_not_checked += 1;
+                continue;
+            }
+            let key = digest_key(signer);
+            // The suite checks one message per sender per `generation_interval_s` (1 s,
+            // `PipelineConfig.dt`), the rate every one of its thresholds was calibrated at:
+            // `min_consecutive` = 2 is two *seconds* of violation there, the one-step
+            // heading baseline needs a 5 m displacement, and the 1.5 s motion lag is a
+            // count of steps. Fed every 10 Hz BSM, "two consecutive" becomes 0.2 s and the
+            // heading check runs only when noise moves a claim 5 m in 100 ms — which is how
+            // honest vehicles were reported. A frozen or falsified claim is as visible at
+            // one check a second as at ten.
+            // The US profile compares every BSM with the one before it from the same
+            // certificate ("two consecutive BSMs", [SM-MBR] §2.3.1.2.2), so it checks
+            // every message.
+            if !self.judge_revoked
+                && m.verification == v2xw_node::stores::VerificationState::Revoked
+            {
+                self.report.messages_not_checked += 1;
+                continue;
+            }
+            // A message this node's policy delivered without checking its signature is
+            // not judged: misbehaviour detection reads authenticated BSMs ([SM-MBR]
+            // 2.3.1.2.1: the evidence is the signed BSMs, which the reporter has checked),
+            // and the suite zeroes every check of an unverified message anyway. Before, it
+            // was still fed to the detector and counted as checked: under on-demand
+            // verification `messages_checked` rose 45,071 -> 49,194 while 97 % of
+            // receptions went unverified, and the trackers' state moved on
+            // content nobody had authenticated. A compromised unit still keeps what it
+            // heard (its forgeries frame a vehicle it heard, verified or not).
+            let unverified = m.verification == v2xw_node::stores::VerificationState::Unverified;
+            if unverified && !compromised {
+                self.report.messages_not_checked += 1;
+                continue;
+            }
+            if rate_limited
+                && let Some(last) = self.checked_at.get(&(node, key))
+                && m.received_at
+                    < interval
+                        .after(*last)
+                        .saturating_sub(interval.as_nanos() / 10)
+            {
+                continue;
+            }
+            // The rate-limit stamp is read only by the research suite's 1 s rate (above);
+            // the US profile checks every message and never reads it, so it is not kept.
+            if rate_limited && !unverified {
+                self.checked_at.insert((node, key), m.received_at);
+            }
+            let claimed = m.claimed_pos.unwrap_or(Vec3::ZERO);
+            // The sender's own statement of its accuracy, as the message carried it. A
+            // message that says "unavailable" (or one the join never saw) earns no
+            // tolerance beyond the suite's own floor: a sender cannot widen a receiver's
+            // gate by withholding its accuracy.
+            let stated =
+                Self::accuracy_of(&self.broadcast_accuracy, &key, m.claimed_generation_time);
+            match stated {
+                Some(Some(_)) => self.report.accuracy_stated += 1,
+                Some(None) => self.report.accuracy_unavailable += 1,
+                None => self.report.accuracy_unjoined += 1,
+            }
+            let confidence_m = if self.stated_accuracy {
+                stated.flatten().unwrap_or(0.0)
+            } else {
+                LEGACY_CONFIDENCE_M
+            };
+            // The research suite reads a validity refusal as such; the US
+            // profile checks only verified BSM pairs and has no certificate subtype, so it
+            // sees the refusal as before.
+            let research_validity = m.outside_validity.filter(|_| self.us_profile.is_none());
+            let mut bsm = m.bsm;
+            if self.forge_brakes && m.msg_type == v2xw_msg::MsgType::Bsm {
+                bsm.brakes_applied = Some(true);
+                bsm.accel_long_mps2 = Some(0.5);
+            }
+            let observed = ObservedMessage {
+                bsm,
+                signer: key,
+                kind: match m.msg_type {
+                    v2xw_msg::MsgType::Denm => ObservedKind::Denm(String::new()),
+                    _ => ObservedKind::Beacon,
+                },
+                received_at: m.received_at,
+                claimed_generation_time: m.claimed_generation_time,
+                claimed_x_m: claimed.x,
+                claimed_y_m: claimed.y,
+                claimed_speed_mps: m.claimed_speed_mps,
+                claimed_heading_rad: m.claimed_heading_rad,
+                claimed_pos_confidence_m: confidence_m,
+                repetitions: 1,
+                // The signer certificate's validity period, when the receiver refused the
+                // message for lying outside it; every other message passed that rule.
+                cert_valid_from: research_validity.map_or(0, |w| w.0),
+                cert_valid_to: research_validity.map_or(SimTime::MAX, |w| w.1),
+                // A PSM is a vulnerable road user's own declaration (J2735 PSM; a CAM's
+                // stationType does the same in Europe): the suite then drops the vehicle
+                // kinematic and map checks a pedestrian would fail honestly.
+                station_type: if m.msg_type == v2xw_msg::MsgType::Psm {
+                    StationType::Vru
+                } else {
+                    StationType::Vehicle
+                },
+                verification: match m.verification {
+                    v2xw_node::stores::VerificationState::Verified => VerificationState::Valid,
+                    // Refused by the generation-time-in-validity rule alone: a genuine
+                    // certificate used out of its period, whose signature is good. The
+                    // research suite judges it as the legacy corpus does (signature
+                    // valid, certificate out of window), so its `certValidity` check
+                    // names the failure; it is not a bad signature.
+                    v2xw_node::stores::VerificationState::Invalid
+                        if research_validity.is_some() =>
+                    {
+                        VerificationState::Valid
+                    }
+                    v2xw_node::stores::VerificationState::Invalid => {
+                        VerificationState::BadSignature
+                    }
+                    v2xw_node::stores::VerificationState::Revoked => {
+                        VerificationState::UnknownCertificate
+                    }
+                    _ => VerificationState::Unverified,
+                },
+            };
+            if compromised {
+                heard.push(observed.clone());
+            }
+            if unverified {
+                self.report.messages_not_checked += 1;
+                continue;
+            }
+            // The BSMs this judgement is about, named before the suite moves on to `m`.
+            let judged = detector.judged_times(&observed);
+            let frame = self.broadcast_frame.get(&key).and_then(|q| {
+                q.iter()
+                    .rev()
+                    .find(|(t, _)| *t == m.claimed_generation_time)
+                    .map(|(_, f)| *f)
+            });
+            let mut inputs = v2xw_threat::ts103759::CrossCheckInputs::none();
+            if let Some(f) = frame.as_ref() {
+                inputs = inputs.and_frame(f);
+            }
+            if let Some(o) = own.as_ref() {
+                inputs = inputs.and_own(o);
+            }
+            let verdict = detector.on_message(ctx, me, &observed, env, &inputs);
+            self.report.messages_checked += 1;
+            if let LocalVerdict::Ts(v) = &verdict {
+                // Ground truth for the run report only (never read by a detector): was the
+                // sender attacking when it generated this message, and as what.
+                let class = self
+                    .by_digest
+                    .get(&key)
+                    .and_then(|(n, _, _)| self.attackers.get(n))
+                    .filter(|a| {
+                        m.claimed_generation_time >= a.from && m.claimed_generation_time < a.to
+                    })
+                    .map_or_else(|| "honest".to_string(), |a| a.id.clone());
+                let fired: BTreeSet<&str> = v.fired.iter().map(|o| o.check.as_str()).collect();
+                let mut any_exceeded = false;
+                for (check, score) in &v.scores {
+                    let row = self
+                        .report
+                        .ts_checks
+                        .entry(check.as_str().to_string())
+                        .or_default()
+                        .entry(class.clone())
+                        .or_default();
+                    row.evaluated += 1;
+                    if *score >= 1.0 {
+                        row.exceeded += 1;
+                        any_exceeded = true;
+                    }
+                    if fired.contains(check.as_str()) {
+                        row.fired += 1;
+                    }
+                }
+                let row = self.report.ts_messages.entry(class).or_default();
+                row.evaluated += 1;
+                row.exceeded += u64::from(any_exceeded);
+                row.fired += u64::from(!fired.is_empty());
+            }
+            *self
+                .report
+                .verification_states
+                .entry(format!("{:?}", m.verification))
+                .or_insert(0) += 1;
+
+            if !verdict.fired() {
+                continue;
+            }
+            self.report.verdicts_fired += 1;
+            for id in verdict.fired_ids() {
+                *self
+                    .report
+                    .verdicts_by_detector
+                    .entry(id.to_string())
+                    .or_insert(0) += 1;
+            }
+            let pair = (node, verdict.subject().to_string());
+            if let Some(last) = self.filed.get(&pair)
+                && m.received_at < self.report_interval.after(*last)
+            {
+                continue;
+            }
+            self.filed.insert(pair, m.received_at);
+            let evidence = Evidence::at(m.received_at, m.received_at, confidence_m);
+            let id = format!("r-{}-{}-{}", node.index(), verdict.subject(), m.received_at);
+            let reporter = reporter_digest
+                .clone()
+                .unwrap_or_else(|| v2xw_core::hash::hex_encode(&me.node.index().to_le_bytes()));
+            if self.rsu_nodes.contains(&node) {
+                for ma in &mut self.ma {
+                    ma.trust_infrastructure(reporter.clone());
+                }
+            }
+            if let Some(mut report) = verdict.report(id, node, reporter, &evidence) {
+                // The evidence window is the accused message's own `generationTime`, on
+                // the sender's clock, as the signed BSM in the report carries it
+                // ([SM-MBR] §2.3.1.2.1); the report's own generation time is the
+                // reporter's (`detection_time`). The MA compares the two.
+                report.st_tstart = m.claimed_generation_time;
+                report.st_tend = m.claimed_generation_time;
+                if let (Some(log), Some(sm)) = (self.report_log.as_mut(), m.bsm.sec_mark_ms) {
+                    log.secmark.insert(report.report_id.clone(), sm);
+                }
+                // The evidence is the signed BSMs this receiver judged ([SM-MBR] §2.3.1.2.1
+                // and §2.3.1.3.1), taken now, when the report is generated: the
+                // certificate's frames on the air with exactly those generation times. A
+                // report stored for days attaches what was judged, not whatever that
+                // certificate sent last (item 5 of the measurement package).
+                if self.etsi.is_none()
+                    && let Some(ring) = self.evidence.get(&key)
+                {
+                    let bsms = judged_bsms(ring, judged.0, judged.1);
+                    if !bsms.is_empty() {
+                        // The evidence window spans the BSMs attached: from the
+                        // predecessor's `generationTime` when it is one of them.
+                        if let Some(start) = judged_start(ring, judged.0, judged.1) {
+                            report.st_tstart = start.min(report.st_tend);
+                        }
+                        self.judged_evidence.insert(report.report_id.clone(), bsms);
+                    }
+                }
+                self.report.reports_sent += 1;
+                truths.push((verdict.subject().to_string(), m.received_at));
+                out.push(report);
+            }
+        }
+        for (subject, at) in truths {
+            self.note_report_truth(&subject, at);
+        }
+        if compromised {
+            let own = reporter_digest.unwrap_or_default();
+            self.compromised_hears(ctx, node, &own, me, &heard);
+        }
+        out
+    }
+
+    /// The insider's reports (`threat/attacker/insider/ReportPoisoning`): it notes every
+    /// sender whose BSM its own stack verified and, once per report interval, files
+    /// forged reports against the ones it designated victims. Each report attaches the
+    /// victim's two latest signed BSMs on the air, genuine ones (an insider holds the BSMs
+    /// it heard, and the MA verifies their signatures), and accuses it of a position jump
+    /// between them (SM-MBR RandomPosition). It then travels the ordinary reporting path:
+    /// the store, the upload, the RA and the MA.
+    fn insider_reports(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        me: &SelfBelief,
+        reporter_digest: Option<String>,
+        delivered: &[v2xw_node::VerifiedMessage],
+    ) -> Vec<MisbehaviourReport> {
+        let interval = self.report_interval;
+        let Some(slot) = self.attackers.get_mut(&me.node) else {
+            return Vec::new();
+        };
+        let id = slot.id.clone();
+        let Some(ins) = slot.insider.as_mut() else {
+            return Vec::new();
+        };
+        for m in delivered {
+            if m.msg_type == v2xw_msg::MsgType::Bsm
+                && m.verification == v2xw_node::stores::VerificationState::Verified
+                && let Some(signer) = &m.signer
+            {
+                ins.model.hear(digest_key(signer));
+            }
+        }
+        let Some(now) = delivered.iter().map(|m| m.received_at).max() else {
+            return Vec::new();
+        };
+        // Without a pseudonym of its own it has nothing to sign a report with.
+        let Some(own) = reporter_digest else {
+            return Vec::new();
+        };
+        if now < ins.next_file {
+            return Vec::new();
+        }
+        ins.next_file = interval.after(now);
+        ins.model.set_own_digest(own);
+        let actions = ins.model.file(ctx, now, me.x_m, me.y_m);
+        let reports = ins.model.take_reports();
+        let actor = ins.actor;
+        v2xw_threat::log_actions(ctx, now, actor, &id, &actions, None);
+        let mut out = Vec::with_capacity(reports.len());
+        for mut r in reports {
+            let Some(key) = decode_hex8(&r.subject_cert_digest) else {
+                continue;
+            };
+            // The victim's two latest BSMs: a position jump is judged between two
+            // consecutive BSMs of one certificate (SM-MBR 1VInconsistent), so the report
+            // attaches the pair, as a genuine one does.
+            let Some(ring) = self.evidence.get(&key).filter(|q| q.len() >= 2) else {
+                continue;
+            };
+            let pair: Vec<&(SimTime, Vec<u8>)> = ring.iter().skip(ring.len() - 2).collect();
+            r.st_tstart = pair[0].0;
+            r.st_tend = pair[1].0;
+            let bsms = pair.iter().map(|(_, b)| b.clone()).collect();
+            self.judged_evidence.insert(r.report_id.clone(), bsms);
+            self.forged_reports.insert(r.report_id.clone());
+            out.push(r);
+        }
+        out
+    }
+
+    /// The ground-truth join of a filed report, for the run report's precision and recall
+    /// only: nothing here reaches a detector or the authority.
+    fn note_report_truth(&mut self, subject_hex: &str, at: SimTime) {
+        let Some(digest) = decode_hex8(subject_hex) else {
+            return;
+        };
+        let Some(subject) = self.by_digest.get(&digest) else {
+            return;
+        };
+        let subject = subject.0;
+        let attacker = self.attackers.contains_key(&subject);
+        if attacker {
+            self.report.reports_about_attackers += 1;
+            let entry = self.attacker_reports.entry(subject).or_default();
+            entry.0 += 1;
+            entry.1.insert(digest);
+        } else {
+            self.report.reports_about_honest += 1;
+        }
+        // A report detects the attack only from its onset on, and reports are filed out
+        // of time order within a step: the earliest one at or after the onset.
+        if attacker
+            && let Some(&onset) = self.first_on_air.get(&subject)
+            && at >= onset
+        {
+            let d = self.first_detected.entry(subject).or_insert(at);
+            *d = (*d).min(at);
+        }
+        if let std::collections::btree_map::Entry::Vacant(e) = self.first_reported.entry(subject) {
+            e.insert(at);
+            if attacker {
+                self.report.attackers_reported += 1;
+            } else {
+                self.report.honest_reported += 1;
+            }
+        }
+    }
+
+    /// Notes the authority's decision about `subject` for the run report's latencies.
+    fn note_decision_truth(&mut self, subject: NodeId, at: SimTime) {
+        if self.decided.contains_key(&subject) {
+            return;
+        }
+        self.decided.insert(subject, at);
+        if !self.attackers.contains_key(&subject) {
+            self.report.decisions_honest += 1;
+            return;
+        }
+        if let Some(first) = self.first_reported.get(&subject) {
+            self.report
+                .detection_to_decision_ns
+                .push(at.saturating_sub(*first));
+        }
+        // From the first action that changed bytes on the air to the earliest report at
+        // or after it, as `time_to_detect`. It read the falsified-label onset, which in Q
+        // came 43,127 s after node 303's first change, so a report before it saturated
+        // the latency to 0; an attacker reported
+        // only before its onset contributes no sample, as there.
+        if let (Some(onset), Some(first)) = (
+            self.first_on_air.get(&subject),
+            self.first_detected.get(&subject),
+        ) {
+            self.report.onset_to_detection_ns.push(first - onset);
+        }
+    }
+
+    /// The device behind a reported certificate digest, `(node, i, lv)`, by the engine's
+    /// own provisioning map: **ground truth** for the records and the run report
+    /// (`log_fate`, `log_received`, the attacker tallies). The decision path does not
+    /// read it: the MA reads the accused certificate from the report, and the
+    /// issuing ACA resolves it from its own table. The modelled report path (no bytes)
+    /// takes its subject from here, labelled `engine-map (modelled report)`.
+    fn truth_subject(&self, digest_hex: &str) -> Option<(NodeId, u32, LinkageValue)> {
+        if self.truth_hook == TruthHook::Forgotten {
+            return None;
+        }
+        let bytes = decode_hex8(digest_hex)?;
+        let (node, i, j) = *self.by_digest.get(&bytes)?;
+        if self.truth_hook == TruthHook::OtherProvider {
+            // Some device of another provider: the first in digest order.
+            let own = self.provider_of_device(device_of(node));
+            let other = self
+                .by_digest
+                .values()
+                .map(|v| v.0)
+                .find(|n| self.provider_of_device(device_of(*n)) != own)?;
+            return Some((other, i, LinkageValue::new([0; 9])));
+        }
+        let cred = self
+            .creds
+            .get(&node)?
+            .iter()
+            .find(|c| c.i == i && c.j == j)?;
+        Some((node, cred.i, cred.lv))
+    }
+
+    /// **A test hook, not a model parameter**: from now on the engine's map
+    /// ([`Phase2::truth_subject`]) names no device for any reported certificate, so
+    /// whatever still reached the decision through it stops. The reporter-side evidence
+    /// rebuild ([`Phase2::real_mbr`], which stands in for the frame the reporter heard)
+    /// keeps the provisioning records it reads.
+    #[doc(hidden)]
+    pub fn forget_digest_map_for_test(&mut self) {
+        self.truth_hook = TruthHook::Forgotten;
+    }
+
+    /// **A test hook, not a model parameter**: from now on the engine's map
+    /// names, for every reported certificate, a device of another provider than the one
+    /// that holds it, so a report routed by the map's device goes to the wrong MA.
+    #[doc(hidden)]
+    pub fn misattribute_providers_for_test(&mut self) {
+        self.truth_hook = TruthHook::OtherProvider;
+    }
+
+    /// **A test hook, not a model parameter**: from now on a real report another
+    /// provider's MA shares crosses without its re-encrypted bytes, so
+    /// the receiving MA takes the forwarding MA's reading on trust. A test compares the
+    /// same seed with and without re-verification.
+    #[doc(hidden)]
+    pub fn share_unverified_for_test(&mut self) {
+        self.share_unverified = true;
+    }
+
+    /// **A test hook, not a model parameter**: from now on every BSM a receiver's
+    /// detector judges reads as brakes applied with `accelSet.long` +0.5 m/s², as a frame
+    /// forged that way would carry it ([SM-MBR] §2.3.1.3.4's BrakeAcceleration case). No
+    /// honest vehicle sends one (its brake switch is on only while it decelerates), so a
+    /// test of the BrakeAcceleration report path needs the forgery.
+    #[doc(hidden)]
+    pub fn forge_brake_acceleration_for_test(&mut self) {
+        self.forge_brakes = true;
+    }
+
+    /// The provider whose ACA certificate is `issuer`: the one that can resolve
+    /// a certificate naming it as issuer ([CAMP122] §5; Provider Req. §2.2).
+    fn provider_of_issuer(&self, issuer: &[u8; 8]) -> Option<usize> {
+        self.runs.iter().position(|r| r.state.issues_under(issuer))
+    }
+
+    /// Stores a report the vehicle could not upload yet in its report store; over the
+    /// quota the store deletes its lowest-weight report (possibly this one).
+    ///
+    /// A report [`Phase2::take_outbox`] took out for an upload that did not happen goes
+    /// back as the same stored report, with the weight and order it had ([SM-MBR] §2.2:
+    /// a report leaves the store only after its TCP-confirmed upload). A new report is
+    /// weighed by its subtypes (`report_weight_*`).
+    pub fn hold_report(
+        &mut self,
+        node: NodeId,
+        report: MisbehaviourReport,
+        detected_at: SimTime,
+        now: SimTime,
+    ) {
+        let unix = v2xw_core::time::WallClock::new(self.params.scms.pdu.t0_unix_s)
+            .unix_seconds_at(detected_at);
+        let policy = self.params.report_store;
+        let weighting = policy.weights.weighting(&report_subtypes(&report));
+        let first = self
+            .report_log
+            .as_ref()
+            .is_some_and(|l| !l.stored.contains(&report.report_id));
+        let fresh_copy = first.then(|| report.clone());
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return;
+        };
+        n.outbox.configure(&policy);
+        let evicted = match n.taken.remove(&report.report_id) {
+            Some(t) => n.outbox.0.reinsert(mbr::QueuedReport {
+                weight: t.weight,
+                multiplier: t.multiplier,
+                seq: t.seq,
+                created_unix: t.created_unix,
+                size: t.size,
+                item: (report, detected_at),
+            }),
+            None => n.outbox.0.push_entry(
+                (report, detected_at),
+                u64::from(report_bytes()),
+                weighting,
+                unix,
+            ),
+        };
+        if self.report_log.is_none() {
+            return;
+        }
+        if let Some(r) = fresh_copy {
+            self.log_fate(now, node, &r, Fate::Stored, Some(weighting.initial));
+        }
+        for e in evicted {
+            let fate = if e.weight < weighting_of(&policy, &e.item.0) * (1.0 - 1e-9) {
+                Fate::DecayedOut
+            } else {
+                Fate::EvictedQuota
+            };
+            self.log_fate(now, node, &e.item.0, fate, Some(e.weight));
+        }
+    }
+
+    /// A report the vehicle has just generated enters its store before anything is
+    /// uploaded ([SM-MBR] §2.2: each report is stored when generated and uploaded from
+    /// the store in weight order, and a new report over the quota may itself be the one
+    /// deleted). Returns whether it survived the quota; if so it is taken straight out
+    /// for its upload attempt, keeping its place for [`Phase2::hold_report`]. A report
+    /// already taken from the store (a retry) passes through. Before this a connected
+    /// vehicle's report bypassed the store, so a full or zero quota deleted nothing it
+    /// sent at once.
+    pub fn admit_report(
+        &mut self,
+        node: NodeId,
+        report: &MisbehaviourReport,
+        detected_at: SimTime,
+        now: SimTime,
+    ) -> bool {
+        let policy = self.params.report_store;
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return true;
+        };
+        if n.taken.contains_key(&report.report_id) {
+            return true;
+        }
+        let unix = v2xw_core::time::WallClock::new(self.params.scms.pdu.t0_unix_s)
+            .unix_seconds_at(detected_at);
+        let weighting = policy.weights.weighting(&report_subtypes(report));
+        n.outbox.configure(&policy);
+        let evicted = n.outbox.0.push_entry(
+            (report.clone(), detected_at),
+            u64::from(report_bytes()),
+            weighting,
+            unix,
+        );
+        let seq = n.outbox.0.last_seq();
+        let kept = n.outbox.0.take_entry(seq).map(|e| {
+            n.taken.insert(
+                report.report_id.clone(),
+                TakenReport {
+                    weight: e.weight,
+                    multiplier: e.multiplier,
+                    seq: e.seq,
+                    created_unix: e.created_unix,
+                    size: e.size,
+                },
+            );
+        });
+        if self.report_log.is_some() {
+            self.log_fate(now, node, report, Fate::Stored, Some(weighting.initial));
+            for e in evicted {
+                let fate = if e.weight < weighting_of(&policy, &e.item.0) * (1.0 - 1e-9) {
+                    Fate::DecayedOut
+                } else {
+                    Fate::EvictedQuota
+                };
+                self.log_fate(now, node, &e.item.0, fate, Some(e.weight));
+            }
+        }
+        kept.is_some()
+    }
+
+    /// Logs one step of a report's life (`pki.report_fate`) when the records are on;
+    /// a report's first step is always `stored`.
+    fn log_fate(
+        &mut self,
+        t: SimTime,
+        node: NodeId,
+        r: &MisbehaviourReport,
+        fate: Fate,
+        weight: Option<f64>,
+    ) {
+        if self.report_log.is_none() {
+            return;
+        }
+        let subject_node = self.truth_subject(&r.subject_cert_digest).map(|x| x.0);
+        let subject_attacker = subject_node.is_some_and(|s| self.attackers.contains_key(&s));
+        let Some(log) = self.report_log.as_mut() else {
+            return;
+        };
+        let truth = crate::report_records::FateTruth {
+            subject_node,
+            subject_attacker,
+            forged: self.forged_reports.contains(&r.report_id),
+        };
+        // Under the dataset gate every fate row carries what the reporter knows of its
+        // report from creation (its fired checks and score), and the secured report's
+        // digest, size and path once it was built for upload.
+        let own = self
+            .dataset
+            .as_ref()
+            .map(|d| crate::dataset_records::ReportFateDataset {
+                checks: r.reason_codes.clone(),
+                score: Some(v2xw_threat::records::q(r.detector_score)),
+                ..d.built.get(&r.report_id).cloned().unwrap_or_default()
+            });
+        let created = own
+            .as_ref()
+            .map(|o| crate::dataset_records::ReportFateDataset {
+                checks: o.checks.clone(),
+                score: o.score,
+                ..Default::default()
+            });
+        let built = own;
+        if fate != Fate::Stored && log.stored.insert(r.report_id.clone()) {
+            log.fates.push(crate::report_records::ReportFate {
+                t,
+                report_id: r.report_id.clone(),
+                reporter: Some(node),
+                fate: Fate::Stored,
+                weight: None,
+                subject: r.subject_cert_digest.clone(),
+                truth: truth.clone(),
+                dataset: created,
+            });
+        }
+        if fate == Fate::Stored && !log.stored.insert(r.report_id.clone()) {
+            return;
+        }
+        log.fates.push(crate::report_records::ReportFate {
+            t,
+            report_id: r.report_id.clone(),
+            reporter: Some(node),
+            fate,
+            weight: weight.map(v2xw_threat::records::q),
+            subject: r.subject_cert_digest.clone(),
+            truth,
+            dataset: built,
+        });
+    }
+
+    /// A report reached provider `k`'s MA at `t` (`pki.report_fate` `delivered`), and
+    /// what that MA read from it (`ma.received`). `subject` is the accused device: the
+    /// MA reads its certificate's issuer and, through the LAs, its link token, never
+    /// its node id.
+    fn log_received(
+        &mut self,
+        k: usize,
+        t: SimTime,
+        run: FlowRun,
+        r: &MisbehaviourReport,
+        subject: Option<NodeId>,
+        set_aside: Option<&str>,
+    ) {
+        if let Some(reporter) = r.reporter {
+            self.log_fate(t, reporter, r, Fate::Delivered, None);
+        }
+        if self.report_log.is_none() {
+            return;
+        }
+        let row = self.ma_view_row(k, t, run, r, subject, set_aside);
+        if let Some(ds) = self.dataset.as_mut() {
+            let digest = row
+                .dataset
+                .as_ref()
+                .and_then(|d| d.report_digest.clone())
+                .unwrap_or_else(|| r.report_id.clone());
+            ds.held
+                .entry((k, row.subject_cert.clone()))
+                .or_default()
+                .push((digest, row.reporter_cert.clone(), t));
+        }
+        if let Some(log) = self.report_log.as_mut() {
+            log.received.push(row);
+        }
+    }
+
+    /// The `ma.received` row of report `r` about `subject` at MA `k`: what the MA reads
+    /// from the report and learns through the protocol.
+    fn ma_view_row(
+        &self,
+        k: usize,
+        t: SimTime,
+        run: FlowRun,
+        r: &MisbehaviourReport,
+        subject: Option<NodeId>,
+        set_aside: Option<&str>,
+    ) -> crate::report_records::MaReceived {
+        let (issuer, la_link, subject_from) = self.ma_learns(k, run, r, subject);
+        // The phase is the judged BSM's own `secMark`, as the evidence carries it: the
+        // 1609.2 `generationTime` is the device's clock with its own jitter (28 ms sd on
+        // the CV pilots, `bsm-timing-cvpilot.yaml`), which put a locked device's phase off
+        // the epoch on most reports. A report with no BSM evidence keeps the evidence time.
+        let secmark_phase_ms = self
+            .report_log
+            .as_ref()
+            .and_then(|log| log.secmark.get(&r.report_id))
+            .map_or(((r.st_tend / 1_000_000) % 50) as u32, |sm| {
+                u32::from(*sm) % 50
+            });
+        let dataset = self
+            .dataset
+            .as_ref()
+            .map(|_| self.ma_dataset_view(k, run, r));
+        crate::report_records::MaReceived {
+            t,
+            report_id: r.report_id.clone(),
+            ma: k as u32,
+            reporter_cert: r.reporter_cert_digest.clone(),
+            subject_cert: r.subject_cert_digest.clone(),
+            subtypes: r.reason_codes.clone(),
+            generation_time: r.generation_time,
+            evidence_start: r.st_tstart,
+            evidence_end: r.st_tend,
+            excess: v2xw_threat::records::q(r.detector_score),
+            pos_accuracy_m: v2xw_threat::records::q(r.subject_pos_confidence),
+            secmark_phase_ms,
+            issuer,
+            la_link,
+            subject_from,
+            set_aside: set_aside.map(str::to_string),
+            dataset,
+        }
+    }
+
+    /// What MA `k` decoded from the report that reached it on `run`
+    /// (`ma.received`'s dataset fields): read from the report it opened, when it opened
+    /// one; the modelled path has no bytes, so only the triggers.
+    fn ma_dataset_view(
+        &self,
+        k: usize,
+        run: FlowRun,
+        r: &MisbehaviourReport,
+    ) -> crate::dataset_records::MaReceivedDataset {
+        let ma = &self.runs[k].state.ma;
+        let opened = ma
+            .report_on_run(run)
+            .and_then(|x| ma.report_opened.get(x).copied().flatten())
+            .and_then(|o| ma.opened_reports.get(o));
+        let mut v = opened.map_or_else(
+            || crate::dataset_records::MaReceivedDataset {
+                report_digest: None,
+                psid: mbr::BSM_APP_PSID,
+                mbr_type: None,
+                subtype_codes: Vec::new(),
+                nonstandard_triggers: Vec::new(),
+                generation_time_us: None,
+                generation_location: None,
+                evidence: Vec::new(),
+                la_link_t: None,
+            },
+            crate::dataset_records::opened_view,
+        );
+        let us = self.us_profile.as_ref();
+        let ts = self.ts_profile.as_ref();
+        v.nonstandard_triggers = r
+            .reason_codes
+            .iter()
+            .filter(|c| us_subtype(c, us).is_none() && ts.and_then(|t| ts_subtype(c, t)).is_none())
+            .cloned()
+            .collect();
+        v
+    }
+
+    /// What provider `k`'s MA learns about the subject of the report that reached it on
+    /// `run`: the provider whose ACA issued the accused certificate (by the issuer the
+    /// certificate names), the LAs' link token, and where the MA's subject came
+    /// from (`suspect-certificate` for a real report). **Modelled:** the link token is
+    /// the device's own (the LA linking replaces it); without the map's device
+    /// it is the certificate's, which links nothing.
+    fn ma_learns(
+        &self,
+        k: usize,
+        run: FlowRun,
+        r: &MisbehaviourReport,
+        subject: Option<NodeId>,
+    ) -> (String, String, String) {
+        let ma = &self.runs[k].state.ma;
+        let held = ma.report_on_run(run).and_then(|x| ma.subject(x));
+        let issuing = held
+            .and_then(|s| s.issuer)
+            .and_then(|id8| self.provider_of_issuer(&id8))
+            .or_else(|| subject.map(|n| self.provider_of_device(device_of(n))))
+            .unwrap_or(k);
+        let seed = self.params.scms.master_seed;
+        let link = subject.map_or_else(
+            || crate::report_records::cert_link(&r.subject_cert_digest, seed),
+            |n| crate::report_records::la_link(n, seed),
+        );
+        let from = held.map_or("engine-map (modelled report)", |s| s.from.as_str());
+        (format!("provider-{issuing}"), link, from.to_string())
+    }
+
+    /// A report taken from `node`'s store left it for good (sent, or refused for ever):
+    /// it will not be put back.
+    pub fn forget_taken(&mut self, node: NodeId, report_id: &str) {
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.taken.remove(report_id);
+        }
+    }
+
+    /// The dataset's `ma.crl_entry` rows written since the last call (empty unless the
+    /// scenario names the dataset exporter).
+    pub fn take_crl_entries(&mut self) -> Vec<crate::dataset_records::CrlEntry> {
+        // In issue order: the providers' CRLs are issued independently, and a step that
+        // issues more than one writes them in provider order otherwise.
+        let mut crl = self
+            .dataset
+            .as_mut()
+            .map(|d| std::mem::take(&mut d.crl))
+            .unwrap_or_default();
+        in_issue_order(&mut crl);
+        crl
+    }
+
+    /// The dataset's `node.report_built` rows written since the last call (empty unless
+    /// the scenario names the dataset exporter).
+    pub fn take_built_reports(&mut self) -> Vec<crate::dataset_records::ReportBuilt> {
+        self.dataset
+            .as_mut()
+            .map(|d| std::mem::take(&mut d.built_log))
+            .unwrap_or_default()
+    }
+
+    /// Whether `security.scms.report_records` is on.
+    #[must_use]
+    pub fn records_reports(&self) -> bool {
+        self.report_log.is_some()
+    }
+
+    /// A report left `node` on an access link at `now` (`pki.report_fate` `uploaded`).
+    pub fn note_report_uploaded(&mut self, node: NodeId, r: &MisbehaviourReport, now: SimTime) {
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.taken.remove(&r.report_id);
+        }
+        self.log_fate(now, node, r, Fate::Uploaded, None);
+    }
+
+    /// The report records written since the last call: fates and MA receptions.
+    pub fn take_report_records(
+        &mut self,
+    ) -> (
+        Vec<crate::report_records::ReportFate>,
+        Vec<crate::report_records::MaReceived>,
+    ) {
+        self.report_log.as_mut().map_or_else(Default::default, |l| {
+            (
+                std::mem::take(&mut l.fates),
+                std::mem::take(&mut l.received),
+            )
+        })
+    }
+
+    /// At the run's end: every report still stored (`held_at_end`), then the remaining
+    /// records and each vehicle's exposure (`gt.device_exposure`).
+    pub fn final_report_records(
+        &mut self,
+        now: SimTime,
+    ) -> (
+        Vec<crate::report_records::ReportFate>,
+        Vec<crate::report_records::MaReceived>,
+        Vec<crate::report_records::DeviceExposure>,
+    ) {
+        if self.report_log.is_none() {
+            return Default::default();
+        }
+        let held: Vec<(NodeId, MisbehaviourReport, f64)> = self
+            .nodes
+            .iter()
+            .flat_map(|(id, n)| {
+                n.outbox
+                    .0
+                    .iter()
+                    .map(move |e| (*id, e.item.0.clone(), e.weight))
+            })
+            .collect();
+        for (node, r, w) in held {
+            self.log_fate(now, node, &r, Fate::HeldAtEnd, Some(w));
+        }
+        let seed = self.params.scms.master_seed;
+        let (fates, received) = self.take_report_records();
+        let log = self.report_log.as_ref().expect("on");
+        let mut exposure = Vec::new();
+        for (node, joined) in &log.joined {
+            if self.rsu_spec_of(*node).is_some() {
+                continue;
+            }
+            let attacker = self.attackers.get(node);
+            exposure.push(crate::report_records::DeviceExposure {
+                t: now,
+                node: *node,
+                la_link: crate::report_records::la_link(*node, seed),
+                joined: *joined,
+                left: log.left.get(node).copied().unwrap_or(now),
+                attacker: attacker.is_some(),
+                // The first falsified message, as the record documents: not the first
+                // edit on the air, which a disguise that only restamps secMark (P1-E8's
+                // `BenignClassMimic`) makes 0.1-4 s earlier than its payload's first lie.
+                attack_start: attacker
+                    .map(|a| self.first_falsified.get(node).copied().unwrap_or(a.from)),
+            });
+        }
+        (fates, received, exposure)
+    }
+
+    /// Whether a vehicle must keep a report it would sign at `at` in its store: it is a
+    /// device of this SCMS (the PDU layer on) and holds no pseudonym certificate valid at
+    /// `at` (`ScmsRun::mbr_signer`), as across the week rollover before its top-up lands.
+    /// The report waits until one is valid ([SM-MBR] §2.2: reports are stored and
+    /// uploaded later), rather than going out unsigned. Counted on
+    /// [`Phase2Report::reports_held_for_signer`].
+    pub fn report_waits_for_signer(&mut self, node: NodeId, at: SimTime) -> bool {
+        if self.etsi.is_some()
+            || self.home().state.pki.is_none()
+            || self.rsu_spec_of(node).is_some()
+        {
+            return false;
+        }
+        let dev = device_of(node);
+        let run = self.run_of(dev);
+        // Only a device on the real-certificate path (it holds implicit pseudonyms, if
+        // none valid now): one that never had any would wait for ever.
+        let on_real_path = run
+            .state
+            .devices
+            .get(&dev)
+            .is_some_and(|d| d.credentials.values().any(|c| c.implicit.is_some()));
+        let waits = on_real_path && run.mbr_signer(dev, at, None).is_none();
+        if waits {
+            self.report.reports_held_for_signer += 1;
+        }
+        waits
+    }
+
+    /// Takes a vehicle's held reports at `now`, to try again, in the store's upload
+    /// order (highest weight first, newer first on ties) after the 05:00-Eastern decays
+    /// since the last look and the deletion of reports older than a week.
+    pub fn take_outbox(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+    ) -> Vec<(MisbehaviourReport, SimTime)> {
+        let unix =
+            v2xw_core::time::WallClock::new(self.params.scms.pdu.t0_unix_s).unix_seconds_at(now);
+        let policy = self.params.report_store;
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return Vec::new();
+        };
+        n.outbox.configure(&policy);
+        n.outbox.0.decay_to(unix);
+        let expired = n.outbox.0.expire_entries(unix);
+        let taken = n.outbox.0.take_upload_order(unix);
+        n.taken.clear();
+        let mut out = Vec::with_capacity(taken.len());
+        for e in taken {
+            n.taken.insert(
+                e.item.0.report_id.clone(),
+                TakenReport {
+                    weight: e.weight,
+                    multiplier: e.multiplier,
+                    seq: e.seq,
+                    created_unix: e.created_unix,
+                    size: e.size,
+                },
+            );
+            out.push(e.item);
+        }
+        for e in expired {
+            self.log_fate(now, node, &e.item.0, Fate::Expired, Some(e.weight));
+        }
+        out
+    }
+
+    /// The reports `node` holds, in upload order, with their current weights.
+    #[must_use]
+    pub fn held_reports(&self, node: NodeId) -> Vec<(String, f64)> {
+        let Some(n) = self.nodes.get(&node) else {
+            return Vec::new();
+        };
+        let mut v: Vec<_> = n.outbox.0.iter().collect();
+        v.sort_by(|a, b| {
+            b.weight
+                .partial_cmp(&a.weight)
+                .unwrap_or(core::cmp::Ordering::Equal)
+                .then(b.seq.cmp(&a.seq))
+        });
+        v.into_iter()
+            .map(|e| (e.item.0.report_id.clone(), e.weight))
+            .collect()
+    }
+
+    /// The scheduled component revocation, once due by `now`: the provider puts
+    /// the component's certificate on the hash CRL of the `(cracaId, crlSeries)` it names
+    /// ([`ScmsRun::revoke_component`]), published by its publication rule. Its devices
+    /// install the list with their next composite CRL, and their receivers then refuse
+    /// what that component certified (`issuer-revoked`). A role the provider's PKI cannot
+    /// put on a list (the S2X ICA: no certificate signs series 2 under the root; the PDU
+    /// layer off) is a backend error and counted in
+    /// [`Phase2Report::component_revocations_refused`].
+    fn component_revocation_due(&mut self, now: SimTime) {
+        let Some(plan) = self
+            .component_revocation
+            .take_if(|c| c.at <= now && c.provider < self.runs.len())
+        else {
+            return;
+        };
+        match self.runs[plan.provider].revoke_component(&plan.role, plan.at) {
+            Ok(_) => self.report.component_revocations += 1,
+            Err(e) => {
+                self.report.component_revocations_refused += 1;
+                self.report.backend_errors += 1;
+                if self.report.first_backend_error.is_empty() {
+                    self.report.first_backend_error =
+                        format!("component_revoked '{}': {e}", plan.role);
+                }
+            }
+        }
+    }
+
+    /// Every provider's RA acknowledgement delays in one histogram: the
+    /// buckets, counts and misses summed, the longest delay the longest of any, so its
+    /// p99 is the fleet's.
+    fn ra_acks(&self) -> v2xw_proto::service::AckDelays {
+        let mut all = v2xw_proto::service::AckDelays::default();
+        for run in &self.runs {
+            let Some(a) = run.kernel.acks(run.state.nodes.ra) else {
+                continue;
+            };
+            for (sum, n) in all.buckets.iter_mut().zip(a.buckets.iter()) {
+                *sum += n;
+            }
+            all.count += a.count;
+            all.over_1s += a.over_1s;
+            all.max_ns = all.max_ns.max(a.max_ns);
+        }
+        all
+    }
+
+    /// Under `eac_review: elector-policy`, each governance time that has come
+    /// is a request: the Board logs it (`eac-request`) and the time becomes the vote's,
+    /// [`Governance::request`] (10 Eastern business days for an addition, a rollover's
+    /// new root; 24 h for a removal).
+    ///
+    /// [`Governance::request`]: v2xw_proto::scms::governance::Governance::request
+    fn eac_requests_due(&mut self, now: SimTime) {
+        use v2xw_proto::scms::governance::CtlChangeKind;
+        let gov = &mut self.runs[0].state.gov;
+        let times = [
+            (
+                &mut self.params.root_rollover_at,
+                CtlChangeKind::AddRoot,
+                "home root rollover",
+            ),
+            (
+                &mut self.params.root_removal_at,
+                CtlChangeKind::RemoveRoot,
+                "removal of the superseded home root",
+            ),
+            (
+                &mut self.params.peer_root_removal_at,
+                CtlChangeKind::RemoveRoot,
+                "removal of the peer provider's root",
+            ),
+            (
+                &mut self.params.elector_replacement_at,
+                CtlChangeKind::ReplaceElector,
+                "replacement of an elector",
+            ),
+            (
+                &mut self.params.root_addition_at,
+                CtlChangeKind::AddRoot,
+                "addition of a new provider's root",
+            ),
+        ];
+        for (k, (at, kind, what)) in times.into_iter().enumerate() {
+            if self.eac_requested[k] {
+                continue;
+            }
+            if let Some(t) = at.filter(|t| *t <= now) {
+                self.eac_requested[k] = true;
+                *at = Some(gov.request(kind, t, what.to_string()));
+                self.report.gov_requests += 1;
+            }
+        }
+    }
+
+    /// The Test Ballot (Elector Policy v1.0 §1.1): once an approved elector
+    /// has gone `test_ballot_interval` without signing, every approved elector signs the
+    /// published CTL's contents. A ballot waits while a decided CTL is unpublished: the
+    /// endorsed contents would carry the published list's `effectiveDate`, before a new
+    /// elector's certificate starts, so it is held at that publication.
+    fn test_ballot_due(&mut self, now: SimTime) {
+        let Some(idle) = self.params.test_ballot_interval else {
+            return;
+        };
+        let gov = &mut self.runs[0].state.gov;
+        if gov.pending.is_empty() && gov.test_ballot_due(now, idle) {
+            gov.test_ballot(now);
+        }
+        // The next instant one is due: the ballot condition only grows true with time
+        // while the log is unchanged, and holds by `now + idle` at the latest.
+        let len = gov.log.len();
+        if self.test_ballot_at.is_some_and(|(n, _)| n == len) {
+            return;
+        }
+        let next = if gov.test_ballot_due(now, idle) {
+            // Held for a publication, whose deadline is a wake of its own.
+            None
+        } else if !gov.test_ballot_due(now.saturating_add(idle), idle) {
+            // No approved elector.
+            None
+        } else {
+            let (mut lo, mut hi) = (now, now.saturating_add(idle));
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if gov.test_ballot_due(mid, idle) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            Some(hi)
+        };
+        self.test_ballot_at = Some((len, next));
+    }
+
+    /// The governance entities' scheduled EAC decisions that are due by `now`, then
+    /// every decided CTL whose publication time has come ([`Governance::publish_due`]):
+    /// a device fetching trust files after that installs it.
+    ///
+    /// [`Governance::publish_due`]: v2xw_proto::scms::governance::Governance::publish_due
+    fn governance_due(&mut self, now: SimTime) {
+        self.ensure_factory_trust();
+        if self.params.eac_review {
+            self.eac_requests_due(now);
+        }
+        let st = &mut self.runs[0].state;
+        // The notice comes before any removal decided at the same instant.
+        if let Some(at) = self.params.root_termination_notice_at.filter(|t| *t <= now) {
+            self.params.root_termination_notice_at = None;
+            let peer = st
+                .peer_pki
+                .first()
+                .and_then(|(label, _)| st.gov.root_of(label));
+            if let Some(root) = peer
+                && st.gov.termination_notice(root, at).is_some()
+            {
+                self.report.gov_termination_notices += 1;
+            }
+        }
+        if let Some(at) = self.params.peer_root_removal_at.filter(|t| *t <= now) {
+            self.params.peer_root_removal_at = None;
+            let peer = st
+                .peer_pki
+                .first()
+                .and_then(|(label, _)| st.gov.root_of(label));
+            if let Some(root) = peer
+                && st.gov.remove_root(root, at).is_some()
+            {
+                self.removed_peer = Some(1);
+                self.report.gov_decisions += 1;
+            }
+        }
+        // Under the Board's review the removal's vote (24 h after its request) can come
+        // before the rollover's (10 business days after its own): the old root is
+        // superseded only at the rollover vote, so the removal is voted with it.
+        if self.eac_requested[1]
+            && self.superseded_root.is_none()
+            && let (Some(rollover), Some(removal)) =
+                (self.params.root_rollover_at, self.params.root_removal_at)
+            && removal < rollover
+        {
+            self.params.root_removal_at = Some(rollover);
+        }
+        if let Some(at) = self.params.root_rollover_at.filter(|t| *t <= now) {
+            self.params.root_rollover_at = None;
+            let (old, _new, _publish) = st.gov.rollover_root(&st.rng, &st.nodes, at);
+            self.superseded_root = Some(old);
+            self.report.gov_decisions += 1;
+        }
+        if let Some(at) = self.params.root_removal_at.filter(|t| *t <= now) {
+            self.params.root_removal_at = None;
+            if let Some(old) = self.superseded_root
+                && st.gov.remove_root(old, at).is_some()
+            {
+                self.report.gov_decisions += 1;
+            }
+        }
+        if let Some(at) = self.params.elector_replacement_at.filter(|t| *t <= now) {
+            self.params.elector_replacement_at = None;
+            let first = (0..st.gov.elector_slots()).find(|s| st.gov.elector_approved(*s));
+            if let Some(slot) = first
+                && st.gov.replace_elector(&st.rng, slot, at).is_some()
+            {
+                self.report.gov_decisions += 1;
+            }
+        }
+        if let Some(at) = self.params.root_addition_at.filter(|t| *t <= now) {
+            self.params.root_addition_at = None;
+            st.gov.add_root(&st.rng, "added-root", at);
+            self.report.gov_decisions += 1;
+        }
+        self.report.ctls_published += u64::from(st.gov.publish_due(now));
+        self.test_ballot_due(now);
+        // One CTL for every provider: the other providers' RAs serve what the SCMS
+        // Manager published.
+        if let Some((home, peers)) = self.runs.split_first_mut() {
+            for run in peers {
+                run.state.gov.sync_trust_from(&home.state.gov);
+                // A home rollover re-certified the home hierarchy: every peer's copy of
+                // it (and so its chain file) follows.
+                run.state.gov.sync_peer_from(&home.state.gov);
+            }
+        }
+        self.follow_published_pki(now);
+    }
+
+    /// A root rollover's changeover on the wire (Provider Req. §3.5.4: after the
+    /// changeover the provider signs only with the new keys). Once the CTL approving the
+    /// home provider's new root is published, every run's PDU PKI for that provider is
+    /// the governance's re-certified hierarchy: new pseudonym, application and enrolment
+    /// certificates, CRLs and backend SPDUs chain to the new root, and the superseded
+    /// certificates stay resolvable until they expire ([`ScmsPki::retired`]). Before
+    /// this, the PDU PKI was fixed at run start and nothing on the wire reached the new
+    /// root.
+    ///
+    /// [`ScmsPki::retired`]: v2xw_proto::scms::pdu::ScmsPki::retired
+    fn follow_published_pki(&mut self, now: SimTime) {
+        let st = &self.runs[0].state;
+        let Some(old) = st.pki.clone() else {
+            return;
+        };
+        let label = st.deployment.providers[0].name.clone();
+        let published = st
+            .gov
+            .root_of(&label)
+            .is_some_and(|r| st.gov.ctl.roots.contains(&r));
+        if !published || st.gov.cert("ica").is_none_or(|c| *c == old.ica.cert) {
+            return;
+        }
+        let Some(Ok(next)) = st.gov.pdu_pki(&label) else {
+            return;
+        };
+        let next = std::sync::Arc::new(old.superseded_by(next));
+        for run in &mut self.runs {
+            run.state.follow_pki(&label, std::sync::Arc::clone(&next));
+        }
+        // The re-certified CRL Generator's first list under the new CRACA.
+        self.runs[0].reissue_crl_after_changeover(now);
+        self.pki_changeover = true;
+    }
+
+    /// Whether the PDU PKI followed a root rollover since the last call: the engine's
+    /// credential factory and the trust a joining device installs follow it.
+    pub fn take_pki_changeover(&mut self) -> bool {
+        core::mem::take(&mut self.pki_changeover)
+    }
+
+    fn note_unsecured(&mut self, why: &str) {
+        self.report.reports_mbr_unsecured += 1;
+        *self
+            .report
+            .reports_mbr_unsecured_by
+            .entry(why.to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// A signed BSM `signer` put on the air, claiming `generated` as its generation time:
+    /// kept (the last [`EVIDENCE_BSMS`]) so a report about that certificate can attach the
+    /// BSMs its reporter judged.
+    pub fn note_signed_bsm(&mut self, signer: [u8; 8], generated: SimTime, spdu: &[u8]) {
+        if self.etsi.is_some() || self.home().state.pki.is_none() {
+            return;
+        }
+        let q = self.evidence.entry(signer).or_default();
+        if q.len() == EVIDENCE_BSMS {
+            q.pop_front();
+        }
+        q.push_back((generated, spdu.to_vec()));
+    }
+
+    /// Cellular vehicles with a multi-message backend flow (a top-up or a re-enrolment)
+    /// in flight, in node order.
+    #[must_use]
+    pub fn cellular_flows_in_flight(&self) -> Vec<NodeId> {
+        self.nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.access == Some(AccessKind::Cellular) && (n.topup.is_some() || n.reenrol.is_some())
+            })
+            .map(|(k, _)| *k)
+            .collect()
+    }
+
+    /// Every device (vehicle or handset) the backend knows, roadside units excluded.
+    #[must_use]
+    pub fn device_nodes(&self) -> Vec<NodeId> {
+        self.nodes
+            .keys()
+            .filter(|k| !self.rsu_nodes().contains(k))
+            .copied()
+            .collect()
+    }
+
+    /// Vehicles with reports held.
+    #[must_use]
+    pub fn nodes_with_outbox(&self) -> Vec<NodeId> {
+        self.nodes
+            .iter()
+            .filter(|(_, n)| !n.outbox.0.is_empty() && !n.powered_off)
+            .map(|(k, _)| *k)
+            .collect()
+    }
+
+    /// Counts a report uploaded over `kind`.
+    pub fn note_upload(&mut self, node: NodeId, kind: AccessKind) {
+        match kind {
+            AccessKind::Cellular => self.report.reports_uploaded_cellular += 1,
+            AccessKind::RsuRelay => self.report.reports_uploaded_relay += 1,
+            AccessKind::Offline => {}
+        }
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.reports_uploaded += 1;
+        }
+    }
+
+    /// Whether `node` may put a stored report on the air to a relaying unit at `now`: its
+    /// retransmission timer has run out, or this is the look that armed it (every stored
+    /// report goes in the same look).
+    #[must_use]
+    pub fn relay_may_send(&self, node: NodeId, now: SimTime) -> bool {
+        self.nodes
+            .get(&node)
+            .is_none_or(|n| n.relay_look_at == Some(now) || now >= n.relay_retry_at)
+    }
+
+    /// `node` put a report on the air to a relaying unit at `now`: the first such attempt
+    /// of a look arms the retransmission timer, doubled for each look no unit confirmed.
+    pub fn note_relay_sent(&mut self, node: NodeId, now: SimTime) {
+        if let Some(n) = self.nodes.get_mut(&node)
+            && n.relay_look_at != Some(now)
+        {
+            n.relay_look_at = Some(now);
+            let rto = RELAY_RTO_INITIAL
+                .as_nanos()
+                .saturating_mul(1u64 << n.relay_unacked.min(RELAY_RTO_MAX_DOUBLINGS));
+            n.relay_retry_at = now.saturating_add(rto);
+            n.relay_unacked = n.relay_unacked.saturating_add(1);
+        }
+    }
+
+    /// Whether `node`'s store still holds `report_id`, unconfirmed: what a relaying unit's
+    /// IP stack learns from the upload's own session. A retransmission of a report a unit
+    /// already confirmed is a duplicate the session discards; forwarded, it reached the
+    /// RA twice, and its second build found its evidence spent and was counted as a
+    /// report not filed (`reports_sent` 15 off, `reports_received` 15 over
+    /// the uploads).
+    #[must_use]
+    pub fn relay_pending(&self, node: NodeId, report_id: &str) -> bool {
+        self.nodes
+            .get(&node)
+            .is_some_and(|n| n.outbox.0.contains_where(|(r, _)| r.report_id == report_id))
+    }
+
+    /// Counts a relayed report frame a unit decoded for an upload already confirmed.
+    pub fn note_relay_duplicate(&mut self) {
+        self.report.reports_relay_duplicates += 1;
+    }
+
+    /// A `report-forward` unit took `report_id` from `node` onto its backhaul at `now`:
+    /// the upload is confirmed, so the report leaves the device's store and counts as
+    /// relayed (`pki.report_fate` `uploaded`). `false` when the store no longer holds it.
+    pub fn relay_delivered(&mut self, node: NodeId, report_id: &str, now: SimTime) -> bool {
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return false;
+        };
+        n.relay_unacked = 0;
+        n.relay_retry_at = 0;
+        let Some(e) = n.outbox.0.remove_where(|(r, _)| r.report_id == report_id) else {
+            return false;
+        };
+        n.reports_uploaded += 1;
+        self.report.reports_uploaded_relay += 1;
+        self.log_fate(now, node, &e.item.0, Fate::Uploaded, None);
+        true
+    }
+
+    /// Counts a relayed report the network layer refused at its MTU: it never
+    /// went on the air, so it is not an upload.
+    pub fn note_report_refused_mtu(&mut self, node: NodeId) {
+        self.report.reports_refused_mtu += 1;
+        self.ee_tally_of(node).reports_refused_mtu += 1;
+    }
+
+    /// Counts a roadside CRL frame the network layer refused at its MTU.
+    pub fn note_crl_frame_refused_mtu(&mut self) {
+        self.report.crl_frames_refused_mtu += 1;
+    }
+
+    fn note_not_filed(&mut self, node: NodeId, why: &str) {
+        self.report.reports_not_filed += 1;
+        self.ee_tally_of(node).reports_not_filed += 1;
+        *self
+            .report
+            .reports_not_filed_by
+            .entry(why.to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// Whether a vehicle's report can leave the device (OF-2).
+    ///
+    /// Under the US SCMS with the PDU layer on, an upload *is* its bytes: a
+    /// SecuredMisbehaviorReport signed under PSID 0x26 and encrypted to the MA, POSTed with
+    /// an enrolment-signed `Download-Req` ([SM-MBR] §3–4). A detection the device cannot
+    /// build that report for — no v1.1 subtype maps its checks, too few of the accused's
+    /// signed BSMs heard, an accused certificate it cannot name — has nothing to upload, so
+    /// it is counted here by reason ([`Phase2Report::reports_not_filed_by`]) and dropped.
+    /// Always `true` without the PDU layer (every report is modelled there), on the ETSI
+    /// path, and with `modelled_reports`. A roadside unit's own detection is not filed
+    /// (the US profile has no roadside reporter, [`Phase2::real_mbr`]); it is
+    /// counted under its own reason.
+    pub fn files_report(&mut self, node: NodeId, report: &MisbehaviourReport) -> bool {
+        if self.params.modelled_reports {
+            return true;
+        }
+        let nowhere = v2xw_sec::envelope::GenerationLocation {
+            lat_tenth_microdeg: 0,
+            lon_tenth_microdeg: 0,
+            elevation: 0,
+        };
+        let why = match self.real_mbr(report, nowhere) {
+            MbrBuild::Real(_) | MbrBuild::Off => return true,
+            MbrBuild::Unmapped => "no SM-MBR v1.1 subtype maps the detector checks",
+            MbrBuild::Unsecured(why) => why,
+        };
+        self.note_not_filed(node, why);
+        self.judged_evidence.remove(&report.report_id);
+        false
+    }
+
+    /// The dataset's record of the bytes a report left its device as (`node.report_built`),
+    /// under the dataset gate: recorded when they are built, because a report still in the
+    /// RA's shuffle at the run's end has no later fate step to carry them.
+    #[allow(clippy::too_many_arguments)]
+    fn note_built(
+        &mut self,
+        report: &MisbehaviourReport,
+        reporter: NodeId,
+        t: SimTime,
+        transport: Transport,
+        inner: &[u8],
+        size: usize,
+        evidence: Vec<String>,
+    ) {
+        let Some(ds) = self.dataset.as_mut() else {
+            return;
+        };
+        let built = crate::dataset_records::ReportFateDataset {
+            report_digest: Some(crate::dataset_records::digest_hex16(inner)),
+            size_bytes: Some(size as u64),
+            path: Some(
+                match transport {
+                    Transport::RsuBackhaul => "rsu_relay",
+                    _ => "cellular",
+                }
+                .to_string(),
+            ),
+            evidence_spdu_digests: evidence,
+            ..Default::default()
+        };
+        ds.built.insert(report.report_id.clone(), built.clone());
+        ds.built_log.push(crate::dataset_records::ReportBuilt {
+            t,
+            reporter,
+            report_id: report.report_id.clone(),
+            subject: report.subject_cert_digest.clone(),
+            built,
+        });
+    }
+
+    /// A car's relayed report that a compromised roadside unit replaced with a forgery
+    /// (`PoisonForwardedReports`) after confirming the car's upload. The car built and
+    /// sent its report as bytes all the same, so under the dataset gate they are built
+    /// here, as they would have been at the proxy, and recorded: the car's `uploaded`
+    /// step names its bytes (the relay repro run: 63 such uploads with no report id and no
+    /// evidence). The bytes go no further; nothing else of the run reads them.
+    pub fn report_intercepted(
+        &mut self,
+        report: &MisbehaviourReport,
+        reporter: NodeId,
+        sent_at: SimTime,
+        location: v2xw_sec::envelope::GenerationLocation,
+    ) {
+        // Its judged evidence is spent either way: nothing builds this report later.
+        if self.dataset.is_none() {
+            self.judged_evidence.remove(&report.report_id);
+            return;
+        }
+        let built = self.real_mbr(report, location);
+        self.judged_evidence.remove(&report.report_id);
+        let MbrBuild::Real(mbr) = built else {
+            return;
+        };
+        let kr = self.provider_of_device(device_of(reporter));
+        let prefer = self.nodes.get(&reporter).and_then(|n| n.active_digest);
+        if let Ok((_, _, secured, inner)) =
+            self.runs[kr].secure_mbr_parts(device_of(reporter), &mbr, sent_at, prefer)
+        {
+            let evidence = mbr
+                .evidence
+                .suspect()
+                .bsms
+                .iter()
+                .map(|b| crate::dataset_records::evidence_bsm(b).spdu_digest)
+                .collect();
+            self.note_built(
+                report,
+                reporter,
+                sent_at,
+                Transport::RsuBackhaul,
+                &inner,
+                secured.report.bytes().len(),
+                evidence,
+            );
+        }
+    }
+
+    /// Counts a report a roadside unit put on its backhaul.
+    pub fn note_rsu_report(&mut self) {
+        self.report.reports_from_rsus += 1;
+    }
+
+    /// Counts a report the access link lost.
+    pub fn note_report_lost(&mut self) {
+        self.report.reports_lost += 1;
+    }
+
+    /// A report reaches the Location Obscurer Proxy, its access leg paid.
+    ///
+    /// The backend takes it from here: the RA's report shuffle, the forward to the MA,
+    /// the MA's own verification. The authority's *decision* happens when the MA has
+    /// ingested it ([`Phase2::advance`]), not here.
+    ///
+    /// Under the SCMS with the PDU layer on, the report is a real US misbehaviour report
+    /// ([`Phase2::real_mbr`]) whenever its detection has a PSID-0x20 type and subtype:
+    /// the RA checks the enrolment-signed upload header, the MA decrypts it and verifies
+    /// the evidence, and each refusal is on `scms.state.pdu_rejections`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn report_at_proxy(
+        &mut self,
+        mut report: MisbehaviourReport,
+        reporter: NodeId,
+        detected_at: SimTime,
+        sent_at: SimTime,
+        arrive_at: SimTime,
+        transport: Transport,
+        location: v2xw_sec::envelope::GenerationLocation,
+    ) {
+        self.report.reports_received += 1;
+        let kind = if transport == Transport::RsuBackhaul {
+            "report-relay"
+        } else {
+            "report-uu"
+        };
+        self.access.note_exchange(kind, sent_at, arrive_at);
+        let at_proxy = arrive_at;
+        // Ground truth for the records only: the report goes to the RA and the MA whatever
+        // the engine's map says. Only a report without bytes (the modelled path,
+        // and the ETSI model) takes its subject from the map.
+        let truth = self.truth_subject(&report.subject_cert_digest);
+        let subject = truth.map(|t| t.0);
+        if self.runs.len() > 1 {
+            let names = &self.runs[0].state.deployment.providers;
+            let of = |n: NodeId| self.device_provider.get(&device_of(n)).copied();
+            if let (Some(a), Some(b)) = (of(reporter), subject.and_then(of)) {
+                let key = format!("{}<-{}", names[a].name, names[b].name);
+                *self.report.reports_by_provider.entry(key).or_insert(0) += 1;
+            }
+        }
+        if let Some(etsi) = self.etsi.as_mut() {
+            // TS 103 759: the report goes to the MA, signed with the reporter's ticket and
+            // encrypted to the authority — no RA shuffle in the ETSI system. **Modelled**:
+            // the ETSI MA is handed the accused device by the engine's map.
+            let Some(subject) = subject else {
+                return;
+            };
+            let run = etsi.report_at_ma(
+                device_of(reporter),
+                device_of(subject),
+                detected_at,
+                sent_at,
+                arrive_at,
+                transport,
+                report_bytes(),
+            );
+            self.in_flight.insert(
+                (0, run),
+                InFlightReport {
+                    report,
+                    subject: Some(subject),
+                },
+            );
+            return;
+        }
+        // The reporter's own provider's RA and MA receive it, after the internet
+        // leg from the city to that provider's region.
+        let kr = self.provider_of_device(device_of(reporter));
+        let arrive_at = arrive_at.saturating_add(self.internet_legs[kr].as_nanos());
+        // Why the report travels on the modelled path, when it does (the PKI view's case
+        // evidence names it with the detector's checks).
+        let mut modelled: Option<String> = None;
+        // A vehicle's report that cannot be built as real bytes has no upload (OF-2,
+        // [`Phase2::files_report`]): [`Engine`]'s route checks before the access leg, and
+        // this catches what changed on the way (the securing itself failing).
+        let strict = !self.params.modelled_reports;
+        let built = self.real_mbr(&report, location);
+        // The report is built now: its evidence is in it, or it never will be.
+        let judged = self.judged_evidence.remove(&report.report_id);
+        let subject_key = decode_hex8(&report.subject_cert_digest);
+        let judged_last = judged.as_ref().and_then(|j| j.last());
+        let moved_on = match subject_key.and_then(|d| self.evidence_final.get(&d)) {
+            Some(last) => judged_last.map(|b| evidence_hash(b)) != Some(*last),
+            None => {
+                let latest = subject_key
+                    .and_then(|d| self.evidence.get(&d))
+                    .and_then(|q| q.back())
+                    .map(|(_, b)| b);
+                judged_last != latest
+            }
+        };
+        let run = match built {
+            MbrBuild::Real(mbr) => {
+                if moved_on {
+                    self.report.reports_evidence_moved_on += 1;
+                }
+                // An Implausible report attaches the judged BSM alone: its evidence
+                // window is that BSM's instant.
+                if mbr.evidence.suspect().bsms.len() < 2 {
+                    report.st_tstart = report.st_tend;
+                }
+                // Signed with the pseudonym the vehicle signs its BSMs with now, if it is
+                // still valid when the report is generated.
+                let prefer = self.nodes.get(&reporter).and_then(|n| n.active_digest);
+                match self.runs[kr].secure_mbr_parts(device_of(reporter), &mbr, sent_at, prefer) {
+                    Ok((si, slv, secured, inner)) => {
+                        self.report.reports_mbr_real += 1;
+                        let evidence = mbr
+                            .evidence
+                            .suspect()
+                            .bsms
+                            .iter()
+                            .map(|b| crate::dataset_records::evidence_bsm(b).spdu_digest)
+                            .collect();
+                        self.note_built(
+                            &report,
+                            reporter,
+                            at_proxy,
+                            transport,
+                            &inner,
+                            secured.report.bytes().len(),
+                            evidence,
+                        );
+                        Some(self.runs[kr].secured_at_proxy(
+                            device_of(reporter),
+                            si,
+                            slv,
+                            secured,
+                            detected_at,
+                            sent_at,
+                            arrive_at,
+                            transport,
+                        ))
+                    }
+                    Err(e) if strict => {
+                        self.note_not_filed(
+                            reporter,
+                            &format!("the report could not be secured: {e}"),
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        self.note_unsecured(&e.to_string());
+                        modelled = Some(format!("the report could not be secured: {e}"));
+                        None
+                    }
+                }
+            }
+            MbrBuild::Unmapped if strict => {
+                self.note_not_filed(reporter, "no SM-MBR v1.1 subtype maps the detector checks");
+                return;
+            }
+            MbrBuild::Unsecured(why) if strict => {
+                self.note_not_filed(reporter, why);
+                return;
+            }
+            MbrBuild::Unmapped => {
+                self.report.reports_mbr_unmapped += 1;
+                modelled = Some("no SM-MBR v1.1 subtype maps the detector checks".to_string());
+                None
+            }
+            MbrBuild::Unsecured(why) => {
+                self.note_unsecured(why);
+                modelled = Some(why.to_string());
+                None
+            }
+            MbrBuild::Off => {
+                modelled = Some("real reports are off (no SCMS PDU layer)".to_string());
+                None
+            }
+        };
+        let run = match run {
+            Some(run) => run,
+            None => {
+                // A report with no bytes carries no certificate for the MA to read: its
+                // subject is the engine map's (`engine-map (modelled report)`).
+                let Some((_, i, lv)) = truth else {
+                    return;
+                };
+                let upload = self.runs[kr].modelled_upload_bytes();
+                let run = self.runs[kr].report_at_proxy(
+                    device_of(reporter),
+                    i,
+                    lv,
+                    detected_at,
+                    sent_at,
+                    arrive_at,
+                    transport,
+                    upload,
+                );
+                let why = modelled.as_deref().unwrap_or("modelled");
+                self.runs[kr].modelled_report_evidence(run, why, &report.reason_codes);
+                run
+            }
+        };
+        self.in_flight
+            .insert((kr, run), InFlightReport { report, subject });
+    }
+
+    /// The US misbehaviour report ([SM-MBR] v1.1, PSID 0x20) a device files for `r`.
+    ///
+    /// The type and subtype come from the first fired check the v1.1 object set has:
+    /// `constantPositionFrozen` → 1VInconsistent/ConstantPosition, `positionJump` →
+    /// 1VInconsistent/RandomPosition, `implausibleAcceleration` →
+    /// Implausible/MaxAcceleration, each with the [SM-MBR] §2.3.1 default parameters
+    /// (1 m drift, 10 m/s²). ObsImplausible/Distance is off by default in the US profile
+    /// (a relay makes an innocent sender look far away, §2.3.1.4.2), and no other check
+    /// has a subtype, so those reports stay on the modelled path and are counted.
+    ///
+    /// The evidence is the signed BSMs the reporter judged, byte for byte, with the
+    /// accused certificate as `signingCertificate` ([SM-MBR] §2.3.1.2.1, §2.3.1.3.1): the
+    /// frames that certificate put on the air with the generation times of the judged
+    /// BSMs, taken when the report was generated ([`Phase2::detect`]). The node layer does
+    /// not keep the frames a receiver decoded; the frame on the air is the same octets.
+    /// Before, it was the certificate's last BSMs on the air when the report was built,
+    /// which for a report stored across a fast-forward was a BSM from before it.
+    fn real_mbr(
+        &self,
+        r: &MisbehaviourReport,
+        location: v2xw_sec::envelope::GenerationLocation,
+    ) -> MbrBuild {
+        if self.etsi.is_some() {
+            return MbrBuild::Off;
+        }
+        // The two filing rules of the US profile come before the PDU layer's check:
+        // neither depends on how the report would be encrypted or
+        // whether its bytes are built. Under a post-quantum KEM (which turns the
+        // 1609.2.1 PDU layer off) a detection no SM-MBR v1.1 subtype maps, or a roadside
+        // unit's own detection, had nothing to file before and still has nothing: before,
+        // `Off` came first and 255 such detections were uploaded on the modelled path.
+        if r.reporter.is_some_and(|n| self.rsu_spec_of(n).is_some()) {
+            // the US profile has no roadside reporter, so a unit's own detection
+            // is not filed (`Phase2::files_report`; sized-only on the modelled path only
+            // under `modelled_reports`). [SM-MBR] §3 signs the report with "the end-entity
+            // certificate", a pseudonym certificate in CAMP's design ([CAMP122] §5.2.8.4),
+            // and §2.3.1.4.1's ObsImplausible evidence is "a BSM from the sender and a BSM
+            // from the receiver": the reporter is a BSM sender, an OBE. The USDOT RSU
+            // Specification v4.1 (2016, p. 15) gives a unit certificates "to support"
+            // store-and-repeat and immediate-forward transmission, and forwarding of
+            // received messages by PSID; it has no detection or reporting function. A
+            // unit holds application certificates only. Labelled apart from a vehicle's
+            // gap (which waits for a valid pseudonym instead).
+            return MbrBuild::Unsecured(
+                "a roadside unit holds no pseudonym certificate to sign an SM-MBR with",
+            );
+        }
+        let us = self.us_profile.as_ref();
+        let ts = self.ts_profile.as_ref();
+        let Some(subtype) = r
+            .reason_codes
+            .iter()
+            .find_map(|c| us_subtype(c, us).or_else(|| ts.and_then(|t| ts_subtype(c, t))))
+        else {
+            return MbrBuild::Unmapped;
+        };
+        if self.home().state.pki.is_none() {
+            // No PDU layer: the report is fileable and travels on the modelled path.
+            return MbrBuild::Off;
+        }
+        if !r.reporter.is_some_and(|n| {
+            self.run_of(device_of(n))
+                .state
+                .devices
+                .contains_key(&device_of(n))
+        }) {
+            // A roadside unit holds no pseudonym or enrolment certificate of this SCMS
+            // (its application certificate is the factory's).
+            return MbrBuild::Unsecured("the reporter holds no SCMS enrolment");
+        }
+        let Some(digest) = decode_hex8(&r.subject_cert_digest) else {
+            return MbrBuild::Unsecured("the accused digest does not parse");
+        };
+        let Some((node, i, j)) = self.by_digest.get(&digest).copied() else {
+            return MbrBuild::Unsecured("the accused certificate is not one the run issued");
+        };
+        let Some(cert) = self
+            .run_of(device_of(node))
+            .state
+            .devices
+            .get(&device_of(node))
+            .and_then(|d| d.credentials.get(&(i, j)))
+            .and_then(|c| c.implicit.as_deref())
+            .map(|c| (*c.certificate).clone())
+        else {
+            return MbrBuild::Unsecured("the accused certificate is not an implicit one");
+        };
+        // The BSMs the reporter judged, taken when the report was generated.
+        let bsms: Vec<_> = self
+            .judged_evidence
+            .get(&r.report_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|b| mbr::decode_signed_bsm(b).ok())
+            .collect();
+        let mbr_type = subtype.mbr_type();
+        let bsms = match mbr_type {
+            mbr::MbrType::OneVInconsistent if bsms.len() >= 2 => bsms,
+            mbr::MbrType::Implausible if !bsms.is_empty() => bsms[bsms.len() - 1..].to_vec(),
+            _ => return MbrBuild::Unsecured("too few of the BSMs the reporter judged on hand"),
+        };
+        let generation_time = self.home().state.time32(r.generation_time);
+        MbrBuild::Real(Box::new(mbr::MisbehaviorReport {
+            generation_time,
+            location,
+            mbr_type,
+            subtypes: vec![subtype],
+            evidence: mbr::Evidence::Suspect(mbr::SignedBsms { bsms, cert }),
+        }))
+    }
+
+    /// Runs the backend to `now` and turns what happened into records and actions.
+    ///
+    /// Every provider's run steps to `now`. A report one provider's MA shares
+    /// with the provider that issued the accused certificate lands in that provider's
+    /// run, which then steps again, so a shared report is never a step late.
+    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::needless_range_loop,
+        reason = "the index addresses several parallel sequences at once"
+    )]
+    pub fn advance(&mut self, now: SimTime) -> BackendTick {
+        self.prune_tables(now);
+        if self.etsi.is_some() {
+            return self.advance_etsi(now);
+        }
+        let mut tick = BackendTick::default();
+        self.governance_due(now);
+        self.component_revocation_due(now);
+        // Start any queued case the backend can take.
+        self.start_cases(now);
+        let providers = self.runs.len();
+        let mut stamps: Vec<Vec<v2xw_proto::stage::StageStamp>> = vec![Vec::new(); providers];
+        for _pass in 0..=providers {
+            let mut shared = false;
+            for (k, stamps_k) in stamps.iter_mut().enumerate() {
+                if let Err(e) = self.runs[k].run_until(now) {
+                    self.note_backend_error(&e);
+                }
+                // Stage stamps since the last look.
+                let new: Vec<v2xw_proto::stage::StageStamp> = {
+                    let (new, cursor) = self.runs[k].kernel.stages_since(self.stage_cursor[k]);
+                    let v = new.to_vec();
+                    self.stage_cursor[k] = cursor;
+                    v
+                };
+                let (decided, forwarded) = self.ingest_arrivals(k, &new, &mut tick);
+                shared |= forwarded;
+                stamps_k.extend(new);
+                for (subject, subject_digest, report_run, _t) in decided {
+                    self.queue[k].push_back(Case {
+                        provider: k,
+                        subject,
+                        subject_digest,
+                        report_run,
+                        runs: None,
+                        entry: None,
+                        stamps_emitted: BTreeSet::new(),
+                        enforced_first: None,
+                        enforcers: Vec::new(),
+                        linked: false,
+                    });
+                }
+            }
+            if !shared {
+                break;
+            }
+        }
+        self.backend_now = now;
+        self.start_cases(now);
+        for k in 0..providers {
+            if (!self.queue[k].is_empty() || self.runs[k].case_open())
+                && let Err(e) = self.runs[k].run_until(now)
+            {
+                self.note_backend_error(&e);
+            }
+        }
+        // Cases: note issuance, and emit the stages each has reached, each on the
+        // deciding provider's own log.
+        for case in &mut self.cases {
+            let Some((resolution, issuance)) = case.runs else {
+                continue;
+            };
+            let run = &self.runs[case.provider];
+            let log = &run.kernel.stages;
+            // The MA's own outcome: both LAs named a chain it had already decided.
+            if !case.linked
+                && run.state.ma.cases.get(&resolution).is_some_and(|c| {
+                    c.outcome() == Some(v2xw_proto::scms::run::CaseOutcome::Linked)
+                })
+            {
+                case.linked = true;
+                self.report.decisions_linked += 1;
+            }
+            // The case's own entries: cases run concurrently, so the list's
+            // last entry may be another case's appended on the same step. A case appends
+            // one entry per chain pair in one issuance, its reported chain's first; the
+            // version that carries them is the list length after its last one.
+            let own = || {
+                let c = run
+                    .state
+                    .ma
+                    .cases
+                    .values()
+                    .find(|c| c.crl_run == issuance)?;
+                let (la, ls) = c.seeds[0]?;
+                let entries = &run.state.crlg.entries;
+                let at = entries
+                    .iter()
+                    .rposition(|e| e.la_id1 == la && e.ls1_i == ls)?;
+                let version = (at + c.chain_seeds.len().max(1)).min(entries.len());
+                Some((entries[at], version as u32))
+            };
+            if case.entry.is_none()
+                && log.at(issuance, StageId::Issued).is_some()
+                && let Some((entry, version)) = own()
+            {
+                self.report.crls_issued += 1;
+                *self
+                    .report
+                    .revocations_by_provider
+                    .entry(run.state.deployment.providers[case.provider].name.clone())
+                    .or_insert(0) += 1;
+                // The ground-truth join, for the run report only: whether the device the
+                // authority revoked was the one that lied.
+                if case.subject.is_none() {
+                    // No device by the engine's map (a test hook): nothing to score.
+                } else if let Some(subject) = case.subject
+                    && !self.revoked_devices.insert(subject)
+                {
+                    self.report.revocations_repeated += 1;
+                } else if case
+                    .subject
+                    .is_some_and(|s| self.attackers.contains_key(&s))
+                {
+                    self.report.revoked_attackers += 1;
+                } else {
+                    self.report.revoked_honest += 1;
+                }
+                case.entry = Some((entry, version));
+                // The dataset's `ma.crl_entry`: the linkage-seed entry this case put on the
+                // pseudonym CRL, with the MA's own link token of the device.
+                if let Some(ds) = self.dataset.as_mut()
+                    && ds
+                        .crl_written
+                        .insert((case.provider, case.subject_digest.clone()))
+                {
+                    let seed = self.params.scms.master_seed;
+                    let t_issued = log.at(issuance, StageId::Issued).unwrap_or(0);
+                    ds.crl.push(crate::dataset_records::CrlEntry {
+                        t_issued,
+                        crl_series: u64::from(v2xw_sec::crl::SERIES_PSEUDONYM),
+                        crl_number: u64::from(version),
+                        entry_kind: "linkage_seed".to_string(),
+                        la_link: case.subject.map_or_else(
+                            || crate::report_records::cert_link(&case.subject_digest, seed),
+                            |n| crate::report_records::la_link(n, seed),
+                        ),
+                        i_period: u64::from(entry.i),
+                        t_effective: t_issued,
+                        subject_cert_id: case.subject_digest.clone(),
+                    });
+                }
+            }
+            for (stage, run) in [
+                (StageId::Detect, case.report_run),
+                (StageId::ReportSent, case.report_run),
+                (StageId::Shuffled, case.report_run),
+                (StageId::ReportReceived, case.report_run),
+                (StageId::Decision, resolution),
+                (StageId::Resolved, resolution),
+                (StageId::Blocklisted, resolution),
+                (StageId::Issued, issuance),
+            ] {
+                if let Some(t) = log.at(run, stage)
+                    && case.stamps_emitted.insert((stage as u8, t))
+                {
+                    tick.stages.push(crate::sec_records::ProtoRevocation::stage(
+                        t,
+                        stage.as_str(),
+                        &case.subject_digest,
+                        None,
+                        None,
+                        None,
+                    ));
+                    // The authority's decision is the operator's go-ahead, when the case
+                    // enters its `decision` stage (at once under the automatic MA).
+                    if stage == StageId::Decision {
+                        // The dataset's view of the decision: the deciding MA, its rule,
+                        // and the reports about the subject it held. The US MA decides
+                        // about the device behind the certificate, which it links through
+                        // the LAs inside the case.
+                        let dataset = self.dataset.as_ref().map(|ds| {
+                            let seed = self.params.scms.master_seed;
+                            // Only the reports it had received by the decision: a report
+                            // that reaches the MA later in the same step is not one the
+                            // decision rests on.
+                            let held = received_by(
+                                ds.held
+                                    .get(&(case.provider, case.subject_digest.clone()))
+                                    .map(Vec::as_slice)
+                                    .unwrap_or_default(),
+                                t,
+                            );
+                            let reporters: BTreeSet<&str> =
+                                held.iter().map(|(_, r, _)| r.as_str()).collect();
+                            v2xw_threat::records::MaDecisionDataset {
+                                ma: case.provider as u32,
+                                rule: ds.rule.clone(),
+                                subject_kind: "device".to_string(),
+                                la_link: Some(case.subject.map_or_else(
+                                    || crate::report_records::cert_link(&case.subject_digest, seed),
+                                    |n| crate::report_records::la_link(n, seed),
+                                )),
+                                report_digests: held.iter().map(|(d, _, _)| d.clone()).collect(),
+                                n_reports: held.len() as u64,
+                                n_distinct_reporters: reporters.len() as u64,
+                            }
+                        });
+                        tick.ma_decisions
+                            .push(v2xw_threat::records::MaDecisionRecord {
+                                t,
+                                subject: case.subject_digest.clone(),
+                                decision: "revoke".to_string(),
+                                dataset,
+                            });
+                    }
+                }
+            }
+        }
+        // Newly finished cases that issued nothing.
+        let unresolved = self
+            .cases
+            .iter()
+            .filter(|c| c.runs.is_some() && c.entry.is_none() && !c.linked)
+            .count() as u64;
+        if self.runs.iter().all(|r| !r.case_open()) {
+            self.report.cases_unresolved = unresolved;
+        }
+        // Publication, per provider: each CRL Store's new version is a CRL every RA
+        // serves once the inter-provider link has carried it.
+        for (k, stamps_k) in stamps.iter().enumerate() {
+            let st = &self.runs[k].state;
+            let store = u32::try_from(st.crl_store.entries.len()).unwrap_or(u32::MAX);
+            let serial = st.crl_store.versions;
+            if store <= self.published[k] && serial <= self.published_serial[k] {
+                continue;
+            }
+            self.published[k] = store;
+            self.published_serial[k] = serial;
+            self.report.crl_versions_published += 1;
+            tick.published = Some(store);
+            self.crl_feeds[k].push(CrlVersion {
+                serial,
+                at: now,
+                version: store,
+                entries: st.crl_store.entries.clone(),
+                // The composite carries every list of the provider's publication: the
+                // series-1 linkage CRL (and its superseded CRACAs') and each hash CRL
+                // (series 2 and 256 component lists, series 3 and 4), each a
+                // `SecuredCrl` the device verifies on its own (1609.2.1 §6.3.5).
+                secured: st
+                    .crlg
+                    .secured
+                    .iter()
+                    .chain(st.crlg.secured_retired.iter())
+                    .chain(st.crl_store.hash_crls.values())
+                    .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+                    .collect(),
+            });
+            let size = u64::from(crl_bytes(&st.sizes, store).bytes());
+            for s in stamps_k {
+                if s.stage == StageId::Published || s.stage == StageId::FirstRsuBroadcast {
+                    for case in self.cases.iter_mut().filter(|c| c.provider == k) {
+                        if case.entry.as_ref().is_some_and(|(_, v)| *v <= store)
+                            && case.stamps_emitted.insert((s.stage as u8, s.t))
+                        {
+                            tick.stages.push(crate::sec_records::ProtoRevocation::stage(
+                                s.t,
+                                s.stage.as_str(),
+                                &case.subject_digest,
+                                Some(size),
+                                Some(u64::from(store)),
+                                None,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        // Every provider's roadside list: a unit relays each provider's CRL, as
+        // every RA serves each one, so a vehicle of either provider hears both.
+        self.broadcast_version = self.runs.iter().fold(0u32, |acc, r| {
+            acc.saturating_add(
+                u32::try_from(r.state.crl_broadcast.entries.len()).unwrap_or(u32::MAX),
+            )
+        });
+        // Top-ups whose batch has been installed, on each vehicle's provider's log.
+        let mut finished = Vec::new();
+        for (node, n) in &self.nodes {
+            let Some(run) = n.topup else { continue };
+            let log = &self.run_of(device_of(*node)).kernel.stages;
+            if let Some(t) = log
+                .at_node(run, StageId::Installed, device_of(*node))
+                .or_else(|| log.at(run, StageId::Installed))
+            {
+                finished.push((*node, run));
+                let started = n.topup_started;
+                self.access.note_exchange("topup", started, t);
+            }
+        }
+        for (node, run) in finished {
+            let next_i = self.nodes.get(&node).map_or(0, |n| n.last_period + 1);
+            let fresh = self.creds_of_device(device_of(node), next_i);
+            // What the vehicle downloaded (`sec.cert`'s `bytes`): the run's steps addressed
+            // to the device. Summing every step of the run counted the RA's, ACA's and
+            // LAs' own exchanges too, so a two-vehicle run reported 7,319 octets per
+            // top-up against a cellular downlink that carried about 1,100.
+            let device = device_of(node);
+            let bytes = self
+                .run_of(device)
+                .kernel
+                .steps
+                .iter()
+                .filter(|s| s.run == run && s.to == device)
+                .map(|s| u64::from(s.bytes))
+                .sum();
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.topup = None;
+                if !fresh.is_empty() {
+                    n.last_period = fresh.iter().map(|c| c.i).max().unwrap_or(n.last_period);
+                }
+            }
+            if !fresh.is_empty() {
+                self.report.topups_completed += 1;
+                self.report.certs_topped_up += fresh.len() as u64;
+                self.creds
+                    .entry(node)
+                    .or_default()
+                    .extend(fresh.iter().cloned());
+                tick.installs.push((node, fresh, bytes));
+            }
+        }
+        // Top-ups the RA refused, and successor enrolments that finished either way.
+        self.settle_refusals_and_renewals(&mut tick, now);
+        // Bytes every provider's backend moved.
+        for k in 0..providers {
+            let (steps, cursor) = {
+                let (new, cursor) = self.runs[k].kernel.steps_since(self.step_cursor[k]);
+                (new.to_vec(), cursor)
+            };
+            self.step_cursor[k] = cursor;
+            push_bytes(&mut tick, steps);
+        }
+        self.maybe_publish_view(now, &mut tick);
+        tick
+    }
+
+    /// The earliest instant after `now` at which the credential system has something to
+    /// do (the backend fast-forward): a delivery or timer in the backend's own kernel (a
+    /// shuffle release, a pre-generation, the CRL publication slot, a download poll, an
+    /// MA review), a CTL due for publication or a scheduled root rollover or removal, or
+    /// a vehicle's own clock reaching its top-up horizon, its re-enrolment lead, its next
+    /// CRL fetch or trust-list fetch, or the eMBMS carousel. `None` when nothing is ever
+    /// due again.
+    ///
+    /// Work the backend holds — a kernel delivery, a CTL, a governance decision — counts
+    /// even when it is due at `now` itself: a request started in this very tick is
+    /// injected at `now` and runs on the next step, as in a full run. A vehicle's own
+    /// horizon counts only strictly after `now`: one already due that could not be started
+    /// (no access at a frozen position) does not become startable by time alone, and the
+    /// fast-forward retries it at its next stop. The backend view's cadence is
+    /// deliberately not a wake: it observes, and changes nothing.
+    #[must_use]
+    pub fn next_wake(&self, now: SimTime) -> Option<SimTime> {
+        self.next_wake_cause(now).map(|(t, _)| t)
+    }
+
+    /// The message the earliest delivery any provider's kernel holds is, by its variant
+    /// name, with the node it is for (`ReportShuffleTimer@ra`): which kernel event keeps a
+    /// fast-forward stopping when [`Phase2::next_wake_cause`] says `kernel`.
+    #[must_use]
+    pub fn next_kernel_delivery_label(&self) -> String {
+        let next = self
+            .runs
+            .iter()
+            .filter_map(|r| r.kernel.peek_next().map(|d| (d, r)))
+            .min_by_key(|(d, _)| d.at);
+        let Some((d, run)) = next else {
+            return "none".to_string();
+        };
+        let debug = format!("{:?}", d.msg);
+        let variant: String = debug
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        format!("{variant}@{}", run.role_of(d.to))
+    }
+
+    /// [`Phase2::next_wake`] with what it is: the source of the earliest wake (`kernel`,
+    /// `governance`, `crl-feed`, `root-rollover`, `root-removal`, `peer-root-removal`,
+    /// `mbms`, `crl-poll`, `topup`, `reenrol` or `trust-fetch`), which the fast-forward
+    /// counts per stop ([`crate::FastForwardReport::stops_by_cause`]) so a window that
+    /// stops more often than its backend has work shows what keeps waking it.
+    #[must_use]
+    pub fn next_wake_cause(&self, now: SimTime) -> Option<(SimTime, &'static str)> {
+        let mut best: Option<(SimTime, &'static str)> = None;
+        let mut offer = |t: SimTime, cause: &'static str| {
+            if t > now && best.is_none_or(|(b, _)| t < b) {
+                best = Some((t, cause));
+            }
+        };
+        let held = |t: SimTime| t.max(now.saturating_add(1));
+        // Every provider's own kernel and governance: a report one MA shares is
+        // a delivery in the receiving provider's kernel, so it is covered here.
+        for run in &self.runs {
+            if let Some(t) = run.kernel.next_due() {
+                offer(held(t), "kernel");
+            }
+            for (t, _) in &run.state.gov.pending {
+                offer(held(*t), "governance");
+            }
+        }
+        if let Some(t) = self.etsi.as_ref().and_then(|e| e.kernel.next_due()) {
+            offer(held(t), "kernel");
+        }
+        // A provider's signed CRL reaching another provider's RA once it has crossed the
+        // inter-provider link: the instant that RA starts serving it.
+        let d = &self.home().state.deployment;
+        for (k, feed) in self.crl_feeds.iter().enumerate() {
+            for h in (0..self.crl_feeds.len()).filter(|&h| h != k) {
+                let lag = d.inter_provider_latency(k, h).unwrap_or(Duration::ZERO);
+                // Only a version still on its way is a wake: one that has crossed is
+                // already served (`visible_versions`). Held to `now + 1`, every version
+                // ever published woke the fast-forward at every mobility step from its
+                // publication on (255,658 backend ticks in two days, measured).
+                for v in feed.iter().filter(|v| !self.prerun_version(k, v)) {
+                    offer(v.at.saturating_add(lag.as_nanos()), "crl-feed");
+                }
+            }
+        }
+        if let Some(t) = self.params.root_rollover_at {
+            offer(held(t), "root-rollover");
+        }
+        if let Some(t) = self.params.root_removal_at {
+            offer(held(t), "root-removal");
+        }
+        if let Some(t) = self.params.peer_root_removal_at {
+            offer(held(t), "peer-root-removal");
+        }
+        if let Some(t) = self.params.root_termination_notice_at {
+            offer(held(t), "termination-notice");
+        }
+        if let Some(t) = self.params.elector_replacement_at {
+            offer(held(t), "elector-replacement");
+        }
+        if let Some(t) = self.params.root_addition_at {
+            offer(held(t), "root-addition");
+        }
+        if let Some((_, Some(t))) = self.test_ballot_at {
+            offer(held(t), "test-ballot");
+        }
+        if self.access.crl_delivery() == crate::backend::CrlDelivery::Mbms
+            && self.published_crl_for_provider(0).0 > 0
+        {
+            offer(self.mbms_next, "mbms");
+        }
+        let us = self.etsi.is_none();
+        let lead = self.params.scms.reenrol_lead.as_nanos();
+        for n in self.nodes.values() {
+            if n.powered_off {
+                continue;
+            }
+            if n.access == Some(AccessKind::Cellular) && !n.crl_fetch_in_flight {
+                offer(n.next_crl_fetch, "crl-poll");
+            }
+            if n.topup.is_none()
+                && !n.self_revoked
+                && !n.blocked
+                && n.etsi_batch.is_none()
+                && let Some(t) = self.params.topup_at(n.last_period)
+            {
+                offer(t, "topup");
+            }
+            if us && n.reenrol.is_none() && !n.blocked && !n.self_revoked {
+                offer(n.enrolment_until.saturating_sub(lead), "reenrol");
+            }
+            if !us && n.trust_fetch.is_none() {
+                offer(n.next_trust_fetch, "trust-fetch");
+            }
+        }
+        best
+    }
+
+    /// Acts on what the RA and the ECA answered: a refused top-up ends the request (a
+    /// blocklisted vehicle asks for nothing more; an expired enrolment is renewed first),
+    /// and a successor enrolment moves the vehicle's certificate expiry.
+    fn settle_refusals_and_renewals(&mut self, tick: &mut BackendTick, now: SimTime) {
+        let mut refused = Vec::new();
+        let mut renewed = Vec::new();
+        for (node, n) in &self.nodes {
+            let device = device_of(*node);
+            let scms = self.run_of(device);
+            if n.topup.is_some()
+                && let Some(reason) = scms.topup_refusal_of(device)
+            {
+                refused.push((*node, reason));
+            }
+            if let Some(run) = n.reenrol {
+                if scms.kernel.stages.at(run, StageId::Installed).is_some() {
+                    let until = scms
+                        .state
+                        .devices
+                        .get(&device)
+                        .and_then(|d| d.latest_enrolment())
+                        .map_or(n.enrolment_until, |e| e.valid_until);
+                    renewed.push((*node, Some(until)));
+                } else if scms.reenrol_refusal_of(device).is_some() {
+                    renewed.push((*node, None));
+                }
+            }
+        }
+        for (node, reason) in refused {
+            use v2xw_proto::scms::msg::Refusal;
+            self.report.topups_refused += 1;
+            tick.events.push((node, "topup-refused"));
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.topup = None;
+                match reason {
+                    Refusal::Blocklisted => {
+                        n.blocked = true;
+                        self.report.topups_refused_blocklisted += 1;
+                        self.ee_tally_of(node).topups_refused_blocklisted += 1;
+                    }
+                    // The certificate it signed with had run out: renew before asking
+                    // again (the ECA refuses an expired one, which is then final).
+                    Refusal::EnrolmentExpired => n.enrolment_until = 0,
+                    Refusal::UnknownEnrolment | Refusal::ProfileViolation => n.blocked = true,
+                    // `ra-maxReqs` = 1: a second butterfly request. A vehicle that holds
+                    // an account tops off by download, so this is a request raced
+                    // against its own first ack; it asks again on the next top-up.
+                    Refusal::RequestLimit => {}
+                }
+            }
+        }
+        for (node, until) in renewed {
+            let Some(n) = self.nodes.get_mut(&node) else {
+                continue;
+            };
+            n.reenrol = None;
+            let started = n.reenrol_started;
+            match until {
+                Some(t) => {
+                    n.enrolment_until = t;
+                    self.access.note_exchange("reenrol", started, now);
+                    self.report.reenrolments_completed += 1;
+                    tick.events.push((node, "reenrolled"));
+                }
+                None => {
+                    // Blocklisted, or already expired: the ECA will not renew it and the
+                    // vehicle's credentials end with its last pseudonym batch.
+                    n.blocked = true;
+                    self.report.reenrolments_refused += 1;
+                    tick.events.push((node, "reenrol-refused"));
+                }
+            }
+        }
+    }
+
+    /// ETSI stations due to ask the Distribution Centre for the ECTL and the CA-CRL, with
+    /// the access to use. Advances each one's next fetch by `crl_fetch_interval_s`, which
+    /// under the CCMS is the interval of this fetch (the CCMS has no vehicle CRL).
+    pub fn trust_fetches_due(&mut self, now: SimTime) -> Vec<(NodeId, AccessKind)> {
+        if self.etsi.is_none() {
+            return Vec::new();
+        }
+        let interval = self.params.crl_fetch_interval;
+        let mut out = Vec::new();
+        for (node, n) in &mut self.nodes {
+            if n.trust_fetch.is_some() || n.next_trust_fetch > now {
+                continue;
+            }
+            n.next_trust_fetch = interval.after(now);
+            out.push((*node, n.access.unwrap_or(AccessKind::Offline)));
+        }
+        out
+    }
+
+    /// Starts one station's Distribution Centre fetch over `link`.
+    pub fn start_trust_fetch(&mut self, node: NodeId, link: v2xw_proto::Link, now: SimTime) {
+        let Some(etsi) = self.etsi.as_mut() else {
+            return;
+        };
+        let device = device_of(node);
+        etsi.set_access(device, link);
+        let held = (
+            etsi.installed_ctl.get(&device).copied().unwrap_or(0),
+            etsi.installed_ca_crl_seq.get(&device).copied().unwrap_or(0),
+        );
+        let run = etsi.fetch_trust_lists(device, now);
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.trust_fetch = Some((run, held.0, held.1));
+            n.trust_started = now;
+        }
+    }
+
+    /// Vehicles whose enrolment certificate is within the renewal lead of expiring and
+    /// that are not already renewing, with the access to use.
+    pub fn reenrolments_due(&mut self, now: SimTime) -> Vec<(NodeId, AccessKind)> {
+        if self.etsi.is_some() {
+            return Vec::new();
+        }
+        let lead = self.params.scms.reenrol_lead;
+        self.nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.reenrol.is_none()
+                    && !n.blocked
+                    && !n.self_revoked
+                    && !n.powered_off
+                    && lead.after(now) >= n.enrolment_until
+            })
+            .map(|(node, n)| (*node, n.access.unwrap_or(AccessKind::Offline)))
+            .collect()
+    }
+
+    /// Starts one vehicle's successor enrolment over `link`.
+    pub fn start_reenrol(&mut self, node: NodeId, link: v2xw_proto::Link, now: SimTime) {
+        let device = device_of(node);
+        let scms = self.run_of_mut(device);
+        scms.set_access(device, link);
+        let run = scms.reenrol_at(device, now);
+        self.report.reenrolments_started += 1;
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.reenrol = Some(run);
+            n.reenrol_started = now;
+        }
+    }
+
+    /// Publishes the backend's state on the view's cadence.
+    fn maybe_publish_view(&mut self, now: SimTime, tick: &mut BackendTick) {
+        if now < self.next_view {
+            return;
+        }
+        self.next_view = self.params.view_interval.after(now);
+        let view = self.backend_view(now);
+        let last = self.last_views.backend.as_ref();
+        let same = last.is_some_and(|l| {
+            let mut v = view.clone();
+            v.t = l.t;
+            v == *l
+        });
+        if !repeats(last, |l| l.t, now, same) {
+            self.last_views.backend = Some(view.clone());
+            tick.view = Some(view);
+        }
+        self.publish_pki(now, tick);
+        self.views = self.views.wrapping_add(1);
+    }
+
+    /// How many devices were present at some instant from `since` on: every device still
+    /// present (joined before or after `since`) and every one that left at or after it.
+    /// The denominator of "enforced by n of N": a vehicle that installed the CRL and then
+    /// drove away is still one of the N it reached, and one that left before the CRL was
+    /// published is not.
+    fn devices_since(&self, since: SimTime) -> u32 {
+        let left_after = self.retired_at.len() - self.retired_at.partition_point(|&t| t < since);
+        u32::try_from(self.nodes.len() + left_after).unwrap_or(u32::MAX)
+    }
+
+    /// The PKI view's records at `now`: the trust domain's state, every message,
+    /// stage stamp and SPDU since the last view, the case board's transitions and, every
+    /// [`KNOWLEDGE_EVERY`] views, what each entity holds. Published SPDUs' bytes are
+    /// dropped from the run's log once a record carries them, so a long run keeps none.
+    fn publish_pki(&mut self, now: SimTime, tick: &mut BackendTick) {
+        use v2xw_proto::scms::pki_view;
+        if self.etsi.is_some() {
+            return;
+        }
+        let Some(mut tracker) = self.pki.take() else {
+            return;
+        };
+        // The trust domain's state, unless it repeats the last one written. A state that
+        // brings certificates the reader has not seen is never a repeat.
+        if let Some(state) = pki_view::pki_state(&self.runs, now, &mut tracker) {
+            let last = self.last_views.pki.as_ref();
+            let same = state.certificates.is_empty()
+                && last.is_some_and(|l| {
+                    let mut s = state.clone();
+                    s.t = l.t;
+                    s.time32 = l.time32;
+                    s.certificates.clone_from(&l.certificates);
+                    s == *l
+                });
+            if !repeats(last, |l| l.t, now, same) {
+                self.last_views.pki = Some(state.clone());
+                tick.pki.state = Some(state);
+            }
+        }
+        tick.pki.flows = pki_view::drain_flows(&self.runs, &mut tracker);
+        for run in &mut self.runs {
+            for p in &mut run.state.pdus {
+                p.bytes = None;
+            }
+        }
+        let enforced = |k: usize, c: &v2xw_proto::scms::run::Case| -> Option<(Vec<SimTime>, u32)> {
+            let ours = self
+                .cases
+                .iter()
+                .find(|e| e.provider == k && e.runs.is_some_and(|(r, _)| r == c.run))?;
+            ours.entry.as_ref()?;
+            let since = self.runs[k]
+                .kernel
+                .stages
+                .at(c.crl_run, StageId::Published)?;
+            let list = ours.enforcers.iter().map(|&(_, at)| at).collect();
+            Some((list, self.devices_since(since)))
+        };
+        tick.pki.cases = pki_view::drain_cases(&self.runs, &mut tracker, now, &enforced);
+        if self.views % KNOWLEDGE_EVERY == 0 {
+            for run in &self.runs {
+                for role in pki_view::KNOWLEDGE_ROLES {
+                    if let Some(k) = pki_view::knowledge(run, role, now, KNOWLEDGE_ROWS) {
+                        let key = (k.entity.clone(), k.role.clone());
+                        let last = self.last_views.knowledge.get(&key);
+                        let same = last.is_some_and(|l| {
+                            let mut c = k.clone();
+                            c.t = l.t;
+                            c == *l
+                        });
+                        if !repeats(last, |l| l.t, now, same) {
+                            self.last_views.knowledge.insert(key, k.clone());
+                            tick.pki.knowledge.push(k);
+                        }
+                    }
+                }
+            }
+        }
+        self.pki = Some(tracker);
+    }
+
+    /// The PKI view's last records at the run's end: the SPDUs, stage stamps and
+    /// case transitions logged since the last view, so a recording carries every SPDU the
+    /// run put on a link (the view publishes on its cadence, and without this the last
+    /// interval's were never recorded). `None` when nothing is pending, so a run whose
+    /// last view drained everything records exactly what it did before.
+    pub fn final_pki(&mut self, now: SimTime) -> Option<PkiTick> {
+        let pending = self.pki.as_ref().is_some_and(|t| {
+            self.runs
+                .iter()
+                .enumerate()
+                .any(|(k, r)| r.state.pdus.len() > t.pdus_published(k))
+        });
+        if !pending {
+            return None;
+        }
+        let mut tick = BackendTick::default();
+        self.publish_pki(now, &mut tick);
+        Some(tick.pki)
+    }
+
+    /// `node.credentials` for one vehicle, or `None` when the PKI view is off,
+    /// the node is not an SCMS device, or its pool has not changed since the last record.
+    pub fn node_credentials(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+        certs: &v2xw_node::CertStore,
+    ) -> Option<v2xw_proto::scms::pki_view::NodeCredentials> {
+        self.node_credentials_as(node, now, certs, false)
+    }
+
+    /// The last `node.credentials` of a vehicle leaving the run: nothing active, marked
+    /// `departed`, so no reader takes its pool at departure for its pool afterwards.
+    pub fn node_credentials_departed(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+        certs: &v2xw_node::CertStore,
+    ) -> Option<v2xw_proto::scms::pki_view::NodeCredentials> {
+        self.node_credentials_as(node, now, certs, true)
+    }
+
+    fn node_credentials_as(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+        certs: &v2xw_node::CertStore,
+        departed: bool,
+    ) -> Option<v2xw_proto::scms::pki_view::NodeCredentials> {
+        use v2xw_proto::scms::pki_view::HeldCert;
+        if self.etsi.is_some() || !self.nodes.contains_key(&node) {
+            return None;
+        }
+        let active = certs
+            .active()
+            .filter(|_| !departed)
+            .map(|c| v2xw_sec::hashedid::id8_bytes(&c.digest));
+        let held: Vec<HeldCert> = certs
+            .credentials()
+            .iter()
+            .map(|c| HeldCert {
+                i: c.i_period,
+                j: c.j_index,
+                id8: v2xw_sec::hashedid::id8_bytes(&c.digest),
+                coer: c.cert_coer.clone(),
+                state: match c.state {
+                    v2xw_node::CredState::Active if c.is_valid_at(now) => "valid",
+                    v2xw_node::CredState::Active | v2xw_node::CredState::Expired => {
+                        if now >= c.valid_until {
+                            "expired"
+                        } else {
+                            "downloaded"
+                        }
+                    }
+                    v2xw_node::CredState::Preloaded => "downloaded",
+                    v2xw_node::CredState::Revoked => "revoked",
+                },
+            })
+            .collect();
+        let k = self
+            .device_provider
+            .get(&device_of(node))
+            .copied()
+            .unwrap_or(0);
+        // Revoked as the vehicle itself knows it: it found itself on a CRL (an engine
+        // run's vehicles install lists on the node, not in the backend's device record).
+        let self_revoked = self.nodes.get(&node).is_some_and(|n| n.self_revoked);
+        // The CTL the vehicle installed on the road (`take_ctl_install`), which the
+        // backend's device record does not see.
+        let installed_ctl = self
+            .nodes
+            .get(&node)
+            .and_then(|n| n.ctl_trust.as_ref())
+            .and_then(|t| t.ctl_sequence);
+        let mut tracker = self.pki.take()?;
+        let rec = self.runs.get(k).and_then(|run| {
+            v2xw_proto::scms::pki_view::node_credentials(
+                run,
+                device_of(node),
+                now,
+                &held,
+                active,
+                self_revoked,
+                installed_ctl,
+                &mut tracker,
+            )
+        });
+        self.pki = Some(tracker);
+        // The engine's node id, not the backend's device id, so a reader joins the
+        // record to the node's other channels.
+        // Revoked as the vehicle itself knows it: it found itself on a CRL (the backend's
+        // device record is not where an engine run's vehicles install lists).
+        rec.map(|mut r| {
+            r.node = node.index();
+            r.departed = departed;
+            r
+        })
+    }
+
+    /// Every backend entity, the roadside units and the vehicles, and the traffic between
+    /// them, at `now`: the credential system's own view (`v2xw_proto::view`) with what the
+    /// engine carries itself — CRL downloads over the vehicles' Uu, roadside broadcasts,
+    /// relayed reports and the authority's decisions — added to the entities that did it.
+    pub fn backend_view(&mut self, now: SimTime) -> BackendView {
+        let mut view = match self.etsi.as_ref() {
+            Some(e) => e.backend_view(now, &mut self.tracker),
+            None => self.runs[0].backend_view(now, &mut self.tracker),
+        };
+        let r = &self.report;
+        let a_now = self.access.report_now();
+        let a = &a_now;
+        for e in &mut view.entities {
+            match e.id.as_str() {
+                "crl-store" => {
+                    e.set("downloads_served", r.crl_downloads);
+                    e.set("versions_published", r.crl_versions_published);
+                }
+                "crl-broadcast" => {
+                    e.set("rsu_frames", r.crl_broadcasts);
+                }
+                "ma" => {
+                    e.set("reports_ingested", r.reports_at_ma);
+                    e.set("revocation_decisions", r.ma_revoke_decisions);
+                    e.set("cases_opened", r.cases_opened);
+                    e.set("decision_rule", self.ma[0].id());
+                    e.set(
+                        "subjects_under_evidence",
+                        self.ma.iter().map(MaHost::subjects).sum::<usize>() as u64,
+                    );
+                    if let Some(peak) = self
+                        .ma
+                        .iter()
+                        .filter_map(MaHost::peak_unrevoked_events)
+                        .max()
+                    {
+                        // How close an unrevoked pseudonym came to the threshold: the
+                        // margin an honest fleet leaves.
+                        e.set("most_corroborated_events_unrevoked", u64::from(peak));
+                    }
+                }
+                "ee" => {
+                    for (key, v) in self.ee_counters(0) {
+                        e.set(key, v);
+                    }
+                    e.set("reports_filed", r.reports_sent);
+                    e.set("reports_over_cellular", r.reports_uploaded_cellular);
+                    e.set("reports_via_rsu", r.reports_uploaded_relay);
+                    e.set(
+                        "reports_waiting_for_coverage",
+                        self.nodes
+                            .values()
+                            .map(|n| n.outbox.0.len() as u64)
+                            .sum::<u64>(),
+                    );
+                    e.set("topups_started", r.topups_started);
+                    e.set("topups_completed", r.topups_completed);
+                    e.set("topups_refused", r.topups_refused);
+                    if r.topups_left_area > 0 {
+                        e.set("topups_left_area", r.topups_left_area);
+                    }
+                    e.set(
+                        "topups_in_flight",
+                        self.nodes.values().filter(|n| n.topup.is_some()).count() as u64,
+                    );
+                    e.set("certificates_topped_up", r.certs_topped_up);
+                    e.set("pseudonym_changes", r.pseudonym_changes);
+                    e.set("reenrolments_completed", r.reenrolments_completed);
+                    if self.etsi.is_some() {
+                        e.set("trust_fetches", r.trust_fetches);
+                        e.set("trust_lists_installed", r.trust_lists_installed);
+                    } else if r.trust_lists_installed > 0
+                        || r.trust_lists_refused > 0
+                        || r.clock_skewed_nodes > 0
+                    {
+                        e.set("trust_lists_installed", r.trust_lists_installed);
+                        e.set("trust_anchors_removed", r.trust_anchors_removed);
+                        e.set("clock_skewed_nodes", r.clock_skewed_nodes);
+                        e.set("trust_lists_refused", r.trust_lists_refused);
+                        e.set("trust_list_verifications", r.trust_list_verifications);
+                    }
+                    if r.crls_skipped_unverifiable > 0 {
+                        e.set("crls_skipped_unverifiable", r.crls_skipped_unverifiable);
+                        e.set("crl_entries_unverifiable", r.crl_entries_unverifiable);
+                    }
+                    e.set("vehicles_starved", r.vehicles_starved);
+                    e.set("crl_installs", r.crls_installed);
+                    e.set("revoked_receptions", r.revoked_receptions);
+                    e.set("access_cellular", a.cellular_vehicles);
+                    e.set("access_rsu_relay", a.relay_only_vehicles);
+                    e.set("access_offline", a.offline_vehicles);
+                    e.set(
+                        "cert_unavailable_s",
+                        (r.cert_unavailable_ns as f64 / 1e9 * 10.0).round() / 10.0,
+                    );
+                    // Backend latency per exchange type, ms (mean and worst so far).
+                    for (kind, l) in &a.exchange_latency {
+                        let key = kind.replace('-', "_");
+                        e.set(
+                            &format!("{key}_latency_ms"),
+                            (l.mean_ms() * 10.0).round() / 10.0,
+                        );
+                        e.set(&format!("{key}_latency_max_ms"), l.max_ns / 1_000_000);
+                    }
+                    if a.mbms_broadcasts > 0 {
+                        e.set("crl_mbms_broadcasts", a.mbms_broadcasts);
+                        e.set("crl_mbms_receptions", a.mbms_receptions);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !self.rsus.is_empty() {
+            let mut rsu = v2xw_proto::view::EntityView {
+                id: "rsu".to_string(),
+                name: "Roadside units".to_string(),
+                system: view.system,
+                tier: "distribution",
+                online: true,
+                node: None,
+                role: "Relay reports and top-ups over their backhaul and repeat the CRL on \
+                       the air; never on the safety channel's behalf.",
+                queue: None,
+                traffic: v2xw_proto::kernel::NodeTraffic::default(),
+                ops: std::collections::BTreeMap::new(),
+                state: std::collections::BTreeMap::new(),
+            };
+            rsu.set("units", self.rsus.len() as u64);
+            rsu.set(
+                "with_backhaul",
+                self.rsus.iter().filter(|s| s.backhaul.connected).count() as u64,
+            );
+            rsu.set("crl_role", self.rsus_with_role("crl").len() as u64);
+            rsu.set("crl_frames", r.crl_broadcasts);
+            rsu.set("reports_filed_by_units", r.reports_from_rsus);
+            rsu.set("reports_relayed", r.reports_uploaded_relay);
+            rsu.set("backhaul_messages", a.carrier.backhaul_messages);
+            rsu.set("backhaul_line_bytes", a.carrier.backhaul_line_bytes);
+            rsu.set("backhaul_retransmissions", a.carrier.backhaul_retx);
+            rsu.set("compromised", self.compromised_count() as u64);
+            rsu.set("in_cert_cycle", r.rsus_in_cert_cycle);
+            rsu.set("app_certs_preloaded", r.rsu_app_certs_preloaded);
+            rsu.set("app_certs_renewed", r.rsu_app_certs_renewed);
+            rsu.set(
+                "starving",
+                self.rsu_cycle
+                    .values()
+                    .filter(|c| c.starved_since.is_some())
+                    .count() as u64,
+            );
+            rsu.set("ever_starved", r.rsus_starved);
+            rsu.set("messages_withheld", r.rsu_messages_withheld);
+            rsu.set("crls_installed", r.rsu_crls_installed);
+            rsu.set("revoked_receptions", r.rsu_revoked_receptions);
+            view.entities.push(rsu);
+        }
+        // What the engine carried outside the credential kernel, as edges.
+        let mut extra =
+            |from: &str, to: &str, messages: u64, bytes: u64, step: &str, transport: &str| {
+                if messages == 0 {
+                    return;
+                }
+                view.edges.push(v2xw_proto::view::EdgeView {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    messages,
+                    bytes,
+                    last_t: now,
+                    last_step: step.to_string(),
+                    transport: transport.to_string(),
+                    steps: std::iter::once((step.to_string(), messages)).collect(),
+                });
+            };
+        // The polls and their answers, as `net.bytes` charges them.
+        extra(
+            "crl-store",
+            "ee",
+            r.crl_downloads,
+            r.crl_poll_bytes_up + r.crl_poll_bytes_down,
+            "crl-download",
+            "cellular-uu",
+        );
+        extra(
+            "crl-broadcast",
+            "rsu",
+            u64::from(self.broadcast_version > 0) * r.crl_versions_published,
+            0,
+            "crl-to-rsu",
+            "rsu-backhaul",
+        );
+        extra(
+            "rsu",
+            "ee",
+            r.crl_broadcasts,
+            0,
+            "crl-air-broadcast",
+            "v2x-air",
+        );
+        extra(
+            "ee",
+            "rsu",
+            r.reports_uploaded_relay,
+            0,
+            "report-relay",
+            "v2x-air",
+        );
+        // Every other provider's backend, its entities and edges named
+        // `<provider>/<role>`: the home provider's keep their bare ids.
+        if self.etsi.is_none() {
+            self.peer_trackers
+                .resize_with(self.runs.len().saturating_sub(1), EdgeTracker::default);
+            for k in 1..self.runs.len() {
+                let name = self.runs[0]
+                    .state
+                    .deployment
+                    .providers
+                    .get(k)
+                    .map_or_else(|| format!("provider-{k}"), |p| p.name.clone());
+                let peer = self.runs[k].backend_view(now, &mut self.peer_trackers[k - 1]);
+                let id = |s: &str| format!("{name}/{s}");
+                let counters = self.ee_counters(k);
+                for mut e in peer.entities {
+                    if e.id == "ee" {
+                        for (key, v) in &counters {
+                            e.set(key, *v);
+                        }
+                    }
+                    e.id = id(&e.id);
+                    e.name = format!("{} ({name})", e.name);
+                    e.set("provider", name.clone());
+                    view.entities.push(e);
+                }
+                for mut e in peer.edges {
+                    e.from = id(&e.from);
+                    e.to = id(&e.to);
+                    view.edges.push(e);
+                }
+                for mut s in peer.recent {
+                    s.from = id(&s.from);
+                    s.to = id(&s.to);
+                    view.recent.push(s);
+                }
+                for (f, n) in peer.flows {
+                    *view.flows.entry(f).or_default() += n;
+                }
+            }
+            view.recent.sort_by_key(|s| s.t);
+            let excess = view.recent.len().saturating_sub(v2xw_proto::view::RECENT);
+            view.recent.drain(..excess);
+        }
+        view
+    }
+
+    /// How many roadside units are under an attacker's control.
+    #[must_use]
+    pub fn compromised_count(&self) -> usize {
+        self.compromised_nodes.len()
+    }
+
+    /// The reports the authority received in `stamps`, through the persistence gate, in the
+    /// order their evidence was observed (a shuffle releases a batch at one instant, and
+    /// the gate dates evidence by observation, not by arrival). Returns each decision:
+    /// `(subject node, certificate digest, the triggering report's run, the instant)`.
+    /// The reports provider `k`'s MA received in `stamps`, and its decisions about them.
+    ///
+    /// A report about a certificate another provider issued cannot be resolved here: only
+    /// the issuing provider's ACA and LAs can link it to a device (Provider Req. §2.2). With `ma_report_sharing` on (the US default) this MA forwards it over the
+    /// MA-to-MA link to that provider's MA, which decides; off, it is counted as
+    /// unresolvable and goes no further. Returns the decisions and whether anything was
+    /// forwarded.
+    #[allow(
+        clippy::type_complexity,
+        reason = "a one-off tuple read where it is built; an alias would hide its fields"
+    )]
+    fn ingest_arrivals(
+        &mut self,
+        k: usize,
+        stamps: &[v2xw_proto::stage::StageStamp],
+        tick: &mut BackendTick,
+    ) -> (Vec<Decided>, bool) {
+        let mut arrived: Vec<(SimTime, FlowRun, InFlightReport)> = Vec::new();
+        let mut forwarded = false;
+        for s in stamps {
+            if s.stage == StageId::ReportReceived
+                && let Some(f) = self.in_flight.remove(&(k, s.run))
+            {
+                if self.etsi.is_some() {
+                    arrived.push((s.t, s.run, f));
+                    continue;
+                }
+                // The report as this MA holds it, and the accused certificate it read from
+                // it: the issuer that certificate names is the provider whose ACA
+                // and LAs can resolve it, so that provider's MA decides ([CAMP122] §5;
+                // Provider Req. §2.2). A report with no certificate to read (modelled)
+                // goes by the engine map's device.
+                let held = self.runs[k].state.ma.report_on_run(s.run);
+                let Some(subj) = held.and_then(|x| self.runs[k].state.ma.subject(x)).copied()
+                else {
+                    continue;
+                };
+                let ks = match subj.issuer {
+                    Some(id8) => self.provider_of_issuer(&id8).unwrap_or(k),
+                    None => f
+                        .subject
+                        .map_or(k, |n| self.provider_of_device(device_of(n))),
+                };
+                if ks == k {
+                    arrived.push((s.t, s.run, f));
+                    continue;
+                }
+                let (i, lv) = (subj.subject_i, subj.subject_lv);
+                if !self.home().state.deployment.ma_report_sharing {
+                    self.runs[k].state.shared.unresolvable += 1;
+                    continue;
+                }
+                // A real report travels as the report this MA opened, re-encrypted
+                // to the accused's provider's MA, which decrypts it and verifies the
+                // reporter's signature and the evidence itself ([SM-MBR] §3); the bytes on
+                // the link are that ciphertext. A modelled report carries its length and
+                // what this MA knew of it.
+                let secured = match (held, self.runs[ks].ma_share_target()) {
+                    (Some(x), Some(peer)) if !self.share_unverified => {
+                        self.runs[k].reencrypt_report_for(x, &peer)
+                    }
+                    _ => None,
+                };
+                let ma_k = &self.runs[k].state.ma;
+                let bytes = held
+                    .and_then(|x| ma_k.reports[x].secured.as_ref().map(|s| s.report.len()))
+                    .unwrap_or(report_bytes());
+                let modelled = secured.is_none().then(|| {
+                    (
+                        held.and_then(|x| ma_k.report_evidence.get(x).cloned().flatten()),
+                        subj,
+                    )
+                });
+                let from = self.runs[k].state.nodes.ma;
+                let observed = f.report.detection_time;
+                let run =
+                    self.runs[ks].shared_report_at_ma(from, i, lv, observed, s.t, bytes, secured);
+                if let Some((evidence, subj)) = modelled {
+                    if let Some(e) = evidence {
+                        self.runs[ks].shared_report_evidence(run, e);
+                    }
+                    self.runs[ks].shared_report_subject(run, subj);
+                }
+                self.runs[k].state.shared.forwarded += 1;
+                // The report's history before the sharing leg (detection, upload, the
+                // RA's shuffle) carries over to the deciding provider's log, so its
+                // revocation decomposes end to end; its arrival there is the deciding
+                // MA's `ReportReceived`.
+                let prior: Vec<v2xw_proto::stage::StageStamp> = [
+                    StageId::Detect,
+                    StageId::ReportSent,
+                    StageId::ProxyForwarded,
+                    StageId::Shuffled,
+                ]
+                .into_iter()
+                .filter_map(|stage| {
+                    let log = &self.runs[k].kernel.stages;
+                    log.at(s.run, stage).map(|t| v2xw_proto::stage::StageStamp {
+                        t,
+                        run,
+                        flow: s.flow,
+                        stage,
+                        node: None,
+                        size: None,
+                    })
+                })
+                .collect();
+                for p in prior {
+                    self.runs[ks].kernel.stages.push(p);
+                }
+                self.in_flight.insert((ks, run), f);
+                forwarded = true;
+            }
+        }
+        arrived.sort_by(|a, b| {
+            (a.2.report.detection_time, &a.2.report.report_id)
+                .cmp(&(b.2.report.detection_time, &b.2.report.report_id))
+        });
+        // A host program's rule decides once over the step's evidence: the rows
+        // the loop below ingests, in its order; the loop then takes each decision on the
+        // report it was taken on, exactly where a built-in policy's would be.
+        if matches!(self.ma[k], MaHost::External(_)) {
+            let rows: Vec<crate::ma_hook::MaHookRow> = arrived
+                .iter()
+                .filter(|(_, _, f)| ma_accepts(&f.report))
+                .map(|(t, run, f)| {
+                    let MaHost::External(m) = &self.ma[k] else {
+                        unreachable!("checked")
+                    };
+                    crate::ma_hook::MaHookRow {
+                        view: self.ma_view_row(k, *t, *run, &f.report, f.subject, None),
+                        observed: f.report.detection_time,
+                        reporter_infrastructure: m
+                            .is_infrastructure(&f.report.reporter_cert_digest),
+                    }
+                })
+                .collect();
+            let now = arrived.iter().map(|a| a.0).max().unwrap_or(0);
+            if let MaHost::External(m) = &mut self.ma[k] {
+                m.decide(now, &rows);
+            }
+        }
+        let mut decisions = Vec::new();
+        for (t, run, f) in arrived {
+            self.report.reports_at_ma += 1;
+            let mut r = f.report;
+            r.ingest_time = t;
+            tick.ma_reports.push(v2xw_threat::records::MaReportRecord {
+                t,
+                reporter: r.reporter,
+                subject: r.subject_cert_digest.clone(),
+                detector: r.leading_reason().map(str::to_string),
+            });
+            if self.report_log.is_some() {
+                let set_aside = if r.reason_codes.iter().all(|c| c == SIGNATURE_VERIFICATION) {
+                    Some("evidence-unverifiable")
+                } else if !evidence_time_plausible(&r) {
+                    Some("evidence-time-implausible")
+                } else {
+                    None
+                };
+                self.log_received(k, t, run, &r, f.subject, set_aside);
+            }
+            // Evidence the authority cannot verify is not evidence against anyone. A report
+            // whose only reason is that the accused's signature failed carries messages
+            // the accused's key never signed: anyone can put a certificate's digest on a
+            // frame with a bad signature, so acting on it lets one transmitter frame any
+            // honest certificate on the air. The MA opens the evidence and verifies it
+            // first ([SM-MBR] §1: the evidence is the accused's signed BSMs with their
+            // certificate, and a valid signature is a precondition of processing).
+            if r.reason_codes.iter().all(|c| c == SIGNATURE_VERIFICATION) {
+                self.report.reports_evidence_unverifiable += 1;
+                continue;
+            }
+            // The evidence's own time stamps against the report's. A BSM cannot have been
+            // generated after the report that quotes it, and one older than any receiver
+            // accepts could not have been judged by a receiver bound by the relevance
+            // window: either way the kinematics in it were judged on a clock that was
+            // wrong, which is how an honest device with a bad clock got revoked (15 of
+            // them for one 5,000 s skew).
+            // The rule uses the deployment profile's window (RS_BSP_168), not a device's.
+            if !evidence_time_plausible(&r) {
+                self.report.reports_evidence_time_implausible += 1;
+                if r.st_tend > r.generation_time {
+                    self.report.reports_evidence_after_report += 1;
+                    self.report.evidence_lead_max_ns = self
+                        .report
+                        .evidence_lead_max_ns
+                        .max(r.st_tend - r.generation_time);
+                } else {
+                    self.report.evidence_lag_max_ns = self
+                        .report
+                        .evidence_lag_max_ns
+                        .max(r.generation_time - r.st_tend);
+                }
+                continue;
+            }
+            // The first detection on record for this pseudonym, which the case's
+            // decomposition starts at.
+            let first = self
+                .first_evidence
+                .entry((k, r.subject_cert_digest.clone()))
+                .or_insert((r.detection_time, run));
+            if r.detection_time < first.0 {
+                *first = (r.detection_time, run);
+            }
+            // A policy also reads what the MA learns about the subject: the LAs'
+            // device link, the issuing provider and the judged BSM's secMark phase, as
+            // `ma.received` records them.
+            let action = if matches!(self.ma[k], MaHost::Policy(_)) {
+                let (issuer, link, _) = self.ma_learns(k, run, &r, f.subject);
+                let secmark_phase_ms = self
+                    .report_log
+                    .as_ref()
+                    .and_then(|l| l.secmark.get(&r.report_id))
+                    .map(|sm| u32::from(*sm) % 50);
+                let hint = crate::ma_policy::SubjectHint {
+                    link: &link,
+                    issuer: &issuer,
+                    secmark_phase_ms,
+                };
+                match &mut self.ma[k] {
+                    MaHost::Policy(m) => m.ingest_linked(&r, r.detection_time, &hint),
+                    other => other.ingest_evidence(&r, r.detection_time),
+                }
+            } else {
+                self.ma[k].ingest_evidence(&r, r.detection_time)
+            };
+            if let Some(subject) = f.subject.filter(|n| self.attackers.contains_key(n)) {
+                *self.attacker_at_ma.entry(subject).or_insert(0) += 1;
+                if let Some(events) = self.ma[k].corroborated_events(&r.subject_cert_digest) {
+                    let peak = self.attacker_peak_events.entry(subject).or_insert(0);
+                    *peak = (*peak).max(events);
+                }
+            }
+            if let Some(MaAction::Revoke { subject }) = action {
+                // The authority decides about a device, not a pseudonym. In SCMS it learns
+                // the device behind a reported certificate by asking the PCA for the
+                // linkage value's pre-linkage values and the linkage authorities for the
+                // chain they belong to (CAMP SCMS PoC EE Requirements §5; Whyte et al.,
+                // VNC 2013, §V); a second pseudonym on a chain already decided adds
+                // evidence, not a second revocation. It used to open one case per
+                // pseudonym: 22 decisions for 12 attackers in a 300 s run.
+                // Under the US SCMS the MA does exactly that inside the case: both LAs name
+                // the chain and a pair already decided ends the case `linked`
+                // (`MaState::decided_chains`), counted in `advance`'s case loop. Only the
+                // ETSI model (no linkage authorities) still de-duplicates here, by the
+                // engine's device (**modelled**: the EA knows the enrolment).
+                if self.etsi.is_some()
+                    && let Some((device, _, _)) = self.truth_subject(&subject)
+                    && !self.ma_decided_devices.insert(device)
+                {
+                    self.report.decisions_linked += 1;
+                    continue;
+                }
+                self.report.ma_revoke_decisions += 1;
+                // The ETSI EA blocks at once. Under the US SCMS this is the pipeline's
+                // recommendation: `ma.decision` is written when the case reaches its
+                // `decision` stage, after the operator's review ([`Phase2::advance`]'s
+                // case loop). It was stamped here, 8 h before the decision under
+                // ManualReview, so `time_to_decision` and the
+                // vehicle-level `det_*` cells counted a decision not yet taken.
+                if self.etsi.is_some() {
+                    tick.ma_decisions
+                        .push(v2xw_threat::records::MaDecisionRecord {
+                            t,
+                            subject: subject.clone(),
+                            decision: "revoke".to_string(),
+                            dataset: None,
+                        });
+                }
+                // The decomposition runs from the earliest-detected report about the
+                // decided pseudonym; a decision through a linked pseudonym with no report
+                // of its own keeps the report it was taken on.
+                let first = self
+                    .first_evidence
+                    .get(&(k, subject.clone()))
+                    .map_or(run, |e| e.1);
+                decisions.push((f.subject, subject, first, t));
+            }
+        }
+        for (subject, _, _, t) in &decisions {
+            if let Some(subject) = subject {
+                self.note_decision_truth(*subject, *t);
+            }
+        }
+        (decisions, forwarded)
+    }
+
+    /// The ETSI deployment's share of a step: reports through the gate, a decision
+    /// carried out as the EA's blocklist (passive revocation, TS 102 941 §6.1.6), ticket
+    /// top-ups, and the bytes it moved. There is no per-vehicle revocation list to publish:
+    /// "revocation of authorization tickets is not possible as passive revocation is
+    /// preferred" [TS 102 941 §6.1.4 NOTE 4], so a blocked vehicle keeps signing until its
+    /// last ticket expires, and that instant is the revocation's last stage.
+    fn advance_etsi(&mut self, now: SimTime) -> BackendTick {
+        let mut tick = BackendTick::default();
+        let Some(etsi) = self.etsi.as_mut() else {
+            return tick;
+        };
+        if let Err(e) = etsi.run_until(now) {
+            self.note_backend_error(&e);
+        }
+        let stamps: Vec<v2xw_proto::stage::StageStamp> = {
+            let etsi = self.etsi.as_ref().expect("checked");
+            let (new, cursor) = etsi.kernel.stages_since(self.stage_cursor[0]);
+            let v = new.to_vec();
+            self.stage_cursor[0] = cursor;
+            v
+        };
+        for s in &stamps {
+            if s.stage == StageId::Blocklisted
+                && let Some(b) = self
+                    .blocks
+                    .iter_mut()
+                    .find(|b| b.run == s.run && b.blocked.is_none())
+            {
+                b.blocked = Some(s.t);
+                tick.stages.push(crate::sec_records::ProtoRevocation::stage(
+                    s.t,
+                    "blocklisted",
+                    &b.subject_digest,
+                    None,
+                    None,
+                    None,
+                ));
+                let last = self
+                    .creds
+                    .get(&b.subject)
+                    .and_then(|c| c.iter().map(|c| c.valid_until).max())
+                    .unwrap_or(s.t);
+                tick.stages.push(crate::sec_records::ProtoRevocation::stage(
+                    last,
+                    "last_valid_credential_expiry",
+                    &b.subject_digest,
+                    None,
+                    None,
+                    Some(b.subject),
+                ));
+                if self.revocation.is_none() {
+                    let stages = [
+                        (StageId::Detect, b.detected),
+                        (StageId::Decision, b.decided),
+                        (StageId::Blocklisted, s.t),
+                        (StageId::LastValidCredentialExpiry, last),
+                    ];
+                    let total = Duration::from_nanos(last.saturating_sub(b.detected));
+                    self.report.revocation_latency_ns = total.as_nanos();
+                    self.report.revocation_stages = stages
+                        .iter()
+                        .map(|(st, t)| (st.as_str().to_string(), t.saturating_sub(b.detected)))
+                        .collect();
+                }
+            }
+        }
+        for (subject, subject_digest, run, t) in self.ingest_arrivals(0, &stamps, &mut tick).0 {
+            // The ETSI model's report always names its device (`report_at_proxy`).
+            let Some(subject) = subject else {
+                continue;
+            };
+            if self.blocks.iter().any(|b| b.subject == subject) {
+                self.report.decisions_already_covered += 1;
+                continue;
+            }
+            let detected = self
+                .etsi
+                .as_ref()
+                .and_then(|e| e.kernel.stages.at(run, StageId::Detect))
+                .unwrap_or(t);
+            let block_run = self
+                .etsi
+                .as_mut()
+                .expect("checked")
+                .decide_block(device_of(subject), t);
+            self.report.cases_opened += 1;
+            if !self.revoked_devices.insert(subject) {
+                self.report.revocations_repeated += 1;
+            } else if self.attackers.contains_key(&subject) {
+                self.report.revoked_attackers += 1;
+            } else {
+                self.report.revoked_honest += 1;
+            }
+            for (stage, at) in [("detect", detected), ("decision", t)] {
+                tick.stages.push(crate::sec_records::ProtoRevocation::stage(
+                    at,
+                    stage,
+                    &subject_digest,
+                    None,
+                    None,
+                    None,
+                ));
+            }
+            self.blocks.push(Block {
+                subject,
+                subject_digest,
+                run: block_run,
+                detected,
+                decided: t,
+                blocked: None,
+            });
+        }
+        // Distribution Centre fetches that came back.
+        let fetched: Vec<(NodeId, bool)> = {
+            let etsi = self.etsi.as_ref().expect("checked");
+            self.nodes
+                .iter()
+                .filter_map(|(node, n)| {
+                    let (run, ctl, crl) = n.trust_fetch?;
+                    etsi.kernel.stages.at(run, StageId::Processed)?;
+                    let device = device_of(*node);
+                    let newer = etsi.installed_ctl.get(&device).copied().unwrap_or(0) > ctl
+                        || etsi.installed_ca_crl_seq.get(&device).copied().unwrap_or(0) > crl;
+                    Some((*node, newer))
+                })
+                .collect()
+        };
+        for (node, newer) in fetched {
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.trust_fetch = None;
+                let started = n.trust_started;
+                self.access.note_exchange("trust-fetch", started, now);
+            }
+            self.report.trust_fetches += 1;
+            if newer {
+                self.report.trust_lists_installed += 1;
+                tick.events.push((node, "trust-list-installed"));
+            }
+        }
+        // Butterfly top-ups: once the EA holds the certified batch, the station asks for
+        // it; a blocklisted station's download is answered empty (passive revocation).
+        let ready: Vec<(NodeId, u32)> = self
+            .nodes
+            .iter()
+            .filter_map(|(node, n)| match n.etsi_batch {
+                Some((i, false))
+                    if self
+                        .etsi
+                        .as_ref()
+                        .is_some_and(|e| e.pending_batches.contains_key(&device_of(*node))) =>
+                {
+                    Some((*node, i))
+                }
+                _ => None,
+            })
+            .collect();
+        for (node, i) in ready {
+            if let Some(e) = self.etsi.as_mut() {
+                let run = e.download_ats(device_of(node), i);
+                if let Some(n) = self.nodes.get_mut(&node) {
+                    n.etsi_batch = Some((i, true));
+                    n.topup = Some(run);
+                    n.etsi_target = Some(e.tickets_of(device_of(node)) + self.params.jmax);
+                }
+            }
+        }
+        // A butterfly request the EA refused outright never produces a batch.
+        let refused: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|(node, n)| {
+                matches!(n.etsi_batch, Some((_, false)))
+                    && self.etsi.as_ref().is_some_and(|e| {
+                        e.blocklist.contains(&device_of(**node))
+                            && !e.pending_batches.contains_key(&device_of(**node))
+                    })
+            })
+            .map(|(node, _)| *node)
+            .collect();
+        for node in refused {
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.etsi_batch = None;
+                n.topup = None;
+                n.blocked = true;
+            }
+            self.report.topups_refused += 1;
+            self.report.topups_refused_blocklisted += 1;
+            self.ee_tally_of(node).topups_refused_blocklisted += 1;
+            tick.events.push((node, "topup-refused"));
+        }
+        // Ticket top-ups: a request per ticket, and the batch installs when the AA has
+        // granted them all.
+        let mut finished = Vec::new();
+        for (node, n) in &self.nodes {
+            if let Some(target) = n.etsi_target
+                && self
+                    .etsi
+                    .as_ref()
+                    .is_some_and(|e| e.tickets_of(device_of(*node)) >= target)
+            {
+                finished.push(*node);
+            }
+        }
+        for node in finished {
+            let i = self.nodes.get(&node).map_or(0, |n| n.last_period + 1);
+            let fresh: Vec<ProvisionedCred> = (0..self.params.jmax)
+                .map(|j| {
+                    let (from, until) = self.params.scms.validity(i);
+                    ProvisionedCred {
+                        i,
+                        j,
+                        lv: LinkageValue::new([0u8; 9]),
+                        valid_from: from,
+                        valid_until: until,
+                        key: None,
+                    }
+                })
+                .collect();
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.etsi_target = None;
+                n.topup = None;
+                n.etsi_batch = None;
+                n.last_period = i;
+                let started = n.topup_started;
+                self.access.note_exchange("topup", started, now);
+            }
+            self.report.topups_completed += 1;
+            self.report.certs_topped_up += fresh.len() as u64;
+            self.creds
+                .entry(node)
+                .or_default()
+                .extend(fresh.iter().cloned());
+            tick.installs.push((node, fresh, 0));
+        }
+        let (steps, cursor) = {
+            let etsi = self.etsi.as_ref().expect("checked");
+            let (new, cursor) = etsi.kernel.steps_since(self.step_cursor[0]);
+            (new.to_vec(), cursor)
+        };
+        self.step_cursor[0] = cursor;
+        push_bytes(&mut tick, steps);
+        self.maybe_publish_view(now, &mut tick);
+        tick
+    }
+
+    /// A backend delivery the kernel refused: a modelling defect (an unhosted entity, a
+    /// missing link, a flow driven out of order), counted and kept so a run says so rather
+    /// than going quiet.
+    fn note_backend_error(&mut self, e: &v2xw_proto::ProtoError) {
+        self.report.backend_errors += 1;
+        if self.report.first_backend_error.is_empty() {
+            self.report.first_backend_error = e.to_string();
+        }
+    }
+
+    fn start_cases(&mut self, now: SimTime) {
+        for k in 0..self.runs.len() {
+            self.start_cases_of(k, now);
+        }
+    }
+
+    /// Provider `k`'s MA takes its queued decisions: every one opens a case at once, up to
+    /// the MA's case table ([`v2xw_proto::scms::params::MaPolicy::max_open_cases`]), so
+    /// cases run side by side and the n-th attacker decided in one shuffle
+    /// release is not reviewed n review periods late. A decision the table has no room
+    /// for waits at the front of the queue. The cap is `ma_max_open_cases`.
+    fn start_cases_of(&mut self, k: usize, now: SimTime) {
+        loop {
+            let Some(mut case) = self.queue[k].pop_front() else {
+                return;
+            };
+            // The report the authority holds about the decided certificate: the latest
+            // one, which is the one the decision came in on. The MA knows it by the
+            // certificate it read from the report; a report on the modelled path
+            // has none, and is found by the subject it carried (the engine map's).
+            let ma = &self.runs[k].state.ma;
+            let index = decode_hex8(&case.subject_digest)
+                .and_then(|d| ma.report_about_cert(&d))
+                .or_else(|| {
+                    let (_, _, lv) = self.truth_subject(&case.subject_digest)?;
+                    ma.report_subjects
+                        .iter()
+                        .rposition(|s| s.cert.is_none() && s.subject_lv == lv)
+                });
+            let Some((index, held)) = index.and_then(|x| ma.subject(x).map(|s| (x, *s))) else {
+                self.report.cases_unresolved += 1;
+                continue;
+            };
+            let (i, lv) = (held.subject_i, held.subject_lv);
+            let _ = now;
+            // A certificate the provider's published list already revokes needs no second
+            // case: the authority checks the CRL before spending lookups [BRECHT §VI-D: the
+            // MA consults the CRL; one entry revokes every certificate of the device from
+            // `i` on]. The list is the one the CRL Store published, not the
+            // Generator's working set: an entry still waiting for its publication slot
+            // revokes nothing yet, and a decision taken meanwhile about the same chain is
+            // caught by the LAs' chain identifiers instead (a `linked` case).
+            let mut covered = v2xw_sec::CrlStore::new();
+            for e in &self.runs[k].state.crl_store.entries {
+                covered.add_linkage_entry(*e);
+            }
+            if covered.revokes_linkage_at_period(i, lv) {
+                self.report.decisions_already_covered += 1;
+                continue;
+            }
+            // Revoke from the reported certificate's own period forward: its entry must
+            // match the certificate that was reported, and forward-only linkage keeps
+            // every earlier certificate unlinkable [BRECHT §VI-D].
+            // Through the MA's decision mode: the CV-pilot manual review by default
+            // (`ma_review_s`), the automatic MA when it is 0.
+            if let Some(runs) = self.runs[k].request_revocation(index, i, self.params.jmax) {
+                // U3a: the case carries the threshold of the rule that decided it.
+                let threshold = self.ma.get(k).or(self.ma.first()).map(MaHost::threshold);
+                if let Some(t) = threshold {
+                    self.runs[k].attach_case_threshold(runs.0, &t);
+                }
+                self.report.cases_opened += 1;
+                case.runs = Some(runs);
+                self.cases.push(case);
+            } else {
+                self.queue[k].push_front(case);
+                return;
+            }
+        }
+    }
+
+    /// The CRL versions provider `h`'s RA serves at the backend's last step: every
+    /// provider's latest version once it has crossed the inter-provider link (its own at
+    /// once). Each is `(provider, version)`.
+    fn visible_versions(&self, h: usize) -> Vec<(usize, &CrlVersion)> {
+        let d = &self.home().state.deployment;
+        let now = self.backend_now;
+        self.crl_feeds
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !self.provider_off_ctl(*k))
+            .filter_map(|(k, feed)| {
+                let lag = if k == h {
+                    Duration::ZERO
+                } else {
+                    d.inter_provider_latency(k, h).unwrap_or(Duration::ZERO)
+                };
+                // A list published before the run crossed the link before it began; the
+                // first step that sees it stamps it, so it carries no lag.
+                feed.iter()
+                    .rev()
+                    .find(|v| {
+                        let lag = if self.prerun_version(k, v) {
+                            0
+                        } else {
+                            lag.as_nanos()
+                        };
+                        v.at.saturating_add(lag) <= now
+                    })
+                    .map(|v| (k, v))
+            })
+            .collect()
+    }
+
+    /// Whether provider `k`'s feed version `v` is the list its CRL Store held before the
+    /// run (`seeded_serial`).
+    fn prerun_version(&self, k: usize, v: &CrlVersion) -> bool {
+        self.seeded_serial.get(k).is_some_and(|s| v.serial <= *s)
+    }
+
+    /// The composite list vehicle `node`'s RA serves: its version (the sum of
+    /// every visible provider's version), every visible provider's entries, and their
+    /// signed CRLs.
+    #[must_use]
+    pub fn published_crl_for(
+        &self,
+        node: NodeId,
+    ) -> (u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>) {
+        let h = self.provider_of_device(device_of(node));
+        let mut version = 0u32;
+        let mut entries = Vec::new();
+        let mut secured = Vec::new();
+        for (_, v) in self.visible_versions(h) {
+            version = version.saturating_add(v.version);
+            entries.extend(v.entries.iter().copied());
+            secured.extend(v.secured.clone());
+        }
+        (version, entries, secured)
+    }
+
+    /// What the eMBMS carousel carries (`crl_delivery: mbms`): every provider's latest
+    /// published CRL as its own CRL Generator signed it — the version (their sum), their
+    /// entries, home provider's first, and the signed CRLs. **ASSUMPTION**: the mobile
+    /// operator's broadcast centre is fed by every provider's CRL store directly, with no
+    /// inter-provider lag; MBMS CRL distribution is specified but not deployed,
+    /// so no document says who feeds it.
+    #[must_use]
+    pub fn mbms_crl(&self) -> (u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>) {
+        let mut version = 0u32;
+        let mut entries = Vec::new();
+        let mut secured = Vec::new();
+        for feed in &self.crl_feeds {
+            if let Some(v) = feed.iter().rev().find(|v| v.at <= self.backend_now) {
+                version = version.saturating_add(v.version);
+                entries.extend(v.entries.iter().copied());
+                secured.extend(v.secured.clone());
+            }
+        }
+        (version, entries, secured)
+    }
+
+    /// The list the CRL Store has published: its version (entry count) and entries.
+    #[must_use]
+    pub fn published_crl(&self) -> (u32, Vec<CrlLinkageEntry>) {
+        // The home provider's RA's composite list (a vehicle's own is
+        // [`Phase2::published_crl_for`]).
+        let (v, e, _) = self.published_crl_for_provider(0);
+        (v, e)
+    }
+
+    fn published_crl_for_provider(
+        &self,
+        h: usize,
+    ) -> (u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>) {
+        let mut version = 0u32;
+        let mut entries = Vec::new();
+        let mut secured = Vec::new();
+        for (_, v) in self.visible_versions(h) {
+            version = version.saturating_add(v.version);
+            entries.extend(v.entries.iter().copied());
+            secured.extend(v.secured.clone());
+        }
+        (version, entries, secured)
+    }
+
+    /// The list the roadside broadcast path holds: its version (the sum of every
+    /// provider's entry count) and every provider's entries, the home provider's first.
+    ///
+    /// ASSUMPTION: a roadside unit relays every provider's CRL, each as its own
+    /// provider's CRL Broadcast published it, the way every RA serves each provider's
+    /// list; no published text assigns roadside CRL relay to one provider.
+    #[must_use]
+    pub fn broadcast_crl(&self) -> (u32, Vec<CrlLinkageEntry>) {
+        let entries = self
+            .runs
+            .iter()
+            .flat_map(|r| r.state.crl_broadcast.entries.iter().copied())
+            .collect();
+        (self.broadcast_version, entries)
+    }
+
+    /// The signed CRLs the roadside broadcast path relays unchanged: one per provider
+    /// whose CRL Broadcast has published, in [`Phase2::broadcast_crl`]'s order. Empty with
+    /// the PDU layer off.
+    #[must_use]
+    pub fn broadcast_secured_crls(&self) -> Vec<std::sync::Arc<[u8]>> {
+        self.runs
+            .iter()
+            .flat_map(|r| {
+                r.state
+                    .crl_broadcast
+                    .secured
+                    .iter()
+                    .chain(r.state.crl_broadcast.secured_retired.iter())
+                    .chain(r.state.crl_broadcast.hash_crls.values())
+            })
+            .map(|p| std::sync::Arc::<[u8]>::from(p.bytes()))
+            .collect()
+    }
+
+    /// The CRL's size on the wire for `entries` entries.
+    #[must_use]
+    pub fn crl_size(&self, entries: u32) -> u32 {
+        crl_bytes(&self.home().state.sizes, entries).bytes()
+    }
+
+    /// Whether the published CTL is newer than `held` (0: the factory CTL).
+    fn ctl_newer_than(&self, held: u32) -> bool {
+        let now = self.home().state.gov.ctl.sequence;
+        held.max(self.factory_ctl_seq.unwrap_or(now)) < now
+    }
+
+    /// Whether provider `k`'s root was removed (`peer_root_removal_at_s`) and the CTL
+    /// without it is published: its RA's CRL is no longer served (no device could verify
+    /// it) and nothing it certifies validates.
+    fn provider_off_ctl(&self, k: usize) -> bool {
+        if self.removed_peer != Some(k) {
+            return false;
+        }
+        let gov = &self.home().state.gov;
+        self.runs
+            .get(k)
+            .and_then(|r| gov.root_of(&r.state.gov.config.provider))
+            .is_none_or(|r| !gov.ctl.roots.contains(&r))
+    }
+
+    /// The factory trust ([`Phase2::factory_trust`]), made once, when the governance
+    /// first runs: the electors SCMS Manager published then, and every CTL in force,
+    /// each installed through [`DeviceTrust::install_ctl`] (its predecessor's quorum).
+    ///
+    /// [`DeviceTrust::install_ctl`]: v2xw_proto::scms::governance::DeviceTrust::install_ctl
+    fn ensure_factory_trust(&mut self) {
+        let gov = &self.runs[0].state.gov;
+        self.factory_ctl_seq.get_or_insert(gov.ctl.sequence);
+        if self.factory_trust.is_none() {
+            let mut t = v2xw_proto::scms::governance::DeviceTrust {
+                anchors: gov.anchors(),
+                ..Default::default()
+            };
+            for c in &gov.ctl_history {
+                let _ = t.install_ctl(c);
+            }
+            self.factory_trust = Some(t);
+        }
+    }
+
+    /// The trust a device installs from the published CTL, when it is newer than the one
+    /// `node` (a vehicle, or a roadside unit when `rsu`) holds: the roots of every
+    /// provider on it and their chain files ([`Phase2::trust_bundle`]).
+    ///
+    /// The device checks every CTL published since the one it holds, in sequence, as
+    /// 1609.2.1 has it: at least `quorum` valid ECDSA P-384 signatures from the electors
+    /// its installed CTL trusts, each bound to this CTL's `tbsCtlHash`
+    /// ([`DeviceTrust::install_ctl`], `v2xw_sec::ctl::verify_ctl`). A CTL that fails is
+    /// refused (`trust_lists_refused`) and skipped; a later one its trust can verify
+    /// still installs. The work is counted in `trust_list_verifications`. Only the roots
+    /// the device's own installed CTL approves become anchors. `None` when the device
+    /// installed nothing new.
+    ///
+    /// [`DeviceTrust::install_ctl`]: v2xw_proto::scms::governance::DeviceTrust::install_ctl
+    #[allow(clippy::type_complexity)]
+    pub fn take_ctl_install(
+        &mut self,
+        node: NodeId,
+        rsu: bool,
+    ) -> Option<(
+        Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+        Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    )> {
+        let held = if rsu {
+            self.rsu_cycle.get(&node).map(|c| c.ctl_seq)
+        } else {
+            self.nodes.get(&node).map(|n| n.ctl_seq)
+        }?;
+        // The trust a vehicle was enrolled with: a vehicle that joins after a CTL change
+        // got the CTL in force then from its RA with its enrolment (1609.2.1 bootstrap),
+        // so it holds that one already and does not install it again. It did, counting a
+        // `trust_lists_installed` for a list it held.
+        let enrolled = if rsu {
+            None
+        } else {
+            let device = device_of(node);
+            let k = self.device_provider.get(&device).copied().unwrap_or(0);
+            self.runs
+                .get(k)
+                .and_then(|r| r.state.devices.get(&device))
+                .map(|d| d.trust.clone())
+                .filter(|t| t.ctl_sequence.is_some())
+        };
+        let enrolled_seq = enrolled.as_ref().and_then(|t| t.ctl_sequence);
+        if !self.ctl_newer_than(held.max(enrolled_seq.unwrap_or(0))) {
+            return None;
+        }
+        self.ensure_factory_trust();
+        let own = if rsu {
+            self.rsu_cycle
+                .get_mut(&node)
+                .and_then(|c| c.ctl_trust.take())
+        } else {
+            self.nodes.get_mut(&node).and_then(|n| n.ctl_trust.take())
+        };
+        let factory_seq = self.factory_trust.as_ref().and_then(|t| t.ctl_sequence);
+        let mut trust = own
+            .map(|b| *b)
+            .or_else(|| enrolled.filter(|_| enrolled_seq > factory_seq))
+            .or_else(|| self.factory_trust.clone())
+            .unwrap_or_default();
+        let from = trust.ctl_sequence;
+        let before = trust.verifications;
+        let gov = &self.home().state.gov;
+        let mut refused = 0u64;
+        for c in gov.ctls_after(from) {
+            if trust.install_ctl(&c).is_err() {
+                refused += 1;
+            }
+        }
+        self.report.trust_lists_refused += refused;
+        self.report.trust_list_verifications += u64::from(trust.verifications - before);
+        let installed = trust.ctl_sequence;
+        let approved: BTreeSet<[u8; 32]> = trust
+            .ctl_trust
+            .as_ref()
+            .map(|t| t.roots.clone())
+            .unwrap_or_default();
+        let seq = installed.unwrap_or(held);
+        if rsu {
+            if let Some(c) = self.rsu_cycle.get_mut(&node) {
+                c.ctl_seq = c.ctl_seq.max(seq);
+                c.ctl_trust = Some(Box::new(trust));
+            }
+        } else if let Some(n) = self.nodes.get_mut(&node) {
+            n.ctl_seq = n.ctl_seq.max(seq);
+            n.ctl_trust = Some(Box::new(trust));
+        }
+        if installed == from {
+            return None;
+        }
+        self.report.trust_lists_installed += 1;
+        let (mut roots, cas) = self.trust_bundle();
+        roots.retain(|r| {
+            v2xw_sec::sig1609::cert_hashed_id32(r).is_ok_and(|h| approved.contains(&h))
+        });
+        Some((roots, cas))
+    }
+
+    /// Counts the trust anchors a device dropped on installing a CTL.
+    pub fn note_anchors_removed(&mut self, n: usize) {
+        self.report.trust_anchors_removed += n as u64;
+    }
+
+    /// The clock offset vehicle `node` carries (`clock_skew_s`, `clock_skew_share`), ns:
+    /// `None` for a true clock. The share is taken by a fixed hash of the node index, so
+    /// a base and a variant skew the same vehicles.
+    pub fn clock_skew_for(&mut self, node: NodeId) -> Option<i64> {
+        let skew = self.params.clock_skew_ns;
+        if skew == 0 {
+            return None;
+        }
+        let h = u64::from(node.index()).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11;
+        let u = h as f64 / (1u64 << 53) as f64;
+        if u >= self.params.clock_skew_share {
+            return None;
+        }
+        self.report.clock_skewed_nodes += 1;
+        Some(skew)
+    }
+
+    /// The bytes vehicle or unit `node` downloads from its RA as its CRL: the real
+    /// `CompositeCrlSpdu` (1609.2.1 §6.3.5.x), which is every provider's
+    /// `SecuredCrl` its RA serves plus the RA provider's home CTL, encoded. The size
+    /// model's `crl_size` estimate (40 B an entry) is charged only when the run signs no
+    /// CRLs (the modelled path).
+    pub fn crl_download_size(&mut self, node: NodeId) -> u32 {
+        let (version, _, secured) = self.published_crl_for(node);
+        let h = self.provider_of_device(device_of(node));
+        if secured.is_empty() && self.etsi.is_none() {
+            return self.composite_estimate(h);
+        }
+        self.composite_size(h, version, &secured)
+    }
+
+    /// The composite CRL vehicle RA `h` serves when no list was signed (the 1609.2.1 PDU
+    /// layer off, as under a post-quantum KEM): IEEE 1609.2.1 §6.3.5.8's `CompositeCrl`
+    /// is every CTL-listed CRACA's `SecuredCrl` plus the home `MultiSignedCtl`, so it is
+    /// the empty composite's encoding (the CTL and the sequence header, exact) plus each
+    /// provider's list under the size model ([`ScmsSizes::crl`]). The CRL is signed, not
+    /// encrypted, so the KEM changes none of it. It was one list of all entries (292 B
+    /// with none), against the 3,298 B composite the same RA serves with the PDU layer on
+    /// (the estimate would leave 175 kB of CRL fetches off the Uu downlink).
+    fn composite_estimate(&self, h: usize) -> u32 {
+        let sizes = &self.home().state.sizes;
+        let visible = self.visible_versions(h);
+        let lists: u32 = (0..self.crl_feeds.len())
+            .filter(|k| !self.provider_off_ctl(*k))
+            .map(|k| {
+                // Before a provider's first in-run publication reaches this RA it
+                // serves that provider's list from before the run (its store's).
+                let n = visible.iter().find(|(j, _)| *j == k).map_or_else(
+                    || {
+                        self.runs
+                            .get(k)
+                            .map_or(0, |r| r.state.crl_store.entries.len())
+                    },
+                    |(_, v)| v.entries.len(),
+                );
+                let n = u32::try_from(n).unwrap_or(u32::MAX);
+                crl_bytes(sizes, n).bytes()
+            })
+            .fold(0u32, u32::saturating_add);
+        let ctl = self
+            .runs
+            .get(h)
+            .and_then(|r| v2xw_sec::ctl::encode_composite_crl_coer(&[], &r.state.gov.ctl.spdu).ok())
+            .map_or(0, |b| u32::try_from(b.len()).unwrap_or(u32::MAX));
+        lists.saturating_add(ctl)
+    }
+
+    /// The bytes of a composite CRL of `secured` under provider `h`'s home CTL; the
+    /// estimate for `version` entries when there is nothing signed to encode.
+    pub fn composite_size(
+        &mut self,
+        h: usize,
+        version: u32,
+        secured: &[std::sync::Arc<[u8]>],
+    ) -> u32 {
+        let estimate = self.crl_size(version);
+        let Some(run) = self.runs.get(h) else {
+            return estimate;
+        };
+        if secured.is_empty() {
+            return estimate;
+        }
+        let ctl = &run.state.gov.ctl;
+        let key = (
+            h,
+            ctl.sequence,
+            secured.len(),
+            secured.iter().map(|s| s.len()).sum::<usize>(),
+        );
+        if let Some(n) = self.composite_sizes.get(&key) {
+            return *n;
+        }
+        let parts: Vec<&[u8]> = secured.iter().map(|s| &s[..]).collect();
+        let n = v2xw_sec::ctl::encode_composite_crl_coer(&parts, &ctl.spdu)
+            .map_or(estimate, |b| u32::try_from(b.len()).unwrap_or(u32::MAX));
+        self.composite_sizes.insert(key, n);
+        n
+    }
+
+    /// The size of a CRL request, bytes: what the size model charged before proto B9b (an
+    /// envelope and the copy's time). Kept for the size table; a poll is charged
+    /// [`Phase2::crl_poll_request_bytes`].
+    #[must_use]
+    pub fn crl_request_size(&self) -> u32 {
+        self.home().state.sizes.crl_request().bytes()
+    }
+
+    /// The internet legs a cellular exchange with `node`'s RA crosses, ns: the city to the
+    /// provider's region and back ([`Phase2::internet_legs`]; zero under `flat`). A top-up's
+    /// messages cross them through the kernel's path oracle ([`InternetLeg`]); the CRL
+    /// poll is priced in the engine and adds them itself.
+    #[must_use]
+    pub fn internet_round_trip_ns(&self, node: NodeId) -> u64 {
+        let k = self.provider_of_device(device_of(node));
+        self.internet_legs
+            .get(k)
+            .map_or(0, |leg| leg.as_nanos().saturating_mul(2))
+    }
+
+    /// A vehicle's conditional CRL poll on the wire: `GET /download-crl/
+    /// HTTP/1.1` to its provider's CRL store (`Host: ma.<provider>:8894`, [CAMP122]
+    /// §6.2.1, §6.2.3) with `If-Modified-Since` its copy's time ([SMP] §4.3.2) and no
+    /// body: the download is unauthenticated, so no SPDU rides in it.
+    #[must_use]
+    pub fn crl_poll_request_bytes(&self, node: NodeId) -> u32 {
+        use v2xw_proto::scms::http;
+        let k = self.provider_of_device(device_of(node));
+        let provider = &self.runs[k.min(self.runs.len() - 1)]
+            .state
+            .gov
+            .config
+            .provider;
+        http::request_bytes(
+            http::Method::Get,
+            CRL_STORE_PATH,
+            &[
+                http::host(&format!("ma.{provider}"), http::MA_PORT),
+                if_modified_since(),
+            ],
+            0,
+        )
+    }
+
+    /// The RA's information-status poll on the wire: a conditional
+    /// `GET` of [`INFO_STATUS_PATH`] to the vehicle's RA (`Host: ra.<provider>:8892`),
+    /// `If-Modified-Since` the status it last received, no body.
+    #[must_use]
+    pub fn info_status_request_bytes(&self, node: NodeId) -> u32 {
+        use v2xw_proto::scms::http;
+        let k = self.provider_of_device(device_of(node));
+        let provider = &self.runs[k.min(self.runs.len() - 1)]
+            .state
+            .gov
+            .config
+            .provider;
+        http::request_bytes(
+            http::Method::Get,
+            INFO_STATUS_PATH,
+            &[
+                http::host(&format!("ra.{provider}"), http::RA_PORT),
+                if_modified_since(),
+            ],
+            0,
+        )
+    }
+
+    /// Counts one composite CRL poll whose request (`up` bytes) and answer (`down`) both
+    /// crossed the cellular link.
+    pub fn note_crl_poll_bytes(&mut self, up: u32, down: u32) {
+        self.report.crl_polls_answered += 1;
+        self.report.crl_poll_bytes_up += u64::from(up);
+        self.report.crl_poll_bytes_down += u64::from(down);
+    }
+
+    /// The answer to a conditional poll on the wire: `200 OK` with `body`
+    /// bytes (the composite CRL, or the signed information status) and its `Date`,
+    /// `Content-Type` and `Content-Length`; or, with `None`, `412 Precondition Failed`
+    /// with `Date` and `Content-Length: 0` ([`CRL_NOT_MODIFIED_BYTES`]).
+    #[must_use]
+    pub fn poll_answer_bytes(body: Option<u32>) -> u32 {
+        use v2xw_proto::scms::http;
+        match body {
+            Some(n) => http::answer_bytes(http::Status::Ok, n, &[]),
+            None => http::answer_bytes(http::Status::PreconditionFailed, 0, &[]),
+        }
+    }
+
+    /// Vehicles whose CRL poll is due at `now`, with the version they hold and whether the
+    /// RA has anything newer for them. Advances each one's next poll.
+    ///
+    /// Every due poll is a request on the air: a device cannot know that nothing changed
+    /// without asking. It is a conditional GET (`If-Modified-Since` its copy's time,
+    /// [SMP] §4.3.2), answered with the composite CRL when something changed and with
+    /// HTTP 412 ([`CRL_NOT_MODIFIED_BYTES`]) when its copy is current. Before this, a poll
+    /// that would have found nothing new put nothing on the air.
+    pub fn crl_polls_due(&mut self, now: SimTime) -> Vec<(NodeId, u32, bool)> {
+        let interval = self.params.crl_fetch_interval;
+        let published: Vec<u32> = (0..self.runs.len())
+            .map(|h| self.published_crl_for_provider(h).0)
+            .collect();
+        let serials: Vec<u64> = (0..self.runs.len())
+            .map(|h| {
+                self.visible_versions(h)
+                    .iter()
+                    .map(|(_, v)| u64::from(v.serial))
+                    .sum()
+            })
+            .collect();
+        let ctl_now = self.home().state.gov.ctl.sequence;
+        let factory = self.factory_ctl_seq.unwrap_or(ctl_now);
+        let providers = &self.device_provider;
+        let mut out = Vec::new();
+        for (node, n) in &mut self.nodes {
+            if n.access != Some(AccessKind::Cellular) || n.crl_fetch_in_flight || n.powered_off {
+                continue;
+            }
+            if n.next_crl_fetch <= now {
+                n.next_crl_fetch = interval.after(now);
+                let h = providers.get(&device_of(*node)).copied().unwrap_or(0);
+                if n.crl_version < published[h]
+                    || n.crl_serial < serials[h]
+                    || n.ctl_seq.max(factory) < ctl_now
+                {
+                    n.crl_serial_asked = serials[h];
+                    n.crl_fetch_in_flight = true;
+                    out.push((*node, n.crl_version, true));
+                } else {
+                    out.push((*node, n.crl_version, false));
+                }
+            }
+        }
+        out
+    }
+
+    /// The lists `node` holds when it joins: the newest list each
+    /// provider had published when it joined, as its RA serves them (every provider's
+    /// `t0` CRL for a device on the road from the start, which it fetched within the week
+    /// before the run; for a later joiner, the composite list its RA serves at `now`,
+    /// since a device fetches on every RA connection, [PRIMER] pp. 5, 8). Marks its copy
+    /// as of those lists, so its first conditional poll is answered 412 unless a provider
+    /// has published since; the caller installs them on the node. `None` for a node with
+    /// no device record or a run whose stores published nothing.
+    ///
+    /// The fetch is logged on the device's provider's run as one pre-run `SecuredCrl` PDU
+    /// per list, from that provider's CRL Store at `now` (OF-3), so the PKI view shows
+    /// where the lists the device holds came from, as it shows its pre-run enrolment.
+    pub fn prerun_crl(&mut self, node: NodeId, now: SimTime) -> Option<PrerunCrl> {
+        // Oracle rule OF-3-JOIN: a joiner was handed the
+        // `t0` lists whatever it joined, so a car switched on after a revocation trusted
+        // the revoked senders until its first poll, and one switched on three weeks in
+        // refused every message as `crl-overdue`. The `t0` snapshot stays the answer
+        // until the RA serves something newer, so a fleet on the road from the start is
+        // unchanged.
+        let served = self.crl_serial_for(node);
+        let newer = served > self.prerun_crl.1;
+        let (version, serial, entries, secured) = if newer {
+            let (v, e, s) = self.published_crl_for(node);
+            (v, served, e, s)
+        } else {
+            let (v, s, e, c) = &self.prerun_crl;
+            (*v, *s, e.clone(), c.clone())
+        };
+        if serial == 0 {
+            return None;
+        }
+        let status = self
+            .params
+            .info_status_poll
+            .then(|| self.status_fingerprint(node));
+        let n = self.nodes.get_mut(&node)?;
+        n.crl_serial = n.crl_serial.max(serial);
+        n.crl_at_join = newer;
+        if status.is_some() {
+            // It fetched the RA's information status with its lists.
+            n.status_seen = status;
+        }
+        let out = (version, entries, secured);
+        let device = device_of(node);
+        let k = self.provider_of_device(device);
+        if let Some(run) = self.runs.get_mut(k) {
+            for crl in &out.2 {
+                let pdu = v2xw_proto::scms::pdu::Pdu::new(crl.to_vec());
+                run.note_prerun_crl(device, now, &pdu);
+            }
+        }
+        Some(out)
+    }
+
+    /// Gives each vehicle's first poll a phase inside the interval, from a keyed draw, so
+    /// a fleet does not poll in one instant.
+    pub fn phase_crl_poll(
+        &mut self,
+        node: NodeId,
+        rng: &v2xw_core::rng::RngRegistry,
+        now: SimTime,
+    ) {
+        let interval = self.params.crl_fetch_interval.as_nanos();
+        if let Some(n) = self.nodes.get_mut(&node) {
+            let u = rng
+                .checkout(
+                    v2xw_core::rng::RngDomain::Backend,
+                    v2xw_core::rng::EntityRef::Node(node),
+                )
+                .f64();
+            n.next_crl_fetch = now.saturating_add((u * interval as f64) as u64);
+        }
+    }
+
+    /// `crl_delivery: mbms` only: the cellular vehicles a broadcast at `now` is for — on a
+    /// newly `published` list, or on a carousel turn — each marked as receiving. `None`
+    /// under unicast delivery or before the first list.
+    pub fn mbms_due(&mut self, now: SimTime, published: bool) -> Option<Vec<NodeId>> {
+        if self.access.crl_delivery() != crate::backend::CrlDelivery::Mbms {
+            return None;
+        }
+        let version = self.mbms_crl().0;
+        if version == 0 || (!published && now < self.mbms_next) {
+            return None;
+        }
+        self.mbms_next = Duration::from_secs_f64(self.access.mbms().carousel_s).after(now);
+        let mut out = Vec::new();
+        for (node, n) in &mut self.nodes {
+            if n.access == Some(AccessKind::Cellular)
+                && !n.crl_fetch_in_flight
+                && !n.powered_off
+                && n.crl_version < version
+            {
+                n.crl_fetch_in_flight = true;
+                out.push(*node);
+            }
+        }
+        Some(out)
+    }
+
+    /// A device kept a composite CRL download but skipped `crls` signed CRLs in it that it
+    /// could not verify (a provider whose root its CTL no longer approves, a bad
+    /// signature), and dropped the `entries` only those CRLs carried.
+    pub fn crls_skipped(&mut self, crls: usize, entries: usize) {
+        self.report.crls_skipped_unverifiable += crls as u64;
+        self.report.crl_entries_unverifiable += entries as u64;
+    }
+
+    /// A vehicle refused a CRL frame or download (its signature, its signer, or an entry
+    /// the signed CRL does not carry).
+    pub fn crl_frame_refused(&mut self, node: NodeId, cellular: bool) {
+        self.report.crl_frames_rejected += 1;
+        if let Some(n) = self.nodes.get_mut(&node)
+            && cellular
+        {
+            n.crl_fetch_in_flight = false;
+        }
+    }
+
+    /// A CRL download reached a device that was switched off after it asked: nothing was
+    /// received, and the device polls again once it is back on.
+    pub fn crl_download_unreceived(&mut self, node: NodeId) {
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.crl_fetch_in_flight = false;
+        }
+    }
+
+    /// Switches a device off or back on (a timeline `outage` on a vehicle or handset).
+    /// While off it reaches no part of the SCMS ([`NodeSec::powered_off`]). `false` when
+    /// the node has no device record here.
+    pub fn set_powered(&mut self, node: NodeId, on: bool) -> bool {
+        match self.nodes.get_mut(&node) {
+            Some(n) => {
+                n.powered_off = !on;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the device is switched off ([`Phase2::set_powered`]).
+    #[must_use]
+    pub fn powered_off(&self, node: NodeId) -> bool {
+        self.nodes.get(&node).is_some_and(|n| n.powered_off)
+    }
+
+    /// What the RA's information status stands for, for `node`'s RA, as its
+    /// `Last-Modified`: the composite CRL it serves (the lists' version and publication
+    /// count) and the home CTL's sequence, the quantities a poll's `changed` compares.
+    fn status_fingerprint(&self, node: NodeId) -> (u32, u64, u32) {
+        let h = self.provider_of_device(device_of(node));
+        let serial = self
+            .visible_versions(h)
+            .iter()
+            .map(|(_, v)| u64::from(v.serial))
+            .sum();
+        (
+            self.published_crl_for_provider(h).0,
+            serial,
+            self.home().state.gov.ctl.sequence,
+        )
+    }
+
+    /// Under `security.scms.crl_poll: info-status`: the RA's answer to `node`'s
+    /// information-status poll (1609.2.1 §6.3.5.14, `If-Modified-Since` as [SMP] §4.4
+    /// profiles it): `None` for HTTP 412 when the status the vehicle last received is
+    /// still the RA's, else the size of the signed `CertificateManagementInformationStatusSpdu`,
+    /// which the RA signs and logs (`ScmsRun::ra_info_status`) and the vehicle keeps.
+    ///
+    /// Its CRL lines are the lists of the composite the RA serves; the CTL, `caCcf`, MA and
+    /// RA lines are the RA's own (`ScmsRun::ra_status_lines`). With the 1609.2.1 PDU layer
+    /// off (no RA key) the size is the size model's (`ScmsSizes::info_status`).
+    ///
+    /// The second value is what that status stands for: the caller hands it to
+    /// [`Phase2::info_status_received`] once the answer reached the vehicle, and not before
+    /// (a lost answer leaves the vehicle's `If-Modified-Since` where it was).
+    pub fn info_status_answer(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+    ) -> (Option<u32>, (u32, u64, u32)) {
+        let fp = self.status_fingerprint(node);
+        if self
+            .nodes
+            .get(&node)
+            .is_some_and(|n| n.status_seen == Some(fp))
+        {
+            return (None, fp);
+        }
+        (self.info_status_signed(node, now), fp)
+    }
+
+    /// An information-status poll put on the air.
+    pub fn note_info_status_poll(&mut self) {
+        self.report.info_status_polls += 1;
+    }
+
+    /// The signed status reached the vehicle; it keeps what the status stands for
+    /// as its next `If-Modified-Since`.
+    pub fn info_status_received(&mut self, node: NodeId, seen: (u32, u64, u32)) {
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.status_seen = Some(seen);
+        }
+    }
+
+    /// The RA's signed status for `node` at `now`, logged, and its size.
+    fn info_status_signed(&mut self, node: NodeId, now: SimTime) -> Option<u32> {
+        use v2xw_proto::scms::pdu::{CrlStatusLine, CtlStatusLine, InfoStatus};
+        self.report.info_status_sent += 1;
+        let (_, _, secured) = self.published_crl_for(node);
+        let crl: Vec<CrlStatusLine> = secured
+            .iter()
+            .filter_map(|b| v2xw_sec::crl::decode_crl(b).ok())
+            .map(|o| CrlStatusLine {
+                craca_id8: v2xw_sec::hashedid::id8_bytes(&o.contents.crl_craca),
+                series: o.contents.crl_series.0.0,
+                issue_date: o.contents.issue_date.0.0,
+            })
+            .collect();
+        let device = device_of(node);
+        let h = self.provider_of_device(device);
+        let home_ctl = &self.home().state.gov.ctl;
+        let mut status = InfoStatus {
+            crl,
+            ctl: vec![CtlStatusLine {
+                series_id: v2xw_sec::ctl::US_CTL_SERIES_ID,
+                sequence: u16::try_from(home_ctl.sequence).unwrap_or(u16::MAX),
+                last_update: home_ctl.effective,
+            }],
+            ca_ccf: home_ctl.effective,
+            ma: Vec::new(),
+            ra: Some(0),
+        };
+        let estimate = |s: &InfoStatus, sizes: &v2xw_proto::scms::msg::ScmsSizes| {
+            let body = v2xw_proto::scms::pdu::info_status_coer(s).map_or(0, |b| b.len() as u32);
+            sizes.info_status(body).bytes()
+        };
+        let Some(run) = self.runs.get_mut(h) else {
+            return Some(estimate(&status, &self.home().state.sizes));
+        };
+        if let Some((ctl, ccf, ma, ra)) = run.ra_status_lines() {
+            status.ctl = vec![ctl];
+            status.ca_ccf = ccf;
+            status.ma = vec![ma];
+            status.ra = Some(ra);
+        }
+        match run.ra_info_status(device, now, &status) {
+            Some(p) => Some(p.len()),
+            None => Some(estimate(&status, &run.state.sizes)),
+        }
+    }
+
+    /// A conditional CRL poll answered 412: the vehicle's copy is current.
+    pub fn note_crl_not_modified(&mut self) {
+        self.report.crl_polls_not_modified += 1;
+    }
+
+    /// A CRL poll that ended without a download (lost, no coverage).
+    pub fn crl_poll_failed(&mut self, node: NodeId) {
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.crl_fetch_in_flight = false;
+        }
+    }
+
+    /// A vehicle received part or all of CRL `version`: `entries` are the entries the
+    /// frame or download carried. Returns the entries new to this vehicle and the
+    /// revocation stages its enforcement completes.
+    ///
+    /// A list may arrive split across several broadcast frames, or by both paths; an
+    /// entry is installed once, and the vehicle holds `version` once it holds that many
+    /// entries.
+    #[allow(clippy::too_many_arguments)]
+    pub fn install_crl(
+        &mut self,
+        node: NodeId,
+        version: u32,
+        entries: &[CrlLinkageEntry],
+        now: SimTime,
+        cellular: bool,
+        node_verified: bool,
+    ) -> (
+        Vec<CrlLinkageEntry>,
+        Vec<crate::sec_records::ProtoRevocation>,
+    ) {
+        let records = Vec::new();
+        // What the vehicle's RA serves now (version, publication count), so a list held
+        // whole is named by its publication count (`NodeSec::crl_held_serial`).
+        let served = (self.crl_version_for(node), self.crl_serial_for(node));
+        // With the PDU layer on, the vehicle verified the signed CRL itself
+        // (`ObuRuntime::install_secured_crl`) before this is called, and refused a frame
+        // carrying an entry the CRL does not sign. Only the modelled path (PDU layer off:
+        // no signed bytes exist) still compares against the Generator's own list, which
+        // is what the modelled digest signature covers (`crl_digest`).
+        if !node_verified {
+            let signed =
+                |e: &CrlLinkageEntry| self.runs.iter().any(|r| r.state.crlg.entries.contains(e));
+            if !entries.iter().all(signed) {
+                self.crl_frame_refused(node, cellular);
+                return (Vec::new(), records);
+            }
+        }
+        let mut records = records;
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return (Vec::new(), records);
+        };
+        if cellular {
+            n.crl_fetch_in_flight = false;
+            n.crl_serial = n.crl_serial.max(n.crl_serial_asked);
+            self.report.crl_downloads += 1;
+        }
+        let fresh: Vec<CrlLinkageEntry> = entries
+            .iter()
+            .filter(|e| !n.crl_installed.contains(e))
+            .cloned()
+            .collect();
+        n.crl_installed.extend(fresh.iter().cloned());
+        if n.crl_installed.len() >= version as usize {
+            n.crl_version = n.crl_version.max(version);
+            // The list it holds is the one its RA serves when the versions agree; else
+            // (a roadside copy behind the RA) the one its own fetch or join named.
+            let held = if served.0 == version {
+                served.1
+            } else {
+                n.crl_serial
+            };
+            n.crl_held_serial = n.crl_held_serial.max(held);
+        }
+        let size = u64::from(crl_bytes(&self.home().state.sizes, version).bytes());
+        self.report.crls_installed += fresh.len() as u64;
+        for case in &mut self.cases {
+            let Some((entry, _)) = case.entry.as_ref() else {
+                continue;
+            };
+            if !fresh.contains(entry) {
+                continue;
+            }
+            for stage in ["downloaded", "processed", "enforced"] {
+                records.push(crate::sec_records::ProtoRevocation::stage(
+                    now,
+                    stage,
+                    &case.subject_digest,
+                    (stage == "downloaded").then_some(size),
+                    (stage == "downloaded").then_some(u64::from(version)),
+                    Some(node),
+                ));
+            }
+            if case.enforced_first.is_none() {
+                case.enforced_first = Some(now);
+            }
+            case.enforcers.push((node, now));
+        }
+        self.finish_first_revocation(now);
+        (fresh, records)
+    }
+
+    /// Whether a report is being forwarded for the first time: two units that both hear
+    /// one relayed report forward it once between them, as the RA's duplicate check
+    /// would otherwise have to.
+    pub fn claim_forward(&mut self, report_id: &str) -> bool {
+        self.forwarded.insert(report_id.to_string())
+    }
+
+    /// How many CRL entries a vehicle holds.
+    #[must_use]
+    pub fn crl_entries_of(&self, node: NodeId) -> u32 {
+        self.nodes
+            .get(&node)
+            .map_or(0, |n| n.crl_installed.len() as u32)
+    }
+
+    /// Assembles the first revocation's decomposition, once a vehicle enforces it.
+    fn finish_first_revocation(&mut self, _now: SimTime) {
+        if self.revocation.is_some() {
+            return;
+        }
+        let Some(case) = self.cases.iter().find(|c| c.enforced_first.is_some()) else {
+            return;
+        };
+        let (Some((resolution, issuance)), Some((entry, version)), Some(enforced), Some(subject)) =
+            (case.runs, case.entry, case.enforced_first, case.subject)
+        else {
+            return;
+        };
+        let log = &self.runs[case.provider].kernel.stages;
+        let latency = RevocationLatency::assemble(
+            log,
+            device_of(subject),
+            Transport::CellularUu,
+            case.report_run,
+            resolution,
+            issuance,
+            FlowRun(u32::MAX),
+        );
+        let mut stages = latency.stages.clone();
+        stages.push((StageId::Enforced, enforced));
+        let first = stages.first().map_or(enforced, |s| s.1);
+        let total = Duration::from_nanos(enforced.saturating_sub(first));
+        self.report.revocation_latency_ns = total.as_nanos();
+        self.report.revocation_stages = stages
+            .iter()
+            .map(|(s, t)| (s.as_str().to_string(), t.saturating_sub(first)))
+            .collect();
+        self.revocation = Some(Revocation {
+            entry,
+            stages,
+            latency: total,
+            bytes: crl_bytes(&self.home().state.sizes, version).bytes(),
+            subject,
+            subject_digest: case.subject_digest.clone(),
+        });
+    }
+
+    /// Whether a CRL entry revokes any of `node`'s own certificates, and which `(i, j)`.
+    #[must_use]
+    pub fn own_revoked(&self, node: NodeId, gate: &v2xw_node::stores::CrlGate) -> Vec<(u32, u32)> {
+        self.creds(node)
+            .iter()
+            .filter(|k| gate.revokes_linkage_at_period(k.i, k.lv))
+            .map(|k| (k.i, k.j))
+            .collect()
+    }
+
+    /// Marks a vehicle as having found itself on the CRL.
+    pub fn note_self_revoked(&mut self, node: NodeId) {
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.self_revoked = true;
+        }
+    }
+
+    /// Vehicles whose pool needs the next period, with the access to use. Marks each as
+    /// having a top-up requested; the caller starts the flow with [`Phase2::start_topup`].
+    pub fn topups_due(&mut self, now: SimTime) -> Vec<(NodeId, AccessKind, u32)> {
+        let current = self.params.period_at(now);
+        let below = self.params.topup_below_periods;
+        let mut out = Vec::new();
+        for (node, n) in &self.nodes {
+            if n.topup.is_some()
+                || n.self_revoked
+                || n.blocked
+                || n.etsi_batch.is_some()
+                || n.powered_off
+            {
+                continue;
+            }
+            let remaining = n.last_period.saturating_add(1).saturating_sub(current);
+            if below > 0 && remaining <= below {
+                out.push((
+                    *node,
+                    n.access.unwrap_or(AccessKind::Offline),
+                    n.last_period + 1,
+                ));
+            }
+        }
+        out
+    }
+
+    /// Starts one vehicle's top-up over `link`, for period `i`.
+    pub fn start_topup(&mut self, node: NodeId, link: v2xw_proto::Link, i: u32, now: SimTime) {
+        let device = device_of(node);
+        if let Some(etsi) = self.etsi.as_mut()
+            && self.params.etsi_butterfly
+        {
+            // One butterfly request for the whole period (TS 102 941 V2 §6.2.3.5): the EA
+            // expands the caterpillar keys, the AA certifies the batch without learning
+            // whose it is, and the station comes back for it at the next backend step.
+            etsi.set_access(device, link);
+            etsi.current_i = i;
+            let run = etsi.authorize_butterfly(device);
+            self.report.topups_started += 1;
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.topup = Some(run);
+                n.topup_started = now;
+                n.etsi_batch = Some((i, false));
+            }
+            return;
+        }
+        if let Some(etsi) = self.etsi.as_mut() {
+            // One standard authorization per ticket [TS 102 941 §6.2.3.3]; a blocklisted
+            // station's requests are refused by the EA and its pool runs dry.
+            etsi.set_access(device, link);
+            let target = etsi.tickets_of(device) + self.params.jmax;
+            let mut run = FlowRun(0);
+            for _ in 0..self.params.jmax {
+                run = etsi.authorize_at(device, now);
+            }
+            self.report.topups_started += 1;
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.topup = Some(run);
+                n.topup_started = now;
+                n.etsi_target = Some(target);
+            }
+            let _ = i;
+            return;
+        }
+        let jmax = self.params.jmax;
+        let scms = self.run_of_mut(device);
+        scms.set_access(device, link);
+        let run = scms.topup_at(device, now, i, jmax);
+        self.report.topups_started += 1;
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.topup = Some(run);
+            n.topup_started = now;
+        }
+    }
+
+    /// Notes a pseudonym change the engine saw, returning the previous digest.
+    pub fn note_change(
+        &mut self,
+        node: NodeId,
+        changes: u32,
+        digest: Option<[u8; 8]>,
+    ) -> Option<Option<[u8; 8]>> {
+        let n = self.nodes.get_mut(&node)?;
+        if changes == n.changes_seen && digest == n.active_digest {
+            return None;
+        }
+        let old = n.active_digest;
+        let changed = changes > n.changes_seen;
+        n.changes_seen = changes;
+        n.active_digest = digest;
+        if changed {
+            self.report.pseudonym_changes += 1;
+            Some(old)
+        } else {
+            None
+        }
+    }
+
+    /// Counts a node step at `now` spent unable to sign, and the time since the last one.
+    pub fn note_starved(&mut self, node: NodeId, now: SimTime) {
+        self.report.starved_node_steps += 1;
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return;
+        };
+        if !n.starved {
+            n.starved = true;
+            self.report.vehicles_starved += 1;
+        }
+        match n.starved_since {
+            None => n.starved_since = Some(now),
+            Some(since) => {
+                self.report.cert_unavailable_ns += now.saturating_sub(n.starved_last);
+                self.report.cert_unavailable_max_ns = self
+                    .report
+                    .cert_unavailable_max_ns
+                    .max(now.saturating_sub(since));
+            }
+        }
+        n.starved_last = now;
+    }
+
+    /// A node step at `now` at which the vehicle could sign: closes a spell without a
+    /// valid pseudonym, counting the time up to this step.
+    pub fn note_signable(&mut self, node: NodeId, now: SimTime) {
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return;
+        };
+        if let Some(since) = n.starved_since.take() {
+            self.report.cert_unavailable_ns += now.saturating_sub(n.starved_last);
+            self.report.cert_unavailable_max_ns = self
+                .report
+                .cert_unavailable_max_ns
+                .max(now.saturating_sub(since));
+        }
+    }
+
+    /// The security panel's row for one vehicle.
+    #[must_use]
+    pub fn security_view(
+        &self,
+        node: NodeId,
+        t: SimTime,
+        certs: &v2xw_node::CertStore,
+        crl_entries: u32,
+        link_up: bool,
+    ) -> Option<crate::sec_records::NodeSecurityView> {
+        let n = self.nodes.get(&node)?;
+        let active = certs.active();
+        let hex = |d: &[u8]| v2xw_core::hash::hex_encode(d);
+        let valid = certs
+            .credentials()
+            .iter()
+            .filter(|c| c.is_valid_at(t))
+            .count();
+        let preloaded = certs
+            .credentials()
+            .iter()
+            .filter(|c| t < c.valid_from)
+            .count();
+        let next_change = certs.next_change_at(t);
+        Some(crate::sec_records::NodeSecurityView {
+            t,
+            node,
+            protocol: if self.etsi.is_some() {
+                ETSI_PKI
+            } else {
+                CAMP_SCMS
+            }
+            .to_string(),
+            pseudonym: active.map(|c| hex(&c.digest.0[..])),
+            temp_id: active.map(|c| hex(&c.digest.0[..4])),
+            cert_i: active.map(|c| c.i_period),
+            cert_j: active.map(|c| c.j_index),
+            cert_valid_until: active.map(|c| c.valid_until),
+            pool_valid: valid as u32,
+            pool_preloaded: preloaded as u32,
+            pool_stored: certs.stored_count() as u32,
+            pool_last_period: Some(n.last_period),
+            changes: certs.changes(),
+            next_change: next_change.as_ref().map(|c| c.at),
+            next_change_reason: next_change.as_ref().map(|c| {
+                match c.reason {
+                    v2xw_node::stores::ChangeReason::Age => "age",
+                    v2xw_node::stores::ChangeReason::Distance => "distance",
+                    v2xw_node::stores::ChangeReason::Expired => "expired",
+                    _ => "other",
+                }
+                .to_string()
+            }),
+            next_change_needs_distance: next_change.as_ref().is_some_and(|c| c.needs_distance),
+            topup_in_flight: n.topup.is_some(),
+            // Due now or later; a device that is revoked, blocklisted or already topping up
+            // asks for nothing.
+            next_topup: if n.topup.is_some() || n.self_revoked || n.blocked {
+                None
+            } else {
+                self.params.topup_at(n.last_period)
+            },
+            link: n.access.unwrap_or(AccessKind::Offline).as_str().to_string(),
+            link_up,
+            outbox_reports: n.outbox.0.len() as u32,
+            reports_uploaded: n.reports_uploaded,
+            crl_entries,
+            crl_version: Self::record_crl_version(n),
+            self_revoked: n.self_revoked,
+            // The node's own store holds them (`Engine::emit_node_security`).
+            crls: Vec::new(),
+        })
+    }
+
+    /// The `crl_version` of a vehicle's `node.security` row: the publication count of the
+    /// composite CRL it holds whole ([`NodeSec::crl_held_serial`]), as `pki.state`'s CRL
+    /// heads count versions. It was the list's entry count, so a re-issue at `nextCrl`
+    /// read as no new version and an empty list as version 0.
+    fn record_crl_version(n: &NodeSec) -> u32 {
+        u32::try_from(n.crl_held_serial).unwrap_or(u32::MAX)
+    }
+
+    /// Notes that the roadside put a CRL frame on the air.
+    pub fn note_crl_broadcast(&mut self) {
+        self.report.crl_broadcasts += 1;
+    }
+
+    /// Notes a revocation whose publication fell past the run horizon.
+    pub fn note_crl_past_horizon(&mut self) {
+        self.report.crl_past_horizon += 1;
+    }
+
+    /// Notes that a node installed a CRL entry.
+    pub fn note_crl_installed(&mut self) {
+        self.report.crls_installed += 1;
+    }
+
+    /// Notes a reception the installed CRL caused to be classified revoked (`roadside`:
+    /// on a roadside unit; `node`: the receiver).
+    pub fn note_revoked_reception(&mut self, node: NodeId, roadside: bool) {
+        self.report.revoked_receptions += 1;
+        if roadside {
+            self.report.rsu_revoked_receptions += 1;
+        } else if self.nodes.get(&node).is_some_and(|n| n.crl_at_join) {
+            self.report.revoked_receptions_at_join += 1;
+        }
+    }
+
+    /// Counts what receiver `node` verified and refused as revoked, by the provider that
+    /// serves it and the one that certified each signer: `"<receiver's
+    /// provider><-<signer's provider>"`. Cross-provider trust is visible here, from each
+    /// node's own verdicts; the signer's provider is the engine's bookkeeping (which
+    /// vehicle holds the certificate), never read by a decision.
+    pub fn note_provider_receptions(
+        &mut self,
+        node: NodeId,
+        delivered: &[v2xw_node::VerifiedMessage],
+    ) {
+        if self.runs.len() < 2 {
+            return;
+        }
+        let Some(&rk) = self.device_provider.get(&device_of(node)) else {
+            return;
+        };
+        let names = &self.runs[0].state.deployment.providers;
+        for m in delivered {
+            let Some(signer) = &m.signer else { continue };
+            let Some(&(sender, _, _)) = self.by_digest.get(&digest_key(signer)) else {
+                continue;
+            };
+            let Some(&sk) = self.device_provider.get(&device_of(sender)) else {
+                continue;
+            };
+            let key = format!("{}<-{}", names[rk].name, names[sk].name);
+            let bucket = match m.verification {
+                v2xw_node::stores::VerificationState::Verified => {
+                    &mut self.report.verified_by_provider
+                }
+                v2xw_node::stores::VerificationState::Revoked => {
+                    &mut self.report.revoked_by_provider
+                }
+                _ => continue,
+            };
+            *bucket.entry(key).or_insert(0) += 1;
+        }
+    }
+
+    /// Settles the end of the run: an issued entry that no store published before the
+    /// horizon is counted as cut off by it.
+    pub fn finish(&mut self) {
+        let issued_unpublished = self
+            .cases
+            .iter()
+            .filter(|c| {
+                c.entry
+                    .as_ref()
+                    .is_some_and(|(_, v)| *v > self.published[c.provider])
+            })
+            .count() as u64;
+        self.report.crl_past_horizon = self.report.crl_past_horizon.max(issued_unpublished);
+        self.report.ma_peak_unrevoked_events = u64::from(
+            self.ma
+                .iter()
+                .filter_map(MaHost::peak_unrevoked_events)
+                .max()
+                .unwrap_or(0),
+        );
+        self.report.reports_shared = self.runs.iter().map(|r| r.state.shared.forwarded).sum();
+        self.report.reports_foreign_unresolvable =
+            self.runs.iter().map(|r| r.state.shared.unresolvable).sum();
+        for run in &self.runs {
+            let name = run.state.deployment.providers[run.state.provider]
+                .name
+                .clone();
+            self.report
+                .devices_by_provider
+                .insert(name, run.state.devices.len() as u64);
+        }
+        self.report.privacy_tracked_vehicles = self.privacy_tracked.len() as u64;
+        self.report.privacy_followed_across_change = self.privacy_across.len() as u64;
+        self.report.privacy_tracked_sum_ns = self.privacy_tracked.values().sum();
+        self.report.privacy_tracked_max_ns =
+            self.privacy_tracked.values().copied().max().unwrap_or(0);
+        self.report.attacker_outcomes = self
+            .attackers
+            .iter()
+            .map(|(node, slot)| {
+                let reports = self.attacker_reports.get(node);
+                AttackerOutcome {
+                    node: node.index(),
+                    attack: slot.id.clone(),
+                    onset_ns: self.first_on_air.get(node).copied(),
+                    first_falsified_ns: self.first_falsified.get(node).copied(),
+                    last_falsified_ns: self.attacker_lies.get(node).map(|l| l.0),
+                    falsified_claims: self.attacker_lies.get(node).map_or(0, |l| l.1),
+                    first_reported_ns: self.first_reported.get(node).copied(),
+                    first_detected_ns: self.first_detected.get(node).copied(),
+                    reports: reports.map_or(0, |r| r.0),
+                    pseudonyms_reported: reports.map_or(0, |r| r.1.len() as u64),
+                    reports_at_ma: self.attacker_at_ma.get(node).copied().unwrap_or(0),
+                    peak_events: self.attacker_peak_events.get(node).copied().unwrap_or(0),
+                    decided_ns: self.decided.get(node).copied(),
+                }
+            })
+            .collect();
+    }
+
+    /// The pseudonym policy's totals, for the run report.
+    pub fn note_policy_totals(&mut self, silenced: u64, requested: u64) {
+        self.report.pseudonym_silenced_frames = silenced;
+        self.report.pseudonym_changes_requested = requested;
+    }
+
+    /// Feeds one safety frame, as it goes on the air, to the passive observer.
+    ///
+    /// Without `threats.eavesdropper` the observer is a global eavesdropper: it hears
+    /// every frame, which is the worst case for privacy and the upper bound a roadside
+    /// receiver network approaches as its density grows; with it, the engine hands over
+    /// only what a sniffer hears (`crate::pseudonym_policy`). It reads only what is on the
+    /// air — the signer digest, the claim, the claimed confidence and a BSM's `msgCnt` —
+    /// and whether a link it makes is right is judged from the ground truth for the run
+    /// report only, never by the observer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe_frame(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        signer: [u8; 8],
+        at: SimTime,
+        generated: SimTime,
+        pos: Vec3,
+        speed_mps: f64,
+        heading_rad: f64,
+        confidence_m: f64,
+        seq: Option<u8>,
+    ) {
+        let m = ObservedMessage {
+            bsm: Default::default(),
+            signer,
+            kind: ObservedKind::Beacon,
+            received_at: at,
+            claimed_generation_time: generated,
+            claimed_x_m: pos.x,
+            claimed_y_m: pos.y,
+            claimed_speed_mps: speed_mps,
+            claimed_heading_rad: heading_rad,
+            claimed_pos_confidence_m: confidence_m,
+            repetitions: 1,
+            cert_valid_from: 0,
+            cert_valid_to: SimTime::MAX,
+            station_type: StationType::Vehicle,
+            verification: VerificationState::Valid,
+        };
+        let me = SelfBelief {
+            node: NodeId::new(u32::MAX),
+            believed_time: at,
+            x_m: 0.0,
+            y_m: 0.0,
+            radio_range_m: f64::INFINITY,
+        };
+        self.report.privacy_frames_read += 1;
+        let decision = self.observer.on_message_sequenced(ctx, &me, &m, seq);
+        // Ground truth for the run report only: how long the eavesdropper's current track
+        // of this pseudonym has been following its true vehicle.
+        if decision.is_none()
+            && let Some((Some(vehicle), since)) = self.privacy_chains.get(&signer).copied()
+        {
+            let best = self.privacy_tracked.entry(vehicle).or_insert(0);
+            *best = (*best).max(at.saturating_sub(since));
+        }
+        if let Some(o) = decision {
+            self.score_link(&o, at);
+            self.link_claims
+                .push(v2xw_threat::records::PrivacyLinkClaim {
+                    t: at,
+                    observer: NodeId::new(u32::MAX),
+                    predecessor: o.predecessor.clone().unwrap_or_default(),
+                    successor: o.successor.clone(),
+                    posterior: v2xw_core::math::quantize_to(o.posterior, 1e-6),
+                    candidates: o.anonymity_set_size.saturating_sub(1),
+                    anonymity_set_size: o.anonymity_set_size,
+                    effective_anonymity_set_bits: v2xw_core::math::quantize_to(
+                        o.effective_anonymity_set_bits,
+                        1e-6,
+                    ),
+                    degree_of_anonymity: v2xw_core::math::quantize_to(o.degree_of_anonymity, 1e-6),
+                    method: if o.predecessor.is_some() {
+                        v2xw_threat::privacy::METHOD.to_string()
+                    } else {
+                        v2xw_threat::privacy::METHOD_UNLINKED.to_string()
+                    },
+                });
+            // Ground truth: did a pseudonym change happen behind this decision? It did when
+            // the new pseudonym's vehicle was heard before under another one. Otherwise the
+            // vehicle has just come into the observer's hearing, and a claimed link is
+            // spurious: there was no change to link across (2,873 claims with no
+            // pseudonym change at all were counted as link claims).
+            let owner =
+                |hex: &str| decode_hex8(hex).and_then(|d| self.by_digest.get(&d).map(|(n, ..)| *n));
+            let succ_owner = owner(&o.successor);
+            let changed = succ_owner.is_some_and(|v| {
+                self.privacy_heard
+                    .get(&v)
+                    .is_some_and(|before| *before != signer)
+            });
+            if let Some(v) = succ_owner {
+                self.privacy_heard.insert(v, signer);
+            }
+            if changed {
+                self.report.privacy_changes_heard += 1;
+            }
+            if o.predecessor.is_some() {
+                if changed {
+                    self.report.privacy_links_claimed += 1;
+                } else {
+                    self.report.privacy_links_spurious += 1;
+                }
+                if let (Some(a), Some(b)) = (o.predecessor.as_deref().and_then(owner), succ_owner)
+                    && a == b
+                {
+                    self.report.privacy_links_correct += 1;
+                }
+            }
+        }
+    }
+
+    /// The ground-truth score of one linkage decision, for the run report only.
+    ///
+    /// A correct link extends the true vehicle's followed time; a wrong one means the
+    /// eavesdropper's track now follows whoever the new pseudonym belongs to, from now.
+    fn score_link(&mut self, o: &v2xw_threat::LinkOutcome, at: SimTime) {
+        let owner = |hex: &str| decode_hex8(hex).and_then(|d| self.by_digest.get(&d).map(|v| v.0));
+        let succ = decode_hex8(&o.successor);
+        let succ_owner = owner(&o.successor);
+        self.report.privacy_link_decisions += 1;
+        self.report.privacy_anonymity_set_sum += u64::from(o.anonymity_set_size);
+        self.report.privacy_degree_micro_sum +=
+            (o.degree_of_anonymity.clamp(0.0, 1.0) * 1e6).round() as u64;
+        let mut start = at;
+        if let Some(pred) = o.predecessor.as_deref().and_then(decode_hex8)
+            && let Some((pred_owner, since)) = self.privacy_chains.remove(&pred)
+            && pred_owner.is_some()
+            && pred_owner == succ_owner
+        {
+            start = since;
+            if let Some(vehicle) = succ_owner {
+                let followed = at.saturating_sub(since);
+                let best = self.privacy_tracked.entry(vehicle).or_insert(0);
+                *best = (*best).max(followed);
+                self.privacy_across.insert(vehicle);
+            }
+        }
+        if let Some(d) = succ {
+            self.privacy_chains.insert(d, (succ_owner, start));
+        }
+    }
+
+    /// The observer's link claims since the last call.
+    pub fn take_link_claims(&mut self) -> Vec<v2xw_threat::records::PrivacyLinkClaim> {
+        core::mem::take(&mut self.link_claims)
+    }
+
+    /// The credentials provisioned for a node.
+    pub fn creds(&self, node: NodeId) -> &[ProvisionedCred] {
+        self.creds.get(&node).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The legacy attacker's parameters from a scenario's `threats.attackers[].params`.
+///
+/// Every key is read or refused — none is silently dropped: `intensity`, `dt_s`,
+/// `magnitude_scale` (this attacker kind's multiplier), `dos_burst`, `delay_s`,
+/// `expired_cert_lag_s`, `not_yet_valid_lead_s`, and each field of
+/// [`v2xw_threat::Magnitudes`] by its own name.
+pub fn attacker_params(
+    kind: AttackKind,
+    params: &serde_json::Value,
+) -> Result<LegacyAttackerParams> {
+    let mut p = LegacyAttackerParams::new(kind);
+    if params.is_null() {
+        return Ok(p);
+    }
+    let Some(map) = params.as_object() else {
+        return Err(conflict(
+            "threats.attackers[].params",
+            "must be an object of named numbers".to_string(),
+        ));
+    };
+    for (key, value) in map {
+        let v = value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| {
+            conflict(
+                &format!("threats.attackers[].params.{key}"),
+                format!("must be a finite number, got {value}"),
+            )
+        })?;
+        let m = &mut p.magnitudes;
+        let whole = |v: f64| v.round().max(0.0) as u64;
+        match key.as_str() {
+            "intensity" => p.intensity = v,
+            "dt_s" => p.dt_s = v,
+            "magnitude_scale" => {
+                p.magnitude_scale.insert(kind, v);
+            }
+            "dos_burst" => p.dos_burst = whole(v) as u32,
+            "delay_s" => p.delay_s = v,
+            "expired_cert_lag_s" => p.expired_cert_lag_s = v,
+            "not_yet_valid_lead_s" => p.not_yet_valid_lead_s = v,
+            "const_pos_offset_m" => m.const_pos_offset_m = v,
+            "random_pos_half_range_m" => m.random_pos_half_range_m = v,
+            "teleport_dx_m" => m.teleport_dx_m = v,
+            "teleport_dy_m" => m.teleport_dy_m = v,
+            "teleport_period_s" => m.teleport_period_s = whole(v).max(1),
+            "sine_pos_amplitude_m" => m.sine_pos_amplitude_m = v,
+            "sine_pos_omega_rad_s" => m.sine_pos_omega_rad_s = v,
+            "const_speed_offset_mps" => m.const_speed_offset_mps = v,
+            "random_speed_max_mps" => m.random_speed_max_mps = v,
+            "stop_and_go_speed_mps" => m.stop_and_go_speed_mps = v,
+            "heading_offset_deg" => m.heading_offset_deg = v,
+            "replay_lag_samples" => m.replay_lag_samples = whole(v) as usize,
+            "slow_drift_ramp_mps" => m.slow_drift_ramp_mps = v,
+            "slow_drift_max_rate_mps" => m.slow_drift_max_rate_mps = v,
+            "along_road_offset_m" => m.along_road_offset_m = v,
+            "disruptive_pos_half_range_m" => m.disruptive_pos_half_range_m = v,
+            "disruptive_speed_up_mps" => m.disruptive_speed_up_mps = v,
+            "disruptive_speed_down_mps" => m.disruptive_speed_down_mps = v,
+            "disruptive_heading_deg" => m.disruptive_heading_deg = v,
+            "pos_speed_inconsistent_drop_mps" => m.pos_speed_inconsistent_drop_mps = v,
+            "pos_heading_swing_m" => m.pos_heading_swing_m = v,
+            "pos_heading_omega_rad_s" => m.pos_heading_omega_rad_s = v,
+            "eventual_stop_delay_s" => m.eventual_stop_delay_s = v,
+            "eventual_stop_base_speed_mps" => m.eventual_stop_base_speed_mps = v,
+            // F2MD `SybilVehNumber` and the legacy pre-pass's `sr.uniform(-1, 1)`: how many
+            // concurrent pseudonyms the ghost set uses, and how far each ghost's claim sits
+            // from the attacker's own. Refused on any other kind, where nothing reads them.
+            "sybil_ghosts" | "sybil_jitter_m" if kind != AttackKind::Sybil => {
+                return Err(conflict(
+                    &format!("threats.attackers[].params.{key}"),
+                    "is read only by threat/attacker/legacy/Sybil".to_string(),
+                ));
+            }
+            "sybil_ghosts" => p.sybil_ghosts = (whole(v) as u32).clamp(1, 59),
+            "sybil_jitter_m" => p.sybil_jitter_m = v.clamp(0.0, 50.0),
+            other => {
+                return Err(conflict(
+                    &format!("threats.attackers[].params.{other}"),
+                    "is not a legacy attacker parameter this build reads".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(p)
+}
+
+/// The playground an F2MD random-position draw spans: the box around every lane of the
+/// map, world-local metres `[x_min, y_min, x_max, y_max]` (F2MD's `MaxRandomPosX/Y` is
+/// its playground). Public map knowledge, which any attacker holds.
+fn playground_of(world: &World) -> [f64; 4] {
+    let mut b = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for lane in world.roads.lanes() {
+        for p in &lane.centreline {
+            b[0] = b[0].min(p.x);
+            b[1] = b[1].min(p.y);
+            b[2] = b[2].max(p.x);
+            b[3] = b[3].max(p.y);
+        }
+    }
+    if b[2] > b[0] && b[3] > b[1] {
+        b
+    } else {
+        [0.0; 4]
+    }
+}
+
+/// `threat/attacker/f2md/<Kind>` (`v2xw_threat::attack_f2md`): the behaviour and its
+/// parameters. `Ok(None)` for any other id.
+///
+/// # Errors
+/// An unknown kind, an unknown parameter, or a value outside the card's range.
+pub fn f2md_params(
+    id: &str,
+    params: &serde_json::Value,
+    playground: [f64; 4],
+) -> Result<Option<v2xw_threat::F2mdParams>> {
+    let Some(name) = id.strip_prefix(v2xw_threat::attack_f2md::ID_PREFIX) else {
+        return Ok(None);
+    };
+    let kind = v2xw_threat::F2mdKind::parse(name).ok_or_else(|| {
+        let all: Vec<&str> = v2xw_threat::F2mdKind::ALL
+            .iter()
+            .map(|k| k.as_str())
+            .collect();
+        conflict(
+            "threats.attackers[].id",
+            format!(
+                "{id} is not an F2MD attack this build ships: {}",
+                all.join(", ")
+            ),
+        )
+    })?;
+    let mut p = v2xw_threat::F2mdParams::new(kind);
+    p.playground_m = playground;
+    if let Some(map) = params.as_object() {
+        for (key, value) in map {
+            let field = format!("threats.attackers[].params.{key}");
+            let num = |lo: f64, hi: f64| {
+                value
+                    .as_f64()
+                    .filter(|v| v.is_finite() && (lo..=hi).contains(v))
+                    .ok_or_else(|| {
+                        conflict(
+                            &field,
+                            format!("must be a number in {lo}..={hi}, got {value}"),
+                        )
+                    })
+            };
+            match key.as_str() {
+                "accel_multiplier" => p.accel_multiplier = num(2.0, 4.0)?,
+                "mirror_edge_distance_m" => p.mirror_edge_distance_m = num(0.0, 20.0)?,
+                "max_speed_mps" => p.max_speed_mps = num(0.0, 70.0)?,
+                "speed_offset_max_mps" => p.speed_offset_max_mps = num(1.0, 7.0)?,
+                "replay_seq" => p.replay_seq = num(1.0, 20.0)?.round() as u32,
+                "replay_window_s" => p.replay_window_s = num(0.5, 10.0)?,
+                "replay_radius_m" => p.replay_radius_m = num(10.0, 1000.0)?,
+                "dos_multiplier" => p.dos_multiplier = num(2.0, 10.0)?.round() as u32,
+                "sybil_pseudonyms" => p.sybil_pseudonyms = num(1.0, 20.0)?.round() as u32,
+                other => {
+                    return Err(conflict(
+                        &format!("threats.attackers[].params.{other}"),
+                        format!("is not a parameter {id} reads"),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(Some(p))
+}
+
+/// [`INSIDER_POISONER_ID`] (`v2xw_threat::poison`): the insider report poisoner's
+/// parameters. `Ok(None)` for any other id.
+///
+/// `report_prob` (0..=1, default 0.9: the chance it files against a victim it heard in a
+/// report interval), `victim_pct` (0..=1, default 0.10: the share of the senders it hears
+/// that it frames) and `reports_per_interval` (1..=50, default 1; above one is a report
+/// flood). Every forgery accuses a position jump (SM-MBR RandomPosition) between the
+/// victim's two latest BSMs, which it attaches.
+///
+/// # Errors
+/// An unknown parameter or a value out of its range.
+pub fn poison_params(
+    id: &str,
+    params: &serde_json::Value,
+) -> Result<Option<v2xw_threat::PoisonParams>> {
+    if id != INSIDER_POISONER_ID {
+        return Ok(None);
+    }
+    let mut p = v2xw_threat::PoisonParams::default();
+    p.forgery.leading_check = v2xw_threat::detect::DetectorId::PositionJump;
+    if let Some(map) = params.as_object() {
+        for (key, value) in map {
+            let field = format!("threats.attackers[].params.{key}");
+            let num = |lo: f64, hi: f64| {
+                value
+                    .as_f64()
+                    .filter(|v| v.is_finite() && (lo..=hi).contains(v))
+                    .ok_or_else(|| {
+                        conflict(
+                            &field,
+                            format!("must be a number in {lo}..={hi}, got {value}"),
+                        )
+                    })
+            };
+            match key.as_str() {
+                "report_prob" => p.report_prob = num(0.0, 1.0)?,
+                "victim_pct" => p.victim_pct = num(0.0, 1.0)?,
+                "reports_per_interval" => p.reports_per_interval = num(1.0, 50.0)?.round() as u32,
+                other => {
+                    return Err(conflict(
+                        &format!("threats.attackers[].params.{other}"),
+                        format!(
+                            "is not a parameter {id} reads (report_prob, victim_pct, \
+                             reports_per_interval)"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(Some(p))
+}
+
+/// `threat/attacker/evasion/<Kind>` (P1-E8, `v2xw_threat::attack_evasion`): the payload
+/// kind, the disguise and the payload's own parameters. `Ok(None)` for any other id.
+///
+/// The parameters are the payload's legacy ones plus `payload` (a legacy kind's name,
+/// default `ConstPos`), `secmark_shift_ms` (1..=99) and `stated_accuracy_m` (> 0).
+///
+/// # Errors
+/// An unknown evasion kind, an unknown or unrendered payload, or a disguise value out of
+/// range.
+pub fn evasion_params(
+    id: &str,
+    params: &serde_json::Value,
+) -> Result<Option<(AttackKind, v2xw_threat::Disguise, LegacyAttackerParams)>> {
+    let Some(name) = id.strip_prefix(v2xw_threat::attack_evasion::ID_PREFIX) else {
+        return Ok(None);
+    };
+    if v2xw_threat::EvasionKind::parse(name).is_none() {
+        return Err(conflict(
+            "threats.attackers[].id",
+            format!("{id} is not an evasion attack this build ships: BenignClassMimic"),
+        ));
+    }
+    let mut rest = serde_json::Map::new();
+    let mut kind = AttackKind::ConstPos;
+    let mut d = v2xw_threat::Disguise::default();
+    if let Some(map) = params.as_object() {
+        for (key, value) in map {
+            let field = format!("threats.attackers[].params.{key}");
+            match key.as_str() {
+                "payload" => {
+                    kind = value
+                        .as_str()
+                        .and_then(AttackKind::parse)
+                        .filter(|k| unrendered(*k).is_none())
+                        .ok_or_else(|| {
+                            conflict(
+                                &field,
+                                format!(
+                                    "must name a legacy attack the engine renders, got {value}"
+                                ),
+                            )
+                        })?;
+                }
+                "secmark_shift_ms" => {
+                    let v = value
+                        .as_f64()
+                        .filter(|v| v.fract() == 0.0 && (1.0..=99.0).contains(v))
+                        .ok_or_else(|| {
+                            conflict(&field, format!("must be a whole 1..=99 ms, got {value}"))
+                        })?;
+                    d.secmark_shift_ms = Some(v as u16);
+                }
+                "stated_accuracy_m" => {
+                    let v = value
+                        .as_f64()
+                        .filter(|v| v.is_finite() && *v > 0.0)
+                        .ok_or_else(|| {
+                            conflict(&field, format!("must be a positive number, got {value}"))
+                        })?;
+                    d.stated_accuracy_m = Some(v);
+                }
+                _ => {
+                    rest.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    } else if !params.is_null() {
+        return Err(conflict(
+            "threats.attackers[].params",
+            "must be an object".to_string(),
+        ));
+    }
+    let p = attacker_params(kind, &serde_json::Value::Object(rest))?;
+    Ok(Some((kind, d, p)))
+}
+
+/// `net.backend_net`: the links between backend entities.
+///
+/// Also the loader's check of the key (`crate::scenario::validate` runs it on a default
+/// parameter set), so a wrong id or parameter is refused at Check, in the same words, and
+/// not first discovered when the run is built.
+/// `security.scms.chain_file`: every CTL provider's CA certificates (the US global chain
+/// file, the default) or only the device's own provider's. One list, read by the loader's
+/// "allowed:" message and published as the settings menu.
+pub const CHAIN_FILE_IDS: [&str; 2] = ["all-providers", "home-provider"];
+
+/// `…providers[].ma_mode`: an operator reviews each case (the CV-pilot MA), or the MA
+/// acts at once.
+pub const MA_MODE_IDS: [&str; 2] = ["manual-review", "automatic"];
+
+/// `security.scms.deployment.latency`: great-circle distance at fibre speed, or the
+/// backend network's fixed latency.
+pub const LATENCY_IDS: [&str; 2] = ["region", "flat"];
+
+/// `security.scms.deployment.options.butterfly` values this build runs: the original
+/// expansion, the only one the US profile uses ([`Deployment::butterfly`]).
+///
+/// [`Deployment::butterfly`]: v2xw_proto::scms::deployment::Deployment::butterfly
+pub const BUTTERFLY_IDS: [&str; 1] = ["original"];
+
+/// Butterfly variants the schema names and the loader refuses (`unified`, `cubk`): shown
+/// in the menu disabled, with the reason, never hidden.
+pub const REFUSED_BUTTERFLIES: [&str; 2] = ["unified", "cubk"];
+
+/// `actors.backend.entities.*.service_model`: the two queues `apply_backend_topology`
+/// builds (c parallel workers, the default, or one).
+pub const SERVICE_MODEL_IDS: [&str; 2] = ["service/mmc", "service/mm1"];
+
+/// Whether a scenario is the deployed US SCMS, and if not, why (the settings window's
+/// banner, from `scenario.validate`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UsSystem {
+    /// No setting departs from the US system.
+    pub is_us: bool,
+    /// Each departure in words ("electors 7", "signature ml-dsa-65"); empty when `is_us`.
+    pub reasons: Vec<String>,
+}
+
+/// The US verdict on an SCMS run (`None` on any other credential protocol, or a deployment
+/// that does not build, which the loader reports itself).
+///
+/// The deployment's part is [`Deployment::is_us`], the manifest's own flag; the rest are the
+/// values the settings menus badge "not US" (`scenario::options::us_of`): the envelope, the
+/// signature and KEM schemes, the chain-file scope, the LOP and authority committees.
+///
+/// [`Deployment::is_us`]: v2xw_proto::scms::deployment::Deployment::is_us
+#[must_use]
+pub fn us_system(scenario: &Scenario) -> Option<UsSystem> {
+    use v2xw_proto::scms::deployment::{Preset, US_ELECTORS, US_QUORUM, US_REQUIRED_ROLES};
+    let protocol = scenario
+        .actors
+        .backend
+        .protocol
+        .clone()
+        .or_else(|| scenario.security.protocol.as_ref().map(|c| c.id.clone()));
+    if protocol.as_deref() != Some(CAMP_SCMS) {
+        return None;
+    }
+    let d = deployment_of(scenario, true).ok()?;
+    let mut reasons = Vec::new();
+    if d.preset == Preset::CampReference {
+        reasons.push("the CAMP reference design".to_string());
+    }
+    if d.electors != US_ELECTORS {
+        reasons.push(format!("electors {}", d.electors));
+    }
+    if d.quorum != US_QUORUM {
+        reasons.push(format!("quorum {}", d.quorum));
+    }
+    for p in &d.providers {
+        for role in US_REQUIRED_ROLES {
+            if p.count(role) == 0 {
+                reasons.push(format!("{} runs no {role}", p.name));
+            }
+        }
+        if p.ica_levels > 1 {
+            reasons.push(format!("{} has {} ICA levels", p.name, p.ica_levels));
+        }
+    }
+    if !d.is_us() && reasons.is_empty() {
+        reasons.push("the deployment is not the US one".to_string());
+    }
+    if d.options.lop {
+        reasons.push("a Location Obscurer Proxy".to_string());
+    }
+    if !d.options.identification_certs {
+        reasons.push("no identification certificates".to_string());
+    }
+    let sec = &scenario.security;
+    for (path, value) in [
+        ("security.envelope", sec.envelope.as_str()),
+        ("security.signature", sec.signature.as_str()),
+        ("security.kem", sec.kem.as_str()),
+    ] {
+        if crate::scenario::options::us_of(path, value) == Some(false) {
+            let leaf = path.rsplit('.').next().unwrap_or(path);
+            reasons.push(format!("{leaf} {value}"));
+        }
+    }
+    if matches!(home_chain_file_of(scenario), Ok(true)) {
+        reasons.push("chain file: home provider only".to_string());
+    }
+    if sec.threshold.is_some() {
+        reasons.push("authority committees".to_string());
+    }
+    Some(UsSystem {
+        is_us: reasons.is_empty(),
+        reasons,
+    })
+}
+
+/// Whether each device's chain file holds only its own provider's CA certificates
+/// (`security.scms.chain_file: home-provider`) rather than every CTL provider's
+/// (`all-providers`, the default).
+///
+/// # Errors
+/// [`EngineError::Scenario`] for any other value.
+pub fn home_chain_file_of(scenario: &Scenario) -> Result<bool> {
+    match scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.chain_file.as_deref())
+    {
+        None | Some("all-providers") => Ok(false),
+        Some("home-provider") => Ok(true),
+        Some(other) => Err(conflict(
+            "security.scms.chain_file",
+            format!(
+                "'{other}' is not a chain file scope; allowed: {}",
+                CHAIN_FILE_IDS.join(", ")
+            ),
+        )),
+    }
+}
+
+/// Whether the scenario records report fates, MA receptions and device exposure
+/// (`security.scms.report_records`): off unless set to `true`.
+#[must_use]
+pub fn report_records_of(scenario: &Scenario) -> bool {
+    scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.report_records)
+        .unwrap_or(false)
+}
+
+/// Whether the scenario publishes the PKI view (`security.scms.pki_view`):
+/// on unless set to `false`.
+#[must_use]
+pub fn pki_view_of(scenario: &Scenario) -> bool {
+    scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.pki_view)
+        .unwrap_or(true)
+}
+
+/// The SCMS deployment a scenario runs on (`security.scms.deployment`).
+///
+/// An SCMS run (`protocol/scms/camp`) defaults to `us-production-2025`, the US system;
+/// any other run keeps the single-SCMS `camp-reference` topology its backend has always
+/// had. An explicit `net.backend_net.params.latency_ms` is a flat link latency, so it
+/// selects the `flat` latency model unless the deployment names one.
+///
+/// # Errors
+/// [`EngineError::Scenario`] for an unknown preset, provider, role, region, latency model
+/// or butterfly, a refused butterfly (`unified`, `cubk`), a `custom` preset without
+/// providers, or a deployment that does not validate.
+pub fn deployment_of(
+    scenario: &Scenario,
+    scms_run: bool,
+) -> Result<v2xw_proto::scms::deployment::Deployment> {
+    use v2xw_proto::scms::deployment::{Deployment, LatencyModel, Preset, Provider, Region};
+    let spec = scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.deployment.as_ref());
+    let field = "security.scms.deployment";
+    let preset = match spec {
+        Some(s) => Preset::parse(&s.preset).ok_or_else(|| {
+            conflict(
+                &format!("{field}.preset"),
+                format!(
+                    "'{}' is not a preset; allowed: {}",
+                    s.preset,
+                    Preset::IDS.join(", ")
+                ),
+            )
+        })?,
+        None if scms_run => Preset::UsProduction2025,
+        None => Preset::CampReference,
+    };
+    let mut d = Deployment::preset(preset);
+    let flat_override = scenario
+        .net
+        .backend_net
+        .as_ref()
+        .and_then(|c| c.params.get("latency_ms"))
+        .is_some();
+    if flat_override {
+        d.latency = LatencyModel::Flat;
+    }
+    let Some(s) = spec else {
+        return Ok(d);
+    };
+    if preset == Preset::Custom {
+        if s.providers.is_empty() {
+            return Err(conflict(
+                &format!("{field}.providers"),
+                "is empty; a custom deployment lists its providers".to_string(),
+            ));
+        }
+        d.providers.clear();
+    }
+    for p in &s.providers {
+        let at = format!("{field}.providers.{}", p.name);
+        let idx = match d.providers.iter().position(|q| q.name == p.name) {
+            Some(i) => i,
+            None if preset == Preset::Custom => {
+                let mut q = Deployment::preset(Preset::UsProduction2025).providers[0].clone();
+                q.name.clone_from(&p.name);
+                q.fleet_share = 0.0;
+                d.providers.push(q);
+                d.providers.len() - 1
+            }
+            None => {
+                return Err(conflict(
+                    &at,
+                    format!(
+                        "is not a provider of {}; it has {}. Use preset custom to name others",
+                        preset.id(),
+                        d.providers
+                            .iter()
+                            .map(|q| q.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+        };
+        let q: &mut Provider = &mut d.providers[idx];
+        for (role, n) in &p.components {
+            q.components.insert(role.clone(), *n);
+        }
+        if let Some(r) = &p.region {
+            q.region = Region::assumed(r).ok_or_else(|| {
+                conflict(
+                    &format!("{at}.region"),
+                    format!(
+                        "'{r}' is not a region; allowed: {}",
+                        v2xw_proto::scms::deployment::REGIONS
+                            .iter()
+                            .map(|x| x.name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            })?;
+        }
+        if let Some(f) = p.fleet_share {
+            q.fleet_share = f;
+        }
+        // Server sites and CA depth. A site overrides
+        // the region, so it is applied after it.
+        crate::scms_topology::apply_sites(p, q)?;
+        crate::scms_topology::ica_levels(p, q)?;
+        if let Some(on) = p.on_ctl {
+            q.on_ctl = on;
+        }
+        if let Some(r) = p.ma_review_s
+            && !(r.is_finite() && r > 0.0)
+        {
+            return Err(conflict(
+                &format!("{at}.ma_review_s"),
+                format!("{r} must be > 0 (use ma_mode: automatic for no review)"),
+            ));
+        }
+        match p.ma_mode.as_deref() {
+            None if p.ma_review_s.is_some() => {
+                return Err(conflict(
+                    &format!("{at}.ma_review_s"),
+                    "is set without ma_mode: manual-review".to_string(),
+                ));
+            }
+            None => {}
+            Some("automatic") if p.ma_review_s.is_some() => {
+                return Err(conflict(
+                    &format!("{at}.ma_review_s"),
+                    "is set with ma_mode: automatic, which has no review".to_string(),
+                ));
+            }
+            Some("automatic") => q.ma_mode = v2xw_proto::scms::params::MaMode::Automatic,
+            Some("manual-review") => {
+                let review = p.ma_review_s.unwrap_or(8.0 * 3_600.0);
+                q.ma_mode = v2xw_proto::scms::params::MaMode::ManualReview {
+                    review: Duration::from_nanos((review * 1e9).round() as u64),
+                };
+            }
+            Some(other) => {
+                return Err(conflict(
+                    &format!("{at}.ma_mode"),
+                    format!(
+                        "'{other}' is not an MA mode; allowed: {}",
+                        MA_MODE_IDS.join(", ")
+                    ),
+                ));
+            }
+        }
+        if let Some(c) = &p.crl_publication {
+            q.crl_publication =
+                v2xw_proto::scms::deployment::CrlPublication::parse(c).ok_or_else(|| {
+                    conflict(
+                        &format!("{at}.crl_publication"),
+                        format!(
+                            "'{c}' is not a CRL publication rule; allowed: {}",
+                            v2xw_proto::scms::deployment::CrlPublication::IDS.join(", ")
+                        ),
+                    )
+                })?;
+        }
+    }
+    if let Some(n) = s.electors {
+        d.electors = n;
+    }
+    if let Some(n) = s.quorum {
+        d.quorum = n;
+    }
+    if let Some(o) = &s.options {
+        if let Some(lop) = o.lop {
+            d.options.lop = lop;
+        }
+        if let Some(on) = o.identification_certs {
+            d.options.identification_certs = on;
+        }
+        if let Some(b) = &o.butterfly {
+            d.options.butterfly = Deployment::butterfly(b)
+                .map_err(|e| conflict(&format!("{field}.options.butterfly"), e.to_string()))?;
+        }
+    }
+    let (fibre, per_link) = (s.fibre_fraction, s.per_link_ms);
+    match s.latency.as_deref() {
+        None if fibre.is_none() && per_link.is_none() => {}
+        None | Some("region") => {
+            let (f0, o0) = match LatencyModel::DEFAULT_REGION {
+                LatencyModel::Region {
+                    fibre_fraction,
+                    per_link_overhead,
+                } => (fibre_fraction, per_link_overhead),
+                LatencyModel::Flat => unreachable!(),
+            };
+            let f = fibre.unwrap_or(f0);
+            if !(f > 0.0 && f <= 1.0) {
+                return Err(conflict(
+                    &format!("{field}.fibre_fraction"),
+                    format!("{f} must be in (0, 1]"),
+                ));
+            }
+            let o = match per_link {
+                Some(ms) if ms.is_finite() && ms >= 0.0 => {
+                    Duration::from_nanos((ms * 1e6).round() as u64)
+                }
+                Some(ms) => {
+                    return Err(conflict(
+                        &format!("{field}.per_link_ms"),
+                        format!("{ms} must be ≥ 0"),
+                    ));
+                }
+                None => o0,
+            };
+            d.latency = LatencyModel::Region {
+                fibre_fraction: f,
+                per_link_overhead: o,
+            };
+        }
+        Some("flat") if fibre.is_none() && per_link.is_none() => d.latency = LatencyModel::Flat,
+        Some("flat") => {
+            return Err(conflict(
+                &format!("{field}.latency"),
+                "is flat, which has no fibre_fraction or per_link_ms; remove them or choose region"
+                    .to_string(),
+            ));
+        }
+        Some(other) => {
+            return Err(conflict(
+                &format!("{field}.latency"),
+                format!(
+                    "'{other}' is not a latency model; allowed: {}",
+                    LATENCY_IDS.join(", ")
+                ),
+            ));
+        }
+    }
+    if let Some(on) = s.ma_report_sharing {
+        if d.providers.len() == 1 {
+            return Err(conflict(
+                &format!("{field}.ma_report_sharing"),
+                "has nothing to share with: the deployment has one provider".to_string(),
+            ));
+        }
+        d.ma_report_sharing = on;
+    }
+    d.validate().map_err(|e| conflict(field, e.to_string()))?;
+    Ok(d)
+}
+
+/// What the run manifest says about the SCMS deployment: its preset and providers,
+/// every labelled assumption it rests on, and what this build does not model yet. Empty
+/// for a run that is not an SCMS run or whose deployment does not build (the loader
+/// refuses that one).
+#[must_use]
+pub fn deployment_warnings(scenario: &Scenario) -> Vec<String> {
+    let protocol = scenario
+        .actors
+        .backend
+        .protocol
+        .clone()
+        .or_else(|| scenario.security.protocol.as_ref().map(|c| c.id.clone()));
+    if protocol.as_deref() != Some(CAMP_SCMS) {
+        return Vec::new();
+    }
+    let Ok(d) = deployment_of(scenario, true) else {
+        return Vec::new();
+    };
+    let mut out = vec![format!(
+        "SCMS deployment {}: {} ({}); {} electors, quorum {}{}",
+        d.preset.id(),
+        d.providers
+            .iter()
+            .map(|p| format!(
+                "{}{} share {:.3}",
+                p.name,
+                if p.on_ctl { "" } else { " (NOT on the CTL)" },
+                p.fleet_share
+            ))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if d.options.lop { "LOP on" } else { "no LOP" },
+        d.electors,
+        d.quorum,
+        if d.is_us() { "" } else { "; NOT the US system" }
+    )];
+    out.extend(d.assumptions());
+    if d.providers.len() > 1 {
+        out.push(format!(
+            "SCMS deployment: one backend per provider; each vehicle and roadside unit is \
+             served by one provider by the seeded fleet split, an MA {} reports about \
+             another provider's certificate with that provider's MA, and every RA serves \
+             every provider's CRL after the inter-provider link. The MA-to-MA report \
+             format is modelled (no published specification); the governance decisions \
+             (root rollover, removal) are taken on {}'s view and its CTL distributed to \
+             every provider",
+            if d.ma_report_sharing {
+                "shares"
+            } else {
+                "does not share (ma_report_sharing off)"
+            },
+            d.providers[0].name
+        ));
+    }
+    out
+}
+
+pub(crate) fn apply_backend_net(scenario: &Scenario, p: &mut ScmsParams) -> Result<()> {
+    let Some(choice) = &scenario.net.backend_net else {
+        return Ok(());
+    };
+    if !crate::backend::BACKEND_NET_MODELS.contains(&choice.id.as_str()) {
+        return Err(conflict(
+            "net.backend_net",
+            format!(
+                "'{}' is not a backend network model; this build ships {}. Choose it, or \
+                 remove net.backend_net to keep the deployment's default links",
+                choice.id,
+                crate::backend::BACKEND_NET_MODELS.join(", ")
+            ),
+        ));
+    }
+    let map = match &choice.params {
+        serde_json::Value::Null => return Ok(()),
+        serde_json::Value::Object(map) => map,
+        other => {
+            return Err(conflict(
+                "net.backend_net.params",
+                format!("is {other}; it must be an object, e.g. {{latency_ms: 10}}"),
+            ));
+        }
+    };
+    for (key, value) in map {
+        let field = format!("net.backend_net.params.{key}");
+        let v = value.as_f64().filter(|v| v.is_finite());
+        match key.as_str() {
+            "latency_ms" => {
+                let ms = v.filter(|v| *v >= 0.0).ok_or_else(|| {
+                    conflict(
+                        &field,
+                        format!("is {value}; it must be milliseconds, 0 or more"),
+                    )
+                })?;
+                p.backend_link_latency = Duration::from_nanos((ms * 1e6).round() as u64);
+            }
+            "capacity_mbps" => {
+                let mbps = v.filter(|v| *v > 0.0).ok_or_else(|| {
+                    conflict(
+                        &field,
+                        format!("is {value}; it must be a capacity above 0 Mbit/s"),
+                    )
+                })?;
+                p.backend_link_bandwidth_bps = (mbps * 1e6).round().max(1.0) as u64;
+            }
+            other => {
+                return Err(conflict(
+                    &field,
+                    format!(
+                        "'{other}' is not a parameter of backend-net/fixed; it takes \
+                         latency_ms and capacity_mbps. Remove the key or correct its spelling"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The SCMS roles a scenario may name in `actors.backend.entities` and `.links`.
+pub const SCMS_ENTITIES: [&str; 11] = [
+    "ra",
+    "pca",
+    "la1",
+    "la2",
+    "ma",
+    "crlg",
+    "lop",
+    "crl_store",
+    "crl_broadcast",
+    "eca",
+    "dcm",
+];
+
+/// The backend node an SCMS role name is hosted on.
+fn scms_node(n: &v2xw_proto::ScmsNodes, name: &str) -> Option<NodeId> {
+    Some(match name {
+        "ra" => n.ra,
+        "pca" => n.pca,
+        "la1" => n.la1,
+        "la2" => n.la2,
+        "ma" => n.ma,
+        "crlg" => n.crlg,
+        "lop" => n.lop,
+        "crl_store" => n.crl_store,
+        "crl_broadcast" => n.crl_broadcast,
+        "eca" => n.eca,
+        "dcm" => n.dcm,
+        _ => return None,
+    })
+}
+
+/// `actors.backend.entities` and `actors.backend.links`: per-entity hardware profile and
+/// service model, and per-link latency and capacity overrides.
+fn apply_backend_topology(scenario: &Scenario, scms: &mut ScmsRun) -> Result<()> {
+    let nodes = scms.state.nodes;
+    let p = scms.state.params;
+    // `nodes.backend_tier: abstract`: no backend entity ever queues. Sixty-four servers
+    // and no fixed overhead leaves only the cryptography's own service time and the links,
+    // which is the abstract tier's definition. The RA keeps its
+    // shuffle: that is the protocol's batching, not a queue.
+    if scenario.nodes.backend_tier == v2xw_core::card::Tier::Abstract {
+        let free = v2xw_proto::ServiceModelSpec::new(64, Duration::ZERO);
+        for node in nodes.all() {
+            let spec = if node == nodes.ra {
+                free.batched(v2xw_proto::BatchPolicy::CAMP_SHUFFLE)
+            } else {
+                free
+            };
+            scms.kernel.host(node, &spec, p.backend_profile);
+        }
+    }
+    for (name, entity) in &scenario.actors.backend.entities {
+        let node = scms_node(&nodes, name).ok_or_else(|| {
+            conflict(
+                "actors.backend.entities",
+                format!(
+                    "'{name}' is not a CAMP SCMS role; allowed: {}",
+                    SCMS_ENTITIES.join(", ")
+                ),
+            )
+        })?;
+        let profile = match entity.profile.as_deref() {
+            None => p.backend_profile,
+            Some(id) => backend_profile(id).ok_or_else(|| {
+                conflict(
+                    &format!("actors.backend.entities.{name}.profile"),
+                    format!("'{id}' is not a hardware profile the security crate prices"),
+                )
+            })?,
+        };
+        let servers = match entity.service_model.as_deref() {
+            None | Some("service/mmc") => p.backend_servers,
+            Some("service/mm1") => 1,
+            Some(other) => {
+                return Err(conflict(
+                    &format!("actors.backend.entities.{name}.service_model"),
+                    format!(
+                        "'{other}' is not a service model; allowed: {}",
+                        SERVICE_MODEL_IDS.join(", ")
+                    ),
+                ));
+            }
+        };
+        let mut spec = v2xw_proto::ServiceModelSpec::new(servers, p.backend_overhead);
+        if name == "ra" {
+            spec = spec.batched(v2xw_proto::BatchPolicy::CAMP_SHUFFLE);
+        }
+        scms.kernel.host(node, &spec, profile);
+    }
+    for l in &scenario.actors.backend.links {
+        let (Some(a), Some(b)) = (scms_node(&nodes, &l.from), scms_node(&nodes, &l.to)) else {
+            return Err(conflict(
+                "actors.backend.links",
+                format!(
+                    "'{}' → '{}': both ends must be CAMP SCMS roles ({})",
+                    l.from,
+                    l.to,
+                    SCMS_ENTITIES.join(", ")
+                ),
+            ));
+        };
+        let base = scms.kernel.net().link(a, b).unwrap_or(v2xw_proto::Link {
+            latency: p.backend_link_latency,
+            bandwidth_bps: p.backend_link_bandwidth_bps,
+            transport: Transport::BackendNet,
+        });
+        let link = v2xw_proto::Link {
+            latency: l.latency_ms.map_or(base.latency, |ms| {
+                Duration::from_nanos((ms * 1e6).round() as u64)
+            }),
+            bandwidth_bps: l
+                .capacity_mbps
+                .map_or(base.bandwidth_bps, |m| (m * 1e6).round().max(1.0) as u64),
+            transport: Transport::BackendNet,
+        };
+        scms.kernel.net_mut().connect(a, b, link);
+    }
+    Ok(())
+}
+
+/// A backend hardware profile by id.
+fn backend_profile(id: &str) -> Option<&'static str> {
+    use v2xw_sec::primitive::profiles as p;
+    [
+        p::I9_11950H_WOLFSSL,
+        p::COHDA_MK6_BOTAN,
+        p::CORTEX_M4_NRF52840,
+        p::CORTEX_M7_STM32F767,
+    ]
+    .into_iter()
+    .find(|p| *p == id)
+}
+
+/// The backend's wire steps, in their byte buckets. The sidelink's own bytes are not here:
+/// a relayed report's air hop is a frame on `node.tx` like any other.
+fn push_bytes(tick: &mut BackendTick, steps: Vec<v2xw_proto::stage::WireStep>) {
+    use v2xw_metrics::channels::ByteBucket;
+    for s in steps {
+        let from_device = s.from.index() >= SCMS_DEVICE_BASE;
+        let node = [s.from, s.to]
+            .into_iter()
+            .find(|n| n.index() >= SCMS_DEVICE_BASE)
+            .map(|n| NodeId::new(n.index() - SCMS_DEVICE_BASE));
+        let bucket = match s.transport {
+            Transport::BackendNet => ByteBucket::Backend,
+            Transport::RsuBackhaul => ByteBucket::Backhaul,
+            Transport::CellularUu if from_device => ByteBucket::CellularUl,
+            Transport::CellularUu => ByteBucket::CellularDl,
+            _ => continue,
+        };
+        tick.bytes.push((s.t, bucket, u64::from(s.bytes), node));
+    }
+}
+
+/// The eight bytes of a certificate digest, as this module keys its maps by.
+fn digest_key(digest: &v2xw_msg::sec_types::HashedId8) -> [u8; 8] {
+    let mut key = [0u8; 8];
+    key.copy_from_slice(&digest.0[..]);
+    key
+}
+
+/// Eight bytes from a sixteen-character hex string.
+/// Empties a report store at `now_unix` in its upload order ([SM-MBR] §2.2): first the
+/// 05:00-Eastern decays since the last look and the deletion of week-old reports, then
+/// highest weight first, newer first on ties.
+#[cfg(test)]
+fn drain_upload_order<T>(q: &mut MbrQueue<T>, now_unix: i64) -> Vec<T> {
+    q.decay_to(now_unix);
+    q.expire(now_unix);
+    let mut out = Vec::with_capacity(q.len());
+    while let Some(seq) = q.next_upload().map(|e| e.seq) {
+        if let Some(item) = q.confirm(seq) {
+            out.push(item);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod report_store_tests {
+    use super::*;
+
+    /// 2026-10-15 12:00 UTC (08:00 EDT), a Thursday.
+    const T: i64 = 1_792_065_600;
+    const DAY: i64 = 86_400;
+
+    /// The device store the engine holds reports in decays at 05:00 Eastern and drains
+    /// highest weight first. Fault: drain in insertion order (FIFO) and the decayed
+    /// older report comes out first.
+    #[test]
+    fn the_store_drains_by_decayed_weight_and_drops_week_old_reports() {
+        assert_eq!(ReportStore::default().0.quota, REPORT_STORE_QUOTA_BYTES);
+        let mut q: MbrQueue<&str> = MbrQueue::new(REPORT_STORE_QUOTA_BYTES);
+        let w = mbr::Weighting::default();
+        // Report 1 at T; it then crosses one 05:00 ET (Friday) before report 2.
+        q.push("old", 100, w, T);
+        q.push("new", 100, w, T + DAY);
+        let weights: Vec<f64> = {
+            let mut v: Vec<_> = q.iter().map(|e| e.weight).collect();
+            v.sort_by(f64::total_cmp);
+            v
+        };
+        assert!((weights[0] - 0.9).abs() < 1e-12, "{weights:?}");
+        assert_eq!(drain_upload_order(&mut q, T + DAY), vec!["new", "old"]);
+        // Equal weights: newer first.
+        q.push("a", 100, w, T + 2 * DAY);
+        q.push("b", 100, w, T + 2 * DAY);
+        assert_eq!(drain_upload_order(&mut q, T + 2 * DAY), vec!["b", "a"]);
+        // An unsent report older than a week is deleted, not uploaded.
+        q.push("stale", 100, w, T + 3 * DAY);
+        assert!(drain_upload_order(&mut q, T + 11 * DAY).is_empty());
+        assert_eq!(q.expired, 1);
+        // Over the quota the lowest weight goes.
+        let mut small: MbrQueue<&str> = MbrQueue::new(250);
+        small.push("x", 100, w, T);
+        small.push("y", 100, w, T + DAY);
+        let evicted = small.push("z", 100, w, T + DAY);
+        assert_eq!(evicted, vec!["x"]);
+    }
+}
+
+/// What [`Phase2::real_mbr`] made of a report.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing the large variant would add an indirection at every use for no measured gain"
+)]
+enum MbrBuild {
+    /// A real report.
+    Real(Box<mbr::MisbehaviorReport>),
+    /// No PSID-0x20 subtype for the detection.
+    Unmapped,
+    /// No evidence, certificate or key to build it from.
+    Unsecured(&'static str),
+    /// Not an SCMS run with the PDU layer.
+    Off,
+}
+
+/// The [SM-MBR] v1.1 PSID-0x20 subtype for a detector check, with the §2.3.1 default
+/// parameters; `None` when the object set has none (see [`Phase2::real_mbr`]).
+/// The SM-MBR v1.1 subtype a fired check reports as, with the thresholds the reporting
+/// device implemented: the US profile's own (`us`), else the [SM-MBR] defaults the
+/// research suite's reports have always carried.
+fn us_subtype(check: &str, us: Option<&v2xw_threat::us_mbr::UsMbrParams>) -> Option<mbr::Subtype> {
+    use v2xw_threat::detect::DetectorId as D;
+    let d = v2xw_threat::us_mbr::UsMbrParams::default();
+    let p = us.unwrap_or(&d);
+    let u16_of = |v: f64| v.round().clamp(0.0, f64::from(u16::MAX)) as u16;
+    match check {
+        c if c == D::ConstantPositionFrozen.as_str() => Some(mbr::Subtype::ConstantPosition),
+        c if c == D::PositionJump.as_str() => Some(mbr::Subtype::RandomPosition {
+            gps_drift_mm: u16_of(p.gps_drift_m * 1000.0),
+        }),
+        c if c == D::ImplausibleAcceleration.as_str() => Some(mbr::Subtype::MaxAcceleration {
+            threshold_cmps2: u16_of(p.max_accel_mps2 * 100.0),
+        }),
+        c if c == D::ImplausibleSpeed.as_str() => Some(mbr::Subtype::MaxSpeed {
+            threshold_mps: u16_of(p.max_speed_mps),
+        }),
+        // [SM-MBR] §2.3.1.3.4: brakes on with an acceleration that is not
+        // negative; the subtype carries no parameter (NULL).
+        c if c == D::BrakeAcceleration.as_str() => Some(mbr::Subtype::BrakeAcceleration),
+        // ObsImplausible/Distance needs a suspect and a reporter BSM as evidence, which
+        // this host does not collect: the (default-off) distance check stays unmapped.
+        _ => None,
+    }
+}
+
+/// The SM-MBR v1.1 subtype a TS 103 759 check reports as, at the suite's own thresholds:
+/// only the two value checks have one ([SM-MBR] §2.3: MaxSpeed and MaxAcceleration). The
+/// other observations (consistency, Kalman, envelope, box, range, beacon timing) have no
+/// PSID-0x20 subtype, so a US device cannot file them (`reports_not_filed_by`).
+fn ts_subtype(check: &str, p: &v2xw_threat::ts103759::Ts103759Params) -> Option<mbr::Subtype> {
+    use v2xw_threat::ts103759::Ts103759Check as C;
+    let u16_of = |v: f64| v.round().clamp(0.0, f64::from(u16::MAX)) as u16;
+    match check {
+        c if c == C::SpeedPlausibility.as_str() => Some(mbr::Subtype::MaxSpeed {
+            threshold_mps: u16_of(p.max_plausible_speed_mps),
+        }),
+        c if c == C::AccelerationPlausibility.as_str() => Some(mbr::Subtype::MaxAcceleration {
+            threshold_cmps2: u16_of(p.max_plausible_accel_mps2 * 100.0),
+        }),
+        _ => None,
+    }
+}
+
+/// The SM-MBR subtypes a report's fired checks file under (thresholds aside): what its
+/// store weight is read from.
+fn report_subtypes(r: &MisbehaviourReport) -> Vec<mbr::Subtype> {
+    let ts = v2xw_threat::ts103759::Ts103759Params::default();
+    r.reason_codes
+        .iter()
+        .filter_map(|c| us_subtype(c, None).or_else(|| ts_subtype(c, &ts)))
+        .collect()
+}
+
+/// A report's initial store weight under `policy`.
+fn weighting_of(policy: &ReportStorePolicy, r: &MisbehaviourReport) -> f64 {
+    policy.weights.weighting(&report_subtypes(r)).initial
+}
+
+fn decode_hex8(s: &str) -> Option<[u8; 8]> {
+    if s.len() < 16 {
+        return None;
+    }
+    let mut out = [0u8; 8];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+fn conflict(field: &str, message: impl Into<String>) -> EngineError {
+    EngineError::Scenario(crate::ScenarioError::conflict(field, message.into()))
+}
+
+/// The eight bytes of a certificate digest, for a caller outside this module.
+#[must_use]
+pub fn digest_bytes(digest: &v2xw_msg::sec_types::HashedId8) -> [u8; 8] {
+    digest_key(digest)
+}
+
+/// How many bytes a misbehaviour report takes on the wire.
+///
+/// The size charged where the engine carries a report it did not build as real bytes (an
+/// unmapped reason, a roadside unit's forward, the ETSI path): the upload of the reference
+/// US report, 1,119 B, the real encoder's signed-and-encrypted report plus its
+/// `Download-Req` header ([`v2xw_proto::scms::mbr::REFERENCE_UPLOAD_BYTES`], derived and
+/// pinned by `v2xw-proto/tests/mbr.rs`; scms-constants.md). A real report is charged its own
+/// length.
+#[must_use]
+pub const fn report_bytes() -> u32 {
+    v2xw_proto::scms::mbr::REFERENCE_UPLOAD_BYTES
+}
+
+/// `threats.compromised_rsus` and `threats.compromised_rsu_attack`: which roadside units
+/// (by their index in `actors.rsus`) are under an attacker's control, and what they do.
+fn compromised_rsu_specs(
+    scenario: &Scenario,
+) -> Result<BTreeMap<usize, (v2xw_threat::RsuAttackParams, SimTime, SimTime)>> {
+    let mut out = BTreeMap::new();
+    let units = &scenario.threats.compromised_rsus;
+    if units.is_empty() {
+        if scenario.threats.compromised_rsu_attack.is_some() {
+            return Err(conflict(
+                "threats.compromised_rsu_attack",
+                "is set but threats.compromised_rsus names no roadside unit",
+            ));
+        }
+        return Ok(out);
+    }
+    let mut params = v2xw_threat::RsuAttackParams::default();
+    let horizon = (scenario.time.duration_s * 1e9).round().max(0.0) as u64;
+    let (mut from, mut to) = (0, horizon);
+    if let Some(choice) = &scenario.threats.compromised_rsu_attack {
+        if choice.id != v2xw_threat::attack_rsu::MODEL_ID {
+            return Err(conflict(
+                "threats.compromised_rsu_attack.id",
+                format!(
+                    "{} is not the compromised-unit model; use {}",
+                    choice.id,
+                    v2xw_threat::attack_rsu::MODEL_ID
+                ),
+            ));
+        }
+        if let Some(map) = choice.params.as_object() {
+            for (key, value) in map {
+                let bad = || {
+                    conflict(
+                        &format!("threats.compromised_rsu_attack.params.{key}"),
+                        format!("has an unusable value {value}"),
+                    )
+                };
+                let prob = |v: &serde_json::Value| {
+                    v.as_f64()
+                        .filter(|p| (0.0..=1.0).contains(p))
+                        .ok_or_else(bad)
+                };
+                match key.as_str() {
+                    "kind" => {
+                        let name = value.as_str().ok_or_else(bad)?;
+                        let kind = v2xw_threat::RsuAttackKind::parse(name).ok_or_else(|| {
+                            conflict(
+                                "threats.compromised_rsu_attack.params.kind",
+                                format!(
+                                    "'{name}' is not a compromised-unit attack; \
+                                     SuppressForwardedReports, PoisonForwardedReports or \
+                                     FalseCrl"
+                                ),
+                            )
+                        })?;
+                        if matches!(
+                            kind,
+                            v2xw_threat::RsuAttackKind::FalseSpat
+                                | v2xw_threat::RsuAttackKind::FalseMap
+                                | v2xw_threat::RsuAttackKind::FalseCtl
+                        ) {
+                            return Err(conflict(
+                                "threats.compromised_rsu_attack.params.kind",
+                                format!(
+                                    "'{name}' is declared by the model but not driven: no \
+                                     receiver application acts on SPaT or MAP content yet, \
+                                     and roadside units do not broadcast the trust list in \
+                                     this build; SuppressForwardedReports, \
+                                     PoisonForwardedReports or FalseCrl"
+                                ),
+                            ));
+                        }
+                        params.kind = kind;
+                    }
+                    "suppress_prob" => params.suppress_prob = prob(value)?,
+                    "poison_prob" => params.poison_prob = prob(value)?,
+                    "fabricated_entries" => {
+                        params.fabricated_entries =
+                            value.as_f64().filter(|v| *v >= 1.0).ok_or_else(bad)?;
+                    }
+                    "from_s" => {
+                        from = (value.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)? * 1e9).round()
+                            as u64;
+                    }
+                    "to_s" => {
+                        to = (value.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)? * 1e9).round()
+                            as u64;
+                    }
+                    other => {
+                        return Err(conflict(
+                            "threats.compromised_rsu_attack.params",
+                            format!(
+                                "'{other}' is not a parameter; kind, suppress_prob, \
+                                 poison_prob, fabricated_entries, from_s, to_s"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for &index in units {
+        let index = index as usize;
+        if index >= scenario.actors.rsus.len() {
+            return Err(conflict(
+                "threats.compromised_rsus",
+                format!(
+                    "names roadside unit {index}, and actors.rsus declares {}; a unit is \
+                     named by its position in that list, from 0",
+                    scenario.actors.rsus.len()
+                ),
+            ));
+        }
+        out.insert(index, (params.clone(), from, to));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod fast_forward_wake_tests {
+    use super::*;
+
+    /// Realism R-FF: a CRL version one provider
+    /// published is a fast-forward wake only until it has crossed the inter-provider link
+    /// to the other provider's RA. Fault (the version held to `now + 1` for ever, the
+    /// first form): an hour after the crossing it still wakes the very next instant, and
+    /// a two-day fast-forward stopped at every 100 ms step (255,658 backend ticks).
+    #[test]
+    fn a_crl_version_wakes_the_fast_forward_only_until_it_has_crossed() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        assert_eq!(p.crl_feeds.len(), 2, "us-production-2025: two providers");
+        let lag = p
+            .home()
+            .state
+            .deployment
+            .inter_provider_latency(0, 1)
+            .expect("a link")
+            .as_nanos();
+        assert!(lag > 0, "the providers are apart");
+        let at: SimTime = 1_000_000_000;
+        let crossed = at + lag;
+        let before = at + lag / 2;
+        let after = crossed + 3_600_000_000_000;
+        let (w_before, w_after) = (p.next_wake(before), p.next_wake(after));
+        assert_ne!(w_after, Some(after + 1), "nothing else is due at once");
+        // A list published in the run: its serial is past the pre-run lists'
+        // (`prerun_version`), which every device already holds and which wake nothing.
+        let serial = p.seeded_serial[0] + 1;
+        p.crl_feeds[0].push(CrlVersion {
+            at,
+            version: 1,
+            entries: Vec::new(),
+            secured: Vec::new(),
+            serial,
+        });
+        let in_transit = p.next_wake(before).expect("a wake");
+        assert_eq!(in_transit, w_before.map_or(crossed, |w| w.min(crossed)));
+        assert_eq!(p.next_wake(after), w_after, "a crossed version is no wake");
+    }
+}
+
+#[cfg(test)]
+mod crl_poll_framing_tests {
+    use super::*;
+
+    /// Proto B9b: a vehicle's CRL poll and the RA's answers are charged as the HTTP/1.1
+    /// texts they are ([CAMP122] §6.2.1, §6.2.3; [SMP] §4.3.2), checked against the
+    /// literal texts. The request is an unauthenticated conditional `GET` with no body;
+    /// a `200` carries `Date`, `Content-Type` and `Content-Length` before the composite;
+    /// a `412` is the 92 B [`CRL_NOT_MODIFIED_BYTES`].
+    ///
+    /// Fault: the answer without its status line and headers (the body alone, as before
+    /// B9b). The `200` assert goes red.
+    #[test]
+    fn a_crl_poll_is_charged_its_http_text() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        let date = "Sun, 06 Nov 1994 08:49:37 GMT";
+        assert_eq!(date.len() as u32, v2xw_proto::scms::http::IMF_FIXDATE_BYTES);
+        for (k, name) in ["provider-a", "provider-b"].iter().enumerate() {
+            let node = NodeId::new(9_300 + k as u32);
+            p.device_provider.insert(device_of(node), k);
+            let get = format!(
+                "GET /download-crl/ HTTP/1.1\r\nHost: ma.{name}:8894\r\n\
+                 If-Modified-Since: {date}\r\n\r\n"
+            );
+            assert_eq!(p.crl_poll_request_bytes(node), get.len() as u32, "{get}");
+            let status = format!(
+                "GET /download/info-status HTTP/1.1\r\nHost: ra.{name}:8892\r\n\
+                 If-Modified-Since: {date}\r\n\r\n"
+            );
+            assert_eq!(p.info_status_request_bytes(node), status.len() as u32);
+        }
+        let n = 1_234u32;
+        let ok = format!(
+            "HTTP/1.1 200 OK\r\nDate: {date}\r\nContent-Type: application/octet-stream\r\n\
+             Content-Length: {n}\r\n\r\n"
+        );
+        assert_eq!(
+            Phase2::poll_answer_bytes(Some(n)),
+            ok.len() as u32 + n,
+            "{ok}"
+        );
+        let not_modified = format!(
+            "HTTP/1.1 412 Precondition Failed\r\nDate: {date}\r\nContent-Length: 0\r\n\r\n"
+        );
+        assert_eq!(not_modified.len() as u32, CRL_NOT_MODIFIED_BYTES);
+        assert_eq!(Phase2::poll_answer_bytes(None), CRL_NOT_MODIFIED_BYTES);
+    }
+}
+
+#[cfg(test)]
+mod ee_view_tests {
+    use super::*;
+
+    /// U7: each provider's `ee` entity in the Backend view
+    /// states its own vehicles and its own devices' counters, the ones that left the run
+    /// included. Six vehicles split 4 / 2 over the two US providers; their reports
+    /// refused at the MTU, never filed, and deleted from the store (quota and age) are
+    /// set per device, one vehicle of each provider leaves, and each entity must show
+    /// exactly its devices' counts, which sum to the run report's.
+    ///
+    /// Fault: emit a constant 0 (or omit the field) for any of the six; or count every
+    /// vehicle on the home provider. The per-provider assert goes red.
+    #[test]
+    fn each_provider_ee_entity_counts_its_own_devices() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        assert_eq!(p.runs.len(), 2, "us-production-2025: two providers");
+        // (provider, mtu, not filed, evicted, expired, blocklisted, leaves)
+        let fleet: [(usize, u64, u64, u64, u64, u64, bool); 6] = [
+            (0, 1, 2, 3, 1, 1, false),
+            (0, 0, 1, 0, 2, 0, false),
+            (0, 2, 0, 1, 0, 1, true),
+            (0, 0, 0, 0, 0, 0, false),
+            (1, 3, 4, 2, 5, 1, false),
+            (1, 1, 0, 7, 0, 0, true),
+        ];
+        for (i, &(k, mtu, nf, ev, ex, bl, _)) in fleet.iter().enumerate() {
+            let node = NodeId::new(9_100 + i as u32);
+            p.device_provider.insert(device_of(node), k);
+            let mut n = NodeSec::default();
+            n.outbox.0.evicted = ev;
+            n.outbox.0.expired = ex;
+            p.nodes.insert(node, n);
+            for _ in 0..mtu {
+                p.note_report_refused_mtu(node);
+            }
+            for _ in 0..nf {
+                p.note_not_filed(node, "a test reason");
+            }
+            for _ in 0..bl {
+                p.report.topups_refused_blocklisted += 1;
+                p.ee_tally_of(node).topups_refused_blocklisted += 1;
+            }
+        }
+        for (i, f) in fleet.iter().enumerate() {
+            if f.6 {
+                p.retire(NodeId::new(9_100 + i as u32), 1);
+            }
+        }
+        let view = p.backend_view(1);
+        let name = p.runs[0].state.deployment.providers[1].name.clone();
+        let ee = |id: &str| {
+            view.entities
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap_or_else(|| panic!("no {id} entity"))
+                .clone()
+        };
+        let report = p.report();
+        // Every mismatch is listed, so one fault shows each field it breaks.
+        let mut wrong = Vec::new();
+        for (k, id) in [(0usize, "ee".to_string()), (1, format!("{name}/ee"))] {
+            let e = ee(&id);
+            let mine = || fleet.iter().filter(move |f| f.0 == k);
+            let want = [
+                ("vehicles", mine().filter(|f| !f.6).count() as u64),
+                ("reports_refused_mtu", mine().map(|f| f.1).sum()),
+                ("reports_not_filed", mine().map(|f| f.2).sum()),
+                ("reports_evicted", mine().map(|f| f.3).sum()),
+                ("reports_expired", mine().map(|f| f.4).sum()),
+                ("topups_refused_blocklisted", mine().map(|f| f.5).sum()),
+            ];
+            for (key, v) in want {
+                let got = e.state.get(key).and_then(serde_json::Value::as_u64);
+                if got != Some(v) {
+                    wrong.push(format!("{id}.{key}: {got:?}, want {v}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+        let total = |i: usize| fleet.iter().map(|f| [f.1, f.2, f.3, f.4][i]).sum::<u64>();
+        assert_eq!(report.reports_refused_mtu, total(0));
+        assert_eq!(report.reports_not_filed, total(1));
+        assert_eq!(report.reports_evicted, total(2));
+        assert_eq!(report.reports_expired, total(3));
+    }
+}
+
+#[cfg(test)]
+mod join_crl_tests {
+    use super::*;
+
+    /// Oracle rule OF-3-JOIN: a device that
+    /// joins after a provider published a newer list holds that list, as its RA serves
+    /// it, and is marked as of it; a device that joins before anything newer is served
+    /// still holds the `t0` lists. Fault (the first form: `prerun_crl` hands every joiner
+    /// the `t0` snapshot): the late joiner holds no entry and the `t0` serial.
+    #[test]
+    fn a_device_joining_after_a_publication_holds_the_newest_list() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        assert_eq!(p.crl_feeds.len(), 2, "us-production-2025: two providers");
+        let (v0, s0) = (p.prerun_crl.0, p.prerun_crl.1);
+        assert!(s0 > 0, "every CRACA publishes at t0");
+        let early = NodeId::new(9_001);
+        p.nodes.insert(early, NodeSec::default());
+        let (v, e, _) = p.prerun_crl(early, 0).expect("the t0 lists");
+        assert_eq!((v, e.len() as u32), (v0, v0));
+        assert_eq!(p.nodes[&early].crl_serial, s0);
+        // Both providers' t0 lists reach the feeds, then provider 0 revokes one device.
+        let serial = |p: &Phase2, k: usize| p.runs[k].state.crl_store.versions;
+        let (a0, b0) = (serial(&p, 0), serial(&p, 1));
+        p.crl_feeds[1].push(CrlVersion {
+            at: 0,
+            version: 0,
+            entries: Vec::new(),
+            secured: Vec::new(),
+            serial: b0,
+        });
+        let device = v2xw_sec::linkage::DeviceLinkageContext::new(
+            v2xw_sec::linkage::LaId(1),
+            v2xw_sec::linkage::LaId(2),
+            v2xw_sec::linkage::LinkageSeed::new([7; 16]),
+            v2xw_sec::linkage::LinkageSeed::new([9; 16]),
+        );
+        let entry = CrlLinkageEntry::from_device(&device, 615, v2xw_sec::linkage::DEFAULT_JMAX);
+        let published: SimTime = 191_400_000_000_000;
+        p.crl_feeds[0].push(CrlVersion {
+            at: published,
+            version: 1,
+            entries: vec![entry],
+            secured: Vec::new(),
+            serial: a0 + 1,
+        });
+        p.backend_now = published + 3_600_000_000_000;
+        let late = NodeId::new(9_002);
+        p.nodes.insert(late, NodeSec::default());
+        let (v, e, _) = p
+            .prerun_crl(late, p.backend_now)
+            .expect("the lists its RA serves");
+        assert_eq!(v, 1, "the composite version its RA serves");
+        assert_eq!(e.len(), 1, "the revocation is on the list it holds");
+        assert_eq!(
+            p.nodes[&late].crl_serial,
+            u64::from(a0 + 1 + b0),
+            "marked as of the newest lists, so its first poll is answered 412"
+        );
+        assert_eq!(
+            p.nodes[&early].crl_serial, s0,
+            "an earlier joiner is untouched"
+        );
+    }
+}
+
+#[cfg(test)]
+mod crl_record_tests {
+    use super::*;
+
+    /// A vehicle's `node.security` `crl_version` is the publication count of the
+    /// composite CRL it holds (the `t0` lists of both providers, then provider 0's next
+    /// publication), not the list's entry count. Fault: `record_crl_version` back to
+    /// `n.crl_version` reads 1 (one entry) for the late joiner.
+    #[test]
+    fn the_security_record_names_the_crl_publication_the_vehicle_holds() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        let serial = |p: &Phase2, k: usize| p.runs[k].state.crl_store.versions;
+        let (a0, b0) = (serial(&p, 0), serial(&p, 1));
+        for (k, v, at, ser) in [(1, 0u32, 0, b0), (0, 0, 0, a0)] {
+            p.crl_feeds[k].push(CrlVersion {
+                at,
+                version: v,
+                entries: Vec::new(),
+                secured: Vec::new(),
+                serial: ser,
+            });
+        }
+        let early = NodeId::new(9_001);
+        p.nodes.insert(early, NodeSec::default());
+        let (v, e, _) = p.prerun_crl(early, 0).expect("the t0 lists");
+        let _ = p.install_crl(early, v, &e, 0, false, true);
+        let t0 = u32::try_from(p.nodes[&early].crl_held_serial).expect("small");
+        assert!(t0 >= 1, "the t0 lists are publications ({t0})");
+        assert_eq!(Phase2::record_crl_version(&p.nodes[&early]), t0);
+        let device = v2xw_sec::linkage::DeviceLinkageContext::new(
+            v2xw_sec::linkage::LaId(1),
+            v2xw_sec::linkage::LaId(2),
+            v2xw_sec::linkage::LinkageSeed::new([7; 16]),
+            v2xw_sec::linkage::LinkageSeed::new([9; 16]),
+        );
+        let entry = CrlLinkageEntry::from_device(&device, 615, v2xw_sec::linkage::DEFAULT_JMAX);
+        let published: SimTime = 191_400_000_000_000;
+        p.crl_feeds[0].push(CrlVersion {
+            at: published,
+            version: 1,
+            entries: vec![entry],
+            secured: Vec::new(),
+            serial: a0 + 1,
+        });
+        p.backend_now = published + 3_600_000_000_000;
+        let late = NodeId::new(9_002);
+        p.nodes.insert(late, NodeSec::default());
+        let now = p.backend_now;
+        let (v, e, _) = p.prerun_crl(late, now).expect("the lists its RA serves");
+        let _ = p.install_crl(late, v, &e, now, false, true);
+        assert_eq!(
+            Phase2::record_crl_version(&p.nodes[&late]),
+            a0 + 1 + b0,
+            "the record names the publication it holds, not its one entry"
+        );
+    }
+}
+
+#[cfg(test)]
+mod provider_failure_tests {
+    use super::*;
+
+    /// Live-scms finding 4 (KEM download bytes):
+    /// with the 1609.2.1 PDU layer off (a post-quantum KEM) a vehicle's CRL fetch was
+    /// sized as one list of all entries (292 B with none), while the RA serves the
+    /// 1609.2.1 §6.3.5.8 composite (every CRACA's `SecuredCrl` and the home CTL: 3,298 B
+    /// on the reference two-provider run). The CRL is signed, not encrypted, so the KEM must not change it.
+    /// Fault (the old `crl_size(version)` estimate): the modelled fetch is about a tenth
+    /// of the real one.
+    #[test]
+    fn a_crl_fetch_without_the_pdu_layer_is_sized_as_the_composite_the_ra_serves() {
+        let build = |kem: &str| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+            let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+            s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+            s.security.protocol = Some(crate::scenario::ModelChoice {
+                id: CAMP_SCMS.to_string(),
+                params: serde_json::json!({}),
+            });
+            s.security.kem = kem.to_string();
+            let engine = crate::Engine::build(s, "").expect("builds");
+            let mut p = Phase2::build(engine.scenario(), engine.world())
+                .expect("builds")
+                .expect("an SCMS backend");
+            p.advance(10_000_000_000);
+            p
+        };
+        let node = NodeId::new(0);
+        let mut real = build("ecies-p256");
+        let mut modelled = build("ml-kem-768");
+        assert!(
+            modelled.published_crl_for(node).2.is_empty() && modelled.prerun_crl.3.is_empty(),
+            "ml-kem-768 turns the PDU layer off: nothing is signed"
+        );
+        let signed = {
+            let s = real.published_crl_for(node).2;
+            if s.is_empty() {
+                real.prerun_crl.3.clone()
+            } else {
+                s
+            }
+        };
+        assert!(
+            signed.len() >= 2,
+            "every CRACA's list is signed: {}",
+            signed.len()
+        );
+        let r = real.composite_size(0, 0, &signed);
+        let m = modelled.crl_download_size(node);
+        let ratio = f64::from(m) / f64::from(r);
+        eprintln!("composite CRL: signed {r} B, modelled {m} B (ratio {ratio:.3})");
+        assert!(
+            (0.8..=1.25).contains(&ratio),
+            "the modelled CRL fetch ({m} B) is not the composite the RA serves ({r} B)"
+        );
+    }
+
+    fn two_providers(failures: &[(&str, f64, f64)]) -> Phase2 {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        s.actors.backend.failures = failures
+            .iter()
+            .map(
+                |(node, from, to)| crate::scenario::schema::BackendFailureSpec {
+                    node: (*node).to_string(),
+                    mode: "offline".to_string(),
+                    from_s: *from,
+                    to_s: Some(*to),
+                    extra_ms: None,
+                },
+            )
+            .collect();
+        assert!(
+            crate::crypto_config::check(&s).is_ok(),
+            "the loader accepts {failures:?}"
+        );
+        let engine = crate::Engine::build(s, "").expect("builds");
+        Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend")
+    }
+
+    /// Live-chains finding 5: a backend
+    /// failure could name only the home provider's servers, so an outage of the CRL
+    /// Generator or CRL Store that held a revocation (provider-b's, in the
+    /// credential-lifecycle runs) could not be declared, and the CRL-outage chain was
+    /// never tested. A provider-qualified node (`provider-b/crl_store`) takes down that
+    /// provider's server in that provider's run: its CRL Generator's renewal at `nextCrl`
+    /// waits in the Generator's queue (held, not dropped) until the store is back, the
+    /// list every RA serves (and so every device CRL fetch) carries provider-b's new list
+    /// only from then, and the home provider's store and list are untouched. Fault (the
+    /// first form, `failure_node` on the home run only): the loader refuses the name.
+    #[test]
+    fn a_provider_qualified_crl_store_outage_holds_that_providers_list_from_every_fetch() {
+        let week = 7.0 * 86_400.0;
+        let (from, to) = (week - 60.0, week + 600.0);
+        let mut p = two_providers(&[("provider-b/crl_store", from, to)]);
+        assert_eq!(p.runs.len(), 2, "us-production-2025: two providers");
+        let b_store = p.home().state.deployment.nodes(1).online.crl_store;
+        assert!(
+            p.runs[0].state.faults.faults.is_empty(),
+            "the home run is up"
+        );
+        assert_eq!(p.runs[1].state.faults.faults.len(), 1);
+        assert_eq!(p.runs[1].state.faults.faults[0].node, b_store);
+        let next_crl = p.runs[1].state.params.crl.next_crl;
+        assert_eq!(next_crl.as_secs_f64(), week, "the cited weekly nextCrl");
+        let store = |p: &Phase2, k: usize| p.runs[k].state.crl_store.versions;
+        let generated = |p: &Phase2, k: usize| p.runs[k].state.crlg.versions;
+        let served_serial = |p: &Phase2, k: usize| {
+            p.visible_versions(0)
+                .iter()
+                .find(|(j, _)| *j == k)
+                .map_or(0, |(_, v)| v.serial)
+        };
+        let s = |t: f64| (t * 1e9) as SimTime;
+        let (a0, b0, g0) = (store(&p, 0), store(&p, 1), generated(&p, 1));
+        // The t0 lists are served through `prerun_crl`, not the feeds; put provider-b's
+        // in its feed (as the CRL-composition test above does) so "the old list" is the
+        // one an RA serves, not an empty feed's 0.
+        p.crl_feeds[1].push(CrlVersion {
+            at: 0,
+            version: 0,
+            entries: Vec::new(),
+            secured: Vec::new(),
+            serial: b0,
+        });
+        p.advance(s(week + 120.0));
+        assert_eq!(
+            generated(&p, 1),
+            g0 + 1,
+            "provider-b renewed its list at nextCrl"
+        );
+        assert_eq!(
+            store(&p, 1),
+            b0,
+            "provider-b's store is down: nothing landed"
+        );
+        assert!(
+            p.runs[1].state.faults.held >= 1,
+            "the publication is held, not lost"
+        );
+        assert_eq!(p.runs[1].state.faults.dropped, 0);
+        assert_eq!(store(&p, 0), a0 + 1, "the home store published its renewal");
+        assert_eq!(p.runs[0].state.faults.held, 0);
+        assert_eq!(
+            served_serial(&p, 1),
+            b0,
+            "the RA serves provider-b's old list while its store is down"
+        );
+        p.advance(s(to + 300.0));
+        assert_eq!(
+            store(&p, 1),
+            b0 + 1,
+            "delivered on the retry after the outage"
+        );
+        // The backend stamps a publication with the step that saw it; provider-a's RA
+        // holds it only once the inter-provider link has carried it (milliseconds), so
+        // look one step later.
+        p.advance(s(to + 301.0));
+        assert_eq!(served_serial(&p, 1), b0 + 1, "every RA serves it from then");
+        let at = p.crl_feeds[1].last().expect("a version").at;
+        assert!(
+            at >= s(to),
+            "provider-b's list is served from the store's return"
+        );
+    }
+
+    /// The unqualified name keeps its meaning (the home provider's server), and a
+    /// provider the deployment does not have is refused by name.
+    #[test]
+    fn an_unqualified_failure_is_the_home_providers_and_an_unknown_provider_is_refused() {
+        let p = two_providers(&[("crlg", 0.0, 10.0), ("provider-a/ma", 0.0, 10.0)]);
+        let home = p.home().state.nodes;
+        let f = &p.runs[0].state.faults.faults;
+        assert_eq!((f[0].node, f[1].node), (home.crlg, home.ma));
+        assert!(p.runs[1].state.faults.faults.is_empty());
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.actors.backend.failures = vec![crate::scenario::schema::BackendFailureSpec {
+            node: "provider-z/crlg".to_string(),
+            mode: "offline".to_string(),
+            from_s: 0.0,
+            to_s: None,
+            extra_ms: None,
+        }];
+        let e = crate::crypto_config::check(&s)
+            .expect_err("no provider-z")
+            .to_string();
+        assert!(e.contains("provider-a, provider-b"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod ctl_device_tests {
+    use super::*;
+
+    fn phase2() -> Phase2 {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend")
+    }
+
+    /// Edge-case report §6.4: a device checks a newer CTL's elector signatures itself
+    /// (1609.2.1: at least `quorum` valid P-384 signatures from the electors its installed
+    /// CTL trusts) before it applies the CTL's roots. A CTL signed by 2 of the 5 electors
+    /// is refused and counted; a later one signed by all five still installs. Fault (the
+    /// first form: the published root set applied unchecked): the forgery installs.
+    #[test]
+    fn a_device_refuses_a_ctl_below_its_elector_quorum_and_installs_a_genuine_one() {
+        let mut p = phase2();
+        let node = NodeId::new(9_000);
+        p.nodes.insert(node, NodeSec::default());
+        p.ensure_factory_trust();
+        let factory = p.home().state.gov.ctl.sequence;
+        let forged = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1]);
+        assert_eq!(forged.signers.len(), 2);
+        p.runs[0].state.gov.ctl = forged.clone();
+        p.runs[0].state.gov.ctl_history.push(forged);
+        assert!(p.take_ctl_install(node, false).is_none(), "2 of 5: refused");
+        assert_eq!(p.report.trust_lists_refused, 1);
+        assert_eq!(p.report.trust_lists_installed, 0);
+        assert!(
+            p.report.trust_list_verifications >= 2,
+            "the signatures were checked"
+        );
+        assert_eq!(p.nodes[&node].ctl_seq, factory, "still the factory CTL");
+        let genuine = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1, 2, 3, 4]);
+        p.runs[0].state.gov.ctl = genuine.clone();
+        p.runs[0].state.gov.ctl_history.push(genuine.clone());
+        let (roots, _) = p.take_ctl_install(node, false).expect("5 of 5: installed");
+        assert!(!roots.is_empty(), "its approved roots become anchors");
+        assert_eq!(p.report.trust_lists_installed, 1);
+        assert_eq!(
+            p.report.trust_lists_refused, 2,
+            "the forgery was refused again"
+        );
+        assert_eq!(p.nodes[&node].ctl_seq, genuine.sequence);
+        assert!(p.take_ctl_install(node, false).is_none(), "nothing newer");
+    }
+
+    /// A vehicle enrolled after a CTL change got that CTL with
+    /// its enrolment, so its first composite CRL download installs nothing; a vehicle of
+    /// the factory trust still installs it. Fault (the first form: every vehicle started
+    /// from the factory trust): the joiner installed the CTL it held, and
+    /// `trust_lists_installed` counted it.
+    #[test]
+    fn a_vehicle_enrolled_after_a_ctl_change_does_not_install_it_again() {
+        let mut p = phase2();
+        p.ensure_factory_trust();
+        let genuine = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1, 2, 3, 4]);
+        p.runs[0].state.gov.ctl = genuine.clone();
+        p.runs[0].state.gov.ctl_history.push(genuine.clone());
+        let joiner = NodeId::new(9_001);
+        let i = p.runs[0].state.params.period_at(0);
+        p.runs[0]
+            .preload(device_of(joiner), i, 1, 2)
+            .expect("enrols");
+        assert_eq!(
+            p.runs[0].state.devices[&device_of(joiner)]
+                .trust
+                .ctl_sequence,
+            Some(genuine.sequence),
+            "enrolled with the CTL in force"
+        );
+        p.nodes.insert(joiner, NodeSec::default());
+        assert!(
+            p.take_ctl_install(joiner, false).is_none(),
+            "held since enrolment"
+        );
+        assert_eq!(p.report.trust_lists_installed, 0);
+        let old = NodeId::new(9_000);
+        p.nodes.insert(old, NodeSec::default());
+        assert!(
+            p.take_ctl_install(old, false).is_some(),
+            "the factory CTL is older"
+        );
+        assert_eq!(p.report.trust_lists_installed, 1);
+    }
+
+    /// The vehicle's `node.credentials` names the CTL it
+    /// installed on the road (with a composite CRL download), and the install is a change
+    /// of the record. Fault (the record read the backend's enrolment-time trust only): the
+    /// record still names no CTL after the install, so a recording showed none of the
+    /// `trust_lists_installed` it counted.
+    #[test]
+    fn the_credentials_record_names_the_ctl_the_vehicle_installed() {
+        let mut p = phase2();
+        let node = NodeId::new(9_000);
+        p.nodes.insert(node, NodeSec::default());
+        p.ensure_factory_trust();
+        let store = v2xw_node::CertStore::default();
+        let before = p
+            .node_credentials(node, 0, &store)
+            .expect("the first record");
+        let genuine = p.runs[0].state.gov.forge_next_ctl(3, &[0, 1, 2, 3, 4]);
+        p.runs[0].state.gov.ctl = genuine.clone();
+        p.runs[0].state.gov.ctl_history.push(genuine.clone());
+        p.take_ctl_install(node, false).expect("installed");
+        let after = p
+            .node_credentials(node, 1, &store)
+            .expect("the install changes the record");
+        assert_ne!(before.ctl_sequence, after.ctl_sequence);
+        assert_eq!(after.ctl_sequence, Some(genuine.sequence));
+    }
+
+    /// Edge-case report §6.4: a CTL whose publication deadline falls inside a
+    /// fast-forward is a backend wake of its own, at the deadline, and publishes then
+    /// (not at the window's next tick). Fault (decided CTLs not offered to `next_wake`):
+    /// no wake lands on the deadline.
+    #[test]
+    fn a_ctl_due_inside_a_fast_forward_wakes_the_backend_at_its_deadline() {
+        let mut p = phase2();
+        let t0: SimTime = 300 * 1_000_000_000;
+        p.governance_due(t0);
+        let peer = p.runs[0].state.peer_pki[0].0.clone();
+        let root = p.runs[0].state.gov.root_of(&peer).expect("the peer's root");
+        let at = p.runs[0].state.gov.remove_root(root, t0).expect("decided");
+        assert_eq!(
+            at,
+            t0 + 48 * 3_600 * 1_000_000_000,
+            "48 h (Elector Policy §2.2.4)"
+        );
+        let mut now = t0;
+        let mut hit = false;
+        for _ in 0..200_000 {
+            match p.next_wake(now) {
+                Some(w) if w <= at => {
+                    if w == at {
+                        hit = true;
+                        break;
+                    }
+                    now = w;
+                }
+                _ => break,
+            }
+        }
+        assert!(hit, "a wake at the deadline (last stop {now})");
+        let seq = p.home().state.gov.ctl.sequence;
+        p.governance_due(at - 1);
+        assert_eq!(
+            p.home().state.gov.ctl.sequence,
+            seq,
+            "not before its deadline"
+        );
+        p.governance_due(at);
+        assert_eq!(p.home().state.gov.ctl.sequence, seq + 1, "published at it");
+    }
+
+    /// A root rollover reaches the wire. The decision changes nothing
+    /// the devices see; once the CTL approving the new root is published, every run's
+    /// PDU PKI for the home provider is the governance's re-certified hierarchy (the peer
+    /// runs' copies too), the trust a device installs holds both roots and both
+    /// hierarchies, and the issuer the engine's credential factory follows is the new
+    /// ACA. Fault (the first form, the PDU PKI fixed at run start): no changeover, and
+    /// the PKI still signs under the old root.
+    #[test]
+    fn a_published_root_rollover_moves_the_wire_pki_to_the_new_root() {
+        let mut p = phase2();
+        let t0: SimTime = 300 * 1_000_000_000;
+        p.governance_due(t0);
+        let old = std::sync::Arc::clone(p.home().state.pki.as_ref().expect("PDU layer"));
+        p.params.root_rollover_at = Some(t0);
+        p.governance_due(t0);
+        let (publish, _) = p.home().state.gov.pending[0].clone();
+        assert!(!p.take_pki_changeover(), "decided, not yet published");
+        assert_eq!(
+            p.home().state.pki.as_ref().unwrap().root.cert,
+            old.root.cert
+        );
+        p.governance_due(publish);
+        assert!(p.take_pki_changeover(), "the changeover at publication");
+        let pki = std::sync::Arc::clone(p.home().state.pki.as_ref().unwrap());
+        let label = p.home().state.deployment.providers[0].name.clone();
+        assert_eq!(
+            v2xw_sec::sig1609::cert_hashed_id32(&pki.root.cert).ok(),
+            p.home().state.gov.root_of(&label),
+            "signs under the newest approved root"
+        );
+        assert_ne!(pki.root.cert, old.root.cert);
+        assert_eq!(pki.ica.cert, *p.home().state.gov.cert("ica").unwrap());
+        assert!(pki.retired.iter().any(|a| a.cert == old.aca.cert));
+        for run in &p.runs[1..] {
+            let copy = run
+                .state
+                .peer_pki
+                .iter()
+                .find(|(l, _)| *l == label)
+                .expect("the home provider is a peer");
+            assert!(
+                std::sync::Arc::ptr_eq(&copy.1, &pki),
+                "every peer run follows"
+            );
+        }
+        let (roots, cas) = p.trust_bundle();
+        for c in [&pki.root.cert, &old.root.cert] {
+            assert!(roots.iter().any(|r| **r == *c), "both roots are anchors");
+        }
+        for c in [&pki.aca.cert, &old.aca.cert] {
+            assert!(
+                cas.iter().any(|r| **r == *c),
+                "both ACAs are in the chain file"
+            );
+        }
+        assert_eq!(
+            p.provider_issuers()[0].certificate().as_ref(),
+            &pki.aca.cert
+        );
+        p.governance_due(publish + 1);
+        assert!(!p.take_pki_changeover(), "once");
+    }
+
+    /// after a root rollover's changeover every
+    /// new certificate names the new CRACA, so the re-certified CRL Generator signs a list
+    /// under it at once and the home RA serves it; until it did, no device held a CRL a
+    /// new certificate matched, and `multi-week-crlg-down` (Generator down from 700 s)
+    /// refused nothing as `crl-overdue` in 33 days. Fault that turns it red: the
+    /// `reissue_crl_after_changeover` call in `follow_published_pki` removed (the first
+    /// list under the new CRACA waits for `nextCrl`, a week).
+    #[test]
+    fn a_root_changeover_publishes_a_list_under_the_new_craca_at_once() {
+        let mut p = phase2();
+        let t0: SimTime = 300 * 1_000_000_000;
+        p.advance(t0);
+        p.params.root_rollover_at = Some(t0);
+        p.governance_due(t0);
+        let (publish, _) = p.home().state.gov.pending[0].clone();
+        p.advance(publish);
+        assert!(p.take_pki_changeover(), "the changeover at publication");
+        let craca = p.home().state.pki.as_ref().expect("PDU layer").craca_id8();
+        // The Generator's flow (sign, store, publish) runs on the backend's links.
+        p.advance(publish + 60 * 1_000_000_000);
+        let node = (0..400)
+            .map(NodeId::new)
+            .find(|n| p.provider_of_device(device_of(*n)) == 0)
+            .expect("a home-provider device");
+        let cracas: Vec<[u8; 8]> = p
+            .published_crl_for(node)
+            .2
+            .iter()
+            .filter_map(|b| v2xw_sec::crl::decode_crl(&b[..]).ok())
+            .map(|c| {
+                let mut a = [0u8; 8];
+                a.copy_from_slice(&c.contents.crl_craca.0[..]);
+                a
+            })
+            .collect();
+        assert!(
+            cracas.contains(&craca),
+            "the home RA serves no list under the new CRACA {craca:02x?} a minute after the \
+             changeover: {cracas:02x?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod evidence_time_tests {
+    use super::*;
+    use v2xw_core::time::NS_PER_S;
+    use v2xw_threat::detect::{DetectorId, Fingerprint, Observation, Verdict};
+
+    fn report(generated: SimTime, evidence: SimTime) -> MisbehaviourReport {
+        let verdict = Verdict {
+            subject: "0102030405060708".to_string(),
+            fingerprint: Fingerprint::default(),
+            fired: vec![Observation {
+                detector: DetectorId::PositionJump,
+                score: 1.5,
+                subject: "0102030405060708".to_string(),
+                at: generated,
+            }],
+        };
+        let ev = v2xw_threat::Evidence::at(generated, generated, 1.0);
+        let mut r = MisbehaviourReport::from_verdict("r", NodeId::new(1), "aa", &verdict, &ev)
+            .expect("a fired check is a report");
+        r.st_tstart = evidence;
+        r.st_tend = evidence;
+        r
+    }
+
+    /// The run report counts the store deletions of every device, the ones that left the
+    /// run included (on the `scms-audit-mbpipe` run the engine reported 17
+    /// quota deletions where the `pki.report_fate` records hold 228). Fault (the old sum
+    /// over the devices still present): 0 after the vehicle retires.
+    #[test]
+    fn a_retired_vehicles_store_deletions_stay_counted() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = crate::scenario::Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        let node = NodeId::new(9_003);
+        let mut sec = NodeSec::default();
+        sec.outbox.0 = MbrQueue::new(250);
+        let w = mbr::Weighting::default();
+        let unix = 1_792_065_600;
+        for k in 0..3_u64 {
+            let r = report(k * NS_PER_S, k * NS_PER_S);
+            sec.outbox.0.push((r, k * NS_PER_S), 100, w, unix);
+        }
+        assert_eq!(
+            sec.outbox.0.evicted, 1,
+            "three 100 B reports over a 250 B quota"
+        );
+        p.nodes.insert(node, sec);
+        assert_eq!(p.report().reports_evicted, 1);
+        p.retire(node, 10 * NS_PER_S);
+        assert_eq!(
+            p.report().reports_evicted,
+            1,
+            "the deletion left with the vehicle"
+        );
+    }
+
+    /// The MA's evidence-time rule (the edge-case finding of a 5,000 s skew revoking 15
+    /// honest vehicles): evidence stamped after its report beyond 40 ms, or older than
+    /// 10 minutes, is implausible; evidence a few seconds before the report is not.
+    /// Faults injected (and reverted): the rule returning `true` always fails the first
+    /// assertion; dropping the age bound fails the second.
+    #[test]
+    fn evidence_from_a_wrong_clock_is_implausible() {
+        let t = 10_000 * NS_PER_S;
+        assert!(!evidence_time_plausible(&report(t, t + 5_000 * NS_PER_S)));
+        assert!(!evidence_time_plausible(&report(t + 5_000 * NS_PER_S, t)));
+        assert!(evidence_time_plausible(&report(t, t - NS_PER_S)));
+        assert!(evidence_time_plausible(&report(t, t + 39_000_000)));
+        assert!(!evidence_time_plausible(&report(t, t + 41_000_000)));
+        assert!(evidence_time_plausible(&report(t, t - 599 * NS_PER_S)));
+    }
+}
+
+#[cfg(test)]
+mod judged_evidence_tests {
+    use super::*;
+
+    /// One certificate's BSMs on the air at 10 Hz, each tagged with its generation time.
+    fn ring(times: &[SimTime]) -> VecDeque<(SimTime, Vec<u8>)> {
+        times
+            .iter()
+            .map(|t| (*t, t.to_be_bytes().to_vec()))
+            .collect()
+    }
+
+    fn tags(bsms: &[Vec<u8>]) -> Vec<SimTime> {
+        bsms.iter()
+            .map(|b| SimTime::from_be_bytes(b[..8].try_into().expect("8 bytes")))
+            .collect()
+    }
+
+    /// A report's evidence is the pair of BSMs its reporter judged ([SM-MBR] §2.3.1.2.1),
+    /// not the certificate's latest frames: the sender kept transmitting after the BSM the
+    /// reporter judged. Fault: take the ring's last entries (the old `Phase2::evidence`
+    /// behaviour) and the pair is (300, 400), not (100, 200).
+    #[test]
+    fn the_evidence_is_the_judged_pair_not_the_latest_on_the_air() {
+        let r = ring(&[100, 200, 300, 400]);
+        assert_eq!(tags(&judged_bsms(&r, Some(100), 200)), vec![100, 200]);
+        // A suite that names no predecessor: the BSM on the air just before the judged one.
+        assert_eq!(tags(&judged_bsms(&r, None, 300)), vec![200, 300]);
+        // The judged BSM no longer on hand: nothing, never a later BSM in its place.
+        assert!(judged_bsms(&r, Some(0), 50).is_empty());
+        // Its predecessor gone: the judged BSM alone, which a 1VInconsistent report
+        // cannot be filed with (`Phase2::real_mbr`).
+        assert_eq!(tags(&judged_bsms(&r, Some(50), 100)), vec![100]);
+        // A predecessor is one generated before the judged BSM, never after it.
+        assert_eq!(tags(&judged_bsms(&r, Some(400), 200)), vec![200]);
+    }
+}
+
+#[cfg(test)]
+mod settings_menu_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// `scenario` with `security.scms` (and, when given, `security.protocol`) set from JSON.
+    fn with_scms(scms: serde_json::Value, params: Option<serde_json::Value>) -> Scenario {
+        let mut s = Scenario::minimal();
+        s.security.scms = Some(serde_json::from_value(scms).expect("an ScmsSpec"));
+        if let Some(p) = params {
+            s.security.protocol = Some(
+                serde_json::from_value(json!({"id": CAMP_SCMS, "params": p}))
+                    .expect("a model choice"),
+            );
+        }
+        s
+    }
+
+    /// Each closed set the settings menu publishes is
+    /// exactly what its parser accepts: every member loads, the refused butterflies are
+    /// refused, and a value outside is refused with the same list in its message.
+    #[test]
+    fn the_published_sets_are_the_parsers_sets() {
+        for id in MA_MODE_IDS {
+            let mut prov = json!({"name": "provider-a", "ma_mode": id});
+            if id == "manual-review" {
+                prov["ma_review_s"] = json!(3_600.0);
+            }
+            let s = with_scms(
+                json!({"deployment": {"preset": "us-production-2025", "providers": [prov]}}),
+                None,
+            );
+            deployment_of(&s, true).unwrap_or_else(|e| panic!("ma_mode {id}: {e}"));
+        }
+        for id in LATENCY_IDS {
+            let s = with_scms(
+                json!({"deployment": {"preset": "us-production-2025", "latency": id}}),
+                None,
+            );
+            deployment_of(&s, true).unwrap_or_else(|e| panic!("latency {id}: {e}"));
+        }
+        for id in CHAIN_FILE_IDS {
+            let s = with_scms(json!({"chain_file": id}), None);
+            home_chain_file_of(&s).unwrap_or_else(|e| panic!("chain_file {id}: {e}"));
+        }
+        for id in BUTTERFLY_IDS {
+            v2xw_proto::scms::deployment::Deployment::butterfly(id)
+                .unwrap_or_else(|e| panic!("butterfly {id}: {e}"));
+        }
+        for id in REFUSED_BUTTERFLIES {
+            assert!(
+                v2xw_proto::scms::deployment::Deployment::butterfly(id).is_err(),
+                "butterfly {id} is published disabled but loads"
+            );
+        }
+        let s = with_scms(
+            json!({"deployment": {"preset": "us-production-2025", "latency": "nearest"}}),
+            None,
+        );
+        let msg = deployment_of(&s, true)
+            .expect_err("an unknown latency model")
+            .to_string();
+        assert!(msg.contains(&LATENCY_IDS.join(", ")), "{msg}");
+        let s = with_scms(json!({"chain_file": "nobody"}), None);
+        let msg = home_chain_file_of(&s)
+            .expect_err("an unknown scope")
+            .to_string();
+        assert!(msg.contains(&CHAIN_FILE_IDS.join(", ")), "{msg}");
+    }
+
+    /// The nine keys that were reachable only through `security.protocol.params`
+    /// do the same thing as typed `security.scms.lifecycle` fields, and the typed
+    /// field wins where both are written.
+    #[test]
+    fn the_promoted_lifecycle_keys_act_like_their_params_spelling() {
+        let keys = json!({
+            "ee_retry_timeout_s": 0.0, "ee_retry_max_per_hour": 3,
+            "crl_background_entries": 1234, "clock_skew_s": 2.5, "clock_skew_share": 0.25,
+            "root_rollover_at_s": 100.0, "root_removal_at_s": 200.0,
+            "peer_root_removal_at_s": 300.0,
+        });
+        let mut typed = keys.clone();
+        typed["modelled_reports"] = json!(true);
+        let mut params = keys;
+        params["modelled_reports"] = json!(1.0);
+        let a = with_scms(json!({"lifecycle": typed}), None);
+        let b = with_scms(json!({}), Some(params));
+        let pa = LifecycleParams::from_scenario(&a).expect("the typed fields load");
+        let pb = LifecycleParams::from_scenario(&b).expect("the params spelling loads");
+        let base = LifecycleParams::from_scenario(&Scenario::minimal()).expect("the default");
+        let view = |p: &LifecycleParams| {
+            (
+                p.scms.ee_retry_timeout,
+                p.scms.ee_retry_max_per_hour,
+                p.clock_skew_ns,
+                p.clock_skew_share.to_bits(),
+                p.root_rollover_at,
+                p.root_removal_at,
+                p.peer_root_removal_at,
+                p.modelled_reports,
+            )
+        };
+        assert_eq!(view(&pa), view(&pb));
+        assert_ne!(view(&pa), view(&base), "the keys must move the parameters");
+        assert_eq!(LifecycleParams::background_entries(&a), 1234);
+        assert_eq!(LifecycleParams::background_entries(&b), 1234);
+        let both = with_scms(
+            json!({"lifecycle": {"ee_retry_max_per_hour": 7}}),
+            Some(json!({"ee_retry_max_per_hour": 3})),
+        );
+        let p = LifecycleParams::from_scenario(&both).expect("loads");
+        assert_eq!(p.scms.ee_retry_max_per_hour, 7, "the typed field wins");
+        // Absent, every field serialises to nothing: no scenario hash moves.
+        let empty = serde_json::to_value(crate::scenario::schema::LifecycleSpec::default())
+            .expect("serialises");
+        assert_eq!(empty, json!({}));
+    }
+
+    /// The settings window's US banner: the default SCMS run is the US
+    /// system; each departure is named; a run on another protocol has no verdict.
+    #[test]
+    fn the_us_verdict_names_each_departure() {
+        let camp = |scms: serde_json::Value| {
+            let mut s = with_scms(scms, None);
+            s.security.protocol =
+                Some(serde_json::from_value(json!({"id": CAMP_SCMS})).expect("a choice"));
+            s
+        };
+        let us = us_system(&camp(json!({}))).expect("an SCMS run has a verdict");
+        assert_eq!(
+            us,
+            UsSystem {
+                is_us: true,
+                reasons: vec![]
+            }
+        );
+        let seven = us_system(&camp(json!({"deployment": {"preset": "us-production-2025",
+                                                          "electors": 7}})))
+        .expect("a verdict");
+        assert!(!seven.is_us);
+        assert!(
+            seven.reasons.iter().any(|r| r == "electors 7"),
+            "{:?}",
+            seven.reasons
+        );
+        let mut p384 = camp(json!({}));
+        p384.security.signature = "ecdsa-p384".into();
+        let v = us_system(&p384).expect("a verdict");
+        assert_eq!(v.reasons, vec!["signature ecdsa-p384".to_string()]);
+        let camp_ref = us_system(&camp(json!({"deployment": {"preset": "camp-reference"}})))
+            .expect("a verdict");
+        assert!(
+            camp_ref
+                .reasons
+                .iter()
+                .any(|r| r.contains("CAMP reference"))
+        );
+        assert_eq!(us_system(&Scenario::minimal()), None);
+    }
+}
+
+#[cfg(test)]
+mod info_status_tests {
+    use super::*;
+
+    /// The RA's side of an information-status poll, as a vehicle
+    /// meets it. A vehicle that joined with the RA's lists holds its status, so its poll is
+    /// answered 412; once a provider publishes, the RA answers with its signed
+    /// `CertificateManagementInformationStatusSpdu` (signed by the RA, `ra` present,
+    /// IEEE 1609.2.1 l.111 and l.337), and keeps answering it until the vehicle has
+    /// received one: a lost answer leaves its `If-Modified-Since` where it was.
+    ///
+    /// fault: `info_status_answer` records the status as the vehicle's on sending it (the
+    /// unverified wip's form) -> red (the poll after a lost answer is a 412).
+    #[test]
+    fn a_status_is_answered_until_the_vehicle_has_received_it() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        s.security
+            .scms
+            .get_or_insert_with(Default::default)
+            .crl_poll = Some("info-status".to_string());
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let mut p = Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend");
+        assert!(p.params.info_status_poll);
+        for run in &mut p.runs {
+            run.state.params.pdu.keep_bytes = true;
+        }
+        let node = NodeId::new(9_001);
+        p.nodes.insert(node, NodeSec::default());
+        p.prerun_crl(node, 0).expect("the t0 lists");
+        let (a, _) = p.info_status_answer(node, 1);
+        assert_eq!(a, None, "it joined with the RA's status: 412");
+        assert_eq!(p.report.info_status_sent, 0);
+        // Its provider publishes: the RA's status changes.
+        let h = p.provider_of_device(device_of(node));
+        let serial = p.runs[h].state.crl_store.versions;
+        p.crl_feeds[h].push(CrlVersion {
+            at: 0,
+            version: 1,
+            entries: Vec::new(),
+            secured: Vec::new(),
+            serial: serial + 1,
+        });
+        let (a, seen) = p.info_status_answer(node, 2);
+        let size = a.expect("a changed status is sent");
+        assert!(size > CRL_NOT_MODIFIED_BYTES, "{size} B: a signed SPDU");
+        // The answer is lost: the vehicle still has the old status, so it is sent again.
+        let (again, seen2) = p.info_status_answer(node, 3);
+        assert!(again.is_some(), "a lost status is answered again, not 412");
+        assert_eq!(seen, seen2);
+        assert_eq!(p.report.info_status_sent, 2);
+        p.info_status_received(node, seen2);
+        assert_eq!(p.info_status_answer(node, 4).0, None, "received: 412");
+        // What the RA sent: its signed status, as a vehicle opens it.
+        let run = &p.runs[h];
+        let sent: Vec<_> = run
+            .state
+            .pdus
+            .iter()
+            .filter(|e| e.kind == v2xw_proto::scms::pdu::SpduKind::InfoStatus)
+            .collect();
+        assert_eq!(sent.len(), 2, "each signed status is logged by the RA");
+        let pki = run.state.pki.clone().expect("the PDU layer is on");
+        for e in sent {
+            assert_eq!(e.from, run.state.nodes.ra.index());
+            let bytes = e.bytes.as_ref().expect("kept");
+            assert_eq!(bytes.len(), size);
+            let st = v2xw_proto::scms::pdu::open_info_status(bytes.bytes(), &pki)
+                .expect("an RA-signed status with its ra date");
+            assert!(st.ra.is_some());
+            assert_eq!(st.ctl.len(), 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod governance_schedule_tests {
+    use super::*;
+    use serde_json::json;
+    use v2xw_proto::scms::governance::{CtlChangeKind, review_vote_at};
+
+    const S: SimTime = 1_000_000_000;
+    const H24: SimTime = 24 * 3_600 * S;
+
+    fn phase2_with(lifecycle: serde_json::Value) -> Phase2 {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.actors.backend.protocol = Some(CAMP_SCMS.to_string());
+        s.security.protocol = Some(crate::scenario::ModelChoice {
+            id: CAMP_SCMS.to_string(),
+            params: serde_json::json!({}),
+        });
+        s.security.scms = Some(
+            serde_json::from_value(serde_json::json!({"lifecycle": lifecycle}))
+                .expect("an ScmsSpec"),
+        );
+        let engine = crate::Engine::build(s, "").expect("builds");
+        Phase2::build(engine.scenario(), engine.world())
+            .expect("builds")
+            .expect("an SCMS backend")
+    }
+
+    fn logged(p: &Phase2, kind: &str) -> usize {
+        p.home()
+            .state
+            .gov
+            .log
+            .iter()
+            .filter(|e| e.kind == kind)
+            .count()
+    }
+
+    /// Gov C-10: `ctl_genesis_sequence` reaches the ceremony. The grid starts on
+    /// 2027-03-04, so `auto` (and the default) is the production series' 1, and the
+    /// stated `0` (written as a bare number, as YAML allows) is 0. Fault: the typed word
+    /// not mapped to `ScmsParams::ctl_genesis_sequence`; the stated 0 is still 1.
+    #[test]
+    fn the_genesis_sequence_key_reaches_the_ceremony() {
+        let seq = |l: serde_json::Value| phase2_with(l).home().state.gov.ctl.sequence;
+        assert_eq!(seq(json!({})), 1, "by date: the 2027 run is in series 1");
+        assert_eq!(seq(json!({"ctl_genesis_sequence": "auto"})), 1);
+        assert_eq!(seq(json!({"ctl_genesis_sequence": 0})), 0, "stated 0");
+        assert_eq!(seq(json!({"ctl_genesis_sequence": "1"})), 1);
+        let mut s = Scenario::minimal();
+        s.security.scms = Some(
+            serde_json::from_value(json!({"lifecycle": {"ctl_genesis_sequence": "2"}}))
+                .expect("deserialises"),
+        );
+        let e = LifecycleParams::from_scenario(&s)
+            .expect_err("2 is no menu value")
+            .to_string();
+        assert!(e.contains("auto, 0, 1"), "{e}");
+    }
+
+    /// `elector_replacement_pq` reaches the
+    /// governance the ceremony builds. Fault: the word not mapped to
+    /// `ScmsParams::elector_replacement_pq`; `dual` is still classical.
+    #[test]
+    fn the_elector_replacement_key_reaches_the_governance() {
+        let mode = |l: serde_json::Value| phase2_with(l).home().state.gov.elector_replacement_pq();
+        assert_eq!(
+            mode(json!({})),
+            ElectorReplacementPq::Classical,
+            "off by default"
+        );
+        assert_eq!(
+            mode(json!({"elector_replacement_pq": "off"})),
+            ElectorReplacementPq::Classical
+        );
+        assert_eq!(
+            mode(json!({"elector_replacement_pq": "dual"})),
+            ElectorReplacementPq::Dual
+        );
+        let mut s = Scenario::minimal();
+        s.security.scms = Some(
+            serde_json::from_value(json!({"lifecycle": {"elector_replacement_pq": "pq"}}))
+                .expect("deserialises"),
+        );
+        let e = LifecycleParams::from_scenario(&s)
+            .expect_err("pq is no menu value")
+            .to_string();
+        assert!(e.contains("off, dual"), "{e}");
+    }
+
+    /// Gov G-2: under `eac_review: elector-policy` the governance times are
+    /// requests. The peer removal is logged as `eac-request` at its time and voted 24 h
+    /// later; the rollover is voted 10 Eastern business days after its request, and the
+    /// superseded root's removal, requested a second after it (its own 24 h vote long
+    /// before), waits for that vote. Fault: `eac_requests_due` not called; the peer root
+    /// is removed at the request instant.
+    #[test]
+    fn a_board_review_turns_the_governance_times_into_requests() {
+        let mut p = phase2_with(json!({"eac_review": "elector-policy"}));
+        assert!(p.params.eac_review, "the key reaches the parameters");
+        let t0 = 300 * S;
+        p.governance_due(t0 - 1);
+        let peer = p.runs[0].state.peer_pki[0].0.clone();
+        let peer_root = p.home().state.gov.root_of(&peer).expect("the peer's root");
+        p.params.peer_root_removal_at = Some(t0);
+        p.params.root_rollover_at = Some(t0);
+        p.params.root_removal_at = Some(t0 + S);
+        let decisions = p.report.gov_decisions;
+        p.governance_due(t0);
+        assert_eq!(
+            logged(&p, "eac-request"),
+            2,
+            "the peer removal and the rollover"
+        );
+        assert_eq!(
+            p.report.gov_decisions, decisions,
+            "nothing voted at a request"
+        );
+        assert!(p.home().state.gov.pending.is_empty());
+        assert_eq!(p.params.peer_root_removal_at, Some(t0 + H24));
+        let clock = p.home().state.gov.config.clock;
+        let rollover_vote = review_vote_at(CtlChangeKind::AddRoot, t0, clock);
+        assert!(
+            rollover_vote >= t0 + 12 * H24,
+            "10 business days, two weekends"
+        );
+        assert_eq!(p.params.root_rollover_at, Some(rollover_vote));
+        p.governance_due(t0 + S);
+        assert_eq!(
+            logged(&p, "eac-request"),
+            3,
+            "the superseded root's removal"
+        );
+        // Its own vote (t0 + 1 s + 24 h) comes before the rollover's: voted with it.
+        assert_eq!(p.params.root_removal_at, Some(rollover_vote));
+        // The peer removal's vote, 24 h after its request.
+        p.governance_due(t0 + H24);
+        assert_eq!(p.removed_peer, Some(1));
+        assert_eq!(p.report.gov_decisions, decisions + 1);
+        assert!(!p.home().state.gov.pending[0].1.roots.contains(&peer_root));
+        p.governance_due(t0 + S + H24);
+        assert_eq!(p.report.gov_decisions, decisions + 1, "the removal waits");
+        p.governance_due(rollover_vote);
+        assert_eq!(
+            p.report.gov_decisions,
+            decisions + 3,
+            "the rollover, then the removal it unblocks"
+        );
+        assert_eq!(p.report.gov_requests, 3);
+    }
+
+    /// The default (`eac_review` absent) keeps the times as the votes: nothing is
+    /// requested and the peer root is removed at its time.
+    #[test]
+    fn without_a_board_review_the_times_are_the_votes() {
+        let mut p = phase2_with(json!({}));
+        let t0 = 300 * S;
+        p.governance_due(t0 - 1);
+        p.params.peer_root_removal_at = Some(t0);
+        p.governance_due(t0);
+        assert_eq!(logged(&p, "eac-request"), 0);
+        assert_eq!(p.removed_peer, Some(1), "removed at its time");
+        assert_eq!(p.report.gov_requests, 0);
+    }
+
+    /// Gov L-8: `root_termination_notice_at_s` gives the peer provider's
+    /// notice, so a removal of its root 100 s later is refused and counted, and the root
+    /// stays approved; the same removal without a notice goes ahead. Fault: the notice
+    /// block skipped in `governance_due`; the removal goes ahead.
+    #[test]
+    fn a_termination_notice_refuses_an_early_peer_root_removal() {
+        // Inside the grid's 60 s run (the loader refuses a notice after it).
+        let mut p = phase2_with(json!({"root_termination_notice_at_s": 30}));
+        let t0 = 30 * S;
+        assert_eq!(p.params.root_termination_notice_at, Some(t0));
+        p.params.peer_root_removal_at = Some(t0 + 100 * S);
+        assert!(p.next_wake(t0 - 10 * S).is_some_and(|w| w <= t0), "a wake");
+        p.governance_due(t0);
+        assert_eq!(logged(&p, "provider-termination-notice"), 1);
+        assert_eq!(p.report.gov_termination_notices, 1);
+        p.governance_due(t0 + 100 * S);
+        assert_eq!(p.removed_peer, None, "refused before notice + 365 d");
+        assert_eq!(p.report().gov_root_removals_refused, 1);
+        assert!(p.home().state.gov.pending.is_empty(), "no CTL decided");
+
+        let mut q = phase2_with(json!({}));
+        q.params.peer_root_removal_at = Some(t0 + 100 * S);
+        q.governance_due(t0 + 100 * S);
+        assert_eq!(q.removed_peer, Some(1), "no notice: removed at once");
+        assert_eq!(q.report().gov_root_removals_refused, 0);
+    }
+
+    /// Gov G-10: with `test_ballot_interval_days`, a Test Ballot is held once
+    /// an elector has gone that long without signing (from its genesis signature here),
+    /// and the next one is a wake of its own, exactly an interval after the ballot.
+    /// Fault: the scheduler not called from `governance_due`; no ballot.
+    #[test]
+    fn a_test_ballot_is_held_when_an_elector_has_been_idle_for_the_interval() {
+        let mut p = phase2_with(json!({"test_ballot_interval_days": 90}));
+        let idle = 90 * 86_400 * S;
+        assert_eq!(p.params.test_ballot_interval, Some(idle));
+        p.governance_due(S);
+        assert_eq!(logged(&p, "eac-test-ballot"), 0, "not yet due");
+        let due = p
+            .test_ballot_at
+            .and_then(|(_, t)| t)
+            .expect("the next ballot instant");
+        let gov = &p.home().state.gov;
+        assert!(due <= idle + S, "from the genesis signatures ({due})");
+        assert!(!gov.test_ballot_due(due - 1, idle) && gov.test_ballot_due(due, idle));
+        assert!(
+            p.next_wake(S).is_some_and(|w| w <= due),
+            "offered as a wake"
+        );
+        p.governance_due(due - 1);
+        assert_eq!(logged(&p, "eac-test-ballot"), 0, "not before it");
+        p.governance_due(due);
+        assert_eq!(logged(&p, "eac-test-ballot"), 1, "one ballot at {due}");
+        assert_eq!(p.report().gov_test_ballots, 1);
+        assert_eq!(
+            p.test_ballot_at.and_then(|(_, t)| t),
+            Some(due + idle),
+            "the next one an interval later"
+        );
+        p.governance_due(due + 1);
+        assert_eq!(logged(&p, "eac-test-ballot"), 1, "once");
+        let off = phase2_with(json!({"test_ballot_interval_days": 0}));
+        assert_eq!(off.params.test_ballot_interval, None, "0 is off");
+    }
+
+    /// Proto H10 and B5 (§2.13): the report's `crl_index_exhausted` sums every
+    /// provider's deferred publications. Fault: the leaf read from the home provider only
+    /// (or not filled); 2 is missed.
+    #[test]
+    fn the_report_sums_the_crl_index_exhaustion_over_providers() {
+        let mut p = phase2_with(json!({}));
+        assert_eq!(p.report().crl_index_exhausted, 0);
+        p.runs[1].state.crlg.index_exhausted = 2;
+        p.runs[0].state.crlg.index_exhausted = 1;
+        assert_eq!(p.report().crl_index_exhausted, 3);
+        let r = p.report();
+        assert_eq!(
+            (r.ra_ack_requests, r.ra_ack_over_1s, r.ra_ack_p99_ms),
+            (0, 0, 0)
+        );
+    }
+}
+
+#[cfg(test)]
+mod dataset_ma_tests {
+    use super::*;
+
+    /// A decision cites only the reports its MA had received by the decision (r09 of the
+    /// first v1.1 recording: an MA's decision at 46.303 s listed reports received up to
+    /// 46.335 s, later in the same step). Fault: drop the time filter.
+    #[test]
+    fn a_decision_cites_only_reports_received_by_then() {
+        let h = |d: &str, t: SimTime| (d.to_string(), "r".to_string(), t);
+        let held = vec![h("a", 10), h("b", 20), h("c", 30)];
+        let cited: Vec<&str> = received_by(&held, 20)
+            .iter()
+            .map(|x| x.0.as_str())
+            .collect();
+        assert_eq!(cited, ["a", "b"]);
+        assert!(received_by(&held, 9).is_empty());
+    }
+
+    /// Two providers' CRLs issued in one step are written in issue order, each CRL's
+    /// entries in their own order (r09 of the first v1.1 recording: provider 0's CRL at
+    /// 46.398 s came before provider 1's at 46.334 s). Fault: drop the sort.
+    #[test]
+    fn crl_entries_are_written_in_issue_order() {
+        let e = |t: SimTime, n: u64| crate::dataset_records::CrlEntry {
+            t_issued: t,
+            crl_series: 1,
+            crl_number: n,
+            entry_kind: "linkage_seed".to_string(),
+            la_link: String::new(),
+            i_period: 0,
+            t_effective: t,
+            subject_cert_id: String::new(),
+        };
+        let mut crl = vec![e(46_397, 1), e(46_397, 2), e(46_333, 1), e(46_335, 2)];
+        in_issue_order(&mut crl);
+        let order: Vec<(SimTime, u64)> = crl.iter().map(|c| (c.t_issued, c.crl_number)).collect();
+        assert_eq!(order, [(46_333, 1), (46_335, 2), (46_397, 1), (46_397, 2)]);
+    }
+}

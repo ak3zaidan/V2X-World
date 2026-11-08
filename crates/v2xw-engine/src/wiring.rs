@@ -1,0 +1,5016 @@
+//! Composing the nine crates into one run.
+//!
+//! Every choice here is made from the scenario and nothing else, and every model that ends
+//! up in a run is registered first, so the manifest pins it. A
+//! model the scenario does not name is not silently defaulted to "something reasonable":
+//! the default is stated here, in one place, with its citation, and it is registered
+//! exactly like a named one so it appears in the manifest under its own id.
+//!
+//! # The credential bootstrap
+//!
+//! Enrolment and top-up belong in a `CredentialProtocol` plug-in, and
+//! `v2xw-node`'s own documentation says no such protocol ships yet. A node with no
+//! credential cannot sign, and `ObuRuntime::generate` correctly refuses to transmit rather
+//! than sending unsigned — so a run with no bootstrap produces no traffic at all.
+//!
+//! [`bootstrap_credentials`] gives a node the pool it left the factory with when no
+//! SCMS run issues one: [`BOOTSTRAP_PSEUDONYMS`] implicit pseudonym certificates (one RSU
+//! application certificate for a roadside unit) issued by the run's ACA through
+//! [`crate::credentials::CredentialFactory`], with real keys and linkage values. It does
+//! not model a request, a batch, a top-up latency or a provisioning failure; a scenario
+//! measuring provisioning runs the SCMS, whose certificates [`install_provisioned`]
+//! installs instead.
+
+use v2xw_core::geo::GeoOrigin;
+use v2xw_core::geom::Dims;
+use v2xw_core::ids::NodeId;
+use v2xw_core::registry::Registry;
+use v2xw_core::time::{Duration, SimTime, WallClock};
+use v2xw_core::weather::{SurfaceCondition, WeatherKind, WeatherState};
+use v2xw_mobility::{
+    Demand, GnssModel, Mobility, NativeMobility, NoDemand, PoissonDemand, VehicleClass,
+};
+use v2xw_msg::cam::ParticipantType;
+use v2xw_node::stores::{CredState, CredentialHandle, RotationPolicy, pseudo_signer};
+use v2xw_node::{
+    CryptoMode, NodeConfig, ObuRuntime, OnDemand, Prioritized, ServiceSet, VerificationPolicy,
+    VerifyAll,
+};
+use v2xw_sec::envelope::{EnvelopeProfile, SignerIdPolicy};
+use v2xw_world::{ImportOptions, World, WorldSource, WorldSourceSpec};
+
+use crate::adapters::{BoxedFading, BoxedPropagation};
+use crate::error::{EngineError, Result};
+use crate::scenario::Scenario;
+
+/// SAE J2945/1's maximum radiated power, `vRPMax`, dBm EIRP [Rostami 2018 Table 1].
+///
+/// Before `radio.devices` existed this was the transmit power of every node and the link
+/// budget added the antenna gain on top of it, counting the gain twice for a J2945/1
+/// radiated power. Congestion control now sets the radiated power and `radio.devices`
+/// the hardware's conducted power; this constant is kept for callers that name it.
+pub const TX_POWER_DBM: f64 = 20.0;
+
+/// Builds the world the scenario names.
+///
+/// # Errors
+/// [`EngineError::World`] if the source cannot be built or imported.
+pub fn build_world(scenario: &Scenario) -> Result<World> {
+    match scenario.world.cache.as_deref().map(str::trim) {
+        Some(dir) if !dir.is_empty() => cached_world(scenario, std::path::Path::new(dir)),
+        _ => import_world(scenario),
+    }
+}
+
+/// The importers' output revision, part of every [`world_cache_key`].
+///
+/// The workspace version never moves (it is `0.1.0` for every commit), so it cannot tell a
+/// cache written by an older importer from one written by this one. Bump this whenever an
+/// importer's output changes for the same inputs, or a kept cache entry replays the old
+/// world. Revision 2: the traffic track's OSM connector, stop-line setback, tunnel/bridge
+/// height and lane-pairing fixes changed the Manhattan world's content hash. Revision 3:
+/// the junction track's rounded lane corners and arc connectors, fork lane assignment,
+/// passage lanes and ITE change intervals changed it again. Revision 4: `footway=crossing`
+/// ways became crosswalk lanes and signalised junctions gained MUTCD pedestrian intervals
+/// (`v2xw_world::walk`). Revision 5: a procedural grid with no signals, no crossings and a
+/// freeway limit tags its streets `Motorway`, not `Residential`.
+pub const IMPORTER_REVISION: u32 = 5;
+
+/// The key a world is cached under: a digest of everything that decides what the import
+/// produces — the scenario's `world` section (less `cache` itself), the bytes of the source
+/// file and of the terrain raster when the scenario names them, and the importer's revision
+/// ([`IMPORTER_REVISION`]).
+///
+/// The source file's *content* is hashed, not its name or its modification time, so an
+/// edited extract is a different world and a copied one is the same world. Hashing a large
+/// extract costs a fraction of importing it, which is the whole trade.
+///
+/// # Errors
+/// [`EngineError::Scenario`] naming `world.source.path` or `world.terrain.dem` if the
+/// file it names cannot be read.
+pub fn world_cache_key(scenario: &Scenario) -> Result<String> {
+    let mut section = serde_json::to_value(&scenario.world).map_err(|e| {
+        EngineError::Scenario(crate::ScenarioError::conflict("world", e.to_string()))
+    })?;
+    if let Some(map) = section.as_object_mut() {
+        map.remove("cache");
+    }
+    let canonical = v2xw_core::hash::canonical_json(&section).map_err(|e| {
+        EngineError::Scenario(crate::ScenarioError::conflict("world", e.to_string()))
+    })?;
+    let mut material = format!(
+        "v2xw-world-cache/1 importer={IMPORTER_REVISION} workspace={} native=1\n",
+        env!("CARGO_PKG_VERSION")
+    )
+    .into_bytes();
+    material.extend_from_slice(&canonical);
+    if let Some(path) = section
+        .get("source")
+        .and_then(|s| s.get("path"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let bytes = std::fs::read(path).map_err(|e| {
+            EngineError::Scenario(crate::ScenarioError::conflict(
+                "world.source.path",
+                format!(
+                    "names the map {path}, which cannot be read: {e}. Put the OpenStreetMap \
+                     extract there, or point world.source.path at one that exists"
+                ),
+            ))
+        })?;
+        material.extend_from_slice(b"\nsource-sha256=");
+        material.extend_from_slice(v2xw_core::hash::sha256_hex(&bytes).as_bytes());
+    }
+    // The terrain raster is an input of the import too (`attach_terrain`): an edited DEM
+    // under the same name is a different world.
+    if let Some(path) = section
+        .get("terrain")
+        .and_then(|t| t.get("dem"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let bytes = std::fs::read(path).map_err(|e| {
+            EngineError::Scenario(crate::ScenarioError::conflict(
+                "world.terrain.dem",
+                format!(
+                    "names the terrain raster {path}, which cannot be read: {e}. Point it at \
+                     an SRTM .hgt tile or an ESRI ASCII grid, or set it to null for flat \
+                     ground"
+                ),
+            ))
+        })?;
+        material.extend_from_slice(b"\nterrain-sha256=");
+        material.extend_from_slice(v2xw_core::hash::sha256_hex(&bytes).as_bytes());
+    }
+    Ok(v2xw_core::hash::sha256_hex(&material))
+}
+
+/// `world.cache`: read the world from the cache directory when it is there, import it and
+/// write it there when it is not.
+///
+/// The cached form is `v2xw_world::serde_native`, whose round trip is exact — same content
+/// hash, same lane graph, same conflict matrices — so a cached run is the same run, and the
+/// determinism contract is untouched. An unreadable or corrupt cache entry is not an error:
+/// the world is imported again and the entry rewritten, because a cache must never be the
+/// reason a run does not start. The write goes to a temporary name and is renamed into
+/// place, so two runs filling the same entry cannot leave half a file behind.
+fn cached_world(scenario: &Scenario, dir: &std::path::Path) -> Result<World> {
+    let key = world_cache_key(scenario)?;
+    let entry = dir.join(format!("{key}.v2xwworld"));
+    if let Ok(bytes) = std::fs::read(&entry)
+        && let Ok(world) = v2xw_world::serde_native::from_bytes(&bytes)
+    {
+        return Ok(world);
+    }
+    let world = import_world(scenario)?;
+    if std::fs::create_dir_all(dir).is_ok()
+        && let Ok(bytes) = v2xw_world::serde_native::to_bytes(&world)
+    {
+        let partial = dir.join(format!("{key}.{}.partial", std::process::id()));
+        if std::fs::write(&partial, &bytes).is_ok() && std::fs::rename(&partial, &entry).is_err() {
+            let _ = std::fs::remove_file(&partial);
+        }
+    }
+    Ok(world)
+}
+
+/// Imports or generates the world the scenario names and attaches its terrain, with no
+/// cache.
+fn import_world(scenario: &Scenario) -> Result<World> {
+    let world = build_world_geometry(scenario)?;
+    attach_terrain(scenario, world)
+}
+
+/// Reads `world.terrain.dem`, when the scenario names one, and attaches it to the world.
+///
+/// The DEM is resampled onto the world's own frame and extent
+/// ([`v2xw_world::dem::import_terrain_for_world`]) and attached **without draping**
+/// ([`v2xw_world::DrapeOptions::none`]) unless `world.terrain.drape` asks for it
+/// ([`v2xw_world::DrapeOptions::all`]): undraped, lanes, junctions and buildings keep the
+/// `z` the importer gave them, and the terrain is what the radio's knife-edge diffraction
+/// reads as the ground between two antennas (`obstacle/terrain/knife-edge-p526`, composed by
+/// [`build_obstacles`]). An SRTM `.hgt` tile or an ESRI ASCII grid in geographic
+/// coordinates is read; the world's content hash then covers the grid.
+///
+/// # Errors
+/// [`EngineError::World`] if the file cannot be read or does not cover a usable grid.
+fn attach_terrain(scenario: &Scenario, world: World) -> Result<World> {
+    let Some(path) = scenario.world.terrain.dem.as_deref() else {
+        return Ok(world);
+    };
+    let (terrain, report) =
+        v2xw_world::dem::import_terrain_for_world(&world, path, &v2xw_world::DemOptions::default())
+            .map_err(|e| terrain_error(path, e))?;
+    // `world.terrain.drape` lays the geometry on the grid; off, nothing moves.
+    let drape = if scenario.world.terrain.drape {
+        v2xw_world::DrapeOptions::all()
+    } else {
+        v2xw_world::DrapeOptions::none()
+    };
+    let (world, _drape) = v2xw_world::dem::with_terrain(&world, terrain, &drape, &report)?;
+    Ok(world)
+}
+
+/// Whether a world error is about the input the user named — the file, its contents, a
+/// parameter — rather than about the importer's own output. Only these are reported
+/// against a setting; the rest (a dangling id, a broken invariant) are the importer's
+/// fault and stay [`EngineError::World`].
+fn is_input_error(e: &v2xw_world::WorldError) -> bool {
+    use v2xw_world::WorldError as W;
+    matches!(
+        e,
+        W::Io(_)
+            | W::Malformed { .. }
+            | W::InvalidParameter { .. }
+            | W::UnsupportedSource { .. }
+            | W::UnknownSource { .. }
+            | W::Json(_)
+    )
+}
+
+/// An import failure caused by `world.source`, reported against it.
+fn source_error(scenario: &Scenario, e: v2xw_world::WorldError) -> EngineError {
+    if !is_input_error(&e) {
+        return EngineError::World(e);
+    }
+    let (field, what) = match &scenario.world.source {
+        WorldSourceSpec::OsmXml { path, .. } => ("world.source.path", format!("the map {path}")),
+        other => ("world.source", other.label()),
+    };
+    EngineError::Scenario(crate::ScenarioError::conflict(
+        field,
+        format!(
+            "{what} could not be imported: {e}. Check that the file is an OpenStreetMap XML \
+             extract and that world.source.bbox overlaps it"
+        ),
+    ))
+}
+
+/// A terrain failure caused by `world.terrain.dem`, reported against it.
+fn terrain_error(path: &str, e: v2xw_world::WorldError) -> EngineError {
+    if !is_input_error(&e) {
+        return EngineError::World(e);
+    }
+    EngineError::Scenario(crate::ScenarioError::conflict(
+        "world.terrain.dem",
+        format!(
+            "the terrain raster {path} could not be used: {e}. Point it at an SRTM .hgt tile \
+             or an ESRI ASCII grid covering the world, or set it to null for flat ground"
+        ),
+    ))
+}
+
+fn build_world_geometry(scenario: &Scenario) -> Result<World> {
+    let opts = ImportOptions::default().imported_at(scenario.world.imported_at.clone());
+    let opts = ImportOptions {
+        keep_building_holes: scenario.world.buildings.keep_holes,
+        metres_per_level: scenario
+            .world
+            .buildings
+            .metres_per_level
+            .unwrap_or(opts.metres_per_level),
+        ..opts
+    };
+    match &scenario.world.source {
+        WorldSourceSpec::Procedural { generator, .. }
+            if generator == v2xw_world::procedural::radial::MODEL_ID =>
+        {
+            let radial = crate::scenario::validate::radial_params(scenario)?;
+            Ok(v2xw_world::procedural::radial::radial(&radial, &opts)?)
+        }
+        WorldSourceSpec::Procedural { .. } => {
+            let grid = crate::scenario::validate::grid_params(scenario)?;
+            Ok(v2xw_world::procedural::grid(&grid, &opts)?)
+        }
+        spec @ WorldSourceSpec::OsmXml { bbox, .. } => {
+            // The importer has no default class-default preset on purpose: a fallback
+            // speed limit is a jurisdictional fact, so the scenario must state it. Refuse
+            // with the field name rather than guessing, which is what the importer itself
+            // would do one layer down.
+            let preset = scenario.world.highway_preset.ok_or_else(|| {
+                EngineError::Scenario(crate::ScenarioError::conflict(
+                    "world.highway_preset",
+                    "an osm-xml world needs an explicit highway=* class-default preset, \
+                     because a fallback speed limit is a statement about a jurisdiction; \
+                     select one of: sumo-german, urban-us-nyc, urban-us-portland, urban-de, or \
+                     urban-us-<state> (urban-us-tx, urban-us-ca, ...)",
+                ))
+            })?;
+            let mut osm = v2xw_world::osm::OsmOptions {
+                import: opts.clone(),
+                ..Default::default()
+            }
+            .highway_preset(preset);
+            osm.layers.service = scenario.world.service_roads;
+            osm.vegetation = scenario.world.vegetation;
+            osm.signals.coordinate = scenario.world.signals.coordinate;
+            osm.signals.progression_speed_mps = scenario.world.signals.progression_speed_mps;
+            // traffic audit: the synthesised plans' timing (`world.signals`).
+            let ws = &scenario.world.signals;
+            if let Some(v) = ws.cycle_s {
+                osm.signals.cycle_s = v;
+            }
+            if let Some(v) = ws.all_red_s {
+                osm.signals.all_red_s = v;
+            }
+            if let Some(v) = ws.pedestrian_walk_s {
+                osm.signals.pedestrian_walk_s = v;
+            }
+            if let Some(v) = ws.pedestrian_speed_mps {
+                osm.signals.pedestrian_speed_mps = v;
+            }
+            if let Some(v) = ws.join_m {
+                osm.signals.join_m = v;
+            }
+            if let Some(b) = bbox {
+                osm = osm.bbox(*b);
+            }
+            let source = v2xw_world::osm::OsmSource::with_options(osm);
+            source
+                .build(spec, &opts)
+                .map_err(|e| source_error(scenario, e))
+        }
+        spec @ WorldSourceSpec::SumoNet { .. } => {
+            let options = v2xw_world::sumo::SumoOptions {
+                import: opts.clone(),
+                signal_programmes: scenario.world.sumo.signal_programmes,
+                ..v2xw_world::sumo::SumoOptions::default()
+            };
+            v2xw_world::sumo::SumoSource::with_options(options)
+                .build(spec, &opts)
+                .map_err(|e| source_error(scenario, e))
+        }
+        other => {
+            // Any remaining source is another importer's. `GridSource` refuses what it
+            // does not know rather than pretending, which is the error the caller sees
+            // (the loader refuses these kinds first, by name).
+            let source = v2xw_world::procedural::GridSource::new();
+            source
+                .build(other, &opts)
+                .map_err(|e| source_error(scenario, e))
+        }
+    }
+}
+
+/// Registers every model a run can select, so the manifest pins all of them.
+///
+/// # Errors
+/// [`EngineError::Registry`] if a card fails validation or two models share an id.
+pub fn register_all(registry: &mut Registry) -> Result<()> {
+    v2xw_node::register_all(registry)?;
+    // The message generators, the two network layers and the fragmenters: the models the
+    // `messages.generator`, `net.layer` and `net.fragmenter` keys choose between. Without
+    // them the page's choice lists for those keys were empty and the manifest pinned none
+    // of the models that framed and paced every frame of the run.
+    let extra: Vec<v2xw_core::card::ModelCard> = vec![
+        v2xw_core::model::Model::card(&v2xw_msg::generator::BsmGenerator::default()).clone(),
+        v2xw_core::model::Model::card(&v2xw_msg::generator::CamGenerator::default()).clone(),
+        v2xw_core::model::Model::card(&v2xw_net::WsmpNetLayer::default()).clone(),
+        v2xw_core::model::Model::card(&v2xw_net::GnBtpNetLayer::default()).clone(),
+        v2xw_core::model::Model::card(&v2xw_net::NoneFragmenter::default()).clone(),
+        v2xw_core::model::Model::card(&v2xw_net::GenericSduFragmenter::default()).clone(),
+        v2xw_core::model::Model::card(&v2xw_net::FacilitiesSegmentation::default()).clone(),
+        v2xw_core::model::Model::card(&v2xw_net::CertCyclePartialHybrid::default()).clone(),
+        // The three 802.11p congestion controls `radio.models.dcc` chooses between, and
+        // SAE J3161/1's rate control on an LTE-V2X sidelink.
+        v2xw_core::model::Model::card(&v2xw_radio::SaeJ2945Dcc::new()).clone(),
+        v2xw_core::model::Model::card(&v2xw_radio::SaeJ2945Dcc::j3161()).clone(),
+        // The vehicle antenna patterns `radio.devices.obu.antenna_pattern` applies.
+        v2xw_radio::antenna::card(),
+        v2xw_core::model::Model::card(&v2xw_radio::AdaptiveDcc::new()).clone(),
+        v2xw_core::model::Model::card(&v2xw_radio::ReactiveDcc::new()).clone(),
+    ];
+    for card in extra {
+        if !registry.contains(&card.id) {
+            registry.register(card)?;
+        }
+    }
+    for (_, card) in v2xw_mobility::model_cards() {
+        // A card already registered by another crate is not an error here: two crates may
+        // legitimately publish the same model. `register` refuses a *different* card under
+        // the same id, which is the case worth failing on.
+        if !registry.contains(&card.id) {
+            registry.register(card.clone())?;
+        }
+    }
+    Ok(())
+}
+
+/// The mobility provider the scenario names.
+pub fn build_mobility(scenario: &Scenario) -> Box<dyn Mobility> {
+    Box::new(native_mobility(scenario))
+}
+
+/// The mobility provider the scenario names, on its world: SUMO over TraCI when
+/// `mobility.provider` is `sumo` (`v2xw_interop::sumo`), the native engine otherwise.
+///
+/// # Errors
+/// `mobility.provider: sumo` on a world that is not a `sumo-net` import, or with no SUMO
+/// installation to be found.
+pub fn build_mobility_for(scenario: &Scenario, world: &World) -> Result<Box<dyn Mobility>> {
+    let Some(spec) = scenario.mobility.as_ref().filter(|m| m.provider == "sumo") else {
+        return Ok(build_mobility(scenario));
+    };
+    let conflict = |what: String| {
+        EngineError::Scenario(crate::ScenarioError::conflict("mobility.provider", what))
+    };
+    let WorldSourceSpec::SumoNet { path } = &scenario.world.source else {
+        return Err(conflict(
+            "SUMO can drive the traffic only on the network it runs: set world.source to \
+             { kind: sumo-net, path: <the .net.xml> }"
+                .to_string(),
+        ));
+    };
+    let home = spec
+        .sumo_home
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .or_else(v2xw_interop::sumo_home)
+        .ok_or_else(|| {
+            conflict(
+                "no SUMO installation found: set mobility.sumo_home, $SUMO_HOME or \
+                 $V2XW_SUMO_VENV (pip install eclipse-sumo)"
+                    .to_string(),
+            )
+        })?;
+    let mut cfg = v2xw_interop::sumo::SumoConfig::new(&home, path);
+    cfg.route_files = spec
+        .route_files
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    cfg.extra_args = spec.sumo_args.clone();
+    cfg.seed = scenario.seed;
+    cfg.shift_m = sumo_shift(world);
+    Ok(Box::new(v2xw_interop::sumo::SumoMobility::new(
+        cfg,
+        v2xw_interop::SumoIds::new(world),
+    )))
+}
+
+/// The translation the SUMO importer applied (its `frame` transformation in the world's
+/// provenance), `(0, 0)` when there is none.
+pub(crate) fn sumo_shift(world: &World) -> (f64, f64) {
+    let get = |key: &str| {
+        world
+            .provenance
+            .transformations
+            .iter()
+            .find(|t| t.name == "frame")
+            .and_then(|t| t.params.get(key))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0)
+    };
+    (get("shift_x_m"), get("shift_y_m"))
+}
+
+/// The native mobility engine exactly as [`build_mobility`] configures it, as its concrete
+/// type — what the traffic-invariant auditor (`examples/traffic_audit.rs`) steps, so the
+/// run it audits is the run the kernel would drive.
+pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
+    // The jurisdiction's rules of the road come with the highway preset that names it
+    // (`v2xw_mobility::rules`): New York City prohibits a right turn on red unless signed.
+    let rules = v2xw_mobility::rules::TrafficRules::of_highway_preset(
+        scenario.world.highway_preset.map(|p| p.label()),
+    );
+    let vru = &scenario.actors.vru;
+    let mut params = rules.apply(v2xw_mobility::EngineParams {
+        step: scenario.time.mobility_step(),
+        ..v2xw_mobility::EngineParams::default()
+    });
+    if let Some(share) = vru.ebike_share {
+        params.cyclists.ebike_share = share;
+    }
+    // The traffic section (`scenario.traffic`): each field overrides the jurisdiction's
+    // rule or the engine default it names; absent, the defaults stand (gridlock resolution
+    // at SUMO's 300 s).
+    let traffic = scenario.traffic.clone().unwrap_or_default();
+    if let Some(rtor) = traffic.right_turn_on_red {
+        params.right_turn_on_red = rtor;
+    }
+    params.dynamic_rerouting = traffic.dynamic_rerouting;
+    params.reroute_period_s = traffic.reroute_period_s.max(0.0);
+    if let Some(share) = traffic.reroute_share {
+        params.reroute_share = share.clamp(0.0, 1.0);
+    }
+    if let Some(source) = traffic.reroute_source {
+        params.reroute_source = source;
+    }
+    if let Some(v) = traffic.depart_at_speed {
+        params.depart_at_speed = v;
+    }
+    params.lane_changes = traffic.lane_changes;
+    params.strategic_lane_choice = traffic.strategic_lane_choice;
+    params.junction_clearance = traffic.keep_junctions_clear;
+    params.time_to_teleport_s = traffic.gridlock_timeout_s.max(0.0);
+    // How human the drivers are (`actors.vehicles.drivers`, `v2xw_mobility::drivers`).
+    let drivers = &scenario.actors.vehicles.drivers;
+    params.human = drivers.human_params();
+    if drivers.realism == crate::scenario::schema::DriverRealism::Identical {
+        params.driver_heterogeneity = false;
+        params.driver_styles = false;
+    }
+    // Kerbside stops follow the jurisdiction too: New York City has its taxis
+    // (`v2xw_mobility::kerbside`).
+    params.kerbside = v2xw_mobility::kerbside::KerbsideParams::for_highway_preset(
+        scenario.world.highway_preset.map(|p| p.label()),
+    );
+    // traffic audit: junction behaviour, kerbside stops and the drivers' speed and
+    // reaction (each unset field keeps the default above).
+    if let Some(v) = traffic.critical_gap_factor {
+        params.critical_gap_factor = v;
+    }
+    if let Some(v) = traffic.permitted_left_gap_s {
+        params.permitted_left_critical_headway_s = v;
+    }
+    if let Some(v) = traffic.turn_lateral_accel_mps2 {
+        params.turn_lateral_accel_mps2 = v;
+    }
+    if let Some(v) = traffic.turn_curve_window_m {
+        params.turn_curve_window_m = v;
+    }
+    if let Some(v) = traffic.heavy_vehicle_gap_terms {
+        params.heavy_vehicle_gap_terms = v;
+    }
+    // Per-driver critical gaps, junction impatience and the permissive sneakers.
+    if let Some(v) = traffic.critical_gap_cv {
+        params.junction_patience.critical_gap_cv = v;
+    }
+    if let Some(v) = traffic.time_to_impatience_s {
+        params.junction_patience.time_to_impatience_s = v;
+    }
+    if let Some(v) = traffic.impatience_gap_floor {
+        params.junction_patience.floor_ratio = v;
+    }
+    if let Some(v) = traffic.impatience_foe_braking {
+        params.junction_patience.foe_braking = v;
+    }
+    if let Some(v) = traffic.permissive_sneakers {
+        params.permissive_sneakers = v;
+    }
+    if let Some(v) = traffic.standing_leader_stop {
+        params.standing_leader_stop = v;
+    }
+    if let Some(v) = traffic.depart_speed_max {
+        params.depart_speed_max = v;
+    }
+    if let Some(v) = traffic.lane_bend_speed {
+        params.lane_bend_speed = v;
+    }
+    if let Some(d) = traffic.vehicle_dynamics {
+        params.vehicle_dynamics = d.params();
+    }
+    if let Some(y) = traffic.emergency_yield {
+        params.emergency_yield = y.apply(params.emergency_yield);
+    }
+    // SUMO LC2013's motivations: any lc_* field switches them on; the unset ones take
+    // SUMO's default of 1 (`v2xw_mobility::lanechange::lc2013`).
+    if traffic.lc_strategic.is_some()
+        || traffic.lc_cooperative.is_some()
+        || traffic.lc_speed_gain.is_some()
+        || traffic.lc_keep_right.is_some()
+    {
+        let d = v2xw_mobility::lanechange::lc2013::Lc2013Params::default();
+        params.lc2013 = Some(v2xw_mobility::lanechange::lc2013::Lc2013Params {
+            strategic: traffic.lc_strategic.unwrap_or(d.strategic),
+            cooperative: traffic.lc_cooperative.unwrap_or(d.cooperative),
+            speed_gain: traffic.lc_speed_gain.unwrap_or(d.speed_gain),
+            keep_right: traffic.lc_keep_right.unwrap_or(d.keep_right),
+        });
+    }
+    if let Some(k) = &traffic.kerbside {
+        params.kerbside = k.apply(params.kerbside);
+    }
+    if let Some(v) = drivers.speed_factor {
+        params.speed_factor_mean = v;
+    }
+    if let Some(v) = drivers.speed_spread {
+        params.speed_spread = v;
+    }
+    if let Some(v) = drivers.red_runner_share {
+        params.red_runner_share = v;
+    }
+    if let Some(v) = &drivers.violations {
+        params.violations = v.params();
+    }
+    if let Some(v) = drivers.start_reaction_s {
+        params.start_reaction_median_s = v;
+    }
+    if let Some(v) = drivers.queue_start_delay_s {
+        params.queue_start_delay_median_s = v;
+    }
+    let mut people = match vru.behaviour {
+        crate::scenario::schema::VruBehaviour::Observed => {
+            v2xw_mobility::SocialForceParams::observed()
+        }
+        crate::scenario::schema::VruBehaviour::Document => {
+            v2xw_mobility::SocialForceParams::default()
+        }
+    };
+    if let Some(rate) = vru.midblock_rate_per_100m {
+        people.midblock.rate_per_100m = rate;
+    }
+    if let Some(share) = vru.red_crossing_share {
+        people.red_crossing_share = share;
+    }
+    if let Some(margin) = vru.crossing_gap_margin_s {
+        people.gap_margin_s = margin;
+    }
+    if let Some(speed) = vru.walking_speed_mps {
+        // Every mean moves by the same ratio, so the age mix keeps its spread.
+        let k = speed / people.younger_speed_mean_mps;
+        people.younger_speed_mean_mps = speed;
+        people.older_speed_mean_mps *= k;
+        people.desired_speed_mean_mps = speed;
+    }
+    let mut mobility = crate::driving::native_with_driving(scenario, params, &rules);
+    if vru.pedestrians > 0 {
+        mobility = mobility.with_vru(v2xw_mobility::SocialForce::new(people));
+    }
+    mobility.with_vru_population(v2xw_mobility::engine::VruPopulation {
+        pedestrians: vru.pedestrians,
+        cyclists: vru.cyclists,
+    })
+}
+
+/// The population law drivers' traits are drawn under: `actors.vehicles.drivers`' speed
+/// factor, speed spread and reactions over the mobility crate's defaults. The queue tier
+/// (`scale.traffic.model: mobility/meso/queue`) draws with it; the microscopic engine reads the
+/// same four fields from its own parameters.
+#[must_use]
+pub fn trait_law(scenario: &Scenario) -> v2xw_mobility::engine::TraitLaw {
+    let d = &scenario.actors.vehicles.drivers;
+    let base = v2xw_mobility::engine::TraitLaw::default();
+    v2xw_mobility::engine::TraitLaw {
+        speed_factor_mean: d.speed_factor.unwrap_or(base.speed_factor_mean),
+        speed_spread: d.speed_spread.unwrap_or(base.speed_spread),
+        reaction_median_s: d.start_reaction_s.unwrap_or(base.reaction_median_s),
+        follow_median_s: d.queue_start_delay_s.unwrap_or(base.follow_median_s),
+    }
+}
+
+/// True for the classes `actors.vru` populates: whether an actor carries a device is drawn
+/// with `actors.vru.device_fraction` for these and `actors.vehicles.equipped_fraction` for
+/// every other class.
+pub const fn is_vru_class(class: VehicleClass) -> bool {
+    matches!(class, VehicleClass::Pedestrian | VehicleClass::Bicycle)
+}
+
+/// The demand models a scenario may name in `actors.vehicles.demand.kind`.
+///
+/// `mobility/demand/poisson` is the scenario spelling of the thinned-Poisson model, whose
+/// card id is `mobility/demand/poisson-thinned`; both are accepted.
+///
+/// The next seven are the `v2xw-demand` crate's ([`v2xw_demand::scenario::KINDS`]): saved
+/// routes, trip files, OD matrices, link counts, GTFS transit, trip purposes and a
+/// composite of several. The last is a SUMO `.rou.xml` imported whole
+/// ([`v2xw_interop::routes`]), on a world read from the `net.xml` it was written for.
+pub const DEMAND_KINDS: [&str; 12] = [
+    "mobility/demand/none",
+    "mobility/demand/poisson",
+    v2xw_mobility::demand::poisson::MODEL_ID,
+    v2xw_mobility::demand::tr36885::MODEL_ID,
+    v2xw_demand::scenario::KINDS[0],
+    v2xw_demand::scenario::KINDS[1],
+    v2xw_demand::scenario::KINDS[2],
+    v2xw_demand::scenario::KINDS[3],
+    v2xw_demand::scenario::KINDS[4],
+    v2xw_demand::scenario::KINDS[5],
+    v2xw_demand::scenario::KINDS[6],
+    v2xw_interop::routes::MODEL_ID,
+];
+
+/// The parameters of `mobility/demand/sumo-rou`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SumoRouParams {
+    /// The `.rou.xml` file.
+    path: std::path::PathBuf,
+    /// `bernoulli` (SUMO's definition, the default) or `equal-spacing` (the mean rate
+    /// without the variance).
+    #[serde(default)]
+    probability_flows: Option<String>,
+}
+
+/// The vehicle classes `actors.vehicles.classes` may name: the motorised ones. A cyclist
+/// or a pedestrian is a vulnerable road user and belongs in `actors.vru`.
+pub fn vehicle_class_named(name: &str) -> Option<VehicleClass> {
+    VehicleClass::ALL
+        .into_iter()
+        .find(|c| c.as_str() == name)
+        .filter(|c| !matches!(c, VehicleClass::Bicycle | VehicleClass::Pedestrian))
+}
+
+/// The thinned-Poisson model's parameters from `actors.vehicles.demand.params`: its own
+/// struct plus an optional `od` object. One parse for the loader's check
+/// ([`demand_params_problem`]) and for [`build_demand`], so `v2xw validate` refuses
+/// exactly what `v2xw run` would.
+fn poisson_params(
+    params: &serde_json::Value,
+) -> std::result::Result<
+    (
+        v2xw_mobility::demand::PoissonParams,
+        v2xw_mobility::demand::OdParams,
+    ),
+    (&'static str, String),
+> {
+    let mut raw = if params.is_null() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        params.clone()
+    };
+    let od: v2xw_mobility::demand::OdParams = match raw.as_object_mut().and_then(|m| m.remove("od"))
+    {
+        Some(v) => {
+            serde_json::from_value(v).map_err(|e| ("origin-destination law", e.to_string()))?
+        }
+        None => v2xw_mobility::demand::OdParams::default(),
+    };
+    let p =
+        serde_json::from_value(raw).map_err(|e| ("thinned-Poisson demand model", e.to_string()))?;
+    Ok((p, od))
+}
+
+/// The TR 36.885 drop model's parameters (null is its defaults).
+fn drop_params(
+    params: &serde_json::Value,
+) -> std::result::Result<v2xw_mobility::demand::DropParams, (&'static str, String)> {
+    if params.is_null() {
+        return Ok(v2xw_mobility::demand::DropParams::default());
+    }
+    serde_json::from_value(params.clone()).map_err(|e| ("TR 36.885 drop model", e.to_string()))
+}
+
+/// The SUMO route-file import's parameters and its flow law.
+fn sumo_rou_params(
+    params: &serde_json::Value,
+) -> std::result::Result<
+    (SumoRouParams, v2xw_interop::routes::ProbabilityFlows),
+    (&'static str, String),
+> {
+    use v2xw_interop::routes::ProbabilityFlows;
+    const WHAT: &str = "SUMO route-file import";
+    let p: SumoRouParams =
+        serde_json::from_value(params.clone()).map_err(|e| (WHAT, e.to_string()))?;
+    let flows = match p.probability_flows.as_deref() {
+        None | Some("bernoulli") => ProbabilityFlows::Bernoulli,
+        Some("equal-spacing") => ProbabilityFlows::EqualSpacing,
+        Some(o) => {
+            return Err((
+                WHAT,
+                format!("probability_flows '{o}' is neither bernoulli nor equal-spacing"),
+            ));
+        }
+    };
+    Ok((p, flows))
+}
+
+/// Whether `actors.vehicles.demand.params` fits the parameter struct of the model its
+/// `kind` names, checked without the world: the message [`build_demand`] would refuse the
+/// run with, or `None`. The `v2xw-demand` kinds (GTFS, OD tables, composites) are checked
+/// by their crate's own parse (`v2xw_demand::scenario::check_params`); the files they name
+/// and their fit to the world are checked when the run builds them, and an unknown kind is
+/// refused by name elsewhere.
+pub(crate) fn demand_params_problem(scenario: &Scenario) -> Option<String> {
+    let d = &scenario.actors.vehicles.demand;
+    let k = d.kind.as_str();
+    if v2xw_demand::scenario::KINDS.contains(&k) {
+        return v2xw_demand::scenario::check_params(k, &d.params)
+            .err()
+            .map(|e| e.to_string());
+    }
+    let r = if k == "mobility/demand/none" || !DEMAND_KINDS.contains(&k) {
+        Ok(())
+    } else if k == v2xw_interop::routes::MODEL_ID {
+        sumo_rou_params(&d.params).map(|_| ())
+    } else if k == v2xw_mobility::demand::tr36885::MODEL_ID {
+        drop_params(&d.params).map(|_| ())
+    } else {
+        poisson_params(&d.params).map(|_| ())
+    };
+    r.err()
+        .map(|(what, e)| format!("does not fit the {what}'s parameters: {e}"))
+}
+
+/// The demand model the scenario names.
+///
+/// * `mobility/demand/none` — nothing arrives.
+/// * `mobility/demand/poisson` (or `…/poisson-thinned`) — the thinned-Poisson model;
+///   `params` is its own parameter struct plus an optional `od` object for the
+///   origin-destination law ([`v2xw_mobility::demand::OdParams`]).
+/// * `mobility/demand/tr36885-drop` — the 3GPP TR 36.885 vehicle drop; `params` is its
+///   [`v2xw_mobility::demand::DropParams`].
+///
+/// `actors.vehicles.classes`, when given, is the fleet mix: its shares replace the Poisson
+/// model's `fleet` preset, and a single class sets the drop model's class.
+///
+/// # Errors
+/// [`EngineError::Scenario`] if `params` does not fit the model, and
+/// [`EngineError::Mobility`] if the world admits no trip the demand model could place.
+pub fn build_demand(scenario: &Scenario, world: &World) -> Result<Box<dyn Demand>> {
+    let d = &scenario.actors.vehicles.demand;
+    let bad = |what: &str, e: String| {
+        EngineError::Scenario(crate::ScenarioError::conflict(
+            "actors.vehicles.demand.params",
+            format!("does not fit the {what}'s parameters: {e}"),
+        ))
+    };
+    let shares: Vec<(VehicleClass, f64)> = scenario
+        .actors
+        .vehicles
+        .classes
+        .iter()
+        .filter_map(|(name, c)| vehicle_class_named(name).map(|class| (class, c.fraction)))
+        .collect();
+    match d.kind.as_str() {
+        "mobility/demand/none" => Ok(Box::new(NoDemand::new())),
+        // A SUMO route file, every vehicle driven by its own vType. Draws are keyed by the
+        // scenario seed.
+        k if k == v2xw_interop::routes::MODEL_ID => {
+            use v2xw_interop::routes::{ImportOptions, RouteFile, RouteFileDemand};
+            let (p, probability_flows) =
+                sumo_rou_params(&d.params).map_err(|(what, e)| bad(what, e))?;
+            let opts = ImportOptions {
+                seed: scenario.seed,
+                probability_flows,
+            };
+            let file = RouteFile::read_with(&p.path, &opts)
+                .map_err(|e| bad("SUMO route-file import", e))?;
+            Ok(Box::new(RouteFileDemand::new(file)))
+        }
+        // The demand-and-route-choice crate's kinds: everything it needs from the scenario
+        // is in the context, and its errors name the parameter that is wrong.
+        k if v2xw_demand::scenario::KINDS.contains(&k) => {
+            // A composite may hold this engine's own kinds (Poisson cars beside GTFS
+            // buses); it builds them through this function, on a copy of the scenario that
+            // names the part.
+            let other = |kind: &str,
+                         params: &serde_json::Value,
+                         rate: Option<f64>|
+             -> std::result::Result<Box<dyn Demand>, String> {
+                if !DEMAND_KINDS.contains(&kind) {
+                    return Err(format!(
+                        "'{kind}' is not a demand model this build ships; use one of {}",
+                        DEMAND_KINDS.join(", ")
+                    ));
+                }
+                let mut part = scenario.clone();
+                part.actors.vehicles.demand.kind = kind.to_string();
+                part.actors.vehicles.demand.params = params.clone();
+                part.actors.vehicles.demand.rate_veh_per_h = rate;
+                build_demand(&part, world).map_err(|e| e.to_string())
+            };
+            let ctx = v2xw_demand::scenario::BuildContext {
+                world,
+                seed: scenario.seed,
+                t0: scenario.time.t0.clone(),
+                duration_s: scenario.time.duration_s,
+                fleet: shares.clone(),
+                other: Some(&other),
+            };
+            v2xw_demand::scenario::build(k, &d.params, &ctx).map_err(|e| {
+                EngineError::Scenario(crate::ScenarioError::conflict(
+                    "actors.vehicles.demand.params",
+                    e.to_string(),
+                ))
+            })
+        }
+        k if k == v2xw_mobility::demand::tr36885::MODEL_ID => {
+            let mut params = drop_params(&d.params).map_err(|(what, e)| bad(what, e))?;
+            if let [(class, _)] = shares.as_slice() {
+                params.class = *class;
+            }
+            Ok(Box::new(v2xw_mobility::demand::DropModel::new(params)))
+        }
+        _ => {
+            // `params` is the model's own parameter struct, so a scenario reaches every
+            // field the demand model publishes — including `max_total_vehicles`, the only
+            // way to ask for an exact fleet size — plus `od` for the OD law.
+            let (mut params, od) = poisson_params(&d.params).map_err(|(what, e)| bad(what, e))?;
+            // Two fields the scenario states outside `params`, and the outer spelling
+            // wins: `duration` is the run's, not the demand model's, and `rate_veh_per_h`
+            // is the friendlier unit for the same quantity as `arrival_rate_per_s`.
+            params.duration = Duration::from_secs_f64(scenario.time.duration_s);
+            if let Some(rate) = d.rate_veh_per_h {
+                params.arrival_rate_per_s = rate / 3600.0;
+            }
+            if let Some(n) = d.fleet_size {
+                params.fleet_size = u64::from(n);
+            }
+            if !shares.is_empty() {
+                params.fleet = v2xw_mobility::demand::FleetMix::from_shares(&shares);
+            }
+            // The thinning is exact only while the candidate boost covers every multiplier
+            // the timeline puts in force (`PoissonParams::candidate_boost`), so the boost is
+            // raised to the timeline's peak. A scenario with no demand event has a peak of 1
+            // and keeps the draw sequence it always had.
+            let mut peak = crate::timeline::demand_peak(scenario);
+            // A daily profile is on the civil clock: `time.t0` puts the run on it, and the
+            // world's longitude gives the local offset when the scenario does not. Its peak
+            // multiplies the timeline's in the boost.
+            if let Some(daily) = params.daily.as_mut() {
+                let wall = WallClock::parse_rfc3339(&scenario.time.t0).map_err(|e| {
+                    EngineError::Scenario(crate::ScenarioError::conflict(
+                        "time.t0",
+                        format!("a daily demand profile needs the run on the civil clock: {e}"),
+                    ))
+                })?;
+                daily.t0_unix_s = wall.t0_unix_s() as f64;
+                if daily.utc_offset_h.is_none() {
+                    daily.utc_offset_h = Some((world.origin.lon_deg / 15.0).round());
+                }
+                peak *= daily.supremum();
+            }
+            if peak > params.candidate_boost {
+                params.candidate_boost = peak;
+            }
+            Ok(Box::new(PoissonDemand::new(world, params, od)?))
+        }
+    }
+}
+
+/// Registers the card of the demand model a scenario built, when it is one of the
+/// `v2xw-demand` kinds, so the manifest pins it. The built-in kinds are registered as
+/// before ([`register_all`]) and nothing changes for them.
+///
+/// # Errors
+/// A registry refusal.
+pub fn register_demand(
+    registry: &mut Registry,
+    scenario: &Scenario,
+    demand: &dyn Demand,
+) -> Result<()> {
+    let kind = scenario.actors.vehicles.demand.kind.as_str();
+    if !v2xw_demand::scenario::KINDS.contains(&kind) && kind != v2xw_interop::routes::MODEL_ID {
+        return Ok(());
+    }
+    let card = v2xw_core::model::Model::card(demand).clone();
+    if !registry.contains(&card.id) {
+        registry.register(card)?;
+    }
+    Ok(())
+}
+
+/// The GNSS model the scenario names.
+///
+/// The default is the Gauss–Markov receiver rather than a perfect
+/// one: a node whose belief equals the truth makes every plausibility detector trivially
+/// correct, which is the single most misleading default this engine could have.
+pub fn build_gnss(scenario: &Scenario) -> Box<dyn GnssModel> {
+    Box::new(v2xw_mobility::GaussMarkovGnss::new(gnss_params(scenario)))
+}
+
+/// The GNSS model's parameters: `actors.vehicles.gnss` over the defaults of the receiver
+/// class `actors.vehicles.gnss.quality` names (traffic audit).
+///
+/// `j2945-1` is SAE J2945/1's open-sky receiver ([`GnssQuality::J2945_1`]): the class,
+/// which fits the position scales to 1.5 m / 3 m at 68 % at construction, its speed and
+/// heading noise, and the low-speed heading latch (6.3.6.5-6.3.6.10). A set `velocity_noise_mps` still wins over the class's speed noise; every
+/// other key is the measured receiver's and is applied as it is. Unset, the measured
+/// receiver (`reid-2019`) stays the default.
+///
+/// [`GnssQuality::J2945_1`]: v2xw_mobility::gnss::GnssQuality::J2945_1
+pub fn gnss_params(scenario: &Scenario) -> v2xw_mobility::gnss::GaussMarkovParams {
+    /// The deployed receiver's smoothing time constant, s (the US benchmark presets).
+    const US_OBU_SMOOTHING_TAU_S: f64 = 100.0;
+    /// The deployed receiver's static hold, m/s (the US benchmark presets).
+    const US_OBU_STATIC_HOLD_MPS: f64 = 0.3;
+    use crate::scenario::schema::GnssQualitySpec;
+    // under the US OBU profile the receiver is the deployed one, a smoothed
+    // navigation solution (tau 100 s, 0.3 m/s hold) unless the scenario names its own.
+    // Raw 10 Hz fixes with fresh 1.6 m noise are nothing an OBU outputs, and on them the
+    // SM-MBR 1 m position check fires on 83 % of honest BSMs.
+    let us_receiver = |p: &mut v2xw_mobility::gnss::GaussMarkovParams| {
+        if crate::phase2::local_suite_id(scenario) == crate::phase2::US_SM_MBR {
+            p.smoothing_tau_s = US_OBU_SMOOTHING_TAU_S;
+            p.static_hold_mps = US_OBU_STATIC_HOLD_MPS;
+        }
+    };
+    let Some(g) = scenario.actors.vehicles.gnss.as_ref() else {
+        let mut p = v2xw_mobility::gnss::GaussMarkovParams::default();
+        us_receiver(&mut p);
+        return p;
+    };
+    let mut p = g.params();
+    if g.smoothing_tau_s.is_none() {
+        let hold = g.static_hold_mps;
+        us_receiver(&mut p);
+        if let Some(h) = hold {
+            p.static_hold_mps = h;
+        }
+    }
+    if g.quality == Some(GnssQualitySpec::J2945_1) {
+        let j = v2xw_mobility::gnss::GnssQuality::J2945_1.params();
+        p.quality = j.quality;
+        p.sigma_heading_rad = j.sigma_heading_rad;
+        p.sigma_heading_slow_rad = j.sigma_heading_slow_rad;
+        p.heading_speed_threshold_mps = j.heading_speed_threshold_mps;
+        p.heading_latch_mps = j.heading_latch_mps;
+        p.heading_unlatch_mps = j.heading_unlatch_mps;
+        if g.velocity_noise_mps.is_none() {
+            p.sigma_velocity_mps = j.sigma_velocity_mps;
+        }
+    }
+    p
+}
+
+/// The radio families a scenario may name a model for in `radio.models`, and the ids
+/// each accepts. Everything else is refused by the loader.
+pub const RADIO_MODEL_FAMILIES: &[(&str, &[&str])] = &[
+    (
+        "propagation",
+        &[
+            v2xw_radio::FreeSpace::ID,
+            v2xw_radio::TwoRayGround::ID,
+            v2xw_radio::LogDistanceShadowing::ID,
+            v2xw_radio::Tr37885::ID,
+            v2xw_radio::GeometricUrbanV2v::ID,
+            v2xw_radio::WinnerPlusB1::ID,
+            v2xw_radio::TwoRayInterference::ID,
+        ],
+    ),
+    (
+        "fading",
+        &[v2xw_radio::NoFading::ID, v2xw_radio::NakagamiFading::ID],
+    ),
+    ("per", &[v2xw_radio::PerModel::ID]),
+    ("phy", &[v2xw_radio::OfdmPhy::ID]),
+    ("obstacle", &[v2xw_radio::BuildingShadowing::ID]),
+    ("sidelink", &[crate::run::sidelink::SIDELINK_ACCESS_ID]),
+    (
+        "dcc",
+        &[
+            v2xw_radio::SaeJ2945Dcc::ID,
+            v2xw_radio::AdaptiveDcc::ID,
+            v2xw_radio::ReactiveDcc::ID,
+        ],
+    ),
+];
+
+/// Which decentralised congestion control an 802.11p run's units run
+/// (`radio.models.dcc`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DccChoice {
+    /// `dcc/sae/j2945-1-rate-power`: SAE J2945/1's density-driven inter-transmit time and
+    /// channel-busy-driven radiated power.
+    SaeJ2945,
+    /// `dcc/etsi/adaptive-ts102687`: ETSI TS 102 687's adaptive approach, the gatekeeper
+    /// holding each unit's duty cycle δ so the channel settles at a 0.68 load.
+    EtsiAdaptive,
+    /// `dcc/etsi/reactive-ts102687`: TS 102 687's reactive state machine (Annex A,
+    /// Table A.1).
+    EtsiReactive,
+}
+
+/// The congestion control a run's 802.11p units run: the model `radio.models.dcc` names,
+/// or the region's own — SAE J2945/1 under the US DSRC band plan, ETSI TS 102 687's
+/// adaptive approach in Europe, where EN 302 571 requires a DCC and TS 102 687 V1.2.1
+/// makes the adaptive approach the normative one.
+#[derive(Debug)]
+pub enum EngineDcc {
+    /// SAE J2945/1.
+    J2945(v2xw_radio::SaeJ2945Dcc),
+    /// ETSI adaptive.
+    Adaptive(v2xw_radio::AdaptiveDcc),
+    /// ETSI reactive.
+    Reactive(v2xw_radio::ReactiveDcc),
+}
+
+impl EngineDcc {
+    /// Drops the state of a unit that has left the run.
+    pub fn forget_node(&mut self, node: NodeId) {
+        match self {
+            EngineDcc::J2945(d) => d.forget_node(node),
+            EngineDcc::Adaptive(d) => d.forget_node(node),
+            EngineDcc::Reactive(d) => d.forget_node(node),
+        }
+    }
+
+    /// A `time.fast_forward` window froze the traffic and the radio for `paused`: J2945/1
+    /// re-dates the state each unit's neighbours hold (`SaeJ2945Dcc::resume_after_pause`).
+    /// The ETSI algorithms keep nothing that coasts over time.
+    pub fn resume_after_pause(&mut self, paused: Duration) {
+        if let EngineDcc::J2945(d) = self {
+            d.resume_after_pause(paused);
+        }
+    }
+
+    /// The model's card.
+    pub fn card(&self) -> &v2xw_core::card::ModelCard {
+        use v2xw_core::model::Model;
+        match self {
+            EngineDcc::J2945(d) => d.card(),
+            EngineDcc::Adaptive(d) => d.card(),
+            EngineDcc::Reactive(d) => d.card(),
+        }
+    }
+
+    /// Whether the model decides each frame at a gatekeeper between the network layer
+    /// and the access layer (the ETSI algorithms) rather than through the generator's
+    /// inter-transmit time alone (J2945/1).
+    pub const fn gates(&self) -> bool {
+        !matches!(self, EngineDcc::J2945(_))
+    }
+
+    /// Feeds a channel-busy measurement in.
+    pub fn on_cbr<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &mut self,
+        ctx: &mut C,
+        node: v2xw_core::ids::NodeId,
+        cbr: f64,
+    ) {
+        use v2xw_radio::Dcc;
+        match self {
+            EngineDcc::J2945(d) => Dcc::on_cbr(d, ctx, node, cbr),
+            EngineDcc::Adaptive(d) => Dcc::on_cbr(d, ctx, node, cbr),
+            EngineDcc::Reactive(d) => Dcc::on_cbr(d, ctx, node, cbr),
+        }
+    }
+
+    /// Feeds the unit's own neighbour count in; only J2945/1 reads it.
+    pub fn on_density<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &mut self,
+        ctx: &mut C,
+        node: v2xw_core::ids::NodeId,
+        neighbours: u32,
+    ) {
+        if let EngineDcc::J2945(d) = self {
+            d.on_density(ctx, node, neighbours);
+        }
+    }
+
+    /// J2945/1's 100 ms tracking step (`v2xw_radio::SaeJ2945Dcc::on_tracking`): the unit's
+    /// own state, its deceleration and a draw. Returns the exception it raised; the other
+    /// algorithms have none.
+    pub fn on_tracking(
+        &mut self,
+        node: v2xw_core::ids::NodeId,
+        own: v2xw_radio::HostState,
+        critical: bool,
+        u: f64,
+    ) -> Option<v2xw_radio::J2945Trigger> {
+        match self {
+            EngineDcc::J2945(d) => d.on_tracking_event(node, own, critical, u),
+            _ => None,
+        }
+    }
+
+    /// Whether a deceleration (m/s², positive when slowing) is J2945/1's critical event
+    /// condition (`v2xw_radio::SaeJ2945Dcc::is_critical_decel`); `false` for the other
+    /// algorithms, which raise none.
+    pub fn is_critical_decel(&self, decel_mps2: f64) -> bool {
+        match self {
+            EngineDcc::J2945(d) => d.is_critical_decel(decel_mps2),
+            _ => false,
+        }
+    }
+
+    /// J2945/1's `Max_ITT` for one unit (Eq. 7), without the exception's 100 ms: what
+    /// the BSM schedule's transmission decision reads. `None` for the other
+    /// algorithms.
+    pub fn max_itt(&self, node: v2xw_core::ids::NodeId) -> Option<Duration> {
+        match self {
+            EngineDcc::J2945(d) => Some(d.max_itt(node)),
+            _ => None,
+        }
+    }
+
+    /// The flags of J2945/1's transmission decision once the BSM schedule has made it
+    /// (`v2xw_radio::SaeJ2945Dcc::hold_decision`).
+    pub fn hold_decision(
+        &mut self,
+        node: v2xw_core::ids::NodeId,
+        flags: Option<v2xw_radio::J2945Trigger>,
+    ) {
+        if let EngineDcc::J2945(d) = self {
+            d.hold_decision(node, flags);
+        }
+    }
+
+    /// J2945/1's SUPRA power step for a BSM the unit is generating
+    /// (`v2xw_radio::SaeJ2945Dcc::on_generated`, 6.3.8.7): once per BSM, before its power
+    /// is read. The other algorithms have none.
+    pub fn on_generated(&mut self, node: v2xw_core::ids::NodeId) {
+        if let EngineDcc::J2945(d) = self {
+            d.on_generated(node);
+        }
+    }
+
+    /// J2945/1's inference after the unit sent a BSM carrying `sent`
+    /// (`v2xw_radio::SaeJ2945Dcc::on_transmitted`), and the exception the BSM spent.
+    pub fn on_transmitted(
+        &mut self,
+        node: v2xw_core::ids::NodeId,
+        sent: v2xw_radio::HostState,
+        u: f64,
+    ) -> Option<v2xw_radio::J2945Trigger> {
+        match self {
+            EngineDcc::J2945(d) => d.on_transmitted(node, sent, u),
+            _ => None,
+        }
+    }
+
+    /// J2945/1's channel-quality update: the average PER of the unit's neighbours within
+    /// 100 m over the last 5 s.
+    pub fn on_channel_quality(&mut self, node: v2xw_core::ids::NodeId, avg_per: f64) {
+        if let EngineDcc::J2945(d) = self {
+            d.on_channel_quality(node, avg_per);
+        }
+    }
+
+    /// True for SAE J2945/1 itself: rate and power control, the tracking error and the
+    /// channel-quality inference.
+    pub const fn is_j2945(&self) -> bool {
+        matches!(self, EngineDcc::J2945(d) if d.controls_power())
+    }
+
+    /// True for either SAE rate control, J2945/1's or J3161/1's: the density-driven
+    /// inter-transmit time and the critical event.
+    pub const fn is_sae(&self) -> bool {
+        matches!(self, EngineDcc::J2945(_))
+    }
+
+    /// The gatekeeper's decision for one frame.
+    pub fn gate<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &mut self,
+        ctx: &mut C,
+        node: v2xw_core::ids::NodeId,
+        req: &v2xw_radio::TxRequest,
+    ) -> v2xw_radio::GateDecision {
+        use v2xw_radio::Dcc;
+        match self {
+            EngineDcc::J2945(d) => Dcc::gate(d, ctx, node, req),
+            EngineDcc::Adaptive(d) => Dcc::gate(d, ctx, node, req),
+            EngineDcc::Reactive(d) => Dcc::gate(d, ctx, node, req),
+        }
+    }
+
+    /// The unit's congestion-control state as `node.tx` carries it: the algorithm and the
+    /// quantities it decided with, e.g. `sae-j2945-1 itt=320ms rp=14.5dBm`,
+    /// `sae-j3161-1 itt=100ms event=critical`, `etsi-adaptive delta=0.0071 t_off=141ms`,
+    /// `etsi-reactive active-2 t_off=400ms`. `event` is the SAE exception that sent the
+    /// frame early, if one did.
+    pub fn label<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &self,
+        node: v2xw_core::ids::NodeId,
+        event: Option<v2xw_radio::J2945Trigger>,
+    ) -> String {
+        let s = self.state::<C>(node);
+        let ms = |d: v2xw_core::time::Duration| d.as_nanos() / 1_000_000;
+        let event = match event {
+            Some(v2xw_radio::J2945Trigger::CriticalEvent) => " event=critical",
+            Some(v2xw_radio::J2945Trigger::TrackingError) => " event=tracking-error",
+            None => "",
+        };
+        match self {
+            EngineDcc::J2945(d) if !d.controls_power() => {
+                format!("sae-j3161-1 itt={}ms{event}", ms(s.itt.unwrap_or(s.t_off)),)
+            }
+            EngineDcc::J2945(_) => format!(
+                "sae-j2945-1 itt={}ms rp={:.1}dBm{event}",
+                ms(s.itt.unwrap_or(s.t_off)),
+                s.power_dbm.unwrap_or(f64::NAN)
+            ),
+            EngineDcc::Adaptive(_) => format!(
+                "etsi-adaptive delta={:.4} t_off={}ms",
+                s.delta.unwrap_or(f64::NAN),
+                ms(s.t_off)
+            ),
+            EngineDcc::Reactive(_) => format!(
+                "etsi-reactive {} t_off={}ms",
+                s.state.map_or("none", v2xw_radio::ReactiveState::label),
+                ms(s.t_off)
+            ),
+        }
+    }
+
+    /// The state the generator, the HUD and the metrics read.
+    pub fn state<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &self,
+        node: v2xw_core::ids::NodeId,
+    ) -> v2xw_radio::DccState {
+        use v2xw_radio::Dcc;
+        match self {
+            EngineDcc::J2945(d) => <v2xw_radio::SaeJ2945Dcc as Dcc<C>>::state(d, node),
+            EngineDcc::Adaptive(d) => <v2xw_radio::AdaptiveDcc as Dcc<C>>::state(d, node),
+            EngineDcc::Reactive(d) => <v2xw_radio::ReactiveDcc as Dcc<C>>::state(d, node),
+        }
+    }
+}
+
+/// Which published configuration a sidelink run takes its pool and scheduler from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SidelinkProfile {
+    /// LTE-V2X: the SAE J3161/1 US deployment profile (20 MHz channel 183, ten 10-PRB
+    /// sub-channels, MCS 5/7/11, `probResourceKeep` 0.8, J3161/1 CR limits).
+    #[serde(rename = "sae-j3161")]
+    SaeJ3161,
+    /// LTE-V2X: the Molina-Masegosa 2017 validation pool (10 MHz, four 12-PRB
+    /// sub-channels, QPSK r0.7), a study configuration.
+    #[serde(rename = "molina-masegosa-2017")]
+    MolinaMasegosa2017,
+    /// NR-V2X: Todisco 2021's Mode 2 pool at 30 kHz (10 MHz, two 10-PRB sub-channels,
+    /// TS 38.214 Table 5.1.3.1-1), a study configuration.
+    #[serde(rename = "todisco-2021")]
+    Todisco2021,
+    /// NR-V2X: the ETSI EN 303 798 configuration (20 MHz at 30 kHz, four 12-PRB
+    /// sub-channels, a 3-symbol PSCCH, TS 38.214 Table 5.1.3.1-2) that the Lusvarghi
+    /// 2024 link-level curves were generated in, so every block error is read from a
+    /// transcribed curve. The NR default: no US NR-V2X deployment profile exists, and
+    /// this is the configuration Europe's access-layer standard specifies.
+    #[serde(rename = "etsi-en303798")]
+    EtsiEn303798,
+    /// LTE-V2X: the ETSI EN 303 613 V1.1.1 Annex B configuration Europe deploys:
+    /// `sl-bandwidth` n50 (10 MHz; n100 on a 20 MHz channel), sub-channels of 10 PRB
+    /// with an adjacent PSCCH, one sub-channel allowed, `maxTxPower` 23 dBm, MCS up to 11,
+    /// and ETSI TS 103 574's CR limits. The LTE default under `radio.region: eu`.
+    #[serde(rename = "etsi-en303613")]
+    EtsiEn303613,
+}
+
+impl SidelinkProfile {
+    /// The channel width the profile's pool is defined for, MHz, or `None` when it sizes
+    /// itself to the channel.
+    pub const fn fixed_bandwidth_mhz(self) -> Option<f64> {
+        match self {
+            SidelinkProfile::SaeJ3161 => Some(20.0),
+            SidelinkProfile::MolinaMasegosa2017 | SidelinkProfile::Todisco2021 => Some(10.0),
+            SidelinkProfile::EtsiEn303798 | SidelinkProfile::EtsiEn303613 => None,
+        }
+    }
+
+    /// The profile's name in a scenario.
+    pub const fn id(self) -> &'static str {
+        match self {
+            SidelinkProfile::SaeJ3161 => "sae-j3161",
+            SidelinkProfile::MolinaMasegosa2017 => "molina-masegosa-2017",
+            SidelinkProfile::Todisco2021 => "todisco-2021",
+            SidelinkProfile::EtsiEn303798 => "etsi-en303798",
+            SidelinkProfile::EtsiEn303613 => "etsi-en303613",
+        }
+    }
+}
+
+/// Which congestion-control table a sidelink run enforces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CongestionChoice {
+    /// The profile's own: J3161/1's for the J3161 profile, ETSI TS 103 574's otherwise.
+    ProfileDefault,
+    /// No congestion control: CR is measured and never limits.
+    Off,
+    /// A named table ([`v2xw_radio::sidelink::CrLimitTable::by_id`]).
+    Table(&'static str),
+}
+
+/// `radio.models.sidelink`, parsed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SidelinkChoice {
+    /// The configuration; `None` is the RAT's default.
+    pub profile: Option<SidelinkProfile>,
+    /// The MCS index in the profile's table.
+    pub mcs: Option<u8>,
+    /// Transmissions per transport block, blind retransmissions included.
+    pub max_transmissions: Option<u32>,
+    /// The congestion-control table.
+    pub congestion: CongestionChoice,
+    /// SAE J3161/1's application-layer rate control (`rate_control`): `None` is the
+    /// profile's default, on under `sae-j3161` and off elsewhere.
+    pub rate_control: Option<bool>,
+    /// `sensitivity: ts-36-101` cuts every copy weaker than TS 36.101's conformance
+    /// sensitivity, the receiver the standard guarantees; unset (`measured`), the
+    /// block-error curve alone decides, as a fielded receiver does.
+    pub refsens_cutoff: bool,
+    /// `sizing: ts-36-213` (LTE only): transport blocks take TS 36.213 Table 7.1.7.2.1-1's
+    /// size at the MCS's I_TBS; unset (`code-rate`), the profile's `Qm · R` estimate.
+    pub tbs_sizing: bool,
+}
+
+impl Default for SidelinkChoice {
+    fn default() -> Self {
+        Self {
+            profile: None,
+            mcs: None,
+            max_transmissions: None,
+            congestion: CongestionChoice::ProfileDefault,
+            rate_control: None,
+            refsens_cutoff: false,
+            tbs_sizing: false,
+        }
+    }
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SidelinkParams {
+    #[serde(default)]
+    profile: Option<SidelinkProfile>,
+    #[serde(default)]
+    mcs: Option<u8>,
+    #[serde(default)]
+    max_transmissions: Option<u32>,
+    #[serde(default)]
+    congestion_control: Option<String>,
+    #[serde(default)]
+    rate_control: Option<String>,
+    #[serde(default)]
+    sensitivity: Option<String>,
+    #[serde(default)]
+    sizing: Option<String>,
+}
+
+/// The sidelink profile a RAT deploys in a region when `radio.models.sidelink` names
+/// none: SAE J3161/1 for LTE-V2X in the US, ETSI EN 303 613 in Europe, ETSI EN 303 798
+/// for NR-V2X everywhere. `None` for a RAT that is not a sidelink.
+pub fn default_sidelink_profile(
+    rat: crate::scenario::schema::Rat,
+    region: v2xw_radio::regulation::Region,
+) -> Option<SidelinkProfile> {
+    use crate::scenario::schema::Rat;
+    match (rat, region) {
+        (Rat::LteV2xPc5, v2xw_radio::regulation::Region::Eu) => Some(SidelinkProfile::EtsiEn303613),
+        (Rat::LteV2xPc5, _) => Some(SidelinkProfile::SaeJ3161),
+        (Rat::NrV2xPc5, _) => Some(SidelinkProfile::EtsiEn303798),
+        _ => None,
+    }
+}
+
+/// The sidelink profile a scenario runs: the one `radio.models.sidelink` names, or the
+/// RAT's default in the run's region.
+pub fn sidelink_profile(scenario: &Scenario) -> Option<SidelinkProfile> {
+    radio_models(scenario)
+        .ok()
+        .and_then(|m| m.sidelink)
+        .and_then(|c| c.profile)
+        .or_else(|| default_sidelink_profile(scenario.radio.rat, region_of(scenario).0))
+}
+
+/// Checks `radio.models.sidelink`'s parameters against the RAT the scenario runs.
+fn sidelink_choice(
+    rat: crate::scenario::schema::Rat,
+    region: v2xw_radio::regulation::Region,
+    p: SidelinkParams,
+) -> core::result::Result<SidelinkChoice, String> {
+    use crate::scenario::schema::Rat;
+    let lte = match rat {
+        Rat::LteV2xPc5 => true,
+        Rat::NrV2xPc5 => false,
+        _ => {
+            return Err(
+                "configures a sidelink, and radio.rat is not lte-v2x-pc5 or \
+                        nr-v2x-pc5"
+                    .to_string(),
+            );
+        }
+    };
+    let profile = p
+        .profile
+        .unwrap_or_else(|| default_sidelink_profile(rat, region).expect("a sidelink rat"));
+    match (lte, profile) {
+        (true, SidelinkProfile::Todisco2021 | SidelinkProfile::EtsiEn303798) => {
+            return Err("names an NR-V2X pool; radio.rat is lte-v2x-pc5 (choose \
+                        sae-j3161, etsi-en303613 or molina-masegosa-2017)"
+                .to_string());
+        }
+        (
+            false,
+            SidelinkProfile::SaeJ3161
+            | SidelinkProfile::MolinaMasegosa2017
+            | SidelinkProfile::EtsiEn303613,
+        ) => {
+            return Err("names an LTE-V2X profile; radio.rat is nr-v2x-pc5 (choose \
+                        etsi-en303798 or todisco-2021)"
+                .to_string());
+        }
+        _ => {}
+    }
+    if let Some(m) = p.mcs {
+        let ok = match profile {
+            SidelinkProfile::SaeJ3161 => matches!(m, 5 | 7 | 11),
+            // EN 303 613 Table B.5 admits MCS 0-11 for a vehicle; the ones this build
+            // carries an allocation for are J3161/1's.
+            SidelinkProfile::EtsiEn303613 => matches!(m, 5 | 7 | 11),
+            SidelinkProfile::MolinaMasegosa2017 => false,
+            SidelinkProfile::Todisco2021 => m <= 28,
+            SidelinkProfile::EtsiEn303798 => m <= 27,
+        };
+        if !ok {
+            return Err(match profile {
+                SidelinkProfile::SaeJ3161 => format!(
+                    "mcs {m} is not one this build carries for SAE J3161/1: 5, 7 or 11 \
+                     (MCS 6 is admitted by the profile but no allocation for it is \
+                     published)"
+                ),
+                SidelinkProfile::EtsiEn303613 => format!(
+                    "mcs {m} is not one this build carries an allocation for: 5, 7 or 11 \
+                     (EN 303 613 Table B.5 admits 0-11)"
+                ),
+                SidelinkProfile::MolinaMasegosa2017 => {
+                    "the Molina-Masegosa pool has one MCS (QPSK r0.7); remove mcs".to_string()
+                }
+                SidelinkProfile::Todisco2021 => {
+                    format!("mcs {m} is outside TS 38.214 Table 5.1.3.1-1 (0-28)")
+                }
+                SidelinkProfile::EtsiEn303798 => {
+                    format!("mcs {m} is outside TS 38.214 Table 5.1.3.1-2 (0-27)")
+                }
+            });
+        }
+    }
+    if let Some(n) = p.max_transmissions {
+        let max = if lte { 2 } else { 3 };
+        if !(1..=max).contains(&n) {
+            return Err(format!(
+                "max_transmissions {n} is outside 1..={max}: LTE-V2X allows one blind \
+                 retransmission (allowedRetxNumberPSSCH-r14), NR-V2X three resources per \
+                 SCI (sl-MaxNumPerReserve-r16)"
+            ));
+        }
+    }
+    let congestion = match p.congestion_control.as_deref() {
+        None => CongestionChoice::ProfileDefault,
+        Some("off") => CongestionChoice::Off,
+        Some(id) => match v2xw_radio::sidelink::CrLimitTable::by_id(id) {
+            Some(t) => CongestionChoice::Table(t.id),
+            None => {
+                return Err(format!(
+                    "congestion_control '{id}' is not one of: etsi-ts-103-574, sae-j3161, off"
+                ));
+            }
+        },
+    };
+    let rate_control = match p.rate_control.as_deref() {
+        None => None,
+        Some("off") => Some(false),
+        Some(id) if id == v2xw_radio::SaeJ2945Dcc::J3161_ID || id == "sae-j3161" => {
+            if !lte {
+                return Err(
+                    "rate_control sae-j3161 is LTE-V2X's (SAE J3161/1); no NR-V2X \
+                            rate control is published"
+                        .to_string(),
+                );
+            }
+            Some(true)
+        }
+        Some(id) => {
+            return Err(format!(
+                "rate_control '{id}' is not one of: sae-j3161 (SAE J3161/1's density-driven \
+                 inter-transmit time), off"
+            ));
+        }
+    };
+    let refsens_cutoff = match p.sensitivity.as_deref() {
+        None | Some("measured") => false,
+        Some("ts-36-101") => true,
+        Some(other) => {
+            return Err(format!(
+                "sensitivity '{other}' is not one of: measured (the block-error curve \
+                 decides, as a fielded receiver does), ts-36-101 (every copy under the \
+                 conformance sensitivity is lost)"
+            ));
+        }
+    };
+    let tbs_sizing = match p.sizing.as_deref() {
+        None | Some("code-rate") => false,
+        Some("ts-36-213") => {
+            if !lte {
+                return Err(
+                    "sizing ts-36-213 is LTE's transport-block table; NR-V2X keeps \
+                            the code-rate sizing"
+                        .to_string(),
+                );
+            }
+            if matches!(profile, SidelinkProfile::MolinaMasegosa2017) {
+                return Err(
+                    "sizing ts-36-213 needs an MCS index, and the Molina-Masegosa \
+                            pool has none (QPSK r0.7); choose sae-j3161 or etsi-en303613"
+                        .to_string(),
+                );
+            }
+            true
+        }
+        Some(other) => {
+            return Err(format!(
+                "sizing '{other}' is not one of: code-rate (the profile's Qm·R estimate), \
+                 ts-36-213 (TS 36.213 Table 7.1.7.2.1-1 transport block sizes, as a 3GPP UE \
+                 and OpenCV2X size them)"
+            ));
+        }
+    };
+    Ok(SidelinkChoice {
+        profile: Some(profile),
+        mcs: p.mcs,
+        max_transmissions: p.max_transmissions,
+        congestion,
+        rate_control,
+        refsens_cutoff,
+        tbs_sizing,
+    })
+}
+
+/// Which propagation law `radio.models.propagation` selects.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PropagationChoice {
+    /// `propagation/free-space`: Friis.
+    FreeSpace,
+    /// `propagation/two-ray-ground`: the flat-earth two-ray model.
+    TwoRayGround,
+    /// `propagation/log-distance-shadowing` with one fixed preset, or `None` for the
+    /// per-link choice from the environment and the vehicle-obstruction state, and the
+    /// `radio.channel_model` overrides over it.
+    LogDistance(
+        Option<v2xw_radio::LogDistancePreset>,
+        v2xw_radio::LogDistanceTuning,
+    ),
+    /// `propagation/tr37885`: the 3GPP LOS/NLOS/NLOSv state model with its own shadowing.
+    Tr37885,
+    /// `propagation/v2v-urban-geometric`: TR 37.885 LOS, geometric NLOSv, the Mangel 2011
+    /// corner model round a traced corner and TR 37.885 NLOS elsewhere. The high tier's
+    /// default.
+    Geometric,
+    /// `propagation/winner-plus-b1`: WINNER+ B1 line of sight with effective antenna
+    /// heights, the TR 36.885 V2V channel the Veins and OpenCV2X studies ran on. Buildings
+    /// are charged by the obstacle stack's Sommer term. `params: {heights: effective |
+    /// actual}` picks the breakpoint convention ([`v2xw_radio::winner::B1Heights`]);
+    /// `nlos: sommer | manhattan` the building-blocked law ([`v2xw_radio::winner::B1Nlos`]).
+    WinnerB1(v2xw_radio::winner::B1Heights, v2xw_radio::winner::B1Nlos),
+    /// `propagation/two-ray-interference`: the phase-exact ground reflection with the
+    /// Fresnel coefficient of a ground of this relative permittivity (`params:
+    /// {epsilon_r}`, default 1.02, Sommer 2012). Opt-in.
+    TwoRayInterference(f64),
+}
+
+impl PropagationChoice {
+    /// Whether this law prices building obstruction itself, so the obstacle stack
+    /// classifies buildings for it but must not charge them again.
+    pub const fn owns_buildings(self) -> bool {
+        matches!(
+            self,
+            PropagationChoice::Tr37885
+                | PropagationChoice::Geometric
+                | PropagationChoice::WinnerB1(_, v2xw_radio::winner::B1Nlos::Manhattan)
+        )
+    }
+
+    /// Whether this law needs the street corner a blocked link turns round, and the
+    /// vehicles on a clear one.
+    pub const fn traces_geometry(self) -> bool {
+        matches!(
+            self,
+            PropagationChoice::Geometric
+                | PropagationChoice::WinnerB1(_, v2xw_radio::winner::B1Nlos::Manhattan)
+        )
+    }
+}
+
+/// Which small-scale fading `radio.models.fading` selects.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FadingChoice {
+    /// `fading/none`.
+    None,
+    /// `fading/nakagami-m` with one preset.
+    Nakagami(v2xw_radio::NakagamiPreset),
+}
+
+/// The radio models a scenario named in `radio.models`, parsed. A family it did not name
+/// is `None` and gets the tier's default.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RadioModels {
+    /// The propagation law.
+    pub propagation: Option<PropagationChoice>,
+    /// The fading model.
+    pub fading: Option<FadingChoice>,
+    /// The 802.11p packet-error model's implementation-loss preset.
+    pub per: Option<v2xw_radio::PerPreset>,
+    /// The 802.11p receiver-sensitivity table.
+    pub sensitivity: Option<v2xw_radio::SensitivityPreset>,
+    /// The Sommer 2011 fitted row the building obstacle model uses.
+    pub building_fit: Option<v2xw_radio::SommerFit>,
+    /// The sidelink access layer's configuration.
+    pub sidelink: Option<SidelinkChoice>,
+    /// The 802.11p congestion control.
+    pub dcc: Option<DccChoice>,
+}
+
+/// A model that takes no parameters: any key is refused.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoParams {}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PresetParam<T> {
+    #[serde(default = "none")]
+    preset: Option<T>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PhyParams {
+    #[serde(default)]
+    sensitivity: Option<v2xw_radio::SensitivityPreset>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WinnerParams {
+    #[serde(default)]
+    heights: Option<v2xw_radio::winner::B1Heights>,
+    #[serde(default)]
+    nlos: Option<v2xw_radio::winner::B1Nlos>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TwoRayInterferenceParams {
+    #[serde(default)]
+    epsilon_r: Option<f64>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuildingParams {
+    #[serde(default)]
+    fit: Option<v2xw_radio::SommerFit>,
+}
+
+fn none<T>() -> Option<T> {
+    None
+}
+
+fn params_of<T: serde::de::DeserializeOwned>(
+    v: &serde_json::Value,
+) -> core::result::Result<T, String> {
+    let v = if v.is_null() {
+        serde_json::json!({})
+    } else {
+        v.clone()
+    };
+    serde_json::from_value(v).map_err(|e| e.to_string())
+}
+
+/// Parses `radio.models`, returning every problem with the dotted path it is at.
+///
+/// # Errors
+/// One `(path, reason)` per unknown family, unknown id, or parameter that does not fit
+/// the model.
+pub fn radio_models(
+    scenario: &Scenario,
+) -> core::result::Result<RadioModels, Vec<(String, String)>> {
+    let mut out = RadioModels::default();
+    let mut errors = Vec::new();
+    for (family, choice) in &scenario.radio.models {
+        let path = format!("radio.models.{family}");
+        let Some((_, ids)) = RADIO_MODEL_FAMILIES.iter().find(|(f, _)| f == family) else {
+            errors.push((
+                path,
+                format!(
+                    "'{family}' is not a radio family this build selects a model for; \
+                     selectable: {}",
+                    RADIO_MODEL_FAMILIES
+                        .iter()
+                        .map(|(f, _)| *f)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+            continue;
+        };
+        if !ids.contains(&choice.id.as_str()) {
+            errors.push((
+                format!("{path}.id"),
+                format!(
+                    "'{}' is not a {family} model this build ships; choose one of: {}",
+                    choice.id,
+                    ids.join(", ")
+                ),
+            ));
+            continue;
+        }
+        let bad = |e: String| {
+            (
+                format!("{path}.params"),
+                format!("do not fit {}: {e}", choice.id),
+            )
+        };
+        match family.as_str() {
+            "propagation" => {
+                let chosen = match choice.id.as_str() {
+                    v2xw_radio::FreeSpace::ID => PropagationChoice::FreeSpace,
+                    v2xw_radio::TwoRayGround::ID => PropagationChoice::TwoRayGround,
+                    v2xw_radio::Tr37885::ID => PropagationChoice::Tr37885,
+                    v2xw_radio::GeometricUrbanV2v::ID => PropagationChoice::Geometric,
+                    v2xw_radio::TwoRayInterference::ID => {
+                        match params_of::<TwoRayInterferenceParams>(&choice.params) {
+                            Ok(p) => {
+                                let eps = p.epsilon_r.unwrap_or(v2xw_radio::prop::GROUND_EPSILON_R);
+                                if !(1.0..=100.0).contains(&eps) {
+                                    errors.push(bad(format!(
+                                        "epsilon_r {eps} is outside 1 to 100 (a ground's \
+                                         relative permittivity; 1.02 is Sommer 2012's \
+                                         calibrated road)"
+                                    )));
+                                    continue;
+                                }
+                                PropagationChoice::TwoRayInterference(eps)
+                            }
+                            Err(e) => {
+                                errors.push(bad(e));
+                                continue;
+                            }
+                        }
+                    }
+                    v2xw_radio::WinnerPlusB1::ID => {
+                        match params_of::<WinnerParams>(&choice.params) {
+                            Ok(p) => PropagationChoice::WinnerB1(
+                                p.heights.unwrap_or_default(),
+                                p.nlos.unwrap_or_default(),
+                            ),
+                            Err(e) => {
+                                errors.push(bad(e));
+                                continue;
+                            }
+                        }
+                    }
+                    _ => match params_of::<PresetParam<v2xw_radio::LogDistancePreset>>(
+                        &choice.params,
+                    ) {
+                        Ok(p) => PropagationChoice::LogDistance(p.preset, Default::default()),
+                        Err(e) => {
+                            errors.push(bad(e));
+                            continue;
+                        }
+                    },
+                };
+                out.propagation = Some(chosen);
+            }
+            "fading" => {
+                if choice.id == v2xw_radio::NoFading::ID {
+                    out.fading = Some(FadingChoice::None);
+                } else {
+                    match params_of::<PresetParam<v2xw_radio::NakagamiPreset>>(&choice.params) {
+                        Ok(p) => {
+                            out.fading = Some(FadingChoice::Nakagami(
+                                p.preset.unwrap_or(v2xw_radio::NakagamiPreset::FixedMedium),
+                            ));
+                        }
+                        Err(e) => errors.push(bad(e)),
+                    }
+                }
+            }
+            "per" => match params_of::<PresetParam<v2xw_radio::PerPreset>>(&choice.params) {
+                Ok(p) => out.per = Some(p.preset.unwrap_or(v2xw_radio::PerPreset::Ideal)),
+                Err(e) => errors.push(bad(e)),
+            },
+            "phy" => match params_of::<PhyParams>(&choice.params) {
+                Ok(p) => out.sensitivity = p.sensitivity,
+                Err(e) => errors.push(bad(e)),
+            },
+            "obstacle" => match params_of::<BuildingParams>(&choice.params) {
+                Ok(p) => {
+                    out.building_fit = Some(p.fit.unwrap_or(v2xw_radio::SommerFit::Default));
+                }
+                Err(e) => errors.push(bad(e)),
+            },
+            "dcc" => {
+                if technology_of(scenario.radio.rat)
+                    != Some(v2xw_radio::regulation::Technology::Ieee80211p)
+                {
+                    errors.push((
+                        path,
+                        "configures 802.11p congestion control, and radio.rat is not \
+                         dsrc-80211p (a sidelink's congestion control is \
+                         radio.models.sidelink's congestion_control)"
+                            .to_string(),
+                    ));
+                    continue;
+                }
+                match params_of::<NoParams>(&choice.params) {
+                    Ok(_) => {
+                        out.dcc = Some(match choice.id.as_str() {
+                            v2xw_radio::AdaptiveDcc::ID => DccChoice::EtsiAdaptive,
+                            v2xw_radio::ReactiveDcc::ID => DccChoice::EtsiReactive,
+                            _ => DccChoice::SaeJ2945,
+                        });
+                    }
+                    Err(e) => errors.push(bad(e)),
+                }
+            }
+            "sidelink" => match params_of::<SidelinkParams>(&choice.params)
+                .and_then(|p| sidelink_choice(scenario.radio.rat, region_of(scenario).0, p))
+            {
+                Ok(c) => out.sidelink = Some(c),
+                Err(e) => errors.push(bad(e)),
+            },
+            _ => {}
+        }
+    }
+    if errors.is_empty() {
+        Ok(out)
+    } else {
+        Err(errors)
+    }
+}
+
+/// The world's propagation environment: the land-use class at its centre.
+pub fn world_env(world: &World) -> v2xw_world::model::EnvClass {
+    world.env_class_at(v2xw_core::geom::Vec3::new(
+        (world.bbox.min.x + world.bbox.max.x) * 0.5,
+        (world.bbox.min.y + world.bbox.max.y) * 0.5,
+        0.0,
+    ))
+}
+
+/// The propagation law a run uses at `tier`: `radio.models.propagation` when the scenario
+/// names one, else the tier's default — free space at `abstract`, the dual-slope
+/// log-distance law with correlated shadowing at `medium`, and the geometric city-street
+/// law (`propagation/v2v-urban-geometric`) at `high`.
+pub fn propagation_choice_at(
+    scenario: &Scenario,
+    tier: v2xw_core::card::Tier,
+) -> PropagationChoice {
+    let models = radio_models(scenario).unwrap_or_default();
+    let chosen = models.propagation.unwrap_or(match tier {
+        v2xw_core::card::Tier::Abstract => PropagationChoice::FreeSpace,
+        v2xw_core::card::Tier::Medium => PropagationChoice::LogDistance(None, Default::default()),
+        _ => PropagationChoice::Geometric,
+    });
+    let cm = &scenario.radio.channel_model;
+    if !cm.tunes_law() {
+        return chosen;
+    }
+    // `radio.channel_model`'s numbers are the log-distance law's. A law the scenario named
+    // explicitly is kept (the loader refuses the combination); a tier default is replaced,
+    // because a researcher who typed an exponent asked for that law.
+    let tuning = log_distance_tuning(scenario);
+    match chosen {
+        PropagationChoice::LogDistance(p, _) => PropagationChoice::LogDistance(p, tuning),
+        other if models.propagation.is_some() => other,
+        _ => PropagationChoice::LogDistance(None, tuning),
+    }
+}
+
+/// The `radio.channel_model` overrides of the log-distance law, at the run's carrier.
+pub fn log_distance_tuning(scenario: &Scenario) -> v2xw_radio::LogDistanceTuning {
+    let cm = &scenario.radio.channel_model;
+    v2xw_radio::LogDistanceTuning {
+        exponent: cm.path_loss_exponent,
+        sigma_db: cm.shadowing_sigma_db,
+        f_hz: radio_regulation(scenario).ok().map(|r| r.centre_hz()),
+    }
+}
+
+/// The radio one node carries, resolved from `radio.devices` for its class: what the link
+/// budget reads at both ends of every link.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DeviceRadio {
+    /// Conducted transmit power at the antenna port, dBm — the most the node transmits;
+    /// congestion control may lower it.
+    pub tx_power_dbm: f64,
+    /// Antenna gain, dBi.
+    pub antenna_gain_dbi: f64,
+    /// Cable loss between radio and antenna, dB.
+    pub cable_loss_db: f64,
+    /// Antenna height above the ground, metres; `None` takes the body class's default
+    /// (vehicles) or the site's mast (roadside units).
+    pub antenna_height_m: Option<f64>,
+}
+
+impl DeviceRadio {
+    /// The gain the link budget applies at this end, dB: the antenna's gain less the
+    /// cable's loss, which a received signal and a transmitted one both pass through.
+    pub fn net_gain_db(&self) -> f64 {
+        self.antenna_gain_dbi - self.cable_loss_db
+    }
+
+    /// The largest EIRP this device radiates, dBm: `P + G − L`.
+    pub fn max_eirp_dbm(&self) -> f64 {
+        self.tx_power_dbm + self.net_gain_db()
+    }
+}
+
+/// Which `radio.devices` entry a node class takes.
+pub fn device_for(scenario: &Scenario, class: v2xw_radio::ActorClass) -> DeviceRadio {
+    let d = &scenario.radio.devices;
+    match class {
+        v2xw_radio::ActorClass::Rsu | v2xw_radio::ActorClass::BaseStation => DeviceRadio {
+            tx_power_dbm: d.rsu.tx_power_dbm,
+            antenna_gain_dbi: d.rsu.antenna_gain_dbi,
+            cable_loss_db: d.rsu.cable_loss_db,
+            antenna_height_m: d.rsu.antenna_height_m,
+        },
+        v2xw_radio::ActorClass::Pedestrian | v2xw_radio::ActorClass::Bicycle => DeviceRadio {
+            tx_power_dbm: d.vru.tx_power_dbm,
+            antenna_gain_dbi: d.vru.antenna_gain_dbi,
+            cable_loss_db: d.vru.cable_loss_db,
+            antenna_height_m: Some(d.vru.antenna_height_m),
+        },
+        _ => DeviceRadio {
+            tx_power_dbm: d.obu.tx_power_dbm,
+            antenna_gain_dbi: d.obu.antenna_gain_dbi,
+            cable_loss_db: d.obu.cable_loss_db,
+            antenna_height_m: d.obu.antenna_height_m,
+        },
+    }
+}
+
+/// The regulation a run transmits under: its region, its channel, and the rule for that
+/// channel (`radio.region`, `radio.channel`, [`v2xw_radio::regulation`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RadioRegulation {
+    /// The region.
+    pub region: v2xw_radio::regulation::Region,
+    /// True when the scenario did not name it and it followed from the technology.
+    pub derived: bool,
+    /// The technology the rule is for.
+    pub technology: v2xw_radio::regulation::Technology,
+    /// The channel and its limits.
+    pub rule: &'static v2xw_radio::regulation::ChannelRule,
+}
+
+impl RadioRegulation {
+    /// The channel's centre, Hz.
+    pub fn centre_hz(&self) -> f64 {
+        self.rule.channel.centre_hz()
+    }
+
+    /// The channel's number.
+    pub fn channel(&self) -> v2xw_radio::ChannelId {
+        v2xw_radio::ChannelId(self.rule.channel.number)
+    }
+
+    /// The most a node of `class` may radiate here, dBm EIRP, with its antenna
+    /// `antenna_m` above the ground ([`v2xw_radio::regulation::max_eirp_dbm`]).
+    ///
+    /// A pedestrian's device is a *portable* unit — one whose antenna is within 20 cm of
+    /// the user's body, 47 CFR §95.639(i) (2017) and §95.3204(d) — and a cyclist's is
+    /// mounted on the bicycle, so it is an on-board unit.
+    pub fn max_eirp_dbm(&self, class: v2xw_radio::ActorClass, antenna_m: f64) -> f64 {
+        use v2xw_radio::regulation::Station;
+        let station = match class {
+            v2xw_radio::ActorClass::Rsu | v2xw_radio::ActorClass::BaseStation => Station::Rsu,
+            v2xw_radio::ActorClass::Pedestrian => Station::Portable,
+            _ => Station::Obu,
+        };
+        v2xw_radio::regulation::max_eirp_dbm(self.region, self.rule, station, antenna_m)
+    }
+}
+
+/// The regulation's technology for a `radio.rat`, `None` for `hybrid`.
+pub fn technology_of(
+    rat: crate::scenario::schema::Rat,
+) -> Option<v2xw_radio::regulation::Technology> {
+    use crate::scenario::schema::Rat;
+    use v2xw_radio::regulation::Technology;
+    match rat {
+        Rat::Dsrc80211p => Some(Technology::Ieee80211p),
+        Rat::LteV2xPc5 => Some(Technology::LteV2x),
+        Rat::NrV2xPc5 => Some(Technology::NrV2x),
+        _ => None,
+    }
+}
+
+/// The region a run is regulated under: `radio.region`, or, unset, the one its
+/// technology was deployed under — the 2016 DSRC band plan for 802.11p, FCC 24-123 for
+/// C-V2X.
+pub fn region_of(scenario: &Scenario) -> (v2xw_radio::regulation::Region, bool) {
+    use v2xw_radio::regulation::Region;
+    match scenario.radio.region {
+        Some(r) => (r.regulation(), false),
+        None => match scenario.radio.rat {
+            crate::scenario::schema::Rat::Dsrc80211p => (Region::Us2016, true),
+            _ => (Region::Us, true),
+        },
+    }
+}
+
+/// The regulation a scenario's radio transmits under, or the key and the reason it may
+/// not transmit there.
+///
+/// # Errors
+/// `(path, reason)` when the region has no channel for the technology, when
+/// `radio.channel` is not one the region lets it use, or when 802.11p is asked for a
+/// channel wider than its 10 MHz.
+pub fn radio_regulation(
+    scenario: &Scenario,
+) -> core::result::Result<RadioRegulation, (&'static str, String)> {
+    let (region, derived) = region_of(scenario);
+    let Some(technology) = technology_of(scenario.radio.rat) else {
+        return Err((
+            "radio.rat",
+            "has no single technology to regulate".to_string(),
+        ));
+    };
+    // A sidelink profile defined for one channel width needs a channel of that width.
+    let width = sidelink_profile(scenario).and_then(|p| p.fixed_bandwidth_mhz().map(|w| (p, w)));
+    let rule = match scenario.radio.channel {
+        None => {
+            let default = region
+                .default_channel(technology)
+                .map_err(|why| ("radio.region", format!("is '{}': {why}", region.id())))?;
+            match width {
+                Some((profile, w)) if default.channel.bandwidth_mhz() != w => {
+                    // The region's channels of the profile's width, preferring those
+                    // inside the default channel (a 10 MHz study pool inside the US
+                    // 20 MHz C-V2X channel), lowest number first.
+                    let fits = |r: &&v2xw_radio::regulation::ChannelRule| {
+                        r.technologies.contains(&technology) && r.channel.bandwidth_mhz() == w
+                    };
+                    let inside = region.rules().iter().filter(fits).find(|r| {
+                        r.channel.lower_mhz >= default.channel.lower_mhz
+                            && r.channel.upper_mhz <= default.channel.upper_mhz
+                    });
+                    inside
+                        .or_else(|| region.rules().iter().find(fits))
+                        .ok_or_else(|| {
+                            (
+                                "radio.models.sidelink",
+                                format!(
+                                    "names profile '{}', a {w} MHz pool, and region '{}' has \
+                                     no {w} MHz channel for it",
+                                    profile.id(),
+                                    region.id()
+                                ),
+                            )
+                        })?
+                }
+                _ => default,
+            }
+        }
+        Some(n) => region.rule(technology, n).ok_or_else(|| {
+            let allowed = region.channels_for(technology);
+            (
+                "radio.channel",
+                if allowed.is_empty() {
+                    format!(
+                        "is {n}, and region '{}' has no channel for this technology",
+                        region.id()
+                    )
+                } else {
+                    format!(
+                        "is {n}, which region '{}' does not open to this technology; \
+                         it may use {allowed:?}",
+                        region.id()
+                    )
+                },
+            )
+        })?,
+    };
+    if let Some((profile, w)) = width
+        && rule.channel.bandwidth_mhz() != w
+    {
+        return Err((
+            "radio.channel",
+            format!(
+                "is {}, a {} MHz channel, and profile '{}' is a {w} MHz pool",
+                rule.channel.number,
+                rule.channel.bandwidth_mhz(),
+                profile.id()
+            ),
+        ));
+    }
+    if technology == v2xw_radio::regulation::Technology::Ieee80211p
+        && rule.channel.bandwidth_mhz() > 10.0
+    {
+        return Err((
+            "radio.channel",
+            format!(
+                "is {}, a {} MHz channel; this build's 802.11p PHY is the 10 MHz OFDM of \
+                 IEEE 802.11-2016 clause 17 that V2X deploys",
+                rule.channel.number,
+                rule.channel.bandwidth_mhz()
+            ),
+        ));
+    }
+    Ok(RadioRegulation {
+        region,
+        derived,
+        technology,
+        rule,
+    })
+}
+
+/// The best net receive gain any device in the run has, dB — what the candidate range is
+/// computed for, so no receiver that could hear a frame is left out.
+pub fn best_receive_gain_db(scenario: &Scenario) -> f64 {
+    [
+        v2xw_radio::ActorClass::Car,
+        v2xw_radio::ActorClass::Rsu,
+        v2xw_radio::ActorClass::Pedestrian,
+    ]
+    .into_iter()
+    .map(|c| device_for(scenario, c).net_gain_db())
+    .fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// The noise floor the candidate range is measured against, dBm: the 802.11p receiver's
+/// (thermal noise in 10 MHz plus its noise figure) or, on a sidelink, a 10 MHz UE's with
+/// TR 36.885's 9 dB noise figure.
+pub fn range_noise_floor_dbm(scenario: &Scenario, phy: &v2xw_radio::OfdmPhy) -> f64 {
+    match scenario.radio.rat {
+        crate::scenario::schema::Rat::Dsrc80211p | crate::scenario::schema::Rat::Hybrid => {
+            phy.noise_floor()
+        }
+        _ => {
+            v2xw_radio::THERMAL_NOISE_DBM_PER_HZ
+                + 10.0 * v2xw_core::math::log10(10.0e6)
+                + sidelink_noise_figure_db(scenario)
+        }
+    }
+}
+
+/// The sidelink UE's noise figure, dB: `radio.sidelink.noise_figure_db` or TR 36.885
+/// Annex A.1.1's 9 dB (network audit).
+pub fn sidelink_noise_figure_db(scenario: &Scenario) -> f64 {
+    scenario
+        .radio
+        .sidelink
+        .noise_figure_db
+        .unwrap_or(v2xw_radio::UE_NOISE_FIGURE_DB)
+}
+
+/// The deterministic line-of-sight loss of a propagation law at `d_m`, dB — no shadowing,
+/// no fading, no obstacle: the most a transmission can reach, which is what bounds the
+/// candidate range ([`CandidateRangePlan`]).
+pub fn los_mean_loss_db(
+    choice: PropagationChoice,
+    env: v2xw_world::model::EnvClass,
+    d_m: f64,
+    f_hz: f64,
+    h_t_m: f64,
+    h_r_m: f64,
+) -> f64 {
+    let urban = matches!(
+        env,
+        v2xw_world::model::EnvClass::Urban | v2xw_world::model::EnvClass::Suburban
+    );
+    match choice {
+        PropagationChoice::FreeSpace => v2xw_radio::friis_loss_db(d_m, f_hz),
+        PropagationChoice::TwoRayGround => {
+            v2xw_radio::two_ray_ground_loss_db(d_m, h_t_m, h_r_m, f_hz, 1.0)
+        }
+        // The law is not monotone (its deep fades), so the reach is planned on its
+        // constructive bound, Friis − 6.02 dB: never short of a link the law can close.
+        PropagationChoice::TwoRayInterference(_) => {
+            v2xw_radio::two_ray_interference_envelope_db(d_m, f_hz)
+        }
+        PropagationChoice::LogDistance(Some(preset), t) => {
+            t.apply(preset.params()).path_loss_db(d_m)
+        }
+        PropagationChoice::LogDistance(None, t) => t
+            .apply(v2xw_radio::LogDistancePreset::for_environment(env, false).params())
+            .path_loss_db(d_m),
+        PropagationChoice::WinnerB1(h, _) => {
+            v2xw_radio::winner::b1_los_with(d_m, h_t_m, h_r_m, f_hz, h)
+        }
+        PropagationChoice::Tr37885 | PropagationChoice::Geometric => {
+            if urban {
+                v2xw_radio::prop::tr37885_urban_los_db(d_m, f_hz / 1e9)
+            } else {
+                v2xw_radio::prop::tr37885_highway_los_db(d_m, f_hz / 1e9)
+            }
+        }
+    }
+}
+
+/// How far each transmission is followed (`radio.range`).
+///
+/// A transmission is followed to every receiver at which, in line of sight, a unit
+/// radiating the regulatory maximum ([`CandidateRangePlan::REFERENCE_EIRP_DBM`], 33 dBm)
+/// would still arrive at no less than the noise floor minus `radio.range.margin_db`: the
+/// distance `R` solving `EIRP_ref + G_rx − PL_LOS(R) = N − margin` for the run's own
+/// line-of-sight law, its best receive gain and its receiver's noise floor. A link is a
+/// reception attempt when its loss would let that reference clear `N − margin`; the
+/// reference is fixed so that neither set moves with the transmit power a study varies. Within `R` every link gets the full
+/// budget — geometry, shadowing, fading. The 10 dB default margin covers the shadowing
+/// upside (about 2.5 σ of the 4 dB laws) and puts a single arrival left out at most 0.4 dB
+/// of noise rise.
+///
+/// `radio.range.max_m` caps the fully evaluated range for cost. Beyond the cap and out to
+/// `R`, a receiver still gets the transmission's energy as interference when the straight
+/// path is clear of buildings, priced with the deterministic line-of-sight law: blocked
+/// paths that far out are below the margin in every NLOS law this build has (TR 37.885's
+/// NLOS law reaches `N − 10 dB` at about 450 m from a 20 dBm EIRP).
+#[derive(Debug, Clone)]
+pub struct CandidateRangePlan {
+    choice: PropagationChoice,
+    env: v2xw_world::model::EnvClass,
+    f_hz: f64,
+    /// The receiver noise floor, dBm.
+    pub noise_floor_dbm: f64,
+    /// `radio.range.margin_db`.
+    pub margin_db: f64,
+    /// `radio.range.max_m`.
+    pub max_m: Option<f64>,
+    /// The best net receive gain, dB.
+    pub rx_gain_db: f64,
+    /// The world's diagonal, metres: no range is longer.
+    pub world_span_m: f64,
+    /// Solved ranges, keyed by the EIRP on a 0.01 dB grid.
+    cache: std::collections::BTreeMap<i64, f64>,
+}
+
+impl CandidateRangePlan {
+    /// The plan for a run.
+    pub fn new(scenario: &Scenario, world: &World, phy: &v2xw_radio::OfdmPhy, f_hz: f64) -> Self {
+        let span = world.bbox.min.distance_2d(world.bbox.max);
+        Self {
+            choice: propagation_choice_at(scenario, scenario.radio.tiers.propagation),
+            env: world_env(world),
+            f_hz,
+            noise_floor_dbm: range_noise_floor_dbm(scenario, phy),
+            margin_db: scenario.radio.range.margin_db,
+            max_m: scenario.radio.range.max_m,
+            rx_gain_db: best_receive_gain_db(scenario),
+            world_span_m: if span.is_finite() && span > 0.0 {
+                span
+            } else {
+                1_000.0
+            },
+            cache: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// The EIRP the reach and the attempt test are taken at, dBm: 33 dBm, the most any
+    /// V2X unit may radiate in the US (FCC 24-123: §95.3204(b) for a C-V2X on-board unit,
+    /// §90.391(a) for a roadside unit) and at or above the EU's ITS-G5A ceiling
+    /// (EN 302 571's 33 dBm total). Fixed, so the links a run follows and attempts are a
+    /// property of the geometry and not of the transmit power a study varies.
+    pub const REFERENCE_EIRP_DBM: f64 = 33.0;
+
+    /// The mean line-of-sight SNR, dB, of a transmission radiated at `eirp_dbm` and heard
+    /// `d_m` away with the run's best receive gain (the service-channel loss
+    /// curve). Antennas at 1.5 m, as [`CandidateRangePlan::reach_m`] takes them.
+    pub fn los_snr_db(&self, eirp_dbm: f64, d_m: f64) -> f64 {
+        let loss = los_mean_loss_db(self.choice, self.env, d_m.max(1.0), self.f_hz, 1.5, 1.5);
+        eirp_dbm + self.rx_gain_db - loss - self.noise_floor_dbm
+    }
+
+    /// The weakest arrival worth following, dBm: `N − margin`.
+    pub fn floor_dbm(&self) -> f64 {
+        self.noise_floor_dbm - self.margin_db
+    }
+
+    /// The line-of-sight reach of a transmission radiated at `eirp_dbm`, metres: where the
+    /// deterministic LOS loss brings it down to [`CandidateRangePlan::floor_dbm`], found by
+    /// bisection (every law here is monotone in distance), and no
+    /// longer than the world's diagonal.
+    pub fn reach_m(&mut self, eirp_dbm: f64) -> f64 {
+        let key = (eirp_dbm * 100.0).round() as i64;
+        if let Some(r) = self.cache.get(&key) {
+            return *r;
+        }
+        let budget = eirp_dbm + self.rx_gain_db - self.floor_dbm();
+        let loss = |d: f64| los_mean_loss_db(self.choice, self.env, d, self.f_hz, 1.5, 1.5);
+        let span = self.world_span_m + 1.0;
+        let r = if loss(span) <= budget {
+            span
+        } else if loss(1.0) > budget {
+            1.0
+        } else {
+            let (mut lo, mut hi) = (1.0f64, span);
+            for _ in 0..60 {
+                let mid = 0.5 * (lo + hi);
+                if loss(mid) <= budget {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            lo
+        };
+        self.cache.insert(key, r);
+        r
+    }
+
+    /// The fully evaluated range for a transmission at `eirp_dbm`, metres: the reach,
+    /// capped by `radio.range.max_m`.
+    pub fn full_m(&mut self, eirp_dbm: f64) -> f64 {
+        let reach = self.reach_m(eirp_dbm);
+        self.max_m.map_or(reach, |cap| reach.min(cap))
+    }
+
+    /// The deterministic LOS received power at `d_m` from a transmitter radiating
+    /// `eirp_dbm`, at a receiver with net gain `rx_gain_db`, dBm — what an interferer
+    /// beyond the cap contributes.
+    pub fn los_power_dbm(&self, eirp_dbm: f64, rx_gain_db: f64, d_m: f64) -> f64 {
+        eirp_dbm + rx_gain_db - los_mean_loss_db(self.choice, self.env, d_m, self.f_hz, 1.5, 1.5)
+    }
+}
+
+/// The propagation and fading models the scenario names.
+///
+/// `radio.models.propagation` and `radio.models.fading` choose them when present. The
+/// defaults follow the tier : free space with no fading at
+/// `abstract`; dual-slope log-distance with correlated shadowing, the preset chosen per
+/// link from the environment, and Nakagami `m = 3` fading at `medium` and `high`.
+pub fn build_radio(
+    scenario: &Scenario,
+    world: &World,
+) -> (Box<dyn BoxedPropagation>, Box<dyn BoxedFading>) {
+    build_radio_at(scenario, world, scenario.radio.tiers.propagation)
+}
+
+/// [`build_radio`] at a caller-chosen propagation tier: the focus region's stack.
+pub fn build_radio_at(
+    scenario: &Scenario,
+    world: &World,
+    tier: v2xw_core::card::Tier,
+) -> (Box<dyn BoxedPropagation>, Box<dyn BoxedFading>) {
+    let env = world_env(world);
+    let models = radio_models(scenario).unwrap_or_default();
+    // `radio.channel_model`: each law takes the overrides it has a constant for; the
+    // loader refuses an override the chosen law would ignore. The shadowing σ and
+    // decorrelation distance reach every law; the exponent is the log-distance law's
+    // (carried in its `LogDistanceTuning`).
+    let shadow = shadowing_override(scenario);
+    let propagation: Box<dyn BoxedPropagation> = match propagation_choice_at(scenario, tier) {
+        PropagationChoice::FreeSpace => Box::new(v2xw_radio::FreeSpace::new(tier)),
+        PropagationChoice::TwoRayGround => Box::new(v2xw_radio::TwoRayGround::new(tier)),
+        PropagationChoice::TwoRayInterference(eps) => {
+            Box::new(v2xw_radio::TwoRayInterference::new(tier).with_epsilon_r(eps))
+        }
+        PropagationChoice::Tr37885 => {
+            Box::new(v2xw_radio::Tr37885::new(tier, env).with_shadowing(shadow))
+        }
+        PropagationChoice::Geometric => {
+            let m = v2xw_radio::GeometricUrbanV2v::new(tier, env).with_shadowing(shadow);
+            let fit = models
+                .building_fit
+                .unwrap_or(v2xw_radio::SommerFit::Default);
+            Box::new(match sommer_override(scenario, fit) {
+                Some(c) => m.with_building_coefficients(c),
+                None => m,
+            })
+        }
+        PropagationChoice::WinnerB1(h, n) => Box::new(
+            v2xw_radio::WinnerPlusB1::new(tier, env)
+                .with_heights(h)
+                .with_nlos(n)
+                .with_shadowing(shadow),
+        ),
+        PropagationChoice::LogDistance(preset, tuning) => Box::new(
+            match preset {
+                None => v2xw_radio::LogDistanceShadowing::auto(tier, env),
+                Some(p) => v2xw_radio::LogDistanceShadowing::new(tier, p, env),
+            }
+            .with_tuning(tuning)
+            .with_shadowing(shadow),
+        ),
+    };
+    // A sidelink's block errors come from link-level curves — Huawei R1-160284, the
+    // WiLabV2Xsim tables, Lusvarghi 2024 — each simulated over a fading channel and
+    // printed against the *average* SNR, so the small-scale fading is already inside
+    // them. A second Nakagami draw per packet would count it twice and steepen every
+    // delivery-versus-distance curve; a sidelink run therefore draws none unless
+    // `radio.models.fading` asks for it. 802.11p's error model is computed for an AWGN
+    // channel, so it keeps its fading draw.
+    let sidelink = matches!(
+        scenario.radio.rat,
+        crate::scenario::schema::Rat::LteV2xPc5 | crate::scenario::schema::Rat::NrV2xPc5
+    );
+    let default_fading = match tier {
+        v2xw_core::card::Tier::Abstract => FadingChoice::None,
+        _ if sidelink => FadingChoice::None,
+        _ => FadingChoice::Nakagami(v2xw_radio::NakagamiPreset::FixedMedium),
+    };
+    // `radio.channel_model.fading` names the law in words; the loader refuses it beside a
+    // `radio.models.fading`, so at most one of the two is set.
+    let cm = &scenario.radio.channel_model;
+    let fixed = |m: f64| -> Box<dyn BoxedFading> {
+        Box::new(v2xw_radio::NakagamiFading::new(v2xw_radio::NakagamiPreset::FixedMedium).with_m(m))
+    };
+    let fading: Box<dyn BoxedFading> = match cm.fading.as_deref() {
+        Some("none") => Box::new(v2xw_radio::NoFading::new()),
+        Some("rayleigh") => fixed(1.0),
+        Some("rice") => fixed(v2xw_radio::NakagamiFading::rice_m(
+            cm.rice_k_db.unwrap_or(DEFAULT_RICE_K_DB),
+        )),
+        Some("nakagami") => Box::new(
+            v2xw_radio::NakagamiFading::new(v2xw_radio::NakagamiPreset::FixedMedium).with_profile(
+                nakagami_override(scenario).unwrap_or(v2xw_radio::NakagamiProfile::constant(3.0)),
+            ),
+        ),
+        _ => match models.fading.unwrap_or(default_fading) {
+            FadingChoice::None => Box::new(v2xw_radio::NoFading::new()),
+            FadingChoice::Nakagami(preset) => Box::new(v2xw_radio::NakagamiFading::new(preset)),
+        },
+    };
+    (propagation, fading)
+}
+
+/// Whether the run draws small-scale fading at all: what the default and the named laws
+/// in [`build_radio_at`]'s fading half resolve to.
+pub fn draws_fading(scenario: &Scenario) -> bool {
+    let cm = &scenario.radio.channel_model;
+    match cm.fading.as_deref() {
+        Some("none") => return false,
+        Some(_) => return scenario.radio.tiers.propagation != v2xw_core::card::Tier::Abstract,
+        None => {}
+    }
+    if scenario.radio.tiers.propagation == v2xw_core::card::Tier::Abstract {
+        return false;
+    }
+    if let Some(choice) = scenario.radio.models.get("fading") {
+        return choice.id != v2xw_radio::NoFading::ID;
+    }
+    !matches!(
+        scenario.radio.rat,
+        crate::scenario::schema::Rat::LteV2xPc5 | crate::scenario::schema::Rat::NrV2xPc5
+    )
+}
+
+/// The Doppler coherence model the run keys its fading draws by
+/// (`radio.channel_model.fading_coherence: doppler`), on the run's carrier.
+pub fn fading_coherence(
+    scenario: &Scenario,
+    carrier_hz: f64,
+) -> Option<v2xw_radio::DopplerCoherence> {
+    (scenario.radio.channel_model.fading_coherence.as_deref() == Some("doppler"))
+        .then_some(v2xw_radio::DopplerCoherence { carrier_hz })
+}
+
+/// The Rice factor `radio.channel_model.rice_k_db` defaults to, dB: a moderate direct
+/// path, inside the 3 to 10 dB that V2V measurements at 5.9 GHz report for line of sight
+/// (Cheng et al., IEEE JSAC 25(8), 2007, §IV).
+pub const DEFAULT_RICE_K_DB: f64 = 6.0;
+
+/// Registers the cards of the radio models a run composes, so the manifest pins them.
+///
+/// # Errors
+/// [`EngineError::Registry`] if a card does not validate.
+pub fn register_radio(
+    registry: &mut Registry,
+    propagation: &dyn BoxedPropagation,
+    fading: &dyn BoxedFading,
+    phy: &v2xw_radio::OfdmPhy,
+) -> Result<()> {
+    use v2xw_core::model::Model;
+    for card in [
+        propagation.card().clone(),
+        fading.card().clone(),
+        phy.card().clone(),
+    ] {
+        if !registry.contains(&card.id) {
+            registry.register(card)?;
+        }
+    }
+    Ok(())
+}
+
+/// Where each node's generator sits on the time axis.
+///
+/// The default is [`v2xw_msg::GenerationTiming::default`]: an independent uniform phase
+/// per node over the 100 ms nominal period of both the BSM (SAE J2945/1) and the CAM's
+/// `T_GenCamMin` (EN 302 637-2 §6.1.3), and ns-3's 10 ms hand-off jitter. A scenario
+/// overrides either through `messages.generator.params`:
+///
+/// ```yaml
+/// messages:
+///   generator:
+///     id: generator/timing-phase-jitter
+///     params: { phase_window_ms: 0, max_jitter_ms: 0 }   # every node on one grid
+/// ```
+///
+/// `phase_window_ms: 0, max_jitter_ms: 0` is the synchronised behaviour this engine had
+/// before the model existed, kept so the contention it causes can still be studied.
+///
+/// A unit under SAE J2945/1 on 802.11p staggers its BSMs by J2945/1's own rule instead
+/// of ns-3's: `RandOffset ~ U(−vTxRand, +vTxRand)` on each scheduled BSM (6.3.8.8;
+/// [`j2945_schedule`]), so it has no hand-off jitter by default. Only when the scenario
+/// asks for the synchronised grid (`phase_window_ms: 0`), where the J2945/1 schedule does
+/// not run, does it keep the older reading, a hand-off jitter `U[0, 5 ms]` (the FMVSS 150
+/// NPRM's "every 100 ms +/- a random value between 0 and 5 ms", proposed §571.150
+/// S5.3.4). A scenario's own `max_jitter_ms` still wins.
+pub fn generation_timing(scenario: &Scenario) -> v2xw_msg::GenerationTiming {
+    let mut t = v2xw_msg::GenerationTiming::default();
+    // The phase spreads a fleet across its whole generation period, not the 100 ms of the
+    // 10 Hz default: J2945/1 and EN 302 637-2 both have each station time its messages
+    // independently, so at 5 Hz a fleet created in one instant fills the 200 ms period
+    // rather than only its first half. With a 100 ms window every 5 Hz frame fell in the
+    // even 100 ms slots and the MAC's 100 ms CBR sample at each second read about 0.
+    // At the 10 Hz default the period is the old window, so no digest moves.
+    if let Some(p) = fixed_message_period(scenario) {
+        t.phase_window = p;
+    }
+    if j2945_80211p(scenario) {
+        t.max_jitter = v2xw_radio::J2945Params::J2945_1.tx_rand;
+    }
+    // A PC5 sidelink schedules, it does not contend: the per-message hand-off jitter is a
+    // CSMA convention (ns-3's WAVE `TxMaxDelay`, there to stop two stations of one phase
+    // colliding every period), and on semi-persistent scheduling it is a defect. The
+    // reservation is made for one message at an offset in [n + T1, n + T2]; a fresh
+    // U[0, 10 ms] on the next message puts it after its reserved slot whenever the draw
+    // exceeds the offset, and the grant, still inside the 100 ms budget (TS 36.321
+    // 5.14.1.1 sees no trigger), then holds it almost a whole period. Measured on the NR
+    // grid before 2026-10-25: a 1 ms selection window gave a 41.9 ms mean access wait
+    // and a 50 ms one 27.2 ms. 3GPP's periodic traffic model (TR 37.885 A.1.1) is a
+    // random start per UE and then the exact period, which is the phase alone; the
+    // sidelink keeps it and drops the jitter. A scenario's `max_jitter_ms` still wins.
+    if matches!(
+        scenario.radio.rat,
+        crate::scenario::schema::Rat::LteV2xPc5 | crate::scenario::schema::Rat::NrV2xPc5
+    ) {
+        t.max_jitter = Duration::ZERO;
+    }
+    if let Some(choice) = &scenario.messages.generator {
+        let ms = |key: &str| {
+            choice
+                .params
+                .get(key)
+                .and_then(serde_json::Value::as_f64)
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(|v| Duration::from_nanos((v * 1e6).round() as u64))
+        };
+        if let Some(w) = ms("phase_window_ms") {
+            t.phase_window = w;
+        }
+        if let Some(j) = ms("max_jitter_ms") {
+            t.max_jitter = j;
+        }
+    }
+    let jitter_set = scenario
+        .messages
+        .generator
+        .as_ref()
+        .is_some_and(|c| c.params.get("max_jitter_ms").is_some());
+    if j2945_80211p(scenario) && !t.phase_window.is_zero() && !jitter_set {
+        // J2945/1 6.3.8.8: RandOffset replaces the hand-off jitter.
+        t.max_jitter = Duration::ZERO;
+    }
+    t
+}
+
+/// Whether the run's 802.11p units are under SAE J2945/1's rate and power control.
+fn j2945_80211p(scenario: &Scenario) -> bool {
+    build_dcc(scenario).is_some_and(|d| d.is_j2945())
+        && technology_of(scenario.radio.rat) == Some(v2xw_radio::regulation::Technology::Ieee80211p)
+}
+
+/// SAE J2945/1's own BSM schedule (6.3.8.5-6.3.8.8), when the run has it: every US
+/// 802.11p unit under J2945/1's rate control schedules each BSM at `LastTxTime + Max_ITT +
+/// RandOffset` and the engine wakes it at that instant, instead of deciding on its 100 ms
+/// step. `vTxRand` is the DCC parameter set's. Not under the synchronised grid
+/// (`phase_window_ms: 0`), where every node steps at one instant and none can be woken
+/// alone; that study keeps the older step-grid reading. J3161/1 on a sidelink aligns its
+/// BSM to its reservation instead.
+pub fn j2945_schedule(scenario: &Scenario) -> Option<v2xw_msg::J2945Timing> {
+    if !j2945_80211p(scenario) || generation_timing(scenario).phase_window.is_zero() {
+        return None;
+    }
+    Some(v2xw_msg::J2945Timing {
+        tx_rand: v2xw_radio::J2945Params::J2945_1.tx_rand,
+        ..v2xw_msg::J2945Timing::J2945_1
+    })
+}
+
+/// Registers the generation-timing card in force, so the manifest pins the phase window
+/// and the jitter a run used.
+///
+/// # Errors
+/// [`EngineError::Registry`] if the card does not validate.
+pub fn register_generation_timing(
+    registry: &mut Registry,
+    timing: v2xw_msg::GenerationTiming,
+) -> Result<()> {
+    let card = timing.card();
+    if !registry.contains(&card.id) {
+        registry.register(card)?;
+    }
+    Ok(())
+}
+
+/// One end's street direction, a horizontal vector along it (a vehicle's heading), when
+/// known.
+pub type StreetDir = Option<(f64, f64)>;
+
+/// What obstructs a radio link: the obstacle stack, as far as this
+/// build composes it.
+///
+/// * **Buildings** — `obstacle/building/sommer-2011`: `β` dB per exterior wall the
+///   straight path crosses plus `γ` dB per metre of it inside a footprint, from the
+///   world's own building footprints, with the 2.5-D refinement that a roof below both
+///   antennas does not block. On when `world.buildings.enabled` is true (the default) and
+///   the propagation tier is `medium` or `high`, which is how the §3 tier table composes
+///   it. Until this stack existed every link was evaluated as line of sight, so a signal
+///   crossed a Midtown block of 40-storey towers as though it were open road.
+/// * **Street corners** — `v2xw_radio::CornerTracer`: for a law that prices a blocked link
+///   by the corner it turns round (`propagation/v2v-urban-geometric`), the junction both
+///   ends see and its Mangel geometry. On with the buildings, when such a law is in use.
+/// * **Vehicles** — `obstacle/vehicle/tr37885-nlosv`: the actual vehicles on a
+///   building-clear path, and TR 37.885's blockage loss for the antenna-height case they
+///   make. On when the geometric law is in use: it is the law that replaces the TR's
+///   random NLOSv state with the vehicles the engine actually places.
+/// * **Terrain** — `obstacle/terrain/knife-edge-p526`: ITU-R P.526 knife-edge diffraction
+///   over the world's terrain profile, Deygout for multiple edges. On whenever the world
+///   carries a terrain grid (`world.terrain.dem`) at the `medium` or `high` tier. The tier
+///   table puts terrain diffraction at `high` only; this build applies it at `medium` too
+///   because a scenario that loads a DEM has asked for the ground to obstruct, and a flat
+///   world makes the model a no-op anyway.
+///
+/// The abstract tier composes no obstacle: it is free-space by definition.
+///
+/// Whether the building *loss* is charged is decided per link, by the law that priced it
+/// ([`PropagationChoice::owns_buildings`]): TR 37.885 and the geometric law price
+/// building obstruction themselves, so under them the stack classifies buildings and does
+/// not charge them a second time. Per link rather than per run, because a focus region can
+/// put two laws in one run.
+#[derive(Debug, Default)]
+pub struct ObstacleStack {
+    /// Building shadowing, when composed.
+    pub buildings: Option<v2xw_radio::BuildingShadowing>,
+    /// The street-corner tracer, when a law that needs it is composed.
+    pub corners: Option<v2xw_radio::CornerTracer>,
+    /// Vehicle blockage, when a law that needs it is composed.
+    pub vehicles: Option<v2xw_radio::obstacle::VehicleBlockage>,
+    /// Terrain diffraction, when composed.
+    pub terrain: Option<v2xw_radio::TerrainDiffraction>,
+    /// Foliage excess over the world's vegetation layer (`radio.channel_model.foliage`).
+    pub foliage: Option<v2xw_radio::FoliageLoss>,
+    /// GEMV²'s density-dependent shadowing σ (`radio.channel_model.density_sigma`).
+    pub density: Option<DensityTerm>,
+    /// GEMV²'s single-bounce wall reflection (`radio.channel_model.reflection`), added by
+    /// power to a building-blocked path's shadowed one.
+    pub reflection: Option<v2xw_radio::obstacle::reflection::ReflectionTracer>,
+    /// Whether the building model's *loss* is charged under the run's main law. Kept for
+    /// callers that compose one law; the engine decides per link.
+    pub building_loss: bool,
+    /// Whether the vehicles on a building-clear path are looked for under every law, not
+    /// only the geometric one (`radio.channel_model.vehicle_blockage: true`).
+    pub vehicles_any_law: bool,
+    /// Whether the run's law prices a vehicle-obstructed link itself, so the vehicle term
+    /// is classified but not charged: the auto-preset log-distance law switches to its
+    /// measured OLOS preset (Abbas 2015) on such a link.
+    pub law_prices_vehicles: bool,
+}
+
+impl ObstacleStack {
+    /// The line-of-sight answer for one path between two antennas.
+    ///
+    /// `geometry` asks for the street corner of a building-blocked path, and `actors` are
+    /// the vehicles that may stand on a building-clear one; both only matter to a law that
+    /// traces geometry, and cost nothing when not asked for.
+    pub fn classify_with(
+        &mut self,
+        world: &World,
+        a: v2xw_core::geom::Vec3,
+        b: v2xw_core::geom::Vec3,
+        geometry: bool,
+        actors: Option<&v2xw_radio::ActorSet>,
+    ) -> v2xw_radio::LosResult {
+        let mut parts = Vec::with_capacity(3);
+        if let Some(buildings) = self.buildings.as_mut() {
+            let mut los = buildings.los_cached(world, a, b);
+            if geometry
+                && los.class.has_building()
+                && let Some(tracer) = self.corners.as_ref()
+            {
+                los.corner = tracer.trace(world, a, b);
+            }
+            parts.push(los);
+        }
+        let building_clear = parts.first().is_none_or(|p| !p.class.has_building());
+        if geometry
+            && building_clear
+            && let (Some(vehicles), Some(set)) = (self.vehicles.as_ref(), actors)
+        {
+            parts.push(
+                <v2xw_radio::obstacle::VehicleBlockage as v2xw_radio::ObstacleModel<
+                    crate::ctx::EngineCtx<'_>,
+                >>::los(vehicles, world, a, b, Some(set)),
+            );
+        }
+        if let Some(terrain) = self.terrain.as_ref() {
+            parts.push(
+                <v2xw_radio::TerrainDiffraction as v2xw_radio::ObstacleModel<
+                    crate::ctx::EngineCtx<'_>,
+                >>::los(terrain, world, a, b, None),
+            );
+        }
+        match parts.len() {
+            0 => v2xw_radio::LosResult::clear(),
+            1 => parts.pop().expect("one part"),
+            _ => v2xw_radio::merge_los(&parts),
+        }
+    }
+
+    /// [`ObstacleStack::classify_with`] with each end's street direction, so the corner of
+    /// a blocked path is found where the two streets cross
+    /// ([`v2xw_radio::CornerTracer::trace_directed`]). No vehicles: the engine looks for
+    /// those itself, only on building-clear paths.
+    pub fn classify_directed(
+        &mut self,
+        world: &World,
+        a: v2xw_core::geom::Vec3,
+        b: v2xw_core::geom::Vec3,
+        geometry: bool,
+        dirs: (StreetDir, StreetDir),
+    ) -> v2xw_radio::LosResult {
+        self.prepare(world);
+        self.classify_directed_shared(world, a, b, geometry, dirs)
+    }
+
+    /// Builds every index the shared-borrow queries use, for this world. Idempotent.
+    ///
+    /// The building index is the one [`v2xw_radio::BuildingShadowing::los_cached`] would
+    /// build on its first call; building it ahead is what lets the reception phase
+    /// classify a frame's links in parallel through `&self`.
+    pub fn prepare(&mut self, world: &World) {
+        if let Some(buildings) = self.buildings.as_mut() {
+            buildings.prepare(world);
+        }
+    }
+
+    /// [`ObstacleStack::classify_directed`] through a shared borrow, so a frame's links can
+    /// be classified in parallel. The same answer: every model it reads is pure, and the
+    /// building index is [`ObstacleStack::prepare`]'s (or, if that was not called, the
+    /// building model's scan, which gives the same classification).
+    pub fn classify_directed_shared(
+        &self,
+        world: &World,
+        a: v2xw_core::geom::Vec3,
+        b: v2xw_core::geom::Vec3,
+        geometry: bool,
+        dirs: (StreetDir, StreetDir),
+    ) -> v2xw_radio::LosResult {
+        let mut parts = Vec::with_capacity(2);
+        if let Some(buildings) = self.buildings.as_ref() {
+            let mut los = buildings.los_shared(world, a, b);
+            if geometry
+                && los.class.has_building()
+                && let Some(tracer) = self.corners.as_ref()
+            {
+                los.corner = tracer.trace_directed(world, a, b, dirs.0, dirs.1);
+            }
+            parts.push(los);
+        }
+        if let Some(terrain) = self.terrain.as_ref() {
+            parts.push(
+                <v2xw_radio::TerrainDiffraction as v2xw_radio::ObstacleModel<
+                    crate::ctx::EngineCtx<'_>,
+                >>::los(terrain, world, a, b, None),
+            );
+        }
+        match parts.len() {
+            0 => v2xw_radio::LosResult::clear(),
+            1 => parts.pop().expect("one part"),
+            _ => v2xw_radio::merge_los(&parts),
+        }
+    }
+
+    /// The line-of-sight answer for one path, buildings and terrain only.
+    pub fn classify(
+        &mut self,
+        world: &World,
+        a: v2xw_core::geom::Vec3,
+        b: v2xw_core::geom::Vec3,
+    ) -> v2xw_radio::LosResult {
+        self.classify_with(world, a, b, false, None)
+    }
+
+    /// Whether any building stands on the straight path — the any-hit test the
+    /// interference beyond the capped range uses. `false` when buildings are not composed.
+    pub fn blocked_by_buildings(
+        &mut self,
+        world: &World,
+        a: v2xw_core::geom::Vec3,
+        b: v2xw_core::geom::Vec3,
+    ) -> bool {
+        self.prepare_blocked(world);
+        self.blocked_shared(world, a, b)
+    }
+
+    /// Builds what [`ObstacleStack::blocked_shared`] walks — the corner tracer's building
+    /// index — when buildings are composed and it is not built yet. The tracer is built
+    /// here, on first need, exactly as [`ObstacleStack::blocked_by_buildings`] always has.
+    pub fn prepare_blocked(&mut self, world: &World) {
+        if self.buildings.is_some() && self.corners.is_none() {
+            self.corners = Some(v2xw_radio::CornerTracer::build(world));
+        }
+    }
+
+    /// [`ObstacleStack::blocked_by_buildings`] through a shared borrow, after
+    /// [`ObstacleStack::prepare_blocked`]. `false` when buildings are not composed.
+    ///
+    /// # Panics
+    /// When buildings are composed and `prepare_blocked` was not called first.
+    pub fn blocked_shared(
+        &self,
+        world: &World,
+        a: v2xw_core::geom::Vec3,
+        b: v2xw_core::geom::Vec3,
+    ) -> bool {
+        if self.buildings.is_none() {
+            return false;
+        }
+        let tracer = self
+            .corners
+            .as_ref()
+            .expect("prepare_blocked runs before blocked_shared");
+        v2xw_radio::segment_blocked(world, tracer.buildings(), a, b)
+    }
+
+    /// The obstacle loss for a classified path, dB, summed in the stack's fixed order.
+    ///
+    /// `los_path_db` is the line-of-sight path loss the propagation model charged, which
+    /// the building model's street-canyon ceiling is measured against
+    /// ([`v2xw_radio::BuildingShadowing::loss_for_path`]). `charge_buildings` is false
+    /// under a law that prices buildings itself ([`PropagationChoice::owns_buildings`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn loss_db(
+        &mut self,
+        ctx: &mut crate::ctx::EngineCtx<'_>,
+        tx: &v2xw_radio::RadioEndpoint,
+        rx: &v2xw_radio::RadioEndpoint,
+        los: &v2xw_radio::LosResult,
+        f_hz: f64,
+        los_path_db: f64,
+        charge_buildings: bool,
+    ) -> f64 {
+        let mut terms = [0.0f64; 3];
+        if charge_buildings && let Some(buildings) = self.buildings.as_ref() {
+            terms[0] = buildings.loss_for_path(los, tx.pos.distance(rx.pos), f_hz, los_path_db);
+        }
+        // TR 37.885's NLOSv is a same-street state: a building-blocked link is priced by
+        // its NLOS law, and a vehicle on it adds nothing further.
+        if !self.law_prices_vehicles
+            && !los.class.has_building()
+            && let Some(vehicles) = self.vehicles.as_mut()
+        {
+            terms[1] =
+                v2xw_radio::ObstacleModel::obstacle_loss_db(vehicles, ctx, tx, rx, los, f_hz);
+        }
+        if let Some(terrain) = self.terrain.as_mut() {
+            terms[2] = v2xw_radio::ObstacleModel::obstacle_loss_db(terrain, ctx, tx, rx, los, f_hz);
+        }
+        // GEMV² §IV-B.3: a building-blocked link also receives the strongest single bounce
+        // off a wall; its power adds to the shadowed path's (`reflection`).
+        if terms[0] > 0.0
+            && los.class.has_building()
+            && let Some(tracer) = self.reflection.as_ref()
+            && let Some(ray) = tracer.best(
+                <crate::ctx::EngineCtx<'_> as v2xw_core::ctx::Ctx>::world(ctx),
+                tx.pos,
+                rx.pos,
+                f_hz,
+            )
+        {
+            terms[0] =
+                v2xw_radio::obstacle::reflection::power_sum_excess_db(terms[0], ray.excess_db);
+        }
+        let total = v2xw_core::math::sum_ordered(terms);
+        // Added on its own, so a run without foliage sums exactly the three terms it did.
+        match self.foliage.as_ref() {
+            Some(foliage) => total + foliage.loss_db(tx.pos, rx.pos, f_hz),
+            None => total,
+        }
+    }
+
+    /// Registers the cards of the models in the stack, so the manifest pins them.
+    ///
+    /// # Errors
+    /// [`EngineError::Registry`] if a card does not validate.
+    pub fn register(&self, registry: &mut Registry) -> Result<()> {
+        use v2xw_core::model::Model;
+        let mut cards = Vec::new();
+        if let Some(b) = &self.buildings {
+            cards.push(b.card().clone());
+        }
+        if let Some(v) = &self.vehicles {
+            cards.push(v.card().clone());
+        }
+        if let Some(t) = &self.terrain {
+            cards.push(t.card().clone());
+        }
+        if let Some(f) = &self.foliage {
+            cards.push(f.card().clone());
+        }
+        if let Some(r) = &self.reflection {
+            cards.push(r.card().clone());
+        }
+        for card in cards {
+            if !registry.contains(&card.id) {
+                registry.register(card)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The Sommer coefficients `radio.channel_model` sets, over the fitted row `fit`, or
+/// `None` when it sets neither.
+pub fn sommer_override(
+    scenario: &Scenario,
+    fit: v2xw_radio::SommerFit,
+) -> Option<v2xw_radio::SommerCoefficients> {
+    let t = &scenario.radio.channel_model;
+    if t.building_wall_loss_db.is_none() && t.building_loss_db_per_m.is_none() {
+        return None;
+    }
+    let base = fit.coefficients();
+    Some(v2xw_radio::SommerCoefficients {
+        beta_db_per_wall: t.building_wall_loss_db.unwrap_or(base.beta_db_per_wall),
+        gamma_db_per_m: t.building_loss_db_per_m.unwrap_or(base.gamma_db_per_m),
+    })
+}
+
+/// The shadowing override `radio.channel_model` sets.
+pub fn shadowing_override(scenario: &Scenario) -> v2xw_radio::ShadowingOverride {
+    let t = &scenario.radio.channel_model;
+    v2xw_radio::ShadowingOverride {
+        sigma_db: t.shadowing_sigma_db,
+        d_corr_m: t.shadowing_decorrelation_m,
+    }
+}
+
+/// The Nakagami profile `radio.channel_model` sets with `fading: nakagami`, or `None`.
+pub fn nakagami_override(scenario: &Scenario) -> Option<v2xw_radio::NakagamiProfile> {
+    let t = &scenario.radio.channel_model;
+    if t.fading.as_deref() != Some("nakagami") {
+        return None;
+    }
+    let m = t.nakagami_shape.unwrap_or(3.0);
+    Some(v2xw_radio::NakagamiProfile {
+        m_near: m,
+        m_far: t.nakagami_shape_far.unwrap_or(m),
+        breakpoint_m: t.nakagami_breakpoint_m.unwrap_or(f64::INFINITY),
+    })
+}
+
+/// The obstacle stack the scenario selects; see [`ObstacleStack`].
+///
+/// `propagation/tr37885` and `propagation/v2v-urban-geometric` decide their NLOS state
+/// from the same building geometry and price it with their own NLOS laws; charging the
+/// Sommer term on top would count every building twice, so under them the buildings are
+/// classified and not charged. `radio.models.obstacle` picks the Sommer fitted row.
+pub fn build_obstacles(scenario: &Scenario, world: &World) -> ObstacleStack {
+    let tier = scenario.radio.tiers.propagation;
+    let models = radio_models(scenario).unwrap_or_default();
+    if tier == v2xw_core::card::Tier::Abstract {
+        return ObstacleStack::default();
+    }
+    let main = propagation_choice_at(scenario, tier);
+    // The focus region's law, when it has one, may trace geometry the surrounding one
+    // does not.
+    let focus = scenario
+        .radio
+        .tiers
+        .focus
+        .as_ref()
+        .map(|f| propagation_choice_at(scenario, tier.max(f.tier)));
+    let traces = main.traces_geometry() || focus.is_some_and(PropagationChoice::traces_geometry);
+    let fit = models
+        .building_fit
+        .unwrap_or(v2xw_radio::SommerFit::Default);
+    let buildings_on = scenario.world.buildings.enabled && !world.buildings.is_empty();
+    let stack_tier = tier;
+    let tuning = &scenario.radio.channel_model;
+    let coefficients = sommer_override(scenario, fit);
+    let blockage = tuning.vehicle_blockage;
+    let vehicles_on = match blockage {
+        Some(on) => on,
+        None => traces,
+    };
+    ObstacleStack {
+        building_loss: !main.owns_buildings(),
+        vehicles_any_law: blockage == Some(true),
+        law_prices_vehicles: matches!(main, PropagationChoice::LogDistance(None, _)),
+        buildings: buildings_on.then(|| {
+            let b = v2xw_radio::BuildingShadowing::with_fit(stack_tier, fit);
+            match coefficients {
+                Some(c) => b.with_coefficients(c),
+                None => b,
+            }
+        }),
+        corners: (buildings_on && traces).then(|| v2xw_radio::CornerTracer::build(world)),
+        vehicles: vehicles_on
+            .then(|| v2xw_radio::obstacle::VehicleBlockage::new(v2xw_core::card::Tier::High)),
+        terrain: world
+            .terrain
+            .is_some()
+            .then(|| v2xw_radio::TerrainDiffraction::new(stack_tier)),
+        foliage: (tuning.foliage == Some(true) && !world.vegetation.is_empty())
+            .then(|| v2xw_radio::FoliageLoss::new(world, stack_tier)),
+        density: (tuning.density_sigma == Some(true)).then(|| {
+            let term = DensityTerm::new(world);
+            // GEMV² Table V: NLOSb σ_min is 0 dB when reflections are computed.
+            if tuning.reflection == Some(true) && buildings_on {
+                term.with_reflections()
+            } else {
+                term
+            }
+        }),
+        reflection: (tuning.reflection == Some(true) && buildings_on)
+            .then(|| v2xw_radio::obstacle::reflection::ReflectionTracer::build(world)),
+    }
+}
+
+/// GEMV²'s density-dependent shadowing σ for one run (`radio.channel_model.density_sigma`,
+/// [`v2xw_radio::DensitySigma`]): the table, the world's building footprints as
+/// (centroid, area) behind an R-tree of their centroids
+/// ([`v2xw_radio::prop::FootprintIndex`]), and whether the world is urban
+/// (Table VI's LOS ellipse).
+#[derive(Debug)]
+pub struct DensityTerm {
+    /// GEMV²'s σ table and ellipse sizes.
+    pub sigma: v2xw_radio::DensitySigma,
+    /// Whether the LOS ellipse is the urban one (the world's default environment).
+    pub urban: bool,
+    /// Every building footprint as (centroid, area m²), in building-id order, behind an
+    /// R-tree of the centroids.
+    statics: v2xw_radio::prop::FootprintIndex,
+}
+
+impl DensityTerm {
+    /// The term for a world.
+    #[must_use]
+    pub fn new(world: &World) -> Self {
+        let statics = world
+            .buildings
+            .iter()
+            .map(|b| {
+                let ring = &b.footprint;
+                let n = ring.len().max(1) as f64;
+                let (mut x, mut y) = (0.0, 0.0);
+                for p in ring {
+                    x += p.x;
+                    y += p.y;
+                }
+                let area = 0.5 * v2xw_world::ring_signed_area_2x(ring).abs();
+                (v2xw_core::geom::Vec3::new(x / n, y / n, 0.0), area)
+            })
+            .collect();
+        let statics = v2xw_radio::prop::FootprintIndex::new(statics);
+        Self {
+            sigma: v2xw_radio::DensitySigma::default(),
+            urban: !matches!(
+                world.default_env,
+                v2xw_world::EnvClass::Rural | v2xw_world::EnvClass::Highway
+            ),
+            statics,
+        }
+    }
+
+    /// The term with reflections computed: GEMV² Table V's NLOSb σ_min is then 0 dB
+    /// (Mangel et al.'s 4.1 dB is for paths priced without reflections).
+    #[must_use]
+    pub fn with_reflections(mut self) -> Self {
+        self.sigma.nlosb_db.0 = 0.0;
+        self
+    }
+
+    /// The link's σ, dB: the vehicles of `snapshot` (not pedestrians or riders) and the
+    /// footprints inside the ellipse of `tx → rx` for its class.
+    #[must_use]
+    pub fn sigma_db(
+        &self,
+        los: &v2xw_radio::LosResult,
+        tx: v2xw_core::geom::Vec3,
+        rx: v2xw_core::geom::Vec3,
+        snapshot: &v2xw_mobility::snapshot::ActorSnapshot,
+    ) -> f64 {
+        let r = self
+            .sigma
+            .major_axis_m(los.class, self.urban)
+            .max(tx.distance_2d(rx));
+        let centre = tx.lerp(rx, 0.5);
+        let vehicles = snapshot
+            .actors_within(centre, 0.5 * r)
+            .into_iter()
+            .filter_map(|a| snapshot.get(a))
+            .filter(|e| !e.view.class.is_vru())
+            .map(|e| e.kinematics.pos);
+        let density = self.link_density(los.class, tx, rx, vehicles);
+        self.sigma.sigma_db(los.class, density)
+    }
+
+    /// The density around the link `tx → rx` of `class` with `vehicles` about: the
+    /// footprints come from the R-tree, in building-id order.
+    #[must_use]
+    pub fn link_density(
+        &self,
+        class: v2xw_radio::LosClass,
+        tx: v2xw_core::geom::Vec3,
+        rx: v2xw_core::geom::Vec3,
+        vehicles: impl IntoIterator<Item = v2xw_core::geom::Vec3>,
+    ) -> v2xw_radio::LinkDensity {
+        let r = self.sigma.major_axis_m(class, self.urban);
+        let near = self.statics.near_link(tx, rx, r);
+        self.sigma
+            .link_density(class, self.urban, tx, rx, vehicles, near)
+    }
+
+    /// [`Self::link_density`] by a scan of every footprint, as before the R-tree: the
+    /// reference the index is tested against (`gemv2_off.rs`).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn link_density_by_scan(
+        &self,
+        class: v2xw_radio::LosClass,
+        tx: v2xw_core::geom::Vec3,
+        rx: v2xw_core::geom::Vec3,
+        vehicles: impl IntoIterator<Item = v2xw_core::geom::Vec3>,
+    ) -> v2xw_radio::LinkDensity {
+        self.sigma.link_density(
+            class,
+            self.urban,
+            tx,
+            rx,
+            vehicles,
+            self.statics.all().iter().copied(),
+        )
+    }
+
+    /// How many footprints the term holds.
+    #[must_use]
+    pub fn footprints(&self) -> usize {
+        self.statics.all().len()
+    }
+}
+
+/// A focus region and the radio stack that runs inside it.
+///
+/// `v2xw_radio::FocusPlan` holds the coupling rule: a link whose receiver is inside the
+/// region is decided by the focus tier's PHY (at `high`, preamble capture and the
+/// per-window SINR); a link with both ends inside gets the focus tier's propagation (at
+/// `high`, the weather attenuation term) and fading; an inbound link — transmitter
+/// outside, receiver inside — gets the surrounding propagation **without** a fading draw
+/// (rule 3's "deterministic" crossing); an outbound link is the surrounding tier's, and
+/// is the one direction that carries the documented boundary bias.
+///
+/// Medium access stays one model for the whole world: a contention window cannot be
+/// half-modelled, and `FocusPlan::warnings` says so for a `mac: high` focus.
+pub struct FocusStack {
+    /// The region and the coupling rule.
+    pub plan: v2xw_radio::FocusPlan,
+    /// The propagation model inside the region.
+    pub propagation: Box<dyn BoxedPropagation>,
+    /// The fading model inside the region.
+    pub fading: Box<dyn BoxedFading>,
+}
+
+impl core::fmt::Debug for FocusStack {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FocusStack")
+            .field("plan", &self.plan)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The focus region `radio.tiers.focus` declares, or `None`.
+///
+/// A `follow` region is a disc the engine re-centres on the followed node at every
+/// mobility step; until that node exists it sits nowhere, so no link is in focus. A `bbox`
+/// region is projected into the world's frame once.
+pub fn build_focus(scenario: &Scenario, world: &World) -> Option<FocusStack> {
+    use v2xw_core::card::Tier;
+    let focus = scenario.radio.tiers.focus.as_ref()?;
+    let t = &scenario.radio.tiers;
+    let outside = v2xw_radio::RadioTierSet {
+        propagation: t.propagation,
+        phy: t.phy,
+        mac: t.mac,
+    };
+    let inside = v2xw_radio::RadioTierSet {
+        propagation: t.propagation.max(focus.tier),
+        phy: t.phy.max(focus.tier),
+        // One MAC for the world; see the type's documentation.
+        mac: t.mac,
+    };
+    let (shape, follows) = match &focus.region {
+        crate::scenario::schema::FocusRegion::Follow { node, radius_m } => (
+            v2xw_radio::FocusShape::circle(FOCUS_NOWHERE, *radius_m),
+            Some(NodeId::new(*node)),
+        ),
+        crate::scenario::schema::FocusRegion::Bbox { bbox } => {
+            let origin: v2xw_core::geo::GeoOrigin = world.origin.into();
+            let a = origin.to_enu(bbox.min_lat_deg, bbox.min_lon_deg, 0.0);
+            let b = origin.to_enu(bbox.max_lat_deg, bbox.max_lon_deg, 0.0);
+            (
+                v2xw_radio::FocusShape::bbox(v2xw_core::geom::Bbox::new(a, b)),
+                None,
+            )
+        }
+        // `FocusRegion` is `#[non_exhaustive]`; a region added upstream is refused by the
+        // loader until this match learns it.
+        #[allow(unreachable_patterns)]
+        _ => return None,
+    };
+    let mut plan = v2xw_radio::FocusPlan::new(shape, inside, outside);
+    plan.follows = follows;
+    let crossing = if t.propagation == Tier::Abstract {
+        Tier::Medium
+    } else {
+        t.propagation
+    };
+    let plan = plan.with_crossing_propagation(crossing);
+    let (propagation, fading) = build_radio_at(scenario, world, inside.propagation);
+    Some(FocusStack {
+        plan,
+        propagation,
+        fading,
+    })
+}
+
+/// Where a `follow` region sits before its node exists: far outside any world.
+pub const FOCUS_NOWHERE: v2xw_core::geom::Vec3 = v2xw_core::geom::Vec3 {
+    x: 1.0e12,
+    y: 1.0e12,
+    z: 0.0,
+};
+
+/// The weather the run starts in.
+pub fn initial_weather(scenario: &Scenario) -> WeatherState {
+    weather_of(
+        scenario.weather.initial,
+        scenario.weather.intensity,
+        scenario.weather.visibility_m,
+        scenario.weather.surface,
+    )
+}
+
+/// A [`WeatherState`] from a scenario's four fields.
+///
+/// The surface condition is a *separate* field because it does not follow from the kind —
+/// a road can still be wet after the rain stops, and black ice happens under a clear sky.
+/// When the scenario leaves it out, the mapping below is this
+/// engine's stated default rather than a physical claim, and it is the conservative one:
+/// precipitation wets or freezes the surface, fog and wind do not touch it.
+pub fn weather_of(
+    kind: WeatherKind,
+    intensity: f64,
+    visibility_m: Option<f64>,
+    surface: Option<SurfaceCondition>,
+) -> WeatherState {
+    if kind == WeatherKind::Clear && visibility_m.is_none() && surface.is_none() {
+        return WeatherState::CLEAR;
+    }
+    let surface = surface.unwrap_or(match kind {
+        WeatherKind::Rain => SurfaceCondition::Wet,
+        WeatherKind::Snow => SurfaceCondition::Snow,
+        WeatherKind::Sleet => SurfaceCondition::Ice,
+        // `WeatherKind` is `#[non_exhaustive]`, so a kind added upstream lands here. Dry
+        // is the conservative default: it claims no grip penalty this engine cannot
+        // justify, and the scenario can always state the surface itself.
+        _ => SurfaceCondition::Dry,
+    });
+    WeatherState::new(
+        kind,
+        intensity,
+        visibility_m.unwrap_or(f64::INFINITY),
+        surface,
+    )
+}
+
+/// The metric providers the scenario selects.
+///
+/// `metrics: [all]` means every provider this build ships. A named list selects by metric
+/// *name*, so a provider is installed when it defines at least one metric the scenario
+/// asked for — which is the useful reading: a scenario asks for `pdr`, not for
+/// `metrics/comms/v1`.
+///
+/// # Errors
+/// [`EngineError::Metrics`] if a provider's definitions do not validate.
+pub fn build_metrics(
+    scenario: &Scenario,
+    registry: &mut Registry,
+) -> Result<v2xw_metrics::ProviderSet> {
+    build_metrics_for(scenario, None, registry)
+}
+
+/// [`build_metrics`] for a run on `world`: the providers that measure per road element
+/// (Edie's flow, density and space-mean speed, per lane) are told the world's geometry.
+/// The catalogue is the same either way; only a run's providers need the world.
+///
+/// # Errors
+/// As [`build_metrics`].
+pub fn build_metrics_for(
+    scenario: &Scenario,
+    world: Option<&World>,
+    registry: &mut Registry,
+) -> Result<v2xw_metrics::ProviderSet> {
+    let mut set = v2xw_metrics::ProviderSet::new();
+    // Emissions and energy (`v2xw_energy`): whenever the scenario has an `energy:`
+    // section, or with the section's defaults when the metric list names one of its
+    // metrics. Not under a bare `all`: the numbers describe a fleet, and a scenario that
+    // says nothing about its fleet keeps exactly the metrics — and the digests — it had
+    // before the crate existed.
+    let energy_named = v2xw_energy::provider::defs()
+        .iter()
+        .any(|d| scenario.metrics.contains(&d.name));
+    if scenario.energy.is_some() || energy_named {
+        let spec = scenario.energy.clone().unwrap_or_default();
+        let provider = v2xw_energy::EnergyProvider::new(spec, scenario.seed)
+            .map_err(|why| crate::ScenarioError::conflict("energy", why))?;
+        set.register(registry, Box::new(provider))?;
+    }
+    // Signing overhead (`v2xw_metrics::signing`): opt-in, with `metrics: [all, signing]`
+    // or a `sig_*` name, so a bare `all` keeps the digests it had before the group existed.
+    let signing_named = scenario
+        .metrics
+        .iter()
+        .any(|m| m == v2xw_metrics::signing::GROUP || m.starts_with("sig_"));
+    if signing_named {
+        set.register(
+            registry,
+            Box::new(v2xw_metrics::signing::SigningProvider::new(
+                0,
+                signing_facts(scenario),
+            )),
+        )?;
+    }
+    // Traffic control (`v2xw_metrics::traffic`): with a `traffic` section, or when the
+    // metric list names the group or one of its metrics. Not under a bare `all`, so a
+    // scenario that says nothing about it keeps the digests it had.
+    let traffic_named = scenario.metrics.iter().any(|m| {
+        m == v2xw_metrics::traffic::GROUP
+            || v2xw_metrics::traffic::TrafficControlProvider::definitions()
+                .iter()
+                .any(|d| d.name == *m)
+    });
+    if scenario.traffic.is_some() || traffic_named {
+        set.register(
+            registry,
+            Box::new(v2xw_metrics::traffic::TrafficControlProvider::new()),
+        )?;
+    }
+    // The chance-corrected detection scores and the per-message level
+    // (`v2xw_metrics::detection::DetectionScoresProvider`): opt-in, with
+    // `metrics: [all, detection-scores]` or one of its metric names, so a bare `all` keeps
+    // its digests. Naming it also records the detectors' `det.observation` it joins on.
+    let scores_named = scenario.metrics.iter().any(|m| {
+        m == v2xw_metrics::detection::SCORES_GROUP
+            || v2xw_metrics::detection::DetectionScoresProvider::metric_names()
+                .contains(&m.as_str())
+    });
+    if scores_named {
+        set.register(
+            registry,
+            Box::new(v2xw_metrics::detection::DetectionScoresProvider::new()),
+        )?;
+    }
+    if scenario.metrics.is_empty() {
+        return Ok(set);
+    }
+    let all = scenario.metrics.iter().any(|m| m == "all");
+    // Every provider a run can feed, in the crate's fixed order. The runtime diagnostics
+    // (wall-clock per simulated second, memory high-water mark) are not among them: the
+    // engine reads no clock, so it has nothing to hand them, and
+    // installing them would put a column of refusals in every run.
+    let mut candidates: Vec<Box<dyn v2xw_metrics::MetricProvider + Send>> = vec![
+        Box::new(v2xw_metrics::comms::CommsProvider::new(0)),
+        Box::new(v2xw_metrics::latency::LatencyProvider::new()),
+        Box::new(v2xw_metrics::awareness::AwarenessProvider::new(0)),
+        Box::new(v2xw_metrics::load::LoadProvider::new(0)),
+        Box::new(v2xw_metrics::overhead::OverheadProvider::new(0)),
+        Box::new(v2xw_metrics::frag::FragProvider::new()),
+        Box::new(v2xw_metrics::security::SecurityProvider::new(0)),
+        Box::new(v2xw_metrics::detection::DetectionProvider::new()),
+        Box::new(safety_provider(scenario, world)),
+        Box::new(v2xw_metrics::vru::VruSafetyProvider::new()),
+    ];
+    // The applications' warnings, labelled against ground truth, when vehicles run any.
+    if !scenario.apps.enabled.is_empty() {
+        // Seeded with the warning applications on, so one that never warns reports 0.
+        // GLOSA advises and issues no warnings; BSW's provider also issues LCW.
+        let mut seeds: Vec<String> = Vec::new();
+        for a in &scenario.apps.enabled {
+            match a.as_str() {
+                "glosa" => {}
+                "bsw" => seeds.extend(["bsw".to_string(), "lcw".to_string()]),
+                other => seeds.push(other.to_string()),
+            }
+        }
+        candidates.push(Box::new(
+            v2xw_metrics::apps::AppsProvider::new().with_apps(seeds),
+        ));
+    }
+    // The pseudonym, pool, linkability and backend-link metrics read records only the
+    // security path writes, so a run without it would publish a column of empty samples.
+    let security_path = scenario.actors.backend.protocol.is_some()
+        || scenario.security.protocol.is_some()
+        || !scenario.actors.rsus.is_empty()
+        || !scenario.threats.attackers.is_empty()
+        || !scenario.detection.local.is_empty();
+    if security_path {
+        candidates.push(Box::new(crate::privacy_metrics::PrivacyProvider::new()));
+    }
+    let ssm = ssm_named(scenario);
+    for provider in candidates {
+        // The `ssm` group selects the safety provider, which carries the group's metrics.
+        let wanted = all
+            || provider.defs().iter().any(|d| {
+                scenario.metrics.contains(&d.name.to_string())
+                    || (ssm && d.name.starts_with("ssm_"))
+            });
+        if wanted {
+            set.register(registry, provider)?;
+        }
+    }
+    Ok(set)
+}
+
+/// The safety and traffic-flow provider, told the run's mobility step and every motorised
+/// lane's length.
+///
+/// Edie's generalised flow, density and space-mean speed (`flow`, `density`,
+/// `mean_speed`) are per lane, over the lane's length; a lane whose length was never
+/// declared has no aggregate. Nothing declared one, so no run ever measured the three —
+/// they were in every run's catalogue and never once had a value. The sample interval is
+/// the scenario's step, because Edie weights each sample by it (a 50 ms run read at the
+/// 100 ms default would report twice the flow).
+/// Whether the metric list names the full surrogate safety measures (`ssm`, or an `ssm_*`
+/// metric): opt-in, so a bare `all` keeps the digests it had.
+fn ssm_named(scenario: &Scenario) -> bool {
+    scenario
+        .metrics
+        .iter()
+        .any(|m| m == v2xw_metrics::safety::SSM_GROUP || m.starts_with("ssm_"))
+}
+
+fn safety_provider(
+    scenario: &Scenario,
+    world: Option<&World>,
+) -> v2xw_metrics::safety::SafetyProvider {
+    let mut p = v2xw_metrics::safety::SafetyProvider::new(0)
+        .with_sample_interval(v2xw_core::time::Duration::from_millis(
+            scenario.time.mobility_step_ms.max(1),
+        ))
+        .with_per_lane(false)
+        .with_ssm(ssm_named(scenario));
+    // The full surrogate measures' rectangles: every class's own body.
+    for class in v2xw_mobility::VehicleClass::ALL {
+        let d = class.dims();
+        p.declare_class_dims(class.as_str(), d.length_m, d.width_m);
+    }
+    // The lanes traffic drives on: a sidewalk or a crossing full of pedestrians is not
+    // road density, and a parking lane's parked cars are not flow.
+    let motorised = |k: v2xw_world::LaneKind| {
+        matches!(
+            k,
+            v2xw_world::LaneKind::Driving
+                | v2xw_world::LaneKind::Bus
+                | v2xw_world::LaneKind::Internal
+        )
+    };
+    for lane in world
+        .map(|w| w.roads.lanes())
+        .unwrap_or_default()
+        .iter()
+        .filter(|l| motorised(l.kind))
+    {
+        let length: f64 = lane
+            .centreline
+            .windows(2)
+            .map(|w| w[0].distance(w[1]))
+            .sum();
+        if length > 0.0 {
+            p.declare_lane_length(lane.id.index(), length);
+        }
+    }
+    p
+}
+
+/// What the signing-overhead metrics need to know about the run's signature scheme: its
+/// encoded signature length (the scheme registry) and where the default OBU signs and
+/// verifies (its hardware profile).
+pub fn signing_facts(scenario: &Scenario) -> v2xw_metrics::signing::SchemeFacts {
+    let mut facts = v2xw_metrics::signing::SchemeFacts::default();
+    let Some(scheme) = v2xw_sec::scheme::signature(&scenario.security.signature) else {
+        return facts;
+    };
+    facts.scheme = scheme.id.to_string();
+    facts.mode = scheme.mode.as_str().to_string();
+    // In the Partially-Hybrid mode each message carries the classical half's
+    // signature and is signed and verified with its operations; only the certificate is
+    // hybrid, and it travels in the certificate cycle's fragments.
+    let scheme = if crate::signature::partially_hybrid(scenario) {
+        facts.mode = "partially-hybrid".to_string();
+        v2xw_sec::scheme::signature(crate::signature::message_signature(scenario)).unwrap_or(scheme)
+    } else {
+        scheme
+    };
+    facts.sig_octets = u64::from(scheme.sig_octets());
+    if let Some(profile) = v2xw_node::profiles::get(&scenario.nodes.default_obu) {
+        let engine = |op: &str| {
+            profile
+                .op_cost(op)
+                .map_or("unknown".to_string(), |(_, on)| {
+                    match on {
+                        v2xw_node::profile::RunsOn::Hsm => "hsm",
+                        v2xw_node::profile::RunsOn::Accelerator => "accelerator",
+                        v2xw_node::profile::RunsOn::Cpu => "cpu",
+                    }
+                    .to_string()
+                })
+        };
+        facts.sign_engine = engine(scheme.sign_op());
+        facts.verify_engine = engine(scheme.verify_op());
+    }
+    facts
+}
+
+/// The two run-wide facts a node needs that are not in the scenario's `nodes` section.
+///
+/// Both were left at `NodeConfig`'s defaults by the Phase 1 build, and both are wrong by
+/// default in a way that is invisible in a record:
+///
+/// * `origin` is the world's geodetic anchor. Both message formats carry latitude and
+///   longitude, so a node that does not know where world `(0, 0, 0)` is encodes every
+///   position about **null island** — a perfectly valid CAM off the coast of Ghana.
+/// * `wall` is what `time.t0` means. It is what a 1609.2 `generationTime` and a J2735
+///   `secMark` are stamped from, so a node left on the default clock encodes timestamps
+///   that have nothing to do with the run's declared civil time.
+///
+/// Neither is a wall-clock *read*: `wall` comes from the scenario's `time.t0` and
+/// `origin` from the world's provenance.
+#[derive(Debug, Clone, Copy)]
+pub struct NodeEnv {
+    /// The geodetic anchor of the world's ENU frame.
+    pub origin: GeoOrigin,
+    /// The civil instant `SimTime` zero maps to, from `time.t0`.
+    pub wall: WallClock,
+}
+
+impl NodeEnv {
+    /// The environment a run over `world` starting at `wall` gives its nodes.
+    pub fn new(world: &World, wall: WallClock) -> Self {
+        NodeEnv {
+            origin: world.origin.into(),
+            wall,
+        }
+    }
+}
+
+/// The hardware profile id the scenario gives a vehicle of this class.
+///
+/// `nodes.per_class` overrides `nodes.default_obu` by vehicle-class name. The key is the
+/// class's own [`VehicleClass::as_str`] spelling, which is the same spelling
+/// `actors.vehicles.classes` is keyed by and the one `validate` checks `per_class`
+/// against — so a scenario cannot name a class in one section and a different string for
+/// the same class in the other.
+pub fn obu_profile_id(scenario: &Scenario, class: VehicleClass) -> &str {
+    scenario
+        .nodes
+        .per_class
+        .get(class.as_str())
+        .map_or(scenario.nodes.default_obu.as_str(), String::as_str)
+}
+
+/// Which message services the scenario's `messages.sets` turns on.
+///
+/// The Phase 1 build left this at [`ServiceSet::BOTH`], so every node generated a CAM
+/// *and* a BSM whatever the scenario said — which is why the vertical-slice audit found
+/// two different formats on the air in a scenario whose `messages.sets` named one of
+/// them. `validate` refuses a set this build has no generator for, so anything that
+/// reaches here is one of the two or is deliberately absent.
+pub fn service_set(scenario: &Scenario) -> ServiceSet {
+    let has = |name: &str| scenario.messages.sets.iter().any(|s| s == name);
+    ServiceSet {
+        cam: has("cam"),
+        bsm: has("bsm"),
+        denm: has("denm"),
+        cpm: has("cpm"),
+        ..ServiceSet::NONE
+    }
+}
+
+/// The services a vehicle of `class` runs: [`service_set`], plus the signal request when
+/// the scenario asks for `srm` and the vehicle is one entitled to priority.
+///
+/// J2735's `SignalRequestMessage` is sent by a vehicle with a priority or pre-emption
+/// entitlement, and the fleet class that has one is [`VehicleClass::Emergency`]. Transit
+/// priority (a bus asking for an extended green) is the same message and would be a second
+/// class here; this build does not model it, and says so on the key's status.
+pub fn vehicle_services(scenario: &Scenario, class: VehicleClass) -> ServiceSet {
+    let has = |name: &str| scenario.messages.sets.iter().any(|s| s == name);
+    ServiceSet {
+        srm: has("srm") && class == VehicleClass::Emergency,
+        ..service_set(scenario)
+    }
+}
+
+/// The services a roadside unit runs: the intersection broadcasts its roles name and the
+/// scenario's `messages.sets` turns on. A unit with the `spat` role answers signal
+/// requests (SSM) when `ssm` is on, because the unit wired to the controller is the one
+/// that can say what became of a request.
+pub fn rsu_services(scenario: &Scenario, roles: &[String]) -> ServiceSet {
+    let has = |name: &str| scenario.messages.sets.iter().any(|s| s == name);
+    let role = |name: &str| {
+        roles
+            .iter()
+            .any(|r| r == name || r == "spat-map" && (name == "spat" || name == "map"))
+    };
+    ServiceSet {
+        spat: has("spat") && role("spat"),
+        map: has("map") && role("map"),
+        ssm: has("ssm") && role("spat"),
+        // Infrastructure collective perception (TS 103 324 §7.1.3): the unit's own
+        // sensors' objects (`crate::perception`, `perception.rsu`).
+        cpm: has("cpm") && role("cpm"),
+        ..ServiceSet::NONE
+    }
+}
+
+/// The PSIDs (ITS-AIDs on the ETSI stack) a roadside unit's application certificate must
+/// permit: one for each message its enabled applications sign ([`rsu_services`],
+/// `v2xw_msg::registry`), deduplicated and ascending. Empty for a unit that runs no
+/// broadcast application (the certificate kind's default then applies).
+pub fn rsu_app_psids(scenario: &Scenario, roles: &[String]) -> Vec<u64> {
+    v2xw_msg::registry::permissions(
+        &rsu_signed_messages(scenario, roles),
+        etsi_facilities(scenario),
+    )
+}
+
+/// The messages a roadside unit with `roles` signs: one for each of its enabled
+/// applications ([`rsu_services`]) and, when it relays under `net.rsu_ip.air: sch`, its
+/// WSA. Both of its certificates permit these: the application certificate the SCMS
+/// issues ([`rsu_app_psids`]) and the factory certificate it holds outside the
+/// certificate cycle ([`build_rsu`]).
+pub fn rsu_signed_messages(scenario: &Scenario, roles: &[String]) -> Vec<v2xw_msg::MsgType> {
+    let s = rsu_services(scenario, roles);
+    let mut sends: Vec<v2xw_msg::MsgType> = [
+        (s.bsm, v2xw_msg::MsgType::Bsm),
+        (s.cam, v2xw_msg::MsgType::Cam),
+        (s.denm, v2xw_msg::MsgType::Denm),
+        (s.spat, v2xw_msg::MsgType::Spat),
+        (s.map, v2xw_msg::MsgType::Map),
+        (s.srm, v2xw_msg::MsgType::Srm),
+        (s.ssm, v2xw_msg::MsgType::Ssm),
+        (s.cpm, v2xw_msg::MsgType::Cpm),
+    ]
+    .into_iter()
+    .filter_map(|(on, m)| on.then_some(m))
+    .collect();
+    // Under `net.rsu_ip.air: sch` a relaying unit signs its WSA (IEEE 1609.3-2016 Annex
+    // H.1), so its application certificate permits the WSA PSID (135).
+    if rsu_ip_sch(scenario) && is_relay(roles) {
+        sends.push(v2xw_msg::MsgType::Wsa);
+    }
+    sends
+}
+
+/// Whether `net.rsu_ip.air` is `sch`, the default: relaying units advertise the SCMS service in a
+/// WSA, and a vehicle uses
+/// only a unit whose WSA it verified. Only an explicit `constant` opts out.
+pub fn rsu_ip_sch(scenario: &Scenario) -> bool {
+    scenario.net.rsu_ip.as_ref().is_none_or(|r| r.air == "sch")
+}
+
+/// Whether a roadside unit with these roles relays SCMS traffic for vehicles.
+pub fn is_relay(roles: &[String]) -> bool {
+    roles
+        .iter()
+        .any(|r| r == "provisioning-proxy" || r == "report-forward")
+}
+
+/// Whether the node's facilities layer is ETSI's: the GeoNetworking/BTP stack.
+pub fn etsi_facilities(scenario: &Scenario) -> bool {
+    scenario.net.layer == "gn-btp"
+}
+
+/// The envelope profile `security.envelope` names.
+///
+/// `validate` restricts the field to the two this build implements, so the fallback is
+/// unreachable from a validated scenario and is 1609.2 rather than a panic.
+pub fn envelope_profile(scenario: &Scenario) -> EnvelopeProfile {
+    match scenario.security.envelope.as_str() {
+        "etsi103097" => EnvelopeProfile::EtsiTs103097,
+        _ => EnvelopeProfile::Ieee1609Dot2,
+    }
+}
+
+/// The crypto backend `security.crypto_mode` names.
+///
+/// Phase 1 acceptance criterion 3 requires a `real` run and a `modeled` run to produce
+/// identical event logs apart from the manifest, and `NodeConfig::crypto_mode` is the
+/// only thing either mode changes. Until now the scenario's choice reached the *manifest*
+/// and not the nodes, so a scenario asking for `real` got modelled cryptography and a
+/// manifest that said otherwise.
+pub fn crypto_mode(scenario: &Scenario) -> CryptoMode {
+    match scenario.security.crypto_mode {
+        crate::scenario::schema::CryptoModeSpec::Real => CryptoMode::Real,
+        crate::scenario::schema::CryptoModeSpec::Modeled => CryptoMode::Modeled,
+    }
+}
+
+/// `nodes.hsm_sign_lower_us` applied to a node's profile: the signing operation's
+/// published upper bound gains this lower edge, so the service model draws each signature
+/// inside it ([`v2xw_node::profile::HsmOp::range_us`]). A profile without an upper-bound
+/// signing time is left as it is (the loader refuses that combination for the default OBU).
+pub(crate) fn with_sign_lower_edge(
+    scenario: &Scenario,
+    mut profile: v2xw_node::profile::HardwareProfile,
+) -> v2xw_node::profile::HardwareProfile {
+    if let Some(lo) = scenario.nodes.hsm_sign_lower_us {
+        let (sign_op, _) =
+            v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
+        let sign_op = profile.priced_op(sign_op).to_string();
+        if let Some(op) = profile.hsm.ops.get_mut(sign_op.as_str()) {
+            op.latency_lower_us.value = Some(lo);
+            op.latency_lower_us.source = Some("scenario nodes.hsm_sign_lower_us".to_string());
+        }
+    }
+    profile
+}
+
+/// The profile `id` names (the reference OBU when no shipped profile has that id) with
+/// [`with_sign_lower_edge`] applied, shared by every node built on it: one copy per
+/// distinct (profile, lower edge, signing operation) in the process rather than one per
+/// node (about 10 kB each, 17 MB at full Midtown scale, measured).
+/// The value is a pure function of the key, so sharing it changes nothing a node computes.
+pub(crate) fn shared_profile(
+    scenario: &Scenario,
+    id: &str,
+) -> std::sync::Arc<v2xw_node::profile::HardwareProfile> {
+    type Key = (String, Option<u64>, &'static str);
+    type Shared =
+        std::collections::BTreeMap<Key, std::sync::Arc<v2xw_node::profile::HardwareProfile>>;
+    static SHARED: std::sync::OnceLock<std::sync::Mutex<Shared>> = std::sync::OnceLock::new();
+    let (sign_op, _) =
+        v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
+    let key: Key = (
+        id.to_string(),
+        scenario.nodes.hsm_sign_lower_us.map(f64::to_bits),
+        sign_op,
+    );
+    let mut shared = SHARED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::sync::Arc::clone(shared.entry(key).or_insert_with(|| {
+        let profile = v2xw_node::profiles::get(id).cloned().unwrap_or_else(|| {
+            v2xw_node::profiles::get(v2xw_node::profiles::REFERENCE_OBU)
+                .expect("the reference profile ships with v2xw-node")
+                .clone()
+        });
+        std::sync::Arc::new(with_sign_lower_edge(scenario, profile))
+    }))
+}
+
+/// `NodeConfig`'s defaults with `nodes.verify_queue_depth` applied (network audit).
+fn node_capacities(scenario: &Scenario) -> NodeConfig {
+    let mut c = NodeConfig::default();
+    if let Some(n) = scenario.nodes.verify_queue_depth {
+        c.queue_capacity[1] = n as usize;
+    }
+    if let Some(n) = scenario.nodes.peer_cert_cache {
+        c.peer_cache_capacity = n as usize;
+    }
+    c.cpm_interval = infra_interval(scenario.messages.cpm_interval_ms, v2xw_node::cpm::T_GEN_CPM);
+    // The CP service under load and the extra DENM triggers, each off unless set.
+    let m = &scenario.messages;
+    c.cpm = v2xw_node::cpm::CpmConfig {
+        dcc_limited: m.cpm_dcc_limited.unwrap_or(false),
+        quality_threshold: m.cpm_quality_threshold,
+        max_objects: m
+            .cpm_max_objects
+            .map_or(v2xw_node::cpm::MAX_OBJECTS, |n| n as usize),
+        utility_order: m.cpm_max_objects.is_some(),
+    };
+    c.denm_triggers = v2xw_node::events::DenmTriggers {
+        traffic_condition: m.denm_traffic_condition.unwrap_or(false),
+        traction_loss: m.denm_traction_loss.unwrap_or(false),
+    };
+    if let Some(n) = scenario.messages.path_history_points {
+        c.path_history_points = n as usize;
+    }
+    c.path_history_on_change = path_history_on_change(scenario);
+    // Partially-Hybrid: a receiver checks the issuer's post-quantum signature on
+    // each certificate it learns, once, on top of the classical message verification.
+    c.cert_verify_op = crate::signature::certificate_pq_verify_op(scenario);
+    c
+}
+
+/// What a pseudonym change does to a vehicle's path history,
+/// `messages.bsm.path_history_on_change`: `keep`, SAE J2945/1's behaviour (it
+/// has no clearing rule, and §6.3.6.16 `DATAACC-039` asks for 200 m of history), or `clear`,
+/// a privacy-research option. `None` when the key is unset, so the node takes its own
+/// standard's ([`v2xw_node::NodeConfig::path_history_on_change`]: a BSM sender keeps, an
+/// ETSI CAM station clears).
+pub fn path_history_on_change(scenario: &Scenario) -> Option<v2xw_msg::j2945::PathHistoryOnChange> {
+    use crate::scenario::schema::PathHistoryOnChangeSpec;
+    use v2xw_msg::j2945::PathHistoryOnChange;
+    let spec = scenario.messages.bsm.as_ref()?.path_history_on_change?;
+    Some(match spec {
+        PathHistoryOnChangeSpec::Keep => PathHistoryOnChange::Keep,
+        PathHistoryOnChangeSpec::Clear => PathHistoryOnChange::Clear,
+    })
+}
+
+/// A SPaT or MAP period from `messages.*_interval_ms`, or the default (network audit).
+fn infra_interval(ms: Option<u64>, default: Duration) -> Duration {
+    ms.map_or(default, Duration::from_millis)
+}
+
+/// The certificate-attachment cadences `security.signer_id_policy` names, as (CAM and
+/// every other message type, BSM).
+///
+/// Both readings are an interval, and the scenario gives it
+/// in milliseconds. Unset, each message type takes its own standard's: a BSM
+/// 450 ms (SAE J2945/1 §6.5.2 `BSMSIGN-003`, `vMaxCertDigestInterval`), a CAM, a PSM,
+/// a SPaT and the rest once a second (ETSI TS 103 097 §7.1.1). A set value is the cadence
+/// of both. `full_cert_every_ms: 0` or `digest_otherwise: false` means "a certificate on
+/// every message", which is TS 103 097 §7.1.2's DENM rule; `validate` refuses the
+/// contradictory combination of zero with `digest_otherwise` true.
+pub fn signer_id_policies(scenario: &Scenario) -> (SignerIdPolicy, SignerIdPolicy) {
+    let p = &scenario.security.signer_id_policy;
+    if p.always_certificate() {
+        return (
+            SignerIdPolicy::ALWAYS_CERTIFICATE,
+            SignerIdPolicy::ALWAYS_CERTIFICATE,
+        );
+    }
+    let every = |ms: u64| SignerIdPolicy {
+        full_cert_every: Some(Duration::from_millis(ms)),
+        always_certificate: false,
+    };
+    match p.full_cert_every_ms {
+        Some(ms) => (every(ms), every(ms)),
+        None => (
+            every(crate::scenario::schema::SignerIdPolicySpec::CAM_STANDARD_MS),
+            every(crate::scenario::schema::SignerIdPolicySpec::BSM_STANDARD_MS),
+        ),
+    }
+}
+
+/// The CAM `stationType` a vehicle class is.
+///
+/// SUMO's vClass table and the CDD's `TrafficParticipantType` are two vocabularies for
+/// the same thing; this is the mapping between them, and it is here rather than in
+/// `v2xw-mobility` because it is the *scenario's* composition of a traffic model with a
+/// message format and neither crate should know about the other.
+pub fn station_type(class: VehicleClass) -> ParticipantType {
+    match class {
+        VehicleClass::Passenger => ParticipantType::PassengerCar,
+        // An ambulance or a fire appliance is a special vehicle in the CDD, which is the
+        // category the emergency light bar belongs to rather than a size class.
+        VehicleClass::Emergency => ParticipantType::SpecialVehicle,
+        VehicleClass::Delivery => ParticipantType::LightTruck,
+        VehicleClass::Truck => ParticipantType::HeavyTruck,
+        VehicleClass::Trailer => ParticipantType::Trailer,
+        VehicleClass::Bus | VehicleClass::Coach => ParticipantType::Bus,
+        VehicleClass::Motorcycle => ParticipantType::Motorcycle,
+        VehicleClass::Moped => ParticipantType::Moped,
+        VehicleClass::Bicycle => ParticipantType::Cyclist,
+        VehicleClass::Pedestrian => ParticipantType::Pedestrian,
+        VehicleClass::Scooter => ParticipantType::LightVruVehicle,
+    }
+}
+
+/// The scenario's `security.verification_policy`, as the model a receiving device runs.
+///
+/// Vehicles and VRU devices both run it; a roadside unit runs `verify-all` whatever the
+/// scenario says ([`build_rsu`]).
+pub(crate) fn verification_policy(scenario: &Scenario) -> Box<dyn VerificationPolicy> {
+    match scenario.security.verification_policy.as_str() {
+        "verify-all" => Box::new(VerifyAll::new()),
+        // The two parameterised policies take one number each, and neither has a published
+        // default: `on-demand`'s relevance threshold and `prioritized`'s range are study
+        // choices. The values here are the ones `v2xw-node::register_all` registers, so a
+        // run and the manifest's card agree.
+        "on-demand" => Box::new(OnDemand::new(
+            scenario.security.on_demand_threshold.unwrap_or(0.5),
+        )),
+        _ => Box::new(Prioritized::new(
+            scenario.security.prioritized_horizon_m.unwrap_or(300.0),
+        )),
+    }
+}
+
+/// Builds one node on the scenario's profile, with a bootstrap credential.
+///
+/// `class` selects the hardware profile through `nodes.per_class` and the CAM
+/// `stationType`; `dims` are the actor's own body dimensions, which both message formats
+/// carry. `env` brings the world's geodetic anchor and the scenario's civil clock.
+pub fn build_node(
+    scenario: &Scenario,
+    env: NodeEnv,
+    factory: &crate::credentials::CredentialFactory,
+    node: NodeId,
+    at: SimTime,
+    class: VehicleClass,
+    dims: Dims,
+) -> ObuRuntime {
+    let wanted = obu_profile_id(scenario, class);
+    let profile = shared_profile(scenario, wanted);
+    let policy = verification_policy(scenario);
+    let (bsm_params, cam_params) = generator_params(scenario);
+    // The node's own record of its transmit power is its class's `radio.devices` power;
+    // the frame's actual power (congestion control, EIRP) is the engine's.
+    let device = device_for(
+        scenario,
+        if is_vru_class(class) {
+            v2xw_radio::ActorClass::Pedestrian
+        } else {
+            v2xw_radio::ActorClass::Car
+        },
+    );
+    let (sign_op, verify_op) =
+        v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
+    let config = NodeConfig {
+        tx_power_dbm: device.tx_power_dbm,
+        sign_op,
+        verify_op,
+        services: vehicle_services(scenario, class),
+        etsi_facilities: etsi_facilities(scenario),
+        crypto_mode: crypto_mode(scenario),
+        wall: env.wall,
+        origin: env.origin,
+        dims,
+        station_type: station_type(class),
+        bsm_params,
+        cam_params,
+        ..node_capacities(scenario)
+    };
+    let mut runtime = ObuRuntime::new(node, profile, policy, config, at);
+    // The role a CAM's low-frequency container states (EN 302 637-2, `VehicleRole`).
+    runtime.set_vehicle_role(match class {
+        VehicleClass::Emergency => v2xw_msg::cam::VehicleRole::Emergency,
+        VehicleClass::Bus | VehicleClass::Coach => v2xw_msg::cam::VehicleRole::PublicTransport,
+        _ => v2xw_msg::cam::VehicleRole::Default,
+    });
+    apply_compute_tier(&mut runtime, scenario);
+    apply_security_profile(&mut runtime, scenario, env);
+    bootstrap_credentials(&mut runtime, scenario, factory, node, at, false);
+    // The V2X applications (`v2xw_node::apps`), in every equipped vehicle.
+    if !scenario.apps.enabled.is_empty() && !is_vru_class(class) {
+        runtime.enable_apps(app_params(scenario));
+    }
+    runtime
+}
+
+/// The applications' parameters `apps` sets over `v2xw_node::apps`'s cited defaults.
+pub fn app_params(scenario: &Scenario) -> v2xw_node::apps::AppParams {
+    let a = &scenario.apps;
+    let mut p = v2xw_node::apps::AppParams {
+        fcw: a.runs("fcw"),
+        eebl: a.runs("eebl"),
+        ima: a.runs("ima"),
+        lta: a.runs("lta"),
+        bsw: a.runs("bsw"),
+        pcw: a.runs("pcw"),
+        rlvw: a.runs("rlvw"),
+        glosa: a.runs("glosa"),
+        ..v2xw_node::apps::AppParams::default()
+    };
+    p.fcw_params.ttc_s = a.fcw_ttc_s;
+    p.ima_params.tti_s = a.ima_tti_s;
+    p.lta_params.gap_s = a.lta_gap_s;
+    p.pcw_params.ttc_s = a.pcw_ttc_s;
+    p.signal_params.rlvw_decel_mps2 = a.rlvw_decel_mps2;
+    p
+}
+
+/// `nodes.compute_tier`, the node compute tiers:
+///
+/// * `abstract` — the node's cryptography costs a microsecond and no node is ever
+///   compute-bound;
+/// * `medium` — every operation costs its hardware profile's service time and queues FIFO
+///   behind **one** CPU server and the profile's HSM server;
+/// * `high` — the same, with the CPU run as the profile's `cpu.cores` servers, so work
+///   that runs on the CPU (software cryptography, application tasks) is served in
+///   parallel.
+///
+/// What §2.1's `high` also lists — processor sharing, priority classes, memory
+/// accounting, an HSM latency distribution — is not built; the key-status note says so.
+fn apply_compute_tier(runtime: &mut ObuRuntime, scenario: &Scenario) {
+    match scenario.nodes.compute_tier {
+        v2xw_core::card::Tier::Abstract => runtime.set_compute_unlimited(),
+        v2xw_core::card::Tier::Medium => runtime.set_cpu_servers(1),
+        _ => {}
+    }
+}
+
+/// The generation parameters `messages.generator` sets, over the standards' defaults.
+///
+/// The key names one generator and overrides its card's parameters; the other generator
+/// keeps its defaults. Every name and bound was checked by `validate`, so a value that
+/// does not read here is one the loader already refused, and the default stands.
+pub fn generator_params(
+    scenario: &Scenario,
+) -> (
+    v2xw_msg::generator::BsmGenParams,
+    v2xw_msg::generator::CamGenParams,
+) {
+    use v2xw_msg::generator::{BSM_GENERATOR_ID, BsmGenParams, CAM_GENERATOR_ID, CamGenParams};
+    let mut bsm = BsmGenParams::j2945_1();
+    let mut cam = CamGenParams::en302637_2();
+    if let Some(period) = fixed_message_period(scenario) {
+        // A fixed rate: the BSM's nominal interval, and a CAM whose shortest and longest
+        // interval are the same, so the dynamics triggers have nothing to choose between.
+        bsm.nominal_itt = period;
+        bsm.min_itt = bsm.min_itt.min(period);
+        // And the ceiling: the generator clamps its interval into [vMinITT, vMaxITT], so a
+        // fixed rate below 1 / 600 ms (1.67 Hz) was sent at 1.67 Hz whatever it asked for
+        // (1 Hz: 113 frames where 2 s x 40 vehicles is about 80). vMaxITT is the ceiling
+        // J2945/1's congestion control may stretch the interval to, not a floor under a
+        // rate the scenario fixed.
+        bsm.max_itt = bsm.max_itt.max(period);
+        cam.t_gen_cam_min = period;
+        cam.t_gen_cam_max = period;
+        cam.t_check_cam_gen = period.min(cam.t_check_cam_gen);
+    }
+    let Some(choice) = scenario.messages.generator.as_ref() else {
+        return (bsm, cam);
+    };
+    let ms = |name: &str| -> Option<Duration> {
+        choice
+            .params
+            .get(name)
+            .and_then(serde_json::Value::as_f64)
+            .map(|v| Duration::from_nanos((v * 1e6).round().max(0.0) as u64))
+    };
+    let num = |name: &str| choice.params.get(name).and_then(serde_json::Value::as_f64);
+    match choice.id.as_str() {
+        BSM_GENERATOR_ID => {
+            if let Some(d) = ms("nominal_itt_ms") {
+                bsm.nominal_itt = d;
+            }
+            if let Some(d) = ms("min_itt_ms") {
+                bsm.min_itt = d;
+            }
+            if let Some(d) = ms("max_itt_ms") {
+                bsm.max_itt = d;
+            }
+        }
+        CAM_GENERATOR_ID => {
+            if let Some(d) = ms("t_gen_cam_min_ms") {
+                cam.t_gen_cam_min = d;
+            }
+            if let Some(d) = ms("t_gen_cam_max_ms") {
+                cam.t_gen_cam_max = d;
+            }
+            if let Some(d) = ms("t_check_cam_gen_ms") {
+                cam.t_check_cam_gen = d;
+            }
+            if let Some(n) = num("n_gen_cam") {
+                cam.n_gen_cam = n.round().clamp(1.0, 255.0) as u8;
+            }
+            if let Some(deg) = num("heading_threshold_deg") {
+                cam.heading_threshold_rad = deg * (core::f64::consts::PI / 180.0);
+            }
+            if let Some(m) = num("position_threshold_m") {
+                cam.position_threshold_m = m;
+            }
+            if let Some(v) = num("speed_threshold_mps") {
+                cam.speed_threshold_mps = v;
+            }
+            if let Some(d) = ms("low_frequency_interval_ms") {
+                cam.low_frequency_interval = d;
+            }
+        }
+        _ => {}
+    }
+    (bsm, cam)
+}
+
+/// Puts `security.envelope` and `security.signer_id_policy` into a fresh node's security
+/// stack.
+///
+/// A whole replacement rather than a mutation: [`v2xw_node::NodeSecurity`]'s two builder
+/// methods take `self` by value, and the stack this replaces was constructed by
+/// `ObuRuntime::new` moments ago and holds no signers, no issuer and no peer keys. Called
+/// anywhere but immediately after construction it would discard credential state, which
+/// is why it is private and why both call sites are in this module.
+fn apply_security_profile(runtime: &mut ObuRuntime, scenario: &Scenario, env: NodeEnv) {
+    let (cam_policy, bsm_policy) = signer_id_policies(scenario);
+    let configured = v2xw_node::NodeSecurity::new(
+        env.wall,
+        crypto_mode(scenario),
+        v2xw_node::secure::PSID_SAFETY,
+    )
+    .with_profile(envelope_profile(scenario), env.wall)
+    // Unset, each message type its own standard's cadence (BSM 450 ms, the rest 1 s); a
+    // scenario that states a cadence overrides both.
+    .with_signer_id_policies(cam_policy, bsm_policy)
+    .with_new_neighbour_attach(scenario.security.signer_id_policy.on_new_neighbour);
+    *runtime.security_mut() = configured;
+    // Each message under its registered PSID / ITS-AID, and certificates that permit
+    // exactly what the node sends (`v2xw_msg::registry`, the IEEE PSID registry).
+    let s = runtime.schedule().services();
+    let mut sends = Vec::new();
+    for (on, msg) in [
+        (s.bsm, v2xw_msg::MsgType::Bsm),
+        (s.cam, v2xw_msg::MsgType::Cam),
+        (s.denm, v2xw_msg::MsgType::Denm),
+        (s.spat, v2xw_msg::MsgType::Spat),
+        (s.map, v2xw_msg::MsgType::Map),
+        (s.srm, v2xw_msg::MsgType::Srm),
+        (s.ssm, v2xw_msg::MsgType::Ssm),
+        // The CPM's ITS-AID (639), which was missing here until 2026-10-27. It did not
+        // bite while only vehicles sent CPMs; a roadside unit's certificate permits exactly
+        // this list, so without it every receiver refused every infrastructure CPM
+        // (1609.2 §5.2, `psid-not-permitted`).
+        (s.cpm, v2xw_msg::MsgType::Cpm),
+    ] {
+        if on {
+            sends.push(msg);
+        }
+    }
+    if sends.is_empty() {
+        sends.push(if etsi_facilities(scenario) {
+            v2xw_msg::MsgType::Cam
+        } else {
+            v2xw_msg::MsgType::Bsm
+        });
+    }
+    runtime
+        .security_mut()
+        .set_stack(etsi_facilities(scenario), &sends);
+}
+
+/// The pseudonym-rotation rule the scenario states (`security.pseudonym_change`).
+///
+/// The strategy's semantics are `v2xw_proto::pseudonym::PseudonymStrategy`'s, the one place
+/// the scenario spelling is mapped, expressed as the node store's [`RotationPolicy`]:
+///
+/// * `time` — change when the active pseudonym is `period_s` old (default 300 s, the
+///   J2945/1 `CERTCHG` interval), however far the vehicle drove.
+/// * `distance` — change after `distance_m` of travel (default 2 km, the NYC-pilot rule).
+/// * `mix-zone` and `c2c-cc` — no rule of the store's own: the engine asks for each change
+///   (`crate::pseudonym_policy`). Forced changes (expiry, revocation) still happen.
+/// * `silent` — no scheduled change; forced changes still happen.
+///
+/// This used to ignore the numbers: a period of exactly 300 s selected "5 min *and* 2 km"
+/// and any other period "5 min *or* 2 km", so `period_s: 10` in phase2-manhattan.yaml still
+/// rotated at five minutes, and the store held a single pseudonym to rotate to anyway.
+pub fn rotation_policy(scenario: &Scenario) -> RotationPolicy {
+    use v2xw_proto::pseudonym::PseudonymStrategy;
+    let p = &scenario.security.pseudonym_change;
+    // `by-region` (the default) is the envelope's region rule.
+    let strategy = p.effective_strategy(&scenario.security.envelope);
+    let never = RotationPolicy {
+        min_age: Duration::MAX,
+        min_distance_m: f64::INFINITY,
+        require_both: false,
+    };
+    // C2C-CC's staged rule and the mix zones are the engine's to decide
+    // (`crate::pseudonym_policy`), which asks the store for each change; the store keeps no
+    // schedule of its own for them.
+    if strategy == "c2c-cc" {
+        return never;
+    }
+    // The two published US rules, each with both of its conditions: SAE J2945/1
+    // CERTCHG changes once 5 minutes have passed *and* the vehicle is 2 km on from the
+    // last change ([CVP-P2] item 25; [PRIMER] pp.8-9); the NYC CV pilot changes every 2 km
+    // *or* 5 minutes, whichever is first ([PRIMER] pp.8-9). `time` and `distance` are
+    // each one condition alone.
+    match strategy {
+        "j2945-1" => return RotationPolicy::J2945_1,
+        "nyc-pilot" => return RotationPolicy::NYC_PILOT,
+        _ => {}
+    }
+    match PseudonymStrategy::from_scenario(strategy, p.period_s, p.distance_m) {
+        Some(PseudonymStrategy::Time { period }) => RotationPolicy {
+            min_age: period,
+            ..never
+        },
+        Some(PseudonymStrategy::Distance { distance_cm }) => RotationPolicy {
+            min_distance_m: distance_cm as f64 / 100.0,
+            ..never
+        },
+        // `from_scenario` is non-exhaustive and the validator refuses unknown names; a name
+        // that still reaches here gets the schema's default rule.
+        None => RotationPolicy {
+            min_age: v2xw_proto::pseudonym::CERTCHG_INTERVAL,
+            ..never
+        },
+        Some(_) => never,
+    }
+}
+
+/// How many pseudonym certificates the bootstrap stand-in installs: the SCMS's batch of 20
+/// concurrently valid pseudonyms per week (USDOT SCMS Technical Primer, FHWA-JPO-19-775,
+/// pp. 7-8), so a rotation has somewhere to go.
+pub const BOOTSTRAP_PSEUDONYMS: u32 = 20;
+
+/// A runtime a credential can be installed into: an OBU (and an RSU, which the engine
+/// hosts as one) or a VRU device.
+pub trait CredentialSink {
+    /// Its stores.
+    fn sink_stores(&mut self) -> &mut v2xw_node::Stores;
+    /// The PSIDs its certificates must permit.
+    fn sink_permissions(&self) -> Vec<u64>;
+    /// Forgets every installed credential key (a new pool replaces the old one).
+    fn sink_forget(&mut self);
+    /// Its security stack (to install the run's trust).
+    fn sink_security(&mut self) -> &mut v2xw_node::NodeSecurity;
+    /// Installs one credential with its key (`install_credential`).
+    ///
+    /// # Errors
+    /// The key does not reconstruct.
+    fn sink_install(
+        &mut self,
+        handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> core::result::Result<(), v2xw_sec::SecError>;
+}
+
+impl CredentialSink for ObuRuntime {
+    fn sink_stores(&mut self) -> &mut v2xw_node::Stores {
+        self.stores_mut()
+    }
+    fn sink_permissions(&self) -> Vec<u64> {
+        self.security().cert_permissions()
+    }
+    fn sink_forget(&mut self) {
+        self.security_mut().forget_credentials();
+    }
+    fn sink_security(&mut self) -> &mut v2xw_node::NodeSecurity {
+        self.security_mut()
+    }
+    fn sink_install(
+        &mut self,
+        handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> core::result::Result<(), v2xw_sec::SecError> {
+        self.install_credential(handle, key)
+    }
+}
+
+impl CredentialSink for v2xw_node::VruDeviceRuntime {
+    fn sink_stores(&mut self) -> &mut v2xw_node::Stores {
+        self.stores_mut()
+    }
+    fn sink_permissions(&self) -> Vec<u64> {
+        self.security().cert_permissions()
+    }
+    fn sink_forget(&mut self) {
+        self.security_mut().forget_credentials();
+    }
+    fn sink_security(&mut self) -> &mut v2xw_node::NodeSecurity {
+        self.security_mut()
+    }
+    fn sink_install(
+        &mut self,
+        handle: CredentialHandle,
+        key: &v2xw_sec::credential::ImplicitKey,
+    ) -> core::result::Result<(), v2xw_sec::SecError> {
+        self.install_credential(handle, key)
+    }
+}
+
+/// Installs `handle` with `key`, or with a key `factory` issues for it when the protocol
+/// handed none down (keeping `lv`, the protocol's linkage value). `false` when the key
+/// was refused or could not be issued: the credential then stays out of the store, and the
+/// node cannot sign with it.
+pub fn install_one<R: CredentialSink + ?Sized>(
+    rt: &mut R,
+    factory: &crate::credentials::CredentialFactory,
+    node: NodeId,
+    handle: CredentialHandle,
+    key: Option<&v2xw_sec::credential::ImplicitKey>,
+    lv: v2xw_sec::linkage::LinkageValue,
+) -> bool {
+    let issued;
+    let key = match key {
+        Some(k) => k,
+        None => {
+            let perms = rt.sink_permissions();
+            match factory.pseudonym(
+                node,
+                handle.i_period,
+                handle.j_index,
+                lv,
+                handle.valid_from,
+                &perms,
+            ) {
+                Ok(k) => {
+                    issued = k;
+                    &issued
+                }
+                Err(_) => return false,
+            }
+        }
+    };
+    rt.sink_install(handle, key).is_ok()
+}
+
+/// Installs the pool a node starts with when no SCMS run issues one. See the module
+/// documentation.
+///
+/// A vehicle gets [`BOOTSTRAP_PSEUDONYMS`] pseudonyms, all valid for the whole run, which
+/// the store rotates within by the scenario's rule; a roadside unit gets one RSU
+/// application certificate (`rsu`), which it never rotates. Each is an implicit
+/// certificate from the run's ACA with a real key.
+pub fn bootstrap_credentials(
+    runtime: &mut ObuRuntime,
+    scenario: &Scenario,
+    factory: &crate::credentials::CredentialFactory,
+    node: NodeId,
+    at: SimTime,
+    rsu: bool,
+) {
+    let policy = rotation_policy(scenario);
+    let store = runtime.stores_mut();
+    *store = v2xw_node::Stores {
+        certs: core::mem::take(&mut store.certs).with_policy(policy),
+        ..core::mem::take(store)
+    };
+    // The roots and the chain file every receiver validates against.
+    factory.install_trust_for(node, runtime.security_mut());
+    let perms = runtime.security().cert_permissions();
+    let count = if rsu { 1 } else { BOOTSTRAP_PSEUDONYMS };
+    for j in 0..count {
+        let handle = CredentialHandle {
+            // Replaced by the issued certificate's own digest and encoding on install.
+            digest: pseudo_signer(node, j),
+            cert_coer: Vec::new(),
+            // The handle scheme `install_provisioned` uses: one key per (node, j).
+            key: v2xw_sec::KeyId(u64::from(node.index()) << 8 | u64::from(j)),
+            i_period: 0,
+            j_index: j,
+            valid_from: at,
+            valid_until: SimTime::MAX,
+            state: CredState::Active,
+        };
+        let key = if rsu {
+            factory.rsu_application(node, 0, at, &perms)
+        } else {
+            factory.pseudonym(node, 0, j, factory.factory_linkage(node, 0, j), at, &perms)
+        };
+        if let Ok(key) = key {
+            let _ = runtime.install_credential(handle, &key);
+        }
+    }
+}
+
+/// The physical layer the scenario names.
+///
+/// `OfdmPhy` at the scenario's PHY tier, with the crate's own defaults for everything the
+/// scenario does not select: the EN 302 663 static sensitivity table, the −85 dBm CCA
+/// busy threshold of EN 302 571 §4.2.10.1, the per-window SINR capture rule, the hardware
+/// noise figure and the standards-ideal NIST error model.
+///
+/// Every one of those is a *model card* default with a citation, which is why none of them
+/// is restated here. The Phase 1 build instead carried a hand-written noise floor
+/// (`−174 dBm/Hz + 10·log10(10 MHz) + 9 dB = −95 dBm`) and its own `PerModel`, so the
+/// engine and the PHY's card could disagree about the receiver; they now cannot, and the
+/// noise floor a run uses is the card's −98 dBm (−104 dBm thermal in 10 MHz plus the 6 dB
+/// hardware noise figure) rather than the engine's 3GPP 9 dB figure.
+///
+/// The abstract tier gets the same instance. `phy/abstract/distance-load-table` is the
+/// tier's own model and it needs a **calibrated** table — `v2xw_radio::calibrate` produces
+/// one from a `high`-tier run — which this build has not produced, so an abstract-tier
+/// scenario runs the link-budget PHY over free-space propagation and no fading. That is a
+/// missing calibration artefact, not a missing seam.
+///
+/// `radio.models.per` selects the implementation-loss preset of the NIST error model
+/// (`ideal`, or `sjoberg-atheros`'s measured 5 dB), and `radio.models.phy` the sensitivity
+/// table (`measured-obu`, the default — fielded units as an independent lab measured
+/// them — or the standard's `etsi-static` and `etsi-dynamic` minima, or `cohda-mk5`).
+pub fn build_phy(scenario: &Scenario) -> v2xw_radio::OfdmPhy {
+    let models = radio_models(scenario).unwrap_or_default();
+    let mut phy = v2xw_radio::OfdmPhy::new(scenario.radio.tiers.phy);
+    if let Some(preset) = models.per {
+        phy = phy.with_per_model(v2xw_radio::PerModel::new(preset));
+    }
+    let mut phy = phy.with_sensitivity(
+        models
+            .sensitivity
+            .unwrap_or(v2xw_radio::SensitivityPreset::MeasuredObu),
+    );
+    let ps = &scenario.radio.phy;
+    if let Some(nf) = ps.noise_figure_db {
+        phy = phy.with_noise_figure_db(nf);
+    }
+    if let Some(s) = ps.sensitivity_dbm {
+        phy = phy.with_sensitivity_override_dbm(s);
+    }
+    if ps.cca_threshold_dbm.is_some() || ps.energy_detect_dbm.is_some() {
+        phy = phy.with_cca(v2xw_radio::CcaConfig {
+            busy_dbm: ps
+                .cca_threshold_dbm
+                .unwrap_or(v2xw_radio::CcaConfig::ETSI.busy_dbm),
+            energy_detect_dbm: ps.energy_detect_dbm,
+        });
+    }
+    if let Some(cp) = ps.capture_threshold_db {
+        phy = phy.with_capture(v2xw_radio::CaptureRule::Threshold { cp_th_db: cp });
+    }
+    phy
+}
+
+/// The data rate `radio.phy.data_rate_mbps` names, or 6 Mbit/s QPSK 1/2 (SAE J2945/1).
+pub fn safety_mcs(scenario: &Scenario) -> v2xw_radio::Mcs {
+    scenario
+        .radio
+        .phy
+        .data_rate_mbps
+        .and_then(|r| {
+            v2xw_radio::Mcs::ALL
+                .into_iter()
+                .find(|m| (m.rate_mbps() - r).abs() < 1e-9)
+        })
+        .unwrap_or(v2xw_radio::Mcs::R6Qpsk12)
+}
+
+/// An access-category word (`vo`, `vi`, `be`, `bk`) as the MAC's type.
+pub fn access_category(word: Option<&str>) -> v2xw_radio::AccessCategory {
+    match word {
+        Some("vi") => v2xw_radio::AccessCategory::Vi,
+        Some("be") => v2xw_radio::AccessCategory::Be,
+        Some("bk") => v2xw_radio::AccessCategory::Bk,
+        _ => v2xw_radio::AccessCategory::Vo,
+    }
+}
+
+/// The EDCA table the MAC contends with :
+/// `radio.mac.edca_profile` when it names one, else by region: SAE J2945/1 Table 18 for
+/// 802.11p under a US region (`us`, `us-2016`), since `UPEDCA-003` is the US profile's,
+/// and ETSI EN 302 663's OCB defaults everywhere else. The two differ only in AC_VI
+/// (15/1023/4 against 7/15/3).
+pub fn edca_profile(scenario: &Scenario) -> v2xw_radio::EdcaProfile {
+    use v2xw_radio::regulation::{Region, Technology};
+    let us = !matches!(region_of(scenario).0, Region::Eu);
+    let by_region = if us && technology_of(scenario.radio.rat) == Some(Technology::Ieee80211p) {
+        v2xw_radio::EdcaProfile::SaeJ2945_1
+    } else {
+        v2xw_radio::EdcaProfile::En302663
+    };
+    scenario
+        .radio
+        .mac
+        .edca_profile
+        .unwrap_or_default()
+        .profile(by_region)
+}
+
+/// Whether a BSM picks its EDCA queue from its own event flags (SAE
+/// J2945/1 §6.3.4): AC_VI (user priority 5, `UPEDCA-001`) for a BSM without a critical
+/// event flag, AC_VO (user priority 7, `UPEDCA-002`) for one with a flag (§3.1.2: hard
+/// braking, ABS, traction control, stability control).
+///
+/// It holds where the MAC contends with J2945/1 Table 18 ([`edca_profile`]) and nothing
+/// else decides the queue: an explicit `radio.mac.periodic_access_category` puts every
+/// periodic message, the BSM included, in the queue it names, and
+/// `net.access_categories: etsi-profiles` maps by DCC profile. Under EN 302 663 a BSM keeps
+/// the periodic queue (AC_VO by default). Other message types are not affected.
+pub fn bsm_queue_by_flags(scenario: &Scenario) -> bool {
+    scenario.radio.tiers.mac != v2xw_core::card::Tier::Abstract
+        && edca_profile(scenario) == v2xw_radio::EdcaProfile::SaeJ2945_1
+        && scenario.radio.mac.periodic_access_category.is_none()
+        && scenario.net.access_categories.as_deref() != Some("etsi-profiles")
+}
+
+/// The medium-access model the scenario names, or `None` when the tier models no access.
+///
+/// `mac/80211p/edca-ocb` at the medium and high tiers. The abstract tier has no MAC at
+/// all: it is a reception probability from a calibrated
+/// table, and a contention window inside it would be counted twice.
+///
+/// `SlottedMac` (`mac/80211p/slotted-abstraction`) exists in `v2xw-radio` and is not
+/// selected by any tier here, because nothing in the scenario schema distinguishes the two
+/// CSMA abstractions; it is one `radio.models` entry away.
+///
+/// The four EDCA rows are [`edca_profile`]'s table; an explicit `radio.mac.cw_min_*` or
+/// `aifsn_*` key replaces its own value on top of it.
+pub fn build_mac(scenario: &Scenario) -> Option<v2xw_radio::EdcaOcbMac> {
+    match scenario.radio.tiers.mac {
+        v2xw_core::card::Tier::Abstract => None,
+        _ => {
+            use v2xw_radio::{AccessCategory, EdcaParams};
+            let m = &scenario.radio.mac;
+            let profile = edca_profile(scenario);
+            let mut mac = v2xw_radio::EdcaOcbMac::new().with_profile(profile);
+            for (ac, cw, aifsn) in [
+                (AccessCategory::Vo, m.cw_min_vo, m.aifsn_vo),
+                (AccessCategory::Vi, m.cw_min_vi, m.aifsn_vi),
+            ] {
+                if cw.is_some() || aifsn.is_some() {
+                    let row = profile.params(ac);
+                    mac = mac.with_edca(
+                        ac,
+                        EdcaParams {
+                            cw_min: cw.unwrap_or(row.cw_min),
+                            aifsn: aifsn.unwrap_or(row.aifsn),
+                            ..row
+                        },
+                    );
+                }
+            }
+            if let Some(q) = m.queue_length {
+                mac = mac.with_queue_depth(q as usize);
+            }
+            Some(mac)
+        }
+    }
+}
+
+/// The congestion-control model the scenario names, or `None` when the tier models none.
+///
+/// `dcc/sae/j2945-1-rate-power` for `rat: dsrc-80211p`, because J2945/1 is the congestion
+/// control that goes with the US DSRC band plan this engine transmits in (channel 172) and
+/// with the 20 dBm Class B default the node profile already carries. The ETSI adaptive and
+/// reactive algorithms of TS 102 687 ship in `v2xw-radio` and are the right choice for
+/// `rat: lte-v2x-pc5` in ITS-G5 spectrum; nothing selects them yet, and a scenario that
+/// needs one is a `radio.models` entry rather than a new model.
+///
+/// `None` at the abstract MAC tier, which measures no channel busy ratio to feed it.
+pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
+    if scenario.radio.tiers.mac == v2xw_core::card::Tier::Abstract {
+        return None;
+    }
+    if scenario.radio.dcc.enabled == Some(false) {
+        return None;
+    }
+    match technology_of(scenario.radio.rat) {
+        Some(v2xw_radio::regulation::Technology::Ieee80211p) => {}
+        // A sidelink's CR limits are its MAC's; above them, LTE-V2X under SAE J3161/1
+        // runs the J2945/1 density rule without power control (`rate_control`).
+        Some(_) => {
+            let choice = radio_models(scenario).ok().and_then(|m| m.sidelink);
+            let on = choice
+                .and_then(|c| c.rate_control)
+                .unwrap_or_else(|| sidelink_profile(scenario) == Some(SidelinkProfile::SaeJ3161));
+            return on.then(|| {
+                let d = v2xw_radio::SaeJ2945Dcc::j3161();
+                let p = j2945_params(scenario, d.params());
+                EngineDcc::J2945(d.retuned(p))
+            });
+        }
+        None => return None,
+    }
+    let choice =
+        radio_models(scenario)
+            .ok()
+            .and_then(|m| m.dcc)
+            .unwrap_or(match region_of(scenario).0 {
+                v2xw_radio::regulation::Region::Eu => DccChoice::EtsiAdaptive,
+                _ => DccChoice::SaeJ2945,
+            });
+    let ds = &scenario.radio.dcc;
+    Some(match choice {
+        DccChoice::SaeJ2945 => {
+            // Π by SAE J2945/1 Eq. 4 unless `radio.dcc.channel_quality` asks for the
+            // FMVSS 150 NPRM smoothing; the EN 302 571 floor only for a unit in Europe
+            // (a US unit is not under EN 302 571). The floor binds only where the model's
+            // gate is called: the engine schedules J2945/1 by its inter-transmit time
+            // (`EngineDcc::gates` is false), so an engine run never reaches it.
+            let base = match ds.channel_quality.as_deref() {
+                Some("fmvss150-nprm") => v2xw_radio::J2945Params::FMVSS150_NPRM,
+                _ => v2xw_radio::J2945Params::J2945_1,
+            };
+            let d = v2xw_radio::SaeJ2945Dcc::with_params(j2945_params(scenario, base));
+            EngineDcc::J2945(match region_of(scenario).0 {
+                v2xw_radio::regulation::Region::Eu => {
+                    d.with_floor(v2xw_radio::En302571Floor::CONFORMANT)
+                }
+                _ => d,
+            })
+        }
+        DccChoice::EtsiAdaptive => {
+            let mut p = v2xw_radio::AdaptiveParams::TS102687;
+            if let Some(t) = ds.cbr_target {
+                p.cbr_target = t;
+            }
+            if let Some(a) = ds.adaptive_alpha {
+                p.alpha = a;
+            }
+            if let Some(b) = ds.adaptive_beta {
+                p.beta = b;
+            }
+            EngineDcc::Adaptive(v2xw_radio::AdaptiveDcc::new().with_params(p))
+        }
+        DccChoice::EtsiReactive => {
+            // network audit: `radio.dcc.reactive_table` and `.reactive_hold_ms`.
+            let mut r = v2xw_radio::ReactiveDcc::new();
+            if ds.reactive_table.as_deref() == Some("a2") {
+                r = r.with_table(v2xw_radio::ReactiveTable::A2TonUpTo500Us);
+            }
+            if let Some(ms) = ds.reactive_hold_ms {
+                r = r.with_hold(Duration::from_nanos((ms * 1e6).round() as u64));
+            }
+            EngineDcc::Reactive(r)
+        }
+    })
+}
+
+/// The fixed awareness period `messages.rate_hz` asks for, if any.
+pub fn fixed_message_period(scenario: &Scenario) -> Option<Duration> {
+    scenario
+        .messages
+        .rate_hz
+        .filter(|r| r.is_finite() && *r > 0.0)
+        .map(|r| Duration::from_nanos((1e9 / r).round() as u64))
+}
+
+/// `radio.dcc`'s SAE J2945/1 numbers over `base`.
+pub fn j2945_params(scenario: &Scenario, base: v2xw_radio::J2945Params) -> v2xw_radio::J2945Params {
+    let ds = &scenario.radio.dcc;
+    let mut p = base;
+    // A fixed rate above 10 Hz lowers the floor J2945/1 holds the generator to, or the
+    // DCC would put the 100 ms vMinITT straight back.
+    if let Some(period) = fixed_message_period(scenario) {
+        p.min_itt = p.min_itt.min(period);
+    }
+    if let Some(ms) = ds.max_itt_ms {
+        p.max_itt = Duration::from_nanos((ms * 1e6).round() as u64);
+    }
+    if let Some(b) = ds.density_coefficient {
+        p.b_density = b;
+    }
+    if let Some(on) = ds.power_control {
+        p.power_control = on;
+    }
+    if let Some(min) = ds.min_power_dbm {
+        p.rp_min_dbm = min;
+    }
+    p
+}
+
+/// Builds one roadside unit's node runtime.
+///
+/// An [`ObuRuntime`] on an RSU hardware profile with **no message services**: 06-node-
+/// models.md §3 describes an RSU as "the same queue/server structure as the OBU with a
+/// larger profile" plus roles and failure states. A unit that generated CAMs or BSMs would
+/// be a vehicle with a mast, so the service set is empty and what it puts on the air is
+/// what the engine's Phase 2 path hands it.
+///
+/// The roles and failure states now ship, as [`v2xw_node::RsuRuntime`]; this function has
+/// not been moved onto it. See `crate::phase2`'s "What is not here" for what that move
+/// costs and why it is owed rather than missing.
+pub fn build_rsu(
+    scenario: &Scenario,
+    env: NodeEnv,
+    factory: &crate::credentials::CredentialFactory,
+    spec: &crate::phase2::RsuSpec,
+    node: NodeId,
+    at: SimTime,
+) -> ObuRuntime {
+    let profile = shared_profile(scenario, &spec.profile);
+    let (sign_op, verify_op) =
+        v2xw_node::profile::signature_ops(crate::signature::message_signature(scenario));
+    let config = NodeConfig {
+        tx_power_dbm: device_for(scenario, v2xw_radio::ActorClass::Rsu).tx_power_dbm,
+        sign_op,
+        verify_op,
+        // No awareness messages — a mast is not a vehicle — and the intersection
+        // broadcasts its roles name ([`rsu_services`]).
+        services: rsu_services(scenario, &spec.roles),
+        etsi_facilities: etsi_facilities(scenario),
+        crypto_mode: crypto_mode(scenario),
+        wall: env.wall,
+        origin: env.origin,
+        // A mast is infrastructure, not a vehicle: the CDD has a category for it and a
+        // unit that signed as a passenger car would be a unit a plausibility detector is
+        // entitled to disbelieve.
+        station_type: ParticipantType::Infrastructure,
+        spat_interval: infra_interval(
+            scenario.messages.spat_interval_ms,
+            v2xw_node::generate::SPAT_INTERVAL,
+        ),
+        map_interval: infra_interval(
+            scenario.messages.map_interval_ms,
+            v2xw_node::generate::MAP_INTERVAL,
+        ),
+        ..node_capacities(scenario)
+    };
+    // `verify-all` at a roadside unit, whatever the vehicles run: a unit that forwards
+    // misbehaviour reports has to have verified the report it forwards, and the
+    // `prioritized` policy would skip a distant sender — which is every sender, at a mast.
+    let mut runtime = ObuRuntime::new(node, profile, Box::new(VerifyAll::new()), config, at);
+    apply_compute_tier(&mut runtime, scenario);
+    apply_security_profile(&mut runtime, scenario, env);
+    // The factory certificate permits what the unit signs, as its SCMS application
+    // certificate does. The stack's own list (`apply_security_profile`) is the unit's
+    // services and has no WSA, so a relaying unit outside the certificate cycle (every
+    // unit under the post-quantum profile) signed WSAs that every receiver refused
+    // (`psid-not-permitted`), and under `net.rsu_ip.air: sch` no vehicle relayed a report
+    // through any unit.
+    let signed = rsu_signed_messages(scenario, &spec.roles);
+    if !signed.is_empty() {
+        runtime
+            .security_mut()
+            .set_stack(etsi_facilities(scenario), &signed);
+    }
+    bootstrap_credentials(&mut runtime, scenario, factory, node, at, true);
+    runtime
+}
+
+/// Replaces a node's bootstrap credential pool with the certificates the SCMS provisioned.
+///
+/// One [`CredentialHandle`] per provisioned certificate, so the store has something to
+/// *rotate* to and two pseudonyms of one device appear on the air inside a run — which is
+/// what a linkage resolution needs, since the Misbehaviour Authority correlates two
+/// reports about two different pseudonyms.
+///
+/// Each is installed with the key the protocol handed down ([`crate::phase2`], joint 1):
+/// the store names it by the issued certificate's own digest. A credential the protocol
+/// issued without an SPDU (see [`crate::phase2::ProvisionedCred::key`]) is issued by the
+/// same ACA through `factory` with the protocol's linkage value. Returns how many were
+/// installed.
+pub fn install_provisioned<R: CredentialSink + ?Sized>(
+    runtime: &mut R,
+    scenario: &Scenario,
+    factory: &crate::credentials::CredentialFactory,
+    node: NodeId,
+    creds: &[crate::phase2::ProvisionedCred],
+) -> usize {
+    // A fresh store rather than a cleared one: `CertStore` has no `clear`, and it should
+    // not — a credential store that can be emptied in place is one a bug can silently
+    // empty. The rotation policy is re-applied from the scenario, exactly as
+    // `bootstrap_credentials` set it.
+    let policy = rotation_policy(scenario);
+    runtime.sink_forget();
+    *runtime.sink_stores() = v2xw_node::Stores {
+        certs: v2xw_node::CertStore::new().with_policy(policy),
+        ..core::mem::take(runtime.sink_stores())
+    };
+    add_provisioned(runtime, factory, node, creds)
+}
+
+/// Installs RSU application certificates the SCMS issued into a roadside unit:
+/// with `replace`, the factory certificate the unit was built with is dropped first, so a
+/// unit in the cycle signs only with what its provider's ACA issued and starves when that
+/// lapses. Each certificate is held for its own validity window (`Preloaded` until it
+/// opens). Returns how many the node accepted (the import check `d·G = e·P_U + Q_ACA`).
+pub fn install_rsu_app_certs<R: CredentialSink + ?Sized>(
+    runtime: &mut R,
+    scenario: &Scenario,
+    node: NodeId,
+    creds: &[crate::phase2::RsuAppCred],
+    replace: bool,
+) -> usize {
+    if replace {
+        let policy = rotation_policy(scenario);
+        runtime.sink_forget();
+        *runtime.sink_stores() = v2xw_node::Stores {
+            certs: v2xw_node::CertStore::new().with_policy(policy),
+            ..core::mem::take(runtime.sink_stores())
+        };
+    }
+    creds
+        .iter()
+        .filter(|c| {
+            let handle = CredentialHandle {
+                digest: pseudo_signer(node, c.period),
+                cert_coer: Vec::new(),
+                key: v2xw_sec::KeyId(u64::from(node.index()) << 32 | u64::from(c.period)),
+                i_period: c.period,
+                j_index: 0,
+                valid_from: c.valid_from,
+                valid_until: c.valid_until,
+                state: if c.valid_from > 0 {
+                    CredState::Preloaded
+                } else {
+                    CredState::Active
+                },
+            };
+            runtime.sink_install(handle, &c.key).is_ok()
+        })
+        .count()
+}
+
+/// One OBU identification certificate the SCMS issued a privileged vehicle ([CAMP122]
+/// Table 1 row 44): the certificate, its issuing ACA and `d` from the vehicle's
+/// own download, and its validity window in run time.
+#[derive(Debug, Clone)]
+pub struct IdentificationCred {
+    /// The start of its validity, run time.
+    pub valid_from: SimTime,
+    /// Its end (exclusive), run time: 721 h after the start for the CAMP profile.
+    pub valid_until: SimTime,
+    /// The certificate, its issuing ACA and `d`.
+    pub key: std::sync::Arc<v2xw_sec::credential::ImplicitKey>,
+}
+
+/// Installs OBU identification certificates the SCMS issued into a vehicle's
+/// identification signer slot, beside its pseudonym pool, which this leaves untouched.
+/// From the first install on, the vehicle signs its SRMs only under the certificate
+/// valid at the time ([`v2xw_node::NodeSecurity::install_identification`]); its BSMs stay
+/// on pseudonyms. Returns how many the node accepted (the import check
+/// `d·G = e·P_U + Q_ACA`).
+pub fn install_identification_certs<R: CredentialSink + ?Sized>(
+    runtime: &mut R,
+    node: NodeId,
+    creds: &[IdentificationCred],
+) -> usize {
+    creds
+        .iter()
+        .filter(|c| {
+            runtime
+                .sink_security()
+                .install_identification(node, &c.key, c.valid_from, c.valid_until)
+                .is_ok()
+        })
+        .count()
+}
+
+/// Adds provisioned certificates to a node's store (a completed top-up), each with its key
+/// as [`install_provisioned`] does. Returns how many were installed.
+pub fn add_provisioned<R: CredentialSink + ?Sized>(
+    runtime: &mut R,
+    factory: &crate::credentials::CredentialFactory,
+    node: NodeId,
+    creds: &[crate::phase2::ProvisionedCred],
+) -> usize {
+    creds
+        .iter()
+        .filter(|cred| {
+            install_one(
+                runtime,
+                factory,
+                node,
+                provisioned_handle(node, cred),
+                cred.key.as_deref(),
+                cred.lv,
+            )
+        })
+        .count()
+}
+
+/// The credential handle one provisioned certificate is installed as.
+///
+/// The key id and the stand-in digest are distinct per `(node, i, j)`: a pool that spans
+/// several i-periods holds a `j = 0` in each, and two handles sharing a key or a digest
+/// would be one pseudonym under two names — exactly the linkability a pool exists to
+/// prevent. The state follows the validity window, so a certificate for a later period
+/// is held `Preloaded` and becomes usable when its window opens.
+pub fn provisioned_handle(node: NodeId, cred: &crate::phase2::ProvisionedCred) -> CredentialHandle {
+    let index = cred.i.wrapping_mul(64).wrapping_add(cred.j);
+    CredentialHandle {
+        digest: pseudo_signer(node, index),
+        cert_coer: Vec::new(),
+        key: v2xw_sec::KeyId(u64::from(node.index()) << 24 | u64::from(index)),
+        i_period: cred.i,
+        j_index: cred.j,
+        valid_from: cred.valid_from,
+        valid_until: cred.valid_until,
+        state: if cred.valid_from > 0 {
+            CredState::Preloaded
+        } else {
+            CredState::Active
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ms(p: SignerIdPolicy) -> Option<u64> {
+        p.full_cert_every.map(|d| d.as_nanos() / 1_000_000)
+    }
+
+    /// `messages.bsm.path_history_on_change` reaches the node's config, and
+    /// unset leaves the choice to the node's standard (`NodeConfig::path_history_on_change`).
+    ///
+    /// Fault: drop the `path_history_on_change` line in `node_capacities` -> `Some(Clear)` is `None`, red.
+    #[test]
+    fn the_path_history_rule_reaches_the_node_config() {
+        use v2xw_msg::j2945::PathHistoryOnChange;
+        let mut s = Scenario::minimal();
+        assert_eq!(node_capacities(&s).path_history_on_change, None);
+        for (spec, want) in [
+            (
+                crate::scenario::schema::PathHistoryOnChangeSpec::Clear,
+                PathHistoryOnChange::Clear,
+            ),
+            (
+                crate::scenario::schema::PathHistoryOnChangeSpec::Keep,
+                PathHistoryOnChange::Keep,
+            ),
+        ] {
+            s.messages.bsm = Some(crate::scenario::schema::BsmSettings {
+                path_history_on_change: Some(spec),
+            });
+            assert_eq!(node_capacities(&s).path_history_on_change, Some(want));
+        }
+    }
+
+    /// Unset, a BSM attaches its certificate every 450 ms (SAE J2945/1
+    /// `vMaxCertDigestInterval`) and a CAM once a second (ETSI TS 103 097); a set value
+    /// overrides both, and 0 is a certificate on every message.
+    #[test]
+    fn bsm_and_cam_take_their_own_standard_cadence_when_unset() {
+        let mut s = Scenario::minimal();
+        assert_eq!(
+            s.security.envelope, "ieee1609.2",
+            "the default is a US scenario"
+        );
+        assert_eq!(s.security.signer_id_policy.full_cert_every_ms, None);
+        let (cam, bsm) = signer_id_policies(&s);
+        assert_eq!(ms(bsm), Some(450), "BSM: SAE J2945/1 6.5.2");
+        assert_eq!(ms(cam), Some(1000), "CAM: ETSI TS 103 097");
+        assert!(!bsm.always_certificate && !cam.always_certificate);
+        s.security.signer_id_policy.full_cert_every_ms = Some(1000);
+        let (cam, bsm) = signer_id_policies(&s);
+        assert_eq!(
+            (ms(cam), ms(bsm)),
+            (Some(1000), Some(1000)),
+            "a set value is both"
+        );
+        s.security.signer_id_policy.full_cert_every_ms = Some(0);
+        s.security.signer_id_policy.digest_otherwise = false;
+        let (cam, bsm) = signer_id_policies(&s);
+        assert_eq!(
+            (cam, bsm),
+            (
+                SignerIdPolicy::ALWAYS_CERTIFICATE,
+                SignerIdPolicy::ALWAYS_CERTIFICATE
+            )
+        );
+    }
+}

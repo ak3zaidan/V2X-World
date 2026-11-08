@@ -1,0 +1,72 @@
+# Rule H2 in practice: hsm.kind is none, so every operation is
+# charged to the CPU using the software cost table.
+id: obu/generic-automotive-soc-no-hsm
+kind: obu
+version: 2026-10-07.1
+purpose: >-
+  Generic automotive SoC with no secure element or accelerator: the profile for scenarios
+  asking what happens when all crypto runs in software. Anchored on the best-documented
+  Cortex-A72-class figures (Raspberry Pi 4B OpenSSL and liboqs), which are developer-board
+  benchmarks and not automotive parts, and are flagged as proxies throughout.
+sources:
+  - {kind: benchmark, ref: "Raspberry Pi 4 OpenSSL 1.1.1d `openssl speed` gist (HimaJyun)", accessed: 2026-09-18}
+  - {kind: benchmark, ref: "Raspberry Pi 3B/3B+ `openssl speed` gist (dchest)", accessed: 2026-09-18}
+  - {kind: paper, ref: "Berger, Lemoudden, Buchanan, 'Post Quantum Migration of Tor', arXiv 2503.10238 Tables 7-8 (liboqs on Pi 4/Pi 5)", accessed: 2026-09-17}
+  - {kind: benchmark, ref: "wolfSSL vs mbedTLS apples-to-apples benchmark, June 2026 (wolfSSL 5.9.1, mbedTLS 3.6.6)", accessed: 2026-09-17}
+  - {kind: hardware-design, ref: "Quectel AG15 hardware design guide", accessed: 2026-09-18}
+  - {kind: datasheet, ref: "Danlaw AutoLink OBU; Ficosa C-V2X OBU (RAM/flash/power envelope only)", accessed: 2026-09-18}
+cpu:
+  cores: {value: 4, status: proxy, source: "PROXY: Raspberry Pi 4B, BCM2711, 4x Cortex-A72 [dchest Pi 3B and HimaJyun Pi 4 openssl speed gists]; the benchmarks below are single-core. Commercial envelope: Danlaw AutoLink 'dual-core @ 800 MHz' [Danlaw AutoLink OBU brief]"}
+  clock_hz: {value: 1.5e9, status: proxy, source: "PROXY: Pi 4B @ 1.5 GHz [dchest Pi 3B and HimaJyun Pi 4 openssl speed gists]"}
+  arch: {value: armv8-a, status: proxy, source: "Cortex-A72 class [dchest Pi 3B and HimaJyun Pi 4 openssl speed gists]"}
+  dmips: {value: null, status: not-published, calibration: "no DMIPS rating is published for the BCM2711; scale application-task costs by the measured openssl ratio instead of by DMIPS"}
+ram_bytes: {value: 1073741824, status: proxy, source: "Danlaw AutoLink 1 GB RAM [Danlaw AutoLink OBU brief] — a representative commercial OBU without published HSM figures; scenario may override"}
+flash_bytes: {value: 8589934592, status: proxy, source: "Danlaw AutoLink 8 GB eMMC [Danlaw AutoLink OBU brief]"}
+hsm:
+  kind: none
+  part: {value: null, status: not-applicable, calibration: "rule H2: this profile declares no security hardware on purpose. Nothing to calibrate; to model an OBU with an HSM, use obu/cohda-mk5, obu/unex-obu-301-craton2 or obu/cohda-mk6c-qualcomm-9150"}
+  ops: {}
+  queue_depth: {value: null, status: not-applicable, calibration: "rule H2: no HSM queue exists on this profile; the node's CPU queue carries the work"}
+  servers: {value: null, status: not-applicable, calibration: "rule H2: no HSM server exists on this profile"}
+# Catalogue anchors (v2xw_sec::primitive) that price an operation this profile publishes
+# no figure for: the same Raspberry Pi 4 liboqs measurements this profile's software table cites (arXiv 2503.10238 Table 8). Where the catalogue has
+# no row either, it derives one by a cited cycle ratio and flags it (v2xw-sec CostRatio).
+crypto_anchors: [hw-profile/cortex-a72-pi4-liboqs]
+software_crypto:
+  ecdsa-p256-sign: {us: 244, ops_per_s: 4097.4, source: "OpenSSL reports 0.0002 s/sign, 4097.4 sign/s [dchest Pi 3B and HimaJyun Pi 4 openssl speed gists; HimaJyun gist]"}
+  ecdsa-p256-verify: {us: 645, ops_per_s: 1550.7, source: "OpenSSL reports 0.0006 s/verify, 1550.7 verify/s [dchest Pi 3B and HimaJyun Pi 4 openssl speed gists; HimaJyun Pi 4 openssl speed gist]"}
+  ecdsa-p384-sign: {us: 8104, ops_per_s: 123.4, source: "nistp384 123.4 sign/s [HimaJyun Pi 4 openssl speed gist]"}
+  ecdsa-p384-verify: {us: 5721, ops_per_s: 174.8, source: "nistp384 174.8 verify/s [HimaJyun Pi 4 openssl speed gist]"}
+  ed25519-sign: {us: 340, ops_per_s: 2939.1, source: "OpenSSL on Pi 4B [arXiv 2503.10238 Table 7]"}
+  ed25519-verify: {us: 754, ops_per_s: 1327.0, source: "[arXiv 2503.10238 Tables 7-8]"}
+  falcon-512-sign: {us: 1625, ops_per_s: 615.3, source: "liboqs on Pi 4B, Ubuntu Server 24.04 [arXiv 2503.10238 Table 8]"}
+  falcon-512-verify: {us: 127, ops_per_s: 7866.3, source: "[arXiv 2503.10238 Tables 7-8]"}
+  ml-dsa-44-sign: {us: 3495, ops_per_s: 286.1, source: "[arXiv 2503.10238 Tables 7-8]"}
+  ml-dsa-44-verify: {us: 311, ops_per_s: 3213.9, source: "[arXiv 2503.10238 Tables 7-8]"}
+  ml-dsa-65-verify: {us: null, status: not-published, calibration: "ML-DSA-65/87, Falcon-1024 and SLH-DSA on a Pi 4 were not found in the fetched sources — UNVERIFIED [arXiv 2503.10238 Tables 7-8]; run liboqs speed_sig"}
+software_crypto_classes:
+  cortex-a53-1.2ghz:
+    ecdsa-p256-sign: {us: 613, ops_per_s: 1631.1, source: "Raspberry Pi 3B, BCM2837, OpenSSL [dchest gist]"}
+    ecdsa-p256-verify: {us: 1290, ops_per_s: 775.3, source: "[dchest Pi 3B and HimaJyun Pi 4 openssl speed gists]"}
+  cortex-a53-1.4ghz:
+    ecdsa-p256-sign: {us: 522, ops_per_s: 1914.7, source: "Raspberry Pi 3B+, BCM2837B0 [dchest Pi 3B and HimaJyun Pi 4 openssl speed gists]"}
+    ecdsa-p256-verify: {us: 1101, ops_per_s: 908.4, source: "[dchest Pi 3B and HimaJyun Pi 4 openssl speed gists]"}
+  cortex-a76-2.4ghz:
+    ecdsa-p256-verify-wolfssl-5.9.1: {us: 67.0, ops_per_s: 14933, source: "Raspberry Pi 5; a 25x library spread on identical silicon [wolfSSL vs mbedTLS benchmark, June 2026]"}
+    ecdsa-p256-verify-mbedtls-3.6.6: {us: 1689, ops_per_s: 592, source: "[wolfSSL vs mbedTLS benchmark, June 2026]"}
+    ecdsa-p256-sign: {us: null, status: not-published, calibration: "the Pi 5 sign rate is not in the fetched rows (sign is given for the i9 only) [wolfSSL vs mbedTLS benchmark, June 2026]; run openssl speed on a Pi 5"}
+radio:
+  rat: [lte-v2x-pc5]
+  chipset: {value: "Quectel AG15 (1.28 GHz Cortex-A7 application processor inside the module; PCIe to the host)", source: "[Quectel AG15 hardware design guide] — a C-V2X modem that leaves security to the host"}
+  tx_power_dbm:
+    min: {value: null, status: not-published, calibration: "not stated in the AG15 hardware design guide; measure, or take the 3GPP UE power-class floor"}
+    max: {value: 23.0, source: "\"Class 3, 23 dBm +/- 2 dB\" [Quectel AG15 hardware design guide]"}
+    default: {value: 20.0, source: "J2945/1 baseline [Rostami et al., SAE J2945/1 scalability, 2016]"}
+  sensitivity_dbm: {value: -93.0, source: "B47/B46D, 10 MHz, typical, primary and diversity; SIMO -96 dBm, 3GPP SIMO spec -90.4 dBm [Quectel AG15 hardware design guide]"}
+  noise_figure_db: {value: 9.0, status: evaluation-assumption, source: "NOT PUBLISHED for the AG15; 3GPP UE receiver NF 9 dB [3GPP TR 36.885 Annex A.1.1]"}
+  antenna:
+    gain_dbi: {value: 3.0, status: evaluation-assumption, source: "3GPP TR 36.885 Table A.1.1-1 vehicle UE 3 dBi"}
+    height_m: {value: 1.5, status: evaluation-assumption, source: "TR 36.885 Annex A.1.1"}
+    pattern: {value: omni, source: "[3GPP TR 36.885 Annex A.1.1]"}
+power_w: {value: null, status: not-published, calibration: "no whole-OBU figure for this proxy. Envelopes: Ficosa C-V2X OBU '<7 W peak, <3 W typical' [Ficosa C-V2X OBU brief]; Danlaw AutoLink 400 mA @ 12/24 V [Danlaw AutoLink OBU brief]; AG15 modem 240 mA @ 23 dBm [Quectel AG15 hardware design guide]. Measure on the chosen board"}
+storage_model: inherit

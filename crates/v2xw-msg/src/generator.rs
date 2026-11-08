@@ -1,0 +1,2368 @@
+//! Message generation rules — the `MessageGenerator` seam.
+//!
+//! A generator decides **when** a node sends and **what shape** the message has. It does
+//! not build the message and it does not encode it: that is [`crate::cam`] and
+//! [`crate::codec`]. Keeping the two apart is what lets the CAM triggering rules be tested
+//! against the standard's own numbers without an ASN.1 encoder anywhere in the test.
+//!
+//! Two generators live here, with their cited parameters:
+//!
+//! * [`CamGenerator`] — `generator/cam-en302637-2`, the real EN 302 637-2 V1.4.1 §6.1.3
+//!   state machine: `T_CheckCamGen`, the three dynamics triggers, the adaptive `T_GenCam`,
+//!   the `N_GenCam` reset and the 500 ms low-frequency container.
+//! * [`BsmGenerator`] — `generator/bsm-j2945-1`, 10 Hz nominal with Part I in every
+//!   message.
+//!
+//! # Why the trait is generic and the state machine is not
+//!
+//! [`v2xw_core::ctx::Ctx`] and [`v2xw_core::nodeview::NodeView`] both carry associated
+//! types, so `&mut dyn Ctx` on its own does not name a type. [`MessageGenerator`] therefore
+//! takes the context and the view as type parameters; once the engine fixes them,
+//! `dyn MessageGenerator<EngineCtx, EngineNodeView>` is an ordinary trait object, which is
+//! how in-process plug-ins are called.
+//!
+//! The decision logic itself is a plain struct — [`CamTriggerState`] — that takes a time,
+//! a [`CamDynamics`] and a [`DccState`] and returns a [`CamDecision`]. Every trigger path
+//! is unit-tested through that struct directly, with no engine, no node and no ASN.1.
+//!
+//! # Belief, not truth
+//!
+//! Both generators read the node's position from [`v2xw_core::nodeview::NodeView::position`],
+//! which is the GNSS model's *estimate*. A generator that used ground truth would make a
+//! spoofed vehicle send CAMs on its real trajectory while claiming a false one — the exact
+//! opposite of what a spoofing attack does (invariant I-C2).
+
+use v2xw_core::card::{
+    Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation, ValidationStatus,
+};
+use v2xw_core::ctx::{Ctx, CtxExt, Record, Visibility};
+use v2xw_core::geom::Vec3;
+use v2xw_core::ids::NodeId;
+use v2xw_core::math;
+use v2xw_core::model::Model;
+use v2xw_core::nodeview::NodeView;
+use v2xw_core::time::{Duration, SimTime};
+
+use crate::codec::MsgType;
+use crate::units;
+
+// =========================================================================================
+// The seam
+// =========================================================================================
+
+/// The part of the decentralised-congestion-control state a message generator needs.
+///
+/// The DCC family owns the full state — CBR measurements, the
+/// TS 102 687 state machine, the transmit-power and datarate decisions. A generator needs
+/// exactly two things from it: the minimum time DCC allows between transmissions, and the
+/// channel load, which it records but does not act on. This struct is that subset, declared
+/// here so the message layer can be built and tested before the DCC crate exists; when it
+/// lands it either re-exports this type or converts into it.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DccState {
+    /// `T_GenCam_Dcc` in EN 302 637-2 terms, `T_off` in C2C-CC RS 2037 (RS_BSP_293): the
+    /// minimum time that must elapse between two transmissions on this channel.
+    pub t_off: Duration,
+    /// Measured channel busy ratio, `0.0..=1.0`, if the node measures one.
+    pub cbr: Option<f64>,
+}
+
+impl DccState {
+    /// DCC imposing nothing: the state an unloaded channel is in, and the right default
+    /// for a scenario that does not model congestion control.
+    pub const UNRESTRICTED: DccState = DccState {
+        t_off: Duration::ZERO,
+        cbr: None,
+    };
+}
+
+impl Default for DccState {
+    fn default() -> Self {
+        Self::UNRESTRICTED
+    }
+}
+
+/// Something that happened at the application layer and that a generator may react to.
+///
+/// Deliberately small. The full hazard taxonomy is DENM's (`CauseCodeV2` has some 40
+/// causes), and it belongs in [`crate::denm`]; what a *generator* needs is the handful of
+/// events that change its own cadence.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum AppEventKind {
+    /// The vehicle is braking hard. The J2945/1 EEBL event flag is at
+    /// a deceleration of 0.4 g, which is 3.92 m/s².
+    HardBraking {
+        /// Deceleration, m/s², positive.
+        decel_mps2: f64,
+    },
+    /// A hazard the application wants announced. The cause is DENM's business; this only
+    /// says that one exists.
+    HazardDetected,
+    /// A previously announced hazard is over.
+    HazardCleared,
+}
+
+/// An application event with the instant it happened at.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AppEvent {
+    /// What happened.
+    pub kind: AppEventKind,
+    /// When, on the node's own clock.
+    pub at: SimTime,
+}
+
+/// Why a generator asked for a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum GenReason {
+    /// The first message after the service was activated.
+    First,
+    /// One or more of the dynamics thresholds was crossed (EN 302 637-2 trigger 1).
+    Dynamics(DynamicsTriggers),
+    /// The periodic deadline elapsed (EN 302 637-2 trigger 2; J2945/1's 10 Hz).
+    Periodic,
+    /// An application event asked for it.
+    Event,
+}
+
+/// Which of the three EN 302 637-2 dynamics thresholds were crossed.
+///
+/// All three are reported, not just the first: a CAM sent because the vehicle both turned
+/// and accelerated is a different observation from one sent because it only turned, and a
+/// generation-rate analysis that collapsed them would not be able to tell.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Hash,
+)]
+pub struct DynamicsTriggers {
+    /// Heading changed by more than the threshold.
+    pub heading: bool,
+    /// Position moved by more than the threshold.
+    pub position: bool,
+    /// Speed changed by more than the threshold.
+    pub speed: bool,
+}
+
+impl DynamicsTriggers {
+    /// True if any threshold was crossed.
+    pub const fn any(self) -> bool {
+        self.heading || self.position || self.speed
+    }
+}
+
+/// One message a generator wants sent.
+///
+/// It says *what* and *why*, not *how*: the node runtime turns it into a real message with
+/// [`crate::cam::build_cam`] and hands that to a [`crate::codec::MessageCodec`]. The split
+/// is what keeps the triggering rules testable without an encoder.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GenRequest {
+    /// Which message to build.
+    pub msg_type: MsgType,
+    /// Why it was asked for.
+    pub reason: GenReason,
+    /// Whether this one carries the low-frequency container (CAM) or the equivalent
+    /// low-cadence content of its message type.
+    pub include_low_frequency: bool,
+    /// The instant the generator decided at, on the node's own clock.
+    pub at: SimTime,
+}
+
+/// Decides when a node sends, and with what content.
+///
+/// Generic over the engine's context and node-view types; see the module documentation for
+/// why that is not the same as being un-object-safe.
+pub trait MessageGenerator<C, V>: Model
+where
+    C: Ctx + ?Sized,
+    V: NodeView + ?Sized,
+{
+    /// How often the engine must call [`MessageGenerator::on_tick`].
+    ///
+    /// EN 302 637-2 calls this `T_CheckCamGen` and requires it to be no greater than
+    /// `T_GenCamMin`; a generator whose check interval were coarser could not honour its
+    /// own minimum period. The engine schedules a [`v2xw_core::event::EventClass::NodeTask`]
+    /// at this cadence.
+    fn check_interval(&self) -> Duration;
+
+    /// Called every [`MessageGenerator::check_interval`].
+    fn on_tick(&mut self, ctx: &mut C, node: &V, dcc: &DccState) -> Vec<GenRequest>;
+
+    /// Called when the application reports an event.
+    ///
+    /// Defaulted to "no extra message": most generators are purely periodic, and a
+    /// generator that reacts to events says so by overriding this.
+    fn on_event(&mut self, _ctx: &mut C, _node: &V, _ev: &AppEvent) -> Vec<GenRequest> {
+        Vec::new()
+    }
+}
+
+/// The record a generator emits when it decides to send.
+///
+/// [`Visibility::Node`]: everything in it is the node's own decision made from its own
+/// belief, so a detector or a dataset may read it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GenerationRecord {
+    /// Which node decided.
+    pub node: NodeId,
+    /// The node's own clock at the decision.
+    pub t_ns: SimTime,
+    /// What it decided to send.
+    pub msg_type: MsgType,
+    /// Why.
+    pub reason: GenReason,
+    /// Whether the low-frequency content is included.
+    pub low_frequency: bool,
+    /// The period the generator will next aim for, nanoseconds. For a CAM this is
+    /// `T_GenCam`, which the trigger-1 rule rewrites.
+    pub next_period_ns: u64,
+}
+
+impl Record for GenerationRecord {
+    const CHANNEL: &'static str = "msg.generation";
+    const VISIBILITY: Visibility = Visibility::Node;
+}
+
+// =========================================================================================
+// CAM — EN 302 637-2 V1.4.1 §6.1.3
+// =========================================================================================
+
+/// Model id of the CAM generator.
+pub const CAM_GENERATOR_ID: &str = "generator/cam-en302637-2";
+
+/// The EN 302 637-2 parameters, with the standard's defaults.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CamGenParams {
+    /// `T_GenCamMin`, the shortest permitted interval between two CAMs. 100 ms
+    /// [EN 302 637-2 V1.4.1 §6.1.3].
+    pub t_gen_cam_min: Duration,
+    /// `T_GenCamMax`, the longest. 1,000 ms [ibid.].
+    pub t_gen_cam_max: Duration,
+    /// `T_CheckCamGen`, how often the rules are evaluated. Must be ≤ `t_gen_cam_min`
+    /// [ibid.]; defaults to it.
+    pub t_check_cam_gen: Duration,
+    /// `N_GenCam`, the number of consecutive periodic CAMs after a dynamics-triggered one
+    /// before `T_GenCam` returns to `T_GenCamMax`. 3 [ibid.].
+    pub n_gen_cam: u8,
+    /// Heading-change threshold, radians. 4° [ibid. §6.1.3].
+    pub heading_threshold_rad: f64,
+    /// Position-change threshold, metres. 4 m [ibid.].
+    pub position_threshold_m: f64,
+    /// Speed-change threshold, m/s. 0.5 m/s [ibid.].
+    pub speed_threshold_mps: f64,
+    /// Minimum interval between two CAMs that carry the low-frequency container. 500 ms
+    /// [ibid. §6.1.4].
+    pub low_frequency_interval: Duration,
+}
+
+impl CamGenParams {
+    /// Four degrees in radians — the heading threshold, written once.
+    pub const FOUR_DEGREES_RAD: f64 = 4.0 * (core::f64::consts::PI / 180.0);
+
+    /// The standard's defaults.
+    pub const fn en302637_2() -> Self {
+        Self {
+            t_gen_cam_min: Duration::from_millis(100),
+            t_gen_cam_max: Duration::from_millis(1_000),
+            t_check_cam_gen: Duration::from_millis(100),
+            n_gen_cam: 3,
+            heading_threshold_rad: Self::FOUR_DEGREES_RAD,
+            position_threshold_m: 4.0,
+            speed_threshold_mps: 0.5,
+            low_frequency_interval: Duration::from_millis(500),
+        }
+    }
+}
+
+impl Default for CamGenParams {
+    fn default() -> Self {
+        Self::en302637_2()
+    }
+}
+
+/// The node dynamics the CAM rules are evaluated against, all from the node's own belief.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CamDynamics {
+    /// Believed position, world ENU metres.
+    pub pos: Vec3,
+    /// Believed heading, ENU radians.
+    pub heading_rad: f64,
+    /// Believed ground speed, m/s.
+    pub speed_mps: f64,
+}
+
+impl CamDynamics {
+    /// Reads the dynamics a CAM is triggered on out of a position belief.
+    pub fn from_estimate(p: &v2xw_core::belief::PositionEstimate) -> Self {
+        Self {
+            pos: p.pos,
+            heading_rad: p.heading_rad,
+            speed_mps: p.ground_speed_mps(),
+        }
+    }
+}
+
+/// What [`CamTriggerState::check`] decided.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CamDecision {
+    /// Why this CAM is being sent.
+    pub reason: GenReason,
+    /// Whether it carries the low-frequency container.
+    pub include_low_frequency: bool,
+    /// `T_GenCam` after this decision — what the next periodic deadline will be measured
+    /// against.
+    pub t_gen_cam: Duration,
+}
+
+/// The state EN 302 637-2 §6.1.3 keeps between checks.
+#[derive(Debug, Clone, PartialEq)]
+struct LastCam {
+    t: SimTime,
+    dynamics: CamDynamics,
+}
+
+/// The CAM triggering state machine, with no engine attached.
+///
+/// # The rules, as implemented
+///
+/// On every check (every `T_CheckCamGen`):
+///
+/// 1. If no CAM has been sent yet, send one. It is the first CAM, so it carries the
+///    low-frequency container (§6.1.4) and `T_GenCam` stays at `T_GenCamMax`.
+/// 2. Otherwise, let `elapsed` be the time since the last CAM. If
+///    `elapsed < max(T_GenCamMin, T_GenCam_Dcc)`, send nothing — this is the floor that
+///    both the standard's own minimum and DCC impose.
+/// 3. Otherwise, if the heading has changed by more than 4°, **or** the position by more
+///    than 4 m, **or** the speed by more than 0.5 m/s since the last CAM, send one
+///    (trigger 1). `T_GenCam` becomes `elapsed`, and the consecutive-periodic counter
+///    resets to zero.
+/// 4. Otherwise, if `elapsed >= T_GenCam`, send one (trigger 2) and increment the
+///    consecutive-periodic counter. When it reaches `N_GenCam`, `T_GenCam` returns to
+///    `T_GenCamMax` and the counter resets.
+///
+/// Step 3 before step 4 matters: a CAM that satisfies both is a *dynamics* CAM, and
+/// counting it as periodic would let `T_GenCam` drift back to the maximum while the
+/// vehicle is still manoeuvring.
+///
+/// # Determinism
+///
+/// Every threshold comparison is made on **quantised** values: the
+/// heading on a 1 µrad grid, the distance on a 1 mm grid, the speed on a 1 mm/s grid. A
+/// vehicle sitting exactly on a threshold therefore triggers or does not trigger
+/// identically on every platform, instead of depending on the last bit of an f64 that came
+/// out of a mobility model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CamTriggerState {
+    params: CamGenParams,
+    last: Option<LastCam>,
+    t_gen_cam: Duration,
+    consecutive_periodic: u8,
+    last_low_frequency: Option<SimTime>,
+}
+
+impl CamTriggerState {
+    /// A fresh state machine with `params`.
+    pub fn new(params: CamGenParams) -> Self {
+        Self {
+            t_gen_cam: params.t_gen_cam_max,
+            params,
+            last: None,
+            consecutive_periodic: 0,
+            last_low_frequency: None,
+        }
+    }
+
+    /// The parameters in force.
+    pub fn params(&self) -> &CamGenParams {
+        &self.params
+    }
+
+    /// The current `T_GenCam`.
+    pub fn t_gen_cam(&self) -> Duration {
+        self.t_gen_cam
+    }
+
+    /// How many consecutive periodic CAMs have been sent since the last dynamics one.
+    pub fn consecutive_periodic(&self) -> u8 {
+        self.consecutive_periodic
+    }
+
+    /// When the last CAM was sent, if any.
+    pub fn last_cam_at(&self) -> Option<SimTime> {
+        self.last.as_ref().map(|l| l.t)
+    }
+
+    /// Evaluates the rules at `now`. Returns the decision, or `None` for "not yet".
+    ///
+    /// `now` is the node's **own** believed time, because every interval in EN 302 637-2 is
+    /// measured on the sender's clock — which is what makes a clock attack visible as a
+    /// changed CAM rate rather than as nothing at all.
+    pub fn check(
+        &mut self,
+        now: SimTime,
+        dynamics: &CamDynamics,
+        dcc: &DccState,
+    ) -> Option<CamDecision> {
+        let Some(last) = self.last.clone() else {
+            return Some(self.emit(now, dynamics, GenReason::First));
+        };
+
+        // A clock that went backwards (a step correction, or an attacker) cannot produce a
+        // negative interval; treat it as "no time has passed", which delays the next CAM
+        // rather than emitting a burst.
+        let elapsed = Duration::between(last.t, now);
+        // EN 302 637-2 §6.1.3: T_GenCamMin <= T_GenCam_DCC <= T_GenCamMax. A DCC gate
+        // longer than a second does not silence the CAM beyond the 1 s heartbeat
+        // (`tests/cam_en302637.rs` checks every rule of the clause).
+        let floor = dcc
+            .t_off
+            .max(self.params.t_gen_cam_min)
+            .min(self.params.t_gen_cam_max.max(self.params.t_gen_cam_min));
+        if elapsed < floor {
+            return None;
+        }
+
+        let triggers = self.dynamics_triggers(&last.dynamics, dynamics);
+        if triggers.any() {
+            // Trigger 1. T_GenCam becomes the interval that was actually achieved, bounded
+            // by the standard's own limits, and the periodic run starts again.
+            self.t_gen_cam = elapsed.clamp(self.params.t_gen_cam_min, self.params.t_gen_cam_max);
+            self.consecutive_periodic = 0;
+            return Some(self.emit(now, dynamics, GenReason::Dynamics(triggers)));
+        }
+
+        if elapsed >= self.t_gen_cam {
+            // Trigger 2.
+            self.consecutive_periodic = self.consecutive_periodic.saturating_add(1);
+            if self.consecutive_periodic >= self.params.n_gen_cam {
+                self.t_gen_cam = self.params.t_gen_cam_max;
+                self.consecutive_periodic = 0;
+            }
+            return Some(self.emit(now, dynamics, GenReason::Periodic));
+        }
+
+        None
+    }
+
+    /// Whether the three dynamics thresholds are crossed between two states.
+    ///
+    /// Public because a detector that wants to ask "would this peer's CAM have been
+    /// triggered?" needs exactly this predicate, and reimplementing it is how two answers
+    /// to one question appear.
+    pub fn dynamics_triggers(&self, from: &CamDynamics, to: &CamDynamics) -> DynamicsTriggers {
+        let heading_delta = math::quantize_to(
+            angular_difference(to.heading_rad, from.heading_rad).abs(),
+            units::Q_RAD,
+        );
+        let position_delta = math::quantize_to(to.pos.distance_2d(from.pos), units::Q_M);
+        let speed_delta = math::quantize_to((to.speed_mps - from.speed_mps).abs(), units::Q_MPS);
+        DynamicsTriggers {
+            heading: heading_delta
+                > math::quantize_to(self.params.heading_threshold_rad, units::Q_RAD),
+            position: position_delta
+                > math::quantize_to(self.params.position_threshold_m, units::Q_M),
+            speed: speed_delta > math::quantize_to(self.params.speed_threshold_mps, units::Q_MPS),
+        }
+    }
+
+    fn emit(&mut self, now: SimTime, dynamics: &CamDynamics, reason: GenReason) -> CamDecision {
+        // §6.1.4: the low-frequency container goes in the first CAM, then in a CAM only if
+        // at least 500 ms have passed since the last one that carried it.
+        let include_low_frequency = match self.last_low_frequency {
+            None => true,
+            Some(t) => Duration::between(t, now) >= self.params.low_frequency_interval,
+        };
+        if include_low_frequency {
+            self.last_low_frequency = Some(now);
+        }
+        self.last = Some(LastCam {
+            t: now,
+            dynamics: *dynamics,
+        });
+        CamDecision {
+            reason,
+            include_low_frequency,
+            t_gen_cam: self.t_gen_cam,
+        }
+    }
+}
+
+/// The signed difference between two ENU headings, wrapped into `(-π, π]`.
+///
+/// Arithmetic only — `rem_euclid` is exact for finite inputs — so no transcendental is
+/// involved and the result is identical on every platform.
+pub fn angular_difference(a: f64, b: f64) -> f64 {
+    const TWO_PI: f64 = core::f64::consts::TAU;
+    if !a.is_finite() || !b.is_finite() {
+        return 0.0;
+    }
+    let d = (a - b).rem_euclid(TWO_PI);
+    if d > core::f64::consts::PI {
+        d - TWO_PI
+    } else {
+        d
+    }
+}
+
+/// `generator/cam-en302637-2`: the EN 302 637-2 CAM generation service.
+#[derive(Debug, Clone)]
+pub struct CamGenerator {
+    card: ModelCard,
+    state: CamTriggerState,
+}
+
+impl Default for CamGenerator {
+    fn default() -> Self {
+        Self::new(CamGenParams::en302637_2())
+    }
+}
+
+impl CamGenerator {
+    /// A generator with the given parameters and its card.
+    pub fn new(params: CamGenParams) -> Self {
+        Self {
+            card: cam_card(&params),
+            state: CamTriggerState::new(params),
+        }
+    }
+
+    /// The state machine, for inspection and for tests.
+    pub fn state(&self) -> &CamTriggerState {
+        &self.state
+    }
+}
+
+fn cam_card(params: &CamGenParams) -> ModelCard {
+    let en = |clause: &str| {
+        Source::new(
+            SourceKind::Standard,
+            format!("ETSI EN 302 637-2 V1.4.1 {clause}"),
+        )
+    };
+    let mut card = ModelCard::new(
+        CAM_GENERATOR_ID,
+        Family::Generator,
+        "1.0.0",
+        "CAM generation rules of EN 302 637-2: the three dynamics triggers, the adaptive \
+         periodic trigger with its N_GenCam reset, and the 500 ms low-frequency container.",
+    );
+    card.tier = vec![Tier::Abstract, Tier::Medium, Tier::High];
+    card.equations = vec![
+        v2xw_core::card::Equation::new(
+            "trigger 1 (dynamics)",
+            "|heading - heading_last| > 4 deg OR |pos - pos_last| > 4 m OR |v - v_last| > 0,5 m/s",
+        ),
+        v2xw_core::card::Equation::new(
+            "T_GenCam update",
+            "trigger 1: T_GenCam := clamp(elapsed, T_GenCamMin, T_GenCamMax); after N_GenCam \
+             consecutive trigger-2 CAMs: T_GenCam := T_GenCamMax",
+        ),
+    ];
+    card.parameters = vec![
+        Parameter::new(
+            "t_gen_cam_min_ms",
+            "ms",
+            serde_json::json!(params.t_gen_cam_min.as_nanos() / 1_000_000),
+            en("§6.1.3"),
+        ),
+        Parameter::new(
+            "t_gen_cam_max_ms",
+            "ms",
+            serde_json::json!(params.t_gen_cam_max.as_nanos() / 1_000_000),
+            en("§6.1.3"),
+        ),
+        Parameter::new(
+            "t_check_cam_gen_ms",
+            "ms",
+            serde_json::json!(params.t_check_cam_gen.as_nanos() / 1_000_000),
+            en("§6.1.3"),
+        ),
+        Parameter::new(
+            "n_gen_cam",
+            "count",
+            serde_json::json!(params.n_gen_cam),
+            en("§6.1.3"),
+        ),
+        Parameter::new(
+            "heading_threshold_deg",
+            "degree",
+            serde_json::json!(4.0),
+            en("§6.1.3"),
+        ),
+        Parameter::new(
+            "position_threshold_m",
+            "m",
+            serde_json::json!(params.position_threshold_m),
+            en("§6.1.3"),
+        ),
+        Parameter::new(
+            "speed_threshold_mps",
+            "m/s",
+            serde_json::json!(params.speed_threshold_mps),
+            en("§6.1.3"),
+        ),
+        Parameter::new(
+            "low_frequency_interval_ms",
+            "ms",
+            serde_json::json!(params.low_frequency_interval.as_nanos() / 1_000_000),
+            en("§6.1.4"),
+        ),
+    ];
+    card.assumptions = vec![
+        "Every interval is measured on the sending node's own believed clock, not on \
+         simulated time, so a drifting or attacked clock changes the observed CAM rate."
+            .to_string(),
+        "T_GenCam_Dcc arrives through DccState::t_off and acts only as a floor on the \
+         inter-CAM interval; the rest of the DCC state machine is the DCC family's."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "The special-vehicle container's own >= 500 ms cadence and the RSU CAM's >= 1,000 ms \
+         cadence are not implemented: this crate's builder fills neither \
+         container."
+            .to_string(),
+        "The <= 50 ms generation budget of §6.1.3 is not modelled as a delay; a CAM is \
+         assembled instantaneously."
+            .to_string(),
+    ];
+    card.sources = vec![
+        en("§6.1.3, §6.1.4, §6.1.5"),
+        Source::new(
+            SourceKind::Standard,
+            "C2C-CC RS 2037 RS_BSP_293, RS_BSP_297 — T_GenCam_Dcc = T_off, N_GenCam = pCamGenNumber",
+        ),
+        Source::new(
+            SourceKind::Paper,
+            "C2C-CC TR 2052 Observation 10 — field mean CAM interval 0,33-0,47 s, the \
+             validation target",
+        ),
+    ];
+    card.validation = Validation {
+        status: ValidationStatus::UnitTested,
+        references: vec![Source::new(
+            SourceKind::Paper,
+            "C2C-CC TR 2052 Observation 10 (field mean CAM interval 0,33-0,47 s)",
+        )],
+        tests: vec![
+            "generator::tests::heading_change_triggers_a_cam".to_string(),
+            "generator::tests::position_change_triggers_a_cam".to_string(),
+            "generator::tests::speed_change_triggers_a_cam".to_string(),
+            "generator::tests::the_periodic_trigger_fires_at_t_gen_cam".to_string(),
+            "generator::tests::n_gen_cam_consecutive_periodic_cams_restore_the_maximum".to_string(),
+            "generator::tests::the_low_frequency_container_obeys_the_500_ms_rule".to_string(),
+        ],
+    };
+    card.determinism = v2xw_core::card::Determinism {
+        uses_rng: false,
+        rng_domains: Vec::new(),
+    };
+    card
+}
+
+impl Model for CamGenerator {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+impl<C, V> MessageGenerator<C, V> for CamGenerator
+where
+    C: Ctx + ?Sized,
+    V: NodeView + ?Sized,
+{
+    fn check_interval(&self) -> Duration {
+        self.state.params.t_check_cam_gen
+    }
+
+    fn on_tick(&mut self, ctx: &mut C, node: &V, dcc: &DccState) -> Vec<GenRequest> {
+        let now = node.believed_time();
+        let dynamics = CamDynamics::from_estimate(node.position());
+        let Some(decision) = self.state.check(now, &dynamics, dcc) else {
+            return Vec::new();
+        };
+        ctx.emit(GenerationRecord {
+            node: node.node(),
+            t_ns: now,
+            msg_type: MsgType::Cam,
+            reason: decision.reason,
+            low_frequency: decision.include_low_frequency,
+            next_period_ns: decision.t_gen_cam.as_nanos(),
+        });
+        vec![GenRequest {
+            msg_type: MsgType::Cam,
+            reason: decision.reason,
+            include_low_frequency: decision.include_low_frequency,
+            at: now,
+        }]
+    }
+}
+
+// =========================================================================================
+// BSM — SAE J2945/1
+// =========================================================================================
+
+/// Model id of the BSM generator.
+pub const BSM_GENERATOR_ID: &str = "generator/bsm-j2945-1";
+
+/// The J2945/1 parameters this generator uses.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BsmGenParams {
+    /// Nominal inter-transmission time. 100 ms, i.e. 10 Hz — the one VERIFIED number for the BSM
+    /// (SAE J2945/1).
+    pub nominal_itt: Duration,
+    /// The floor J2945/1 puts under a DCC-stretched interval, `vMinITT`. 100 ms
+    /// (marked UNVERIFIED there).
+    pub min_itt: Duration,
+    /// The ceiling, `vMaxITT`. 600 ms (ibid., UNVERIFIED).
+    pub max_itt: Duration,
+}
+
+impl BsmGenParams {
+    /// The cited defaults.
+    pub const fn j2945_1() -> Self {
+        Self {
+            nominal_itt: Duration::from_millis(100),
+            min_itt: Duration::from_millis(100),
+            max_itt: Duration::from_millis(600),
+        }
+    }
+}
+
+impl Default for BsmGenParams {
+    fn default() -> Self {
+        Self::j2945_1()
+    }
+}
+
+/// `generator/bsm-j2945-1`: 10 Hz nominal, Part I in every message.
+///
+/// # What is deliberately not here
+///
+/// J2945/1's inter-transmission-time control — the congestion-driven stretch of the
+/// interval between `vMinITT` and `vMaxITT` — belongs to the DCC family
+/// (`dcc/sae/j2945-1-rate-power`), not to the generator. This generator
+/// therefore honours [`DccState::t_off`] as a floor and does nothing else with congestion;
+/// when the DCC crate lands it drives the floor and this code does not change. Putting the
+/// control loop here instead would mean two models computing a rate and the scenario
+/// choosing which one wins by accident.
+#[derive(Debug, Clone)]
+pub struct BsmGenerator {
+    card: ModelCard,
+    params: BsmGenParams,
+    last_tx: Option<SimTime>,
+    /// The instant the previous BSM was *due* (`last_tx` is when the check that sent it
+    /// ran): the next interval is measured from here, so the rate is the interval's and
+    /// not the check grid's.
+    due_anchor: Option<SimTime>,
+    msg_count: u8,
+    /// SAE J2945/1's own schedule (6.3.8.5-6.3.8.8), when the engine runs it
+    /// ([`BsmGenerator::enable_j2945_schedule`]). `None` keeps the interval check.
+    j2945: Option<J2945Schedule>,
+}
+
+impl Default for BsmGenerator {
+    fn default() -> Self {
+        Self::new(BsmGenParams::j2945_1())
+    }
+}
+
+impl BsmGenerator {
+    /// A generator with the given parameters and its card.
+    pub fn new(params: BsmGenParams) -> Self {
+        Self {
+            card: bsm_card(&params),
+            params,
+            last_tx: None,
+            due_anchor: None,
+            msg_count: 0,
+            j2945: None,
+        }
+    }
+
+    /// The `msgCnt` the next BSM will carry: J2735 `MsgCount ::= INTEGER (0..127)`,
+    /// incremented per message and wrapping.
+    pub fn msg_count(&self) -> u8 {
+        self.msg_count
+    }
+
+    /// When the last BSM was asked for.
+    pub fn last_tx(&self) -> Option<SimTime> {
+        self.last_tx
+    }
+
+    /// Restarts the counter at `value` (taken modulo 128): J2735 lets a sender initialise
+    /// `MsgCount` to any value "if the sender has changed identity", and a pseudonym change
+    /// that kept counting would link the old identity to the new one in the clear.
+    pub fn restart_count(&mut self, value: u8) {
+        self.msg_count = value % 128;
+    }
+
+    /// The decision, with no engine attached — the testable core.
+    ///
+    /// J2945/1 measures the inter-transmission time from the previous BSM, and the node
+    /// checks on its 100 ms step. The interval is measured from the instant the previous
+    /// BSM was due, not from the check that sent it: measuring from the check rounded
+    /// every interval up to the grid, so a congestion-control `MaxITT` of 150 ms (J2945/1's
+    /// `100·N/B` is continuous) went out every 200 ms, 5 Hz instead of 6.7, and 260 ms
+    /// every 300 ms. A sender that fell more than an interval behind restarts from now
+    /// rather than bursting. On the 100 ms grid with a 100 ms interval the two rules send
+    /// at the same checks.
+    ///
+    /// Under SAE J2945/1's own schedule ([`BsmGenerator::enable_j2945_schedule`]) the
+    /// interval check is not used: the BSM goes when `now` reaches
+    /// `NextScheduledMsgTime` ([`BsmGenerator::j2945_check`]), and `dcc` is not read.
+    pub fn check(&mut self, now: SimTime, dcc: &DccState) -> Option<GenReason> {
+        if self.j2945.is_some() {
+            return self.j2945_check(now);
+        }
+        let interval = self.interval(dcc);
+        let reason = match self.due_anchor {
+            None => GenReason::First,
+            Some(anchor) => {
+                if Duration::between(anchor, now) < interval {
+                    return None;
+                }
+                GenReason::Periodic
+            }
+        };
+        let i = interval.as_nanos();
+        self.due_anchor = Some(match self.due_anchor {
+            Some(a) if now.saturating_sub(a) < 2 * i => a + i,
+            _ => now,
+        });
+        self.last_tx = Some(now);
+        self.msg_count = (self.msg_count + 1) % 128;
+        Some(reason)
+    }
+
+    /// The interval [`BsmGenerator::check`] measures from the previous BSM's due instant:
+    /// the nominal period stretched by the DCC gap and kept inside `[min_itt, max_itt]`.
+    pub fn interval(&self, dcc: &DccState) -> Duration {
+        self.params
+            .nominal_itt
+            .max(dcc.t_off)
+            .clamp(self.params.min_itt, self.params.max_itt)
+    }
+
+    /// The instant the previous BSM was due, `None` before the first.
+    pub fn due_anchor(&self) -> Option<SimTime> {
+        self.due_anchor
+    }
+
+    /// The J2945/1 interval bounds, `(min_itt, max_itt)`.
+    pub fn itt_bounds(&self) -> (Duration, Duration) {
+        (self.params.min_itt, self.params.max_itt)
+    }
+
+    /// A BSM at an instant the caller chose (`due`, e.g. aligned to a sidelink
+    /// reservation), sent at the check at `now`: the same counting as
+    /// [`BsmGenerator::check`], with the next interval measured from `due`. The caller has
+    /// already kept `due` inside the interval bounds ([`BsmGenerator::itt_bounds`]).
+    pub fn fire_at(&mut self, now: SimTime, due: SimTime) -> GenReason {
+        let reason = if self.due_anchor.is_none() {
+            GenReason::First
+        } else {
+            GenReason::Periodic
+        };
+        self.due_anchor = Some(due);
+        self.last_tx = Some(now);
+        self.msg_count = (self.msg_count + 1) % 128;
+        reason
+    }
+}
+
+/// How early a scheduled BSM may go out: the check at `NextScheduledMsgTime − this` sends
+/// it. The engine computes the instant on the node's clock and wakes the node on the
+/// simulation's timeline; between the two the clock moves by its drift (10 µs per 100 ms
+/// at 100 ppm), and a check a few nanoseconds short would otherwise hold the BSM a whole
+/// step. Half a millisecond is far below `vTxRand` and `GENTIM-002`'s ±10 ms.
+pub const J2945_SCHEDULE_TOLERANCE: Duration = Duration::from_micros(500);
+
+/// The SAE J2945/1 (2020) constants of the BSM schedule (6.3.8.5-6.3.8.8, Table 21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct J2945Timing {
+    /// `vTxRand`, 5 ms: `RandOffset ~ U(−vTxRand, +vTxRand)` (6.3.8.8).
+    pub tx_rand: Duration,
+    /// `vRescheduleTh`, 25 ms (6.3.8.5).
+    pub reschedule_th: Duration,
+}
+
+impl J2945Timing {
+    /// The J2945/1 (2020) values, Table 21.
+    pub const J2945_1: J2945Timing = J2945Timing {
+        tx_rand: Duration::from_millis(5),
+        reschedule_th: Duration::from_millis(25),
+    };
+}
+
+impl Default for J2945Timing {
+    fn default() -> Self {
+        Self::J2945_1
+    }
+}
+
+/// One transmission decision of SAE J2945/1 6.3.8.5 and what 6.3.8.6 did with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct J2945Decision {
+    /// `TxDecision_Critical_Event`: a critical event condition holds.
+    pub critical: bool,
+    /// `NEW_Tx_Decision_Critical_Event`: it did not hold at the previous decision.
+    pub new_critical: bool,
+    /// `TxDecision_Dynamics`: the tracking-error draw succeeded and the next BSM is at
+    /// least `vRescheduleTh` away.
+    pub dynamics: bool,
+    /// `TxDecision_Max_ITT`: `Max_ITT` fell so the scheduled BSM is `vRescheduleTh` late.
+    pub max_itt: bool,
+    /// The scheduled BSM was cancelled and moved.
+    pub rescheduled: bool,
+    /// `NextScheduledMsgTime` after the decision, on the node's clock; `None` before the
+    /// first BSM.
+    pub next: Option<SimTime>,
+}
+
+/// The state of SAE J2945/1's BSM schedule on one unit.
+#[derive(Debug, Clone, PartialEq)]
+struct J2945Schedule {
+    timing: J2945Timing,
+    /// The run's master seed and the unit: `RandOffset` is drawn from
+    /// `(plugin(generator/bsm-j2945-1), LinkFrame((n, n), LastTxTime))`.
+    seed: u64,
+    node: NodeId,
+    /// `Max_ITT` of the most recent `vTxRateCntrlInt`.
+    max_itt: Duration,
+    /// `NextScheduledMsgTime`.
+    next: Option<SimTime>,
+    /// `previous_TxDecision_Critical_Event`.
+    previous_critical: bool,
+    /// The scheduled BSM is one a decision moved to "now".
+    moved_now: bool,
+}
+
+/// SAE J2945/1's own BSM schedule, 6.3.8.5-6.3.8.8, on the unit's clock.
+///
+/// The interval check above is the engine's older reading, on the 100 ms node step: a
+/// `Max_ITT` of 150 ms came out as alternating 100 and 200 ms intervals, and the 5 ms
+/// randomisation was a one-sided hand-off jitter. J2945/1 instead schedules each BSM at an
+/// instant (6.3.8.8): `NextScheduledMsgTime = LastTxTime + Max_ITT + RandOffset`, with
+/// `RandOffset ~ U(−vTxRand, +vTxRand)`, and the BSM is generated when the unit's clock
+/// reaches it (6.3.3 `GENTIM-002`: within `vBSMRateTolerance`, 10 ms). Every
+/// `vTxRateCntrlInt` (100 ms), and at the onset of a critical event, the transmission
+/// decision (6.3.8.5) may move it ([`BsmGenerator::j2945_decide`]). The engine wakes the
+/// node at [`BsmGenerator::j2945_next`].
+impl BsmGenerator {
+    /// Runs SAE J2945/1's schedule from now on, with `RandOffset` keyed by `seed` and
+    /// `node`. Before the first BSM `Max_ITT` is `vMinITT`.
+    pub fn enable_j2945_schedule(&mut self, timing: J2945Timing, seed: u64, node: NodeId) {
+        self.j2945 = Some(J2945Schedule {
+            timing,
+            seed,
+            node,
+            max_itt: self.j2945_itt(self.params.min_itt),
+            next: None,
+            previous_critical: false,
+            moved_now: false,
+        });
+        self.card = bsm_card_with(&self.params, Some(&timing));
+    }
+
+    /// The `Max_ITT` the schedule uses for the DCC's `max_itt`: never shorter than the
+    /// nominal interval, as [`BsmGenerator::interval`] holds it, so a fixed
+    /// `messages.rate_hz` keeps its rate (a 1.25 Hz study is not sent at 10 Hz because the
+    /// channel is idle), and kept inside `[min_itt, max_itt]`. With the J2945/1 defaults
+    /// (nominal = `vMinITT` = 100 ms) it is the DCC's `Max_ITT` as it is.
+    fn j2945_itt(&self, max_itt: Duration) -> Duration {
+        max_itt
+            .max(self.params.nominal_itt)
+            .clamp(self.params.min_itt, self.params.max_itt)
+    }
+
+    /// Whether SAE J2945/1's schedule runs.
+    pub fn runs_j2945_schedule(&self) -> bool {
+        self.j2945.is_some()
+    }
+
+    /// `previous_TxDecision_Critical_Event`: whether the last transmission decision found a
+    /// critical event condition. A condition that holds when it did not is a new critical
+    /// event, which J2945/1 decides at its onset rather than at the end of the unit's
+    /// `vTxRateCntrlInt` (6.3.8.5). `false` without the J2945/1 schedule.
+    pub fn j2945_in_critical_event(&self) -> bool {
+        self.j2945.as_ref().is_some_and(|s| s.previous_critical)
+    }
+
+    /// `NextScheduledMsgTime` on the unit's clock: `None` without the J2945/1 schedule or
+    /// before the first BSM (which goes at the first check).
+    pub fn j2945_next(&self) -> Option<SimTime> {
+        self.j2945.as_ref().and_then(|s| s.next)
+    }
+
+    /// Moves the J2945/1 schedule on by `paused` of the unit's clock: a fast-forward froze
+    /// the traffic and the radio, so the unit carries on as if no time had passed on the
+    /// road, `LastTxTime` and `NextScheduledMsgTime` each the same distance from the
+    /// resume as they were from the freeze.
+    ///
+    /// Left in the past, every unit's next BSM was hours overdue at the resume, every unit
+    /// sent at the same instant (the first live step) and scheduled from it, so a fleet
+    /// whose BSMs were spread over the 100 ms interval went on air together and stayed
+    /// within ±`vTxRand` of each other for seconds: on the quarter Midtown benchmark 141
+    /// BSMs in the first 10 ms after the first fast-forward and none in the next 80 ms.
+    /// A no-op without the J2945/1 schedule, whose step-grid reading keeps each node's
+    /// phase across a pause.
+    pub fn resume_after_pause(&mut self, paused: Duration) {
+        let Some(s) = self.j2945.as_mut() else {
+            return;
+        };
+        let by = paused.as_nanos();
+        s.next = s.next.map(|t| t.saturating_add(by));
+        self.last_tx = self.last_tx.map(|t| t.saturating_add(by));
+        self.due_anchor = self.due_anchor.map(|t| t.saturating_add(by));
+    }
+
+    /// `RandOffset` for the BSM generated at `at`, ns: `U(−vTxRand, +vTxRand)` in whole
+    /// microseconds, from the key `(plugin(generator/bsm-j2945-1), LinkFrame((n, n), at))`.
+    fn rand_offset_ns(s: &J2945Schedule, at: SimTime) -> i64 {
+        let j = s.timing.tx_rand.as_nanos() / 1_000;
+        if j == 0 {
+            return 0;
+        }
+        let mut r = v2xw_core::rng::RngStream::derive(
+            s.seed,
+            v2xw_core::rng::RngDomain::plugin(BSM_GENERATOR_ID),
+            v2xw_core::rng::EntityRef::LinkFrame {
+                link: v2xw_core::ids::LinkKey::new(s.node, s.node),
+                frame: at,
+            },
+        );
+        let us = r.below(2 * j + 1) as i64 - j as i64;
+        us * 1_000
+    }
+
+    /// The transmission decision of 6.3.8.5 and the scheduling of 6.3.8.6, at the end of
+    /// a `vTxRateCntrlInt` or at the onset of a critical event, at `now` on the unit's
+    /// clock: `max_itt` is `Max_ITT(k)` (Eq. 7), `critical` whether a critical event
+    /// condition holds, and `dynamics_draw` the outcome of the tracking-error Bernoulli
+    /// trial (Eq. 5). A no-op returning the default without the J2945/1 schedule.
+    ///
+    /// - `TxDecision_Dynamics` needs the draw and `Next − now ≥ vRescheduleTh`.
+    /// - `TxDecision_Max_ITT` is `Next − (LastTx + Max_ITT) ≥ vRescheduleTh`.
+    /// - A new critical event, or a critical event or dynamics with
+    ///   `Next − LastTx > 100 ms + vTxRand`, moves the BSM to now; else `TxDecision_Max_ITT`
+    ///   moves it to `max(now, LastTx + Max_ITT)`; else it stays.
+    pub fn j2945_decide(
+        &mut self,
+        now: SimTime,
+        max_itt: Duration,
+        critical: bool,
+        dynamics_draw: bool,
+    ) -> J2945Decision {
+        let min_itt = self.params.min_itt;
+        let last = self.last_tx;
+        let itt = self.j2945_itt(max_itt);
+        let Some(s) = self.j2945.as_mut() else {
+            return J2945Decision::default();
+        };
+        s.max_itt = itt;
+        let mut d = J2945Decision {
+            critical,
+            new_critical: critical && !s.previous_critical,
+            ..J2945Decision::default()
+        };
+        s.previous_critical = critical;
+        let th = s.timing.reschedule_th.as_nanos();
+        if let (Some(last), Some(next)) = (last, s.next) {
+            let next_i = next as i128;
+            d.dynamics = dynamics_draw && next_i - now as i128 >= i128::from(th);
+            let itt_due = last.saturating_add(s.max_itt.as_nanos());
+            d.max_itt = next_i - itt_due as i128 >= i128::from(th);
+            let span = next.saturating_sub(last);
+            let guard = min_itt.as_nanos() + s.timing.tx_rand.as_nanos();
+            if ((d.critical || d.dynamics) && span > guard) || d.new_critical {
+                s.next = Some(now);
+                s.moved_now = true;
+                d.rescheduled = true;
+            } else if d.max_itt {
+                s.next = Some(now.max(itt_due));
+                d.rescheduled = true;
+            }
+        } else if d.new_critical {
+            // Before the first BSM there is nothing scheduled to cancel: the first BSM
+            // goes now.
+            s.next = Some(now);
+            s.moved_now = true;
+            d.rescheduled = true;
+        }
+        d.next = s.next;
+        d
+    }
+
+    /// The J2945/1 schedule's check: the BSM goes when `now` reaches
+    /// `NextScheduledMsgTime` (less [`J2945_SCHEDULE_TOLERANCE`]), or at the first check
+    /// before the first BSM; then `LastTxTime` is set (the scheduled instant, or `now` if
+    /// later) and the next BSM is scheduled at
+    /// `LastTxTime + Max_ITT + RandOffset` (6.3.8.8). A unit that wakes late sends once
+    /// and schedules from when it did, rather than bursting.
+    pub fn j2945_check(&mut self, now: SimTime) -> Option<GenReason> {
+        let first = self.last_tx.is_none();
+        let s = self.j2945.as_mut()?;
+        let due = match s.next {
+            None => first,
+            Some(n) => now.saturating_add(J2945_SCHEDULE_TOLERANCE.as_nanos()) >= n,
+        };
+        if !due {
+            return None;
+        }
+        let reason = if first {
+            GenReason::First
+        } else if s.moved_now {
+            GenReason::Event
+        } else {
+            GenReason::Periodic
+        };
+        s.moved_now = false;
+        // A check inside the tolerance is the scheduled BSM: `LastTxTime` is the instant
+        // it was scheduled for (6.3.8.8, "when CurrentTime is NextScheduledMsgTime"), so the
+        // tolerance does not shorten the interval; a late one is when it went.
+        let at = s.next.map_or(now, |n| now.max(n));
+        let off = Self::rand_offset_ns(s, at);
+        let base = at.saturating_add(s.max_itt.as_nanos());
+        s.next = Some(if off >= 0 {
+            base.saturating_add(off as u64)
+        } else {
+            base.saturating_sub(off.unsigned_abs())
+        });
+        self.last_tx = Some(at);
+        self.due_anchor = Some(at);
+        self.msg_count = (self.msg_count + 1) % 128;
+        Some(reason)
+    }
+}
+
+fn bsm_card(params: &BsmGenParams) -> ModelCard {
+    bsm_card_with(params, None)
+}
+
+fn bsm_card_with(params: &BsmGenParams, j2945: Option<&J2945Timing>) -> ModelCard {
+    let mut card = ModelCard::new(
+        BSM_GENERATOR_ID,
+        Family::Generator,
+        "1.0.0",
+        "BSM generation at the J2945/1 nominal 10 Hz, Part I in every message; the \
+         inter-transmission-time control loop is the DCC family's.",
+    );
+    card.tier = vec![Tier::Abstract, Tier::Medium, Tier::High];
+    card.parameters = vec![
+        Parameter::new(
+            "nominal_itt_ms",
+            "ms",
+            serde_json::json!(params.nominal_itt.as_nanos() / 1_000_000),
+            Source::new(
+                SourceKind::Standard,
+                "SAE J2945/1 — 10 Hz nominal; VERIFIED via secondary sources (NDSS 2024 §II, \
+                 Bindel 2021, Rostami 2018)",
+            ),
+        ),
+        {
+            let mut p = Parameter::new(
+                "min_itt_ms",
+                "ms",
+                serde_json::json!(params.min_itt.as_nanos() / 1_000_000),
+                Source::todo_calibrate(
+                    "vMinITT 100 ms is implied rather than sourced (UNVERIFIED)",
+                ),
+            );
+            p.calibration = Some(
+                "Read SAE J2945/1 §6 on a machine that holds a licence and record vMinITT and \
+                 vMaxITT with their clause numbers."
+                    .to_string(),
+            );
+            p
+        },
+        {
+            let mut p = Parameter::new(
+                "max_itt_ms",
+                "ms",
+                serde_json::json!(params.max_itt.as_nanos() / 1_000_000),
+                Source::todo_calibrate(
+                    "vMaxITT 600 ms is implied rather than sourced (UNVERIFIED)",
+                ),
+            );
+            p.calibration = Some(
+                "Read SAE J2945/1 §6 on a machine that holds a licence and record vMinITT and \
+                 vMaxITT with their clause numbers."
+                    .to_string(),
+            );
+            p
+        },
+    ];
+    card.assumptions = vec![
+        "Part I is present in every BSM, which is what J2735 requires of BSMcoreData.".to_string(),
+    ];
+    card.limitations = vec![
+        "Part II is not generated: PathHistory (about 300 m, max 23 points) and PathPrediction \
+         are UNVERIFIED and arrive with the hand-written BSM codec."
+            .to_string(),
+        "The EEBL event flag at a deceleration of 0,4 g is not raised here; on_event carries \
+         the HardBraking event that will raise it."
+            .to_string(),
+        "The inter-transmission-time control of J2945/1 is not implemented here by design \
+         (see the type's documentation); DccState::t_off is honoured only as a floor."
+            .to_string(),
+    ];
+    card.sources = vec![
+        Source::new(
+            SourceKind::Standard,
+            "SAE J2945/1 — BSM generation; not every one of its numbers is VERIFIED (each parameter says which)",
+        ),
+        Source::new(
+            SourceKind::Paper,
+            "Rostami 2018; Bindel 2021; NDSS 2024 §II — 10 Hz confirmed by secondary sources",
+        ),
+    ];
+    card.validation = Validation {
+        status: ValidationStatus::UnitTested,
+        references: Vec::new(),
+        tests: vec![
+            "generator::tests::the_bsm_generator_runs_at_ten_hertz".to_string(),
+            "generator::tests::dcc_can_only_slow_the_bsm_generator_down".to_string(),
+        ],
+    };
+    card.determinism = v2xw_core::card::Determinism {
+        uses_rng: false,
+        rng_domains: Vec::new(),
+    };
+    if let Some(t) = j2945 {
+        card.version = "1.2.0".to_string();
+        card.purpose = "BSM generation on SAE J2945/1's own schedule (6.3.8.5-6.3.8.8): each \
+             BSM at LastTxTime + Max_ITT + RandOffset, moved by the transmission decision at \
+             the end of each of the unit's own 100 ms intervals and at a critical event's \
+             onset; Part I in every message."
+            .to_string();
+        card.equations = vec![
+            v2xw_core::card::Equation::new(
+                "schedule",
+                "NextScheduledMsgTime = LastTxTime + Max_ITT + RandOffset, RandOffset ~ \
+                 U(-vTxRand, +vTxRand) from (plugin(id), LinkFrame((n,n), LastTxTime))",
+            ),
+            v2xw_core::card::Equation::new(
+                "decision",
+                "new critical event, or (critical or dynamics) and Next - LastTx > 100 ms + \
+                 vTxRand: Next = now; else Next - (LastTx + Max_ITT) >= vRescheduleTh: Next = \
+                 max(now, LastTx + Max_ITT); dynamics needs Next - now >= vRescheduleTh",
+            ),
+        ];
+        let src = |what: &str| {
+            Source::new(
+                SourceKind::Standard,
+                format!("SAE J2945/1 APR2020 {what}, Table 21"),
+            )
+        };
+        card.parameters.push(Parameter::new(
+            "tx_rand_ms",
+            "ms",
+            serde_json::json!(t.tx_rand.as_nanos() as f64 / 1e6),
+            src("6.3.8.8 vTxRand"),
+        ));
+        card.parameters.push(Parameter::new(
+            "reschedule_th_ms",
+            "ms",
+            serde_json::json!(t.reschedule_th.as_nanos() as f64 / 1e6),
+            src("6.3.8.5 vRescheduleTh"),
+        ));
+        card.limitations
+            .retain(|l| !l.starts_with("The inter-transmission-time control"));
+        card.limitations.push(
+            "Max_ITT, the critical event and the tracking-error draw are the DCC family's \
+             (dcc/sae/j2945-1-rate-power); the engine hands them to the decision at the end \
+             of each of the unit's own vTxRateCntrlInt, at a phase in the mobility step drawn \
+             once per unit, and at once when a critical event condition initially occurs."
+                .to_string(),
+        );
+        card.validation.tests.extend([
+            "generator::tests::a_150_ms_max_itt_is_kept_within_the_tolerance".to_string(),
+            "generator::tests::rand_offset_is_symmetric".to_string(),
+            "generator::tests::a_new_critical_event_goes_out_at_once".to_string(),
+            "generator::tests::a_tracking_error_within_25_ms_of_the_next_bsm_does_not_reschedule"
+                .to_string(),
+        ]);
+        card.determinism = v2xw_core::card::Determinism {
+            uses_rng: true,
+            rng_domains: vec![format!("plugin({BSM_GENERATOR_ID})")],
+        };
+    }
+    card
+}
+
+impl Model for BsmGenerator {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+impl<C, V> MessageGenerator<C, V> for BsmGenerator
+where
+    C: Ctx + ?Sized,
+    V: NodeView + ?Sized,
+{
+    fn check_interval(&self) -> Duration {
+        // The check cadence is the nominal period: there is no sub-period trigger to catch.
+        self.params.nominal_itt
+    }
+
+    fn on_tick(&mut self, ctx: &mut C, node: &V, dcc: &DccState) -> Vec<GenRequest> {
+        let now = node.believed_time();
+        let Some(reason) = self.check(now, dcc) else {
+            return Vec::new();
+        };
+        ctx.emit(GenerationRecord {
+            node: node.node(),
+            t_ns: now,
+            msg_type: MsgType::Bsm,
+            reason,
+            // Part I is in every BSM; there is no low-frequency container in a BSM, so the
+            // flag is always false and the field means "no extra content" here.
+            low_frequency: false,
+            next_period_ns: self.params.nominal_itt.as_nanos(),
+        });
+        vec![GenRequest {
+            msg_type: MsgType::Bsm,
+            reason,
+            include_low_frequency: false,
+            at: now,
+        }]
+    }
+}
+
+// =========================================================================================
+// Generation timing — where on the time axis a node's generator runs
+// =========================================================================================
+
+/// Model id of the generation-timing model.
+pub const GENERATION_TIMING_ID: &str = "generator/timing-phase-jitter";
+
+/// When, on the time axis, a node's periodic generator fires: its **phase** and its
+/// per-message **jitter**.
+///
+/// # The defect this exists to close
+///
+/// Both generators above measure every interval from the node's *own* last message
+/// ([`CamTriggerState::check`], [`BsmGenerator::check`]), so neither standard puts two
+/// stations on a common time grid: EN 302 637-2 V1.4.1 §6.1.3 checks the triggers every
+/// `T_CheckCamGen` from when the station's CA basic service was activated, and SAE J2945/1
+/// measures the inter-transmission time from the station's previous BSM. Nothing in either
+/// — nor in the TS 102 687 DCC gate between the facilities and the access layer, whose
+/// `T_off` is again measured from the station's own last transmission — aligns one
+/// station's generation instants with another's. A real fleet's phases are set by when
+/// each unit powered up, which is uncorrelated between vehicles.
+///
+/// The engine used to step every node at the mobility step's own instant, which put every
+/// vehicle's generation at phase 0 of one global 100 ms grid. Every node then finished
+/// signing within microseconds of every other and contended for the channel in the same
+/// few hundred microseconds; in a 17-vehicle, 60 s Manhattan run that synchronised
+/// contention lost 31 % of all reception attempts to collision at a channel load of a
+/// few per cent. That is an artefact of the simulator's clock, not of 802.11p.
+///
+/// # The model
+///
+/// * **Phase.** Each node's generation clock is offset from the engine's step grid by
+///   `φ ~ U[0, phase_window)`, drawn once per node from the keyed stream
+///   `(plugin("generator/timing-phase-jitter"), Node(id))`. With `phase_window` equal to
+///   the nominal period the phases of a fleet are independent and uniform over the
+///   period — the random start per UE of the 3GPP periodic traffic model
+///   (TR 37.885) and what Veins' `DemoBaseApplLayer` does at
+///   start-up.
+/// * **Jitter.** Each message is handed to the access layer `j ~ U[0, max_jitter]` after
+///   it was generated and signed, drawn from the single-use key
+///   `(plugin(id), LinkFrame{(node, node), generation instant})`. It stands for host
+///   scheduling and stack latency, and it is what stops two stations whose phases happen
+///   to coincide from colliding on every period for as long as they are in range. The
+///   default 10 ms is ns-3's `BsmApplication` `TxMaxDelay` default
+///   (`src/wave/model/bsm-application.cc`: `m_txMaxDelay (MilliSeconds (10))`, applied as
+///   `U[0, TxMaxDelay]` per packet on a grid that does not accumulate it). **It is a
+///   simulator convention, not a standard's number**: SAE J2945/1's text was not available
+///   to this build (the card records which J2945/1 numbers are verified), and
+///   whether J2945/1 itself specifies a per-message randomisation is UNVERIFIED here. The
+///   jitter is part of generation-to-air latency and a latency metric reads it as such.
+///
+/// [`GenerationTiming::SYNCHRONISED`] is the old behaviour — every node at phase 0, no
+/// jitter — kept so a study of synchronised contention can still ask for it and so a test
+/// can show the difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GenerationTiming {
+    /// The window a node's phase is drawn from: `φ ~ U[0, phase_window)`. Zero puts every
+    /// node at phase 0.
+    pub phase_window: Duration,
+    /// The largest per-message hand-off jitter: `j ~ U[0, max_jitter]`. Zero is none.
+    pub max_jitter: Duration,
+}
+
+impl GenerationTiming {
+    /// ns-3 `BsmApplication`'s `TxMaxDelay` default, 10 ms.
+    pub const NS3_TX_MAX_DELAY: Duration = Duration::from_millis(10);
+
+    /// Every node at phase 0 of the engine's grid, and no jitter: the behaviour before
+    /// this model existed.
+    pub const SYNCHRONISED: GenerationTiming = GenerationTiming {
+        phase_window: Duration::ZERO,
+        max_jitter: Duration::ZERO,
+    };
+
+    /// Independent uniform phases over `period`, and ns-3's 10 ms hand-off jitter.
+    pub const fn desynchronised(period: Duration) -> Self {
+        GenerationTiming {
+            phase_window: period,
+            max_jitter: Self::NS3_TX_MAX_DELAY,
+        }
+    }
+
+    /// True when nothing is randomised, so every node generates on the common grid.
+    pub const fn is_synchronised(&self) -> bool {
+        self.phase_window.as_nanos() == 0 && self.max_jitter.as_nanos() == 0
+    }
+
+    /// The RNG domain both draws come from, derived from the model id.
+    pub fn domain() -> v2xw_core::rng::RngDomain {
+        v2xw_core::rng::RngDomain::plugin(GENERATION_TIMING_ID)
+    }
+
+    /// One node's phase: `U[0, phase_window)` in whole nanoseconds, keyed by the node.
+    ///
+    /// A pure function of `(seed, node)`: it does not depend on when the node was created
+    /// or on how many nodes were created before it.
+    pub fn phase(&self, rng: &v2xw_core::rng::RngRegistry, node: NodeId) -> Duration {
+        let w = self.phase_window.as_nanos();
+        if w == 0 {
+            return Duration::ZERO;
+        }
+        let mut s = rng.checkout(Self::domain(), v2xw_core::rng::EntityRef::Node(node));
+        Duration::from_nanos(s.below(w))
+    }
+
+    /// One message's hand-off jitter: `U[0, max_jitter]` in whole microseconds, keyed by
+    /// the node and the message's generation instant.
+    pub fn jitter(
+        &self,
+        rng: &v2xw_core::rng::RngRegistry,
+        node: NodeId,
+        generated_at: SimTime,
+    ) -> Duration {
+        let j = self.max_jitter.as_nanos() / 1_000;
+        if j == 0 {
+            return Duration::ZERO;
+        }
+        let mut s = rng.checkout(
+            Self::domain(),
+            v2xw_core::rng::EntityRef::LinkFrame {
+                link: v2xw_core::ids::LinkKey::new(node, node),
+                frame: generated_at,
+            },
+        );
+        Duration::from_micros(s.below(j + 1))
+    }
+
+    /// The model card for this timing.
+    pub fn card(&self) -> ModelCard {
+        timing_card(self)
+    }
+}
+
+impl Default for GenerationTiming {
+    fn default() -> Self {
+        Self::desynchronised(Duration::from_millis(100))
+    }
+}
+
+/// The generation-timing model as a registrable [`Model`].
+#[derive(Debug, Clone)]
+pub struct GenerationTimingModel {
+    card: ModelCard,
+    timing: GenerationTiming,
+}
+
+impl GenerationTimingModel {
+    /// The model for `timing`.
+    pub fn new(timing: GenerationTiming) -> Self {
+        Self {
+            card: timing_card(&timing),
+            timing,
+        }
+    }
+
+    /// The timing it carries.
+    pub const fn timing(&self) -> GenerationTiming {
+        self.timing
+    }
+}
+
+impl Model for GenerationTimingModel {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+fn timing_card(t: &GenerationTiming) -> ModelCard {
+    let mut card = ModelCard::new(
+        GENERATION_TIMING_ID,
+        Family::Generator,
+        "1.0.0",
+        "Where a node's periodic generator sits on the time axis: an independent uniform \
+         phase per node over the nominal period, and a per-message hand-off jitter.",
+    );
+    card.tier = vec![Tier::Abstract, Tier::Medium, Tier::High];
+    card.equations = vec![
+        v2xw_core::card::Equation::new(
+            "phase",
+            "phi_n ~ U[0, phase_window), drawn once per node from (plugin(id), Node(n)); \
+             node n steps at k*T_step + phi_n",
+        ),
+        v2xw_core::card::Equation::new(
+            "hand-off jitter",
+            "j ~ U[0, max_jitter] per message, from (plugin(id), LinkFrame((n,n), t_gen)); \
+             t_access = t_signed + j",
+        ),
+    ];
+    let mut jitter = Parameter::new(
+        "max_jitter_ms",
+        "ms",
+        serde_json::json!(t.max_jitter.as_nanos() as f64 / 1e6),
+        Source::new(
+            SourceKind::Code,
+            "ns-3 src/wave/model/bsm-application.cc (Carpenter, NCSU 2014): \
+             m_txMaxDelay (MilliSeconds (10)), txDelay ~ U[0, TxMaxDelay] per BSM on a \
+             non-accumulating grid",
+        ),
+    );
+    jitter.calibration = Some(
+        "A simulator convention, not a standard's value. Replace it with a measured OBU \
+         generation-to-air delay distribution (a CAMP or Safety Pilot deployment timing \
+         log), or with SAE J2945/1's own randomisation clause if it has one; the J2945/1 \
+         text was not available to verify either way."
+            .to_string(),
+    );
+    card.parameters = vec![
+        Parameter::new(
+            "phase_window_ms",
+            "ms",
+            serde_json::json!(t.phase_window.as_nanos() as f64 / 1e6),
+            Source::new(
+                SourceKind::Standard,
+                "ETSI EN 302 637-2 V1.4.1 §6.1.3 and SAE J2945/1 measure the generation \
+                 interval from the station's own previous message and define no common \
+                 time grid; the 3GPP TR 37.885 periodic traffic model starts each UE at a \
+                 random offset",
+            ),
+        ),
+        jitter,
+    ];
+    card.assumptions = vec![
+        "A fleet's generation phases are independent and uniform: units power up at \
+         unrelated instants and nothing in EN 302 637-2, SAE J2945/1 or TS 102 687 \
+         re-aligns them."
+            .to_string(),
+        "The jitter is host and stack latency between signing and the access layer, and it \
+         counts toward generation-to-air latency."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "A node's phase is fixed for its life: slow drift between free-running host clocks \
+         is represented only by the per-message jitter."
+            .to_string(),
+        "Whether SAE J2945/1 specifies its own per-message randomisation is UNVERIFIED in \
+         this build; the jitter magnitude is ns-3's convention."
+            .to_string(),
+    ];
+    card.sources = vec![
+        Source::new(
+            SourceKind::Standard,
+            "ETSI EN 302 637-2 V1.4.1 §6.1.3 (T_CheckCamGen, T_GenCam measured per station)",
+        ),
+        Source::new(
+            SourceKind::Standard,
+            "SAE J2945/1 — inter-transmission time measured from the station's own last BSM",
+        ),
+        Source::new(
+            SourceKind::Standard,
+            "ETSI TS 102 687 V1.2.1 — T_off gating measured from the station's own last \
+             transmission",
+        ),
+        Source::new(SourceKind::Code, "ns-3 BsmApplication TxMaxDelay = 10 ms"),
+    ];
+    card.validation = Validation {
+        status: ValidationStatus::UnitTested,
+        references: Vec::new(),
+        tests: vec![
+            "generator::tests::phases_are_uniform_and_keyed_by_node".to_string(),
+            "generator::tests::jitter_is_bounded_and_keyed_by_message".to_string(),
+        ],
+    };
+    card.determinism = v2xw_core::card::Determinism {
+        uses_rng: true,
+        rng_domains: vec![format!("plugin({GENERATION_TIMING_ID})")],
+    };
+    card
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use v2xw_core::time::NS_PER_MS;
+
+    #[test]
+    fn phases_are_uniform_and_keyed_by_node() {
+        let rng = v2xw_core::rng::RngRegistry::new(7);
+        let t = GenerationTiming::default();
+        let n = 4_000u32;
+        let phases: Vec<u64> = (0..n)
+            .map(|i| t.phase(&rng, NodeId::new(i)).as_nanos())
+            .collect();
+        assert!(phases.iter().all(|p| *p < 100 * NS_PER_MS));
+        // Ten 10 ms bins, each expecting 400: a synchronised fleet puts all 4,000 in one.
+        let mut bins = [0u32; 10];
+        for p in &phases {
+            bins[(*p / (10 * NS_PER_MS)) as usize] += 1;
+        }
+        for (i, b) in bins.iter().enumerate() {
+            assert!((300..=500).contains(b), "bin {i} holds {b} of 4000 phases");
+        }
+        // Keyed by the node: asking again, in a different order, gives the same answer.
+        let rng2 = v2xw_core::rng::RngRegistry::new(7);
+        for i in (0..n).rev().step_by(97) {
+            assert_eq!(
+                t.phase(&rng2, NodeId::new(i)).as_nanos(),
+                phases[i as usize]
+            );
+        }
+        // And the synchronised timing puts everyone at zero.
+        assert!((0..50).all(|i| {
+            GenerationTiming::SYNCHRONISED
+                .phase(&rng, NodeId::new(i))
+                .as_nanos()
+                == 0
+        }));
+    }
+
+    #[test]
+    fn jitter_is_bounded_and_keyed_by_message() {
+        let rng = v2xw_core::rng::RngRegistry::new(11);
+        let t = GenerationTiming::default();
+        let node = NodeId::new(3);
+        let js: Vec<u64> = (0..2_000u64)
+            .map(|k| t.jitter(&rng, node, k * 100 * NS_PER_MS).as_nanos())
+            .collect();
+        assert!(js.iter().all(|j| *j <= 10 * NS_PER_MS));
+        let mean = js.iter().sum::<u64>() as f64 / js.len() as f64 / NS_PER_MS as f64;
+        assert!(
+            (4.5..5.5).contains(&mean),
+            "mean jitter {mean} ms, expected about 5"
+        );
+        // The same message asked twice gets the same jitter: the key is single-use and
+        // embeds the generation instant, so no stream position leaks between messages.
+        assert_eq!(
+            t.jitter(&rng, node, 500 * NS_PER_MS),
+            t.jitter(&rng, node, 500 * NS_PER_MS)
+        );
+        assert_eq!(
+            GenerationTiming::SYNCHRONISED.jitter(&rng, node, 0),
+            Duration::ZERO
+        );
+        t.card().validate().expect("the timing card validates");
+    }
+
+    fn ms(n: u64) -> SimTime {
+        n * NS_PER_MS
+    }
+
+    fn still() -> CamDynamics {
+        CamDynamics {
+            pos: Vec3::new(100.0, 200.0, 0.0),
+            heading_rad: 0.0,
+            speed_mps: 10.0,
+        }
+    }
+
+    fn state() -> CamTriggerState {
+        CamTriggerState::new(CamGenParams::en302637_2())
+    }
+
+    #[test]
+    fn the_first_check_always_sends_and_carries_the_low_frequency_container() {
+        let mut s = state();
+        let d = s
+            .check(0, &still(), &DccState::UNRESTRICTED)
+            .expect("sends");
+        assert_eq!(d.reason, GenReason::First);
+        assert!(
+            d.include_low_frequency,
+            "EN 302 637-2 §6.1.4: the first CAM"
+        );
+        assert_eq!(d.t_gen_cam, Duration::from_millis(1_000));
+    }
+
+    #[test]
+    fn nothing_is_sent_before_t_gen_cam_min() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+        // A 90-degree turn at 99 ms is still inside the floor.
+        let turned = CamDynamics {
+            heading_rad: core::f64::consts::FRAC_PI_2,
+            ..still()
+        };
+        assert!(s.check(ms(99), &turned, &DccState::UNRESTRICTED).is_none());
+        // At 100 ms it goes.
+        assert!(s.check(ms(100), &turned, &DccState::UNRESTRICTED).is_some());
+    }
+
+    #[test]
+    fn heading_change_triggers_a_cam() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+
+        // 3,9 degrees: under the threshold, and the periodic deadline is 1 s away.
+        let under = CamDynamics {
+            heading_rad: 3.9_f64.to_radians(),
+            ..still()
+        };
+        assert!(s.check(ms(200), &under, &DccState::UNRESTRICTED).is_none());
+
+        // 4,1 degrees: over it.
+        let over = CamDynamics {
+            heading_rad: 4.1_f64.to_radians(),
+            ..still()
+        };
+        let d = s
+            .check(ms(300), &over, &DccState::UNRESTRICTED)
+            .expect("sends");
+        assert_eq!(
+            d.reason,
+            GenReason::Dynamics(DynamicsTriggers {
+                heading: true,
+                position: false,
+                speed: false
+            })
+        );
+        // T_GenCam becomes the interval that was achieved: 300 ms.
+        assert_eq!(d.t_gen_cam, Duration::from_millis(300));
+    }
+
+    /// The threshold is "> 4 degrees", so exactly 4 degrees must not trigger. This is the
+    /// boundary that the quantise-before-comparing rule exists to keep stable.
+    #[test]
+    fn exactly_four_degrees_does_not_trigger() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+        let exactly = CamDynamics {
+            heading_rad: CamGenParams::FOUR_DEGREES_RAD,
+            ..still()
+        };
+        assert!(
+            s.check(ms(200), &exactly, &DccState::UNRESTRICTED)
+                .is_none()
+        );
+    }
+
+    /// The heading difference must wrap: 359 degrees to 1 degree is a 2-degree change, not
+    /// a 358-degree one.
+    #[test]
+    fn heading_difference_wraps_around_the_circle() {
+        let mut s = state();
+        let near_north = CamDynamics {
+            heading_rad: 359.0_f64.to_radians(),
+            ..still()
+        };
+        s.check(0, &near_north, &DccState::UNRESTRICTED).unwrap();
+        let just_past = CamDynamics {
+            heading_rad: 1.0_f64.to_radians(),
+            ..still()
+        };
+        assert!(
+            s.check(ms(200), &just_past, &DccState::UNRESTRICTED)
+                .is_none(),
+            "a 2-degree change across the wrap must not trigger"
+        );
+        assert!((angular_difference(0.1, core::f64::consts::TAU + 0.1)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn position_change_triggers_a_cam() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+
+        let near = CamDynamics {
+            pos: Vec3::new(103.9, 200.0, 0.0),
+            ..still()
+        };
+        assert!(s.check(ms(200), &near, &DccState::UNRESTRICTED).is_none());
+
+        let far = CamDynamics {
+            pos: Vec3::new(104.1, 200.0, 0.0),
+            ..still()
+        };
+        let d = s
+            .check(ms(300), &far, &DccState::UNRESTRICTED)
+            .expect("sends");
+        assert_eq!(
+            d.reason,
+            GenReason::Dynamics(DynamicsTriggers {
+                heading: false,
+                position: true,
+                speed: false
+            })
+        );
+    }
+
+    #[test]
+    fn speed_change_triggers_a_cam() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+
+        let slower = CamDynamics {
+            speed_mps: 9.6,
+            ..still()
+        };
+        assert!(s.check(ms(200), &slower, &DccState::UNRESTRICTED).is_none());
+
+        let much_slower = CamDynamics {
+            speed_mps: 9.4,
+            ..still()
+        };
+        let d = s
+            .check(ms(300), &much_slower, &DccState::UNRESTRICTED)
+            .expect("sends");
+        assert_eq!(
+            d.reason,
+            GenReason::Dynamics(DynamicsTriggers {
+                heading: false,
+                position: false,
+                speed: true
+            })
+        );
+    }
+
+    #[test]
+    fn all_three_triggers_are_reported_when_all_three_fire() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+        let everything = CamDynamics {
+            pos: Vec3::new(120.0, 220.0, 0.0),
+            heading_rad: 0.5,
+            speed_mps: 20.0,
+        };
+        let d = s
+            .check(ms(200), &everything, &DccState::UNRESTRICTED)
+            .expect("sends");
+        assert_eq!(
+            d.reason,
+            GenReason::Dynamics(DynamicsTriggers {
+                heading: true,
+                position: true,
+                speed: true
+            })
+        );
+    }
+
+    #[test]
+    fn the_periodic_trigger_fires_at_t_gen_cam() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+        // Nothing changes; T_GenCam is T_GenCamMax = 1 s.
+        for t in [100, 200, 500, 999] {
+            assert!(
+                s.check(ms(t), &still(), &DccState::UNRESTRICTED).is_none(),
+                "no CAM at {t} ms"
+            );
+        }
+        let d = s
+            .check(ms(1_000), &still(), &DccState::UNRESTRICTED)
+            .expect("sends");
+        assert_eq!(d.reason, GenReason::Periodic);
+    }
+
+    /// EN 302 637-2 §6.1.3: after a dynamics CAM, `T_GenCam` is the achieved interval, and
+    /// it returns to `T_GenCamMax` only after `N_GenCam` consecutive *periodic* CAMs.
+    #[test]
+    fn n_gen_cam_consecutive_periodic_cams_restore_the_maximum() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+
+        // A dynamics CAM at 300 ms sets T_GenCam to 300 ms.
+        let turned = CamDynamics {
+            heading_rad: 0.5,
+            ..still()
+        };
+        let d = s.check(ms(300), &turned, &DccState::UNRESTRICTED).unwrap();
+        assert_eq!(d.t_gen_cam, Duration::from_millis(300));
+        assert_eq!(s.consecutive_periodic(), 0);
+
+        // Three periodic CAMs at 300 ms spacing. The third restores T_GenCamMax.
+        let mut t = 300u64;
+        for i in 1..=3 {
+            t += 300;
+            let d = s
+                .check(ms(t), &turned, &DccState::UNRESTRICTED)
+                .unwrap_or_else(|| panic!("periodic CAM {i} at {t} ms"));
+            assert_eq!(d.reason, GenReason::Periodic, "CAM {i}");
+            if i < 3 {
+                assert_eq!(d.t_gen_cam, Duration::from_millis(300), "CAM {i}");
+                assert_eq!(s.consecutive_periodic(), i as u8);
+            } else {
+                assert_eq!(
+                    d.t_gen_cam,
+                    Duration::from_millis(1_000),
+                    "the third restores T_GenCamMax"
+                );
+                assert_eq!(s.consecutive_periodic(), 0, "and resets the counter");
+            }
+        }
+
+        // And the next periodic CAM is now a second away.
+        assert!(
+            s.check(ms(t + 900), &turned, &DccState::UNRESTRICTED)
+                .is_none()
+        );
+        assert!(
+            s.check(ms(t + 1_000), &turned, &DccState::UNRESTRICTED)
+                .is_some()
+        );
+    }
+
+    /// A dynamics CAM in the middle of a periodic run restarts the count — otherwise
+    /// `T_GenCam` would climb back to the maximum while the vehicle is manoeuvring.
+    #[test]
+    fn a_dynamics_cam_resets_the_periodic_run() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+        let turned = CamDynamics {
+            heading_rad: 0.5,
+            ..still()
+        };
+        s.check(ms(300), &turned, &DccState::UNRESTRICTED).unwrap();
+        s.check(ms(600), &turned, &DccState::UNRESTRICTED).unwrap(); // periodic 1
+        assert_eq!(s.consecutive_periodic(), 1);
+        let turned_more = CamDynamics {
+            heading_rad: 1.5,
+            ..still()
+        };
+        let d = s
+            .check(ms(750), &turned_more, &DccState::UNRESTRICTED)
+            .unwrap();
+        assert!(matches!(d.reason, GenReason::Dynamics(_)));
+        assert_eq!(s.consecutive_periodic(), 0, "the run starts over");
+        assert_eq!(d.t_gen_cam, Duration::from_millis(150));
+    }
+
+    #[test]
+    fn the_low_frequency_container_obeys_the_500_ms_rule() {
+        let mut s = state();
+        assert!(
+            s.check(0, &still(), &DccState::UNRESTRICTED)
+                .unwrap()
+                .include_low_frequency,
+            "the first CAM always carries it"
+        );
+
+        // Dynamics CAMs every 100 ms; only the ones at least 500 ms after the last carrier
+        // may carry it again.
+        let mut carried_at = vec![0u64];
+        for step in 1..=12u64 {
+            let t = step * 100;
+            let moved = CamDynamics {
+                pos: Vec3::new(100.0 + 5.0 * step as f64, 200.0, 0.0),
+                ..still()
+            };
+            let d = s
+                .check(ms(t), &moved, &DccState::UNRESTRICTED)
+                .unwrap_or_else(|| panic!("a 5 m step must trigger at {t} ms"));
+            if d.include_low_frequency {
+                carried_at.push(t);
+            }
+        }
+        assert_eq!(
+            carried_at,
+            vec![0, 500, 1_000],
+            "the low-frequency container goes out at 0, 500 and 1 000 ms"
+        );
+        for pair in carried_at.windows(2) {
+            assert!(pair[1] - pair[0] >= 500);
+        }
+    }
+
+    #[test]
+    fn dcc_raises_the_floor_but_never_lowers_it() {
+        let mut s = state();
+        s.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+        let restrictive = DccState {
+            t_off: Duration::from_millis(400),
+            cbr: Some(0.62),
+        };
+        let moved = CamDynamics {
+            pos: Vec3::new(200.0, 200.0, 0.0),
+            ..still()
+        };
+        // A 100 m jump would normally trigger at 100 ms; DCC holds it to 400.
+        for t in [100, 200, 399] {
+            assert!(s.check(ms(t), &moved, &restrictive).is_none(), "at {t} ms");
+        }
+        assert!(s.check(ms(400), &moved, &restrictive).is_some());
+
+        // A t_off below T_GenCamMin cannot speed the generator up.
+        let mut s2 = state();
+        s2.check(0, &still(), &DccState::UNRESTRICTED).unwrap();
+        let generous = DccState {
+            t_off: Duration::from_millis(10),
+            cbr: Some(0.01),
+        };
+        assert!(s2.check(ms(50), &moved, &generous).is_none());
+        assert!(s2.check(ms(100), &moved, &generous).is_some());
+    }
+
+    /// A clock that steps backwards must not produce a burst of CAMs.
+    #[test]
+    fn a_backwards_clock_does_not_produce_a_burst() {
+        let mut s = state();
+        s.check(ms(10_000), &still(), &DccState::UNRESTRICTED)
+            .unwrap();
+        let moved = CamDynamics {
+            pos: Vec3::new(500.0, 500.0, 0.0),
+            ..still()
+        };
+        assert!(
+            s.check(ms(9_000), &moved, &DccState::UNRESTRICTED)
+                .is_none(),
+            "an interval into the past is not an elapsed interval"
+        );
+    }
+
+    /// The state machine must be a pure function of its inputs: two identical sequences
+    /// must produce identical decisions, which is what makes a run reproducible.
+    #[test]
+    fn the_state_machine_is_deterministic() {
+        let run = || {
+            let mut s = state();
+            let mut out = Vec::new();
+            for step in 0..200u64 {
+                let t = step * 50;
+                let d = CamDynamics {
+                    pos: Vec3::new(100.0 + 0.3 * step as f64, 200.0, 0.0),
+                    heading_rad: 0.001 * step as f64,
+                    speed_mps: 10.0 + 0.004 * step as f64,
+                };
+                out.push(s.check(ms(t), &d, &DccState::UNRESTRICTED));
+            }
+            out
+        };
+        assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn the_bsm_generator_runs_at_ten_hertz() {
+        let mut g = BsmGenerator::default();
+        assert_eq!(g.check(0, &DccState::UNRESTRICTED), Some(GenReason::First));
+        assert_eq!(g.msg_count(), 1);
+        assert_eq!(g.check(ms(99), &DccState::UNRESTRICTED), None);
+        assert_eq!(
+            g.check(ms(100), &DccState::UNRESTRICTED),
+            Some(GenReason::Periodic)
+        );
+        // Ten messages in the first second, counting the one at t = 0.
+        let mut g = BsmGenerator::default();
+        let sent = (0..1_000u64)
+            .filter(|ms_| g.check(ms(*ms_), &DccState::UNRESTRICTED).is_some())
+            .count();
+        assert_eq!(sent, 10);
+    }
+
+    #[test]
+    fn dcc_can_only_slow_the_bsm_generator_down() {
+        let mut g = BsmGenerator::default();
+        g.check(0, &DccState::UNRESTRICTED).unwrap();
+        let restrictive = DccState {
+            t_off: Duration::from_millis(300),
+            cbr: Some(0.6),
+        };
+        assert_eq!(g.check(ms(299), &restrictive), None);
+        assert_eq!(g.check(ms(300), &restrictive), Some(GenReason::Periodic));
+
+        // And it is clamped at vMaxITT even if DCC asks for more.
+        let mut g = BsmGenerator::default();
+        g.check(0, &DccState::UNRESTRICTED).unwrap();
+        let extreme = DccState {
+            t_off: Duration::from_millis(5_000),
+            cbr: Some(0.95),
+        };
+        assert_eq!(g.check(ms(599), &extreme), None);
+        assert_eq!(g.check(ms(600), &extreme), Some(GenReason::Periodic));
+    }
+
+    /// A congestion-control interval that is not a whole number of 100 ms checks keeps
+    /// its rate: J2945/1's `MaxITT = 100·N/B` ms of 150 ms is 6.67 Hz, and 260 ms 3.85 Hz.
+    /// Measuring each interval from the check that sent the last BSM gave 5 Hz and
+    /// 3.33 Hz (every interval rounded up to the check grid).
+    #[test]
+    fn an_off_grid_itt_keeps_its_rate_on_the_check_grid() {
+        let count = |itt_ms: u64, seconds: u64| {
+            let mut g = BsmGenerator::default();
+            let dcc = DccState {
+                t_off: Duration::from_millis(itt_ms),
+                cbr: Some(0.5),
+            };
+            (0..seconds * 10)
+                .filter(|k| g.check(ms(100 * k), &dcc).is_some())
+                .count()
+        };
+        assert_eq!(count(150, 30), 200);
+        assert_eq!(count(260, 26), 100);
+        // On the grid nothing changes: 10 Hz and, at vMaxITT, 1.67 Hz.
+        assert_eq!(count(100, 30), 300);
+        assert_eq!(count(600, 30), 50);
+    }
+
+    #[test]
+    fn msg_count_wraps_at_the_j2735_range() {
+        let mut g = BsmGenerator::default();
+        for _ in 0..128 {
+            let t = g.last_tx().map_or(0, |l| l + ms(100));
+            g.check(t, &DccState::UNRESTRICTED).unwrap();
+        }
+        assert_eq!(g.msg_count(), 0, "MsgCount ::= INTEGER (0..127) wraps");
+    }
+
+    #[test]
+    fn both_cards_validate_and_declare_no_rng() {
+        for card in [
+            CamGenerator::default().card().clone(),
+            BsmGenerator::default().card().clone(),
+        ] {
+            card.validate()
+                .unwrap_or_else(|e| panic!("{}: {e}", card.id));
+            assert_eq!(card.family, Family::Generator);
+            assert!(
+                !card.determinism.uses_rng,
+                "{} must not claim an RNG it does not use",
+                card.id
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // SAE J2945/1's own schedule (6.3.8.5-6.3.8.8)
+    // ------------------------------------------------------------------------------------
+
+    fn j2945_gen() -> BsmGenerator {
+        let mut g = BsmGenerator::default();
+        g.enable_j2945_schedule(J2945Timing::J2945_1, 0x5eed, NodeId::new(7));
+        g
+    }
+
+    /// Drives the schedule as the engine does: the transmission decision at the end of
+    /// every 100 ms `vTxRateCntrlInt`, and the node stepped at `NextScheduledMsgTime`
+    /// (the engine moves its step there), or on the 100 ms grid when there is no instant
+    /// to wake it at. Returns the instants the first `n` BSMs went at.
+    fn drive(g: &mut BsmGenerator, max_itt: Duration, n: usize) -> Vec<SimTime> {
+        let grid = 100 * NS_PER_MS;
+        let mut sent = Vec::new();
+        let mut k = 0u64;
+        while sent.len() < n {
+            let decision_at = k * grid;
+            let at = g.j2945_next().map_or(decision_at, |w| w.min(decision_at));
+            if at == decision_at {
+                g.j2945_decide(at, max_itt, false, false);
+                k += 1;
+            }
+            let steps_here = g.j2945_next().is_none_or(|w| w == at);
+            if steps_here && g.check(at, &DccState::UNRESTRICTED).is_some() {
+                sent.push(at);
+            }
+        }
+        sent
+    }
+
+    fn intervals_ms(sent: &[SimTime]) -> Vec<f64> {
+        sent.windows(2)
+            .map(|w| (w[1] - w[0]) as f64 / NS_PER_MS as f64)
+            .collect()
+    }
+
+    /// J2945/1 Eq. 7 at a smoothed density of 37.5 vehicles (B = 25) puts `Max_ITT` at
+    /// 100 · 37.5 / 25 = 150 ms, and 6.3.8.8 schedules each BSM at `LastTx + 150 ms ±
+    /// 5 ms`: every interval is in [145, 155] ms. The counterexample is a unit that can
+    /// only send on its 100 ms step, whose intervals come out as 200 ms.
+    #[test]
+    fn a_150_ms_max_itt_is_kept_within_the_tolerance() {
+        let n_s: f64 = 37.5;
+        let max_itt = Duration::from_nanos((100.0 * n_s / 25.0 * NS_PER_MS as f64) as u64);
+        assert_eq!(max_itt, Duration::from_millis(150));
+        let mut g = j2945_gen();
+        let sent = drive(&mut g, max_itt, 40);
+        let iv = intervals_ms(&sent);
+        assert_eq!(iv.len(), 39);
+        for (i, v) in iv.iter().enumerate() {
+            assert!(
+                (145.0..=155.0).contains(v),
+                "interval {i} is {v} ms: {iv:?}"
+            );
+        }
+    }
+
+    /// `RandOffset` is uniform on (−vTxRand, +vTxRand): 10,000 intervals at a 100 ms
+    /// `Max_ITT` have a mean of 100 ms, stay inside [95, 105] ms and fall below 100 ms
+    /// as often as above. A one-sided U(0, 5 ms) never goes below 100.
+    #[test]
+    fn rand_offset_is_symmetric() {
+        let mut g = j2945_gen();
+        let sent = drive(&mut g, Duration::from_millis(100), 10_001);
+        let iv = intervals_ms(&sent);
+        assert_eq!(iv.len(), 10_000);
+        let mean = iv.iter().sum::<f64>() / iv.len() as f64;
+        let lo = iv.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = iv.iter().copied().fold(0.0, f64::max);
+        let below = iv.iter().filter(|v| **v < 100.0).count();
+        assert!((mean - 100.0).abs() <= 0.2, "mean {mean}");
+        assert!(lo >= 95.0 && hi <= 105.0, "range [{lo}, {hi}]");
+        assert!(
+            below > 4_000 && below < 6_000,
+            "{below} of 10,000 below 100 ms"
+        );
+    }
+
+    /// 6.3.8.5 runs the decision "when a critical event condition initially occurs", and
+    /// 6.3.8.6 schedules a new critical event's BSM now: an onset 30 ms after a BSM under a
+    /// 600 ms `Max_ITT` sends at the onset instant, not at the next 100 ms decision and
+    /// not 600 ms later.
+    #[test]
+    fn a_new_critical_event_goes_out_at_once() {
+        let mut g = j2945_gen();
+        let max_itt = Duration::from_millis(600);
+        g.j2945_decide(0, max_itt, false, false);
+        assert_eq!(g.check(0, &DccState::UNRESTRICTED), Some(GenReason::First));
+        let next = g.j2945_next().expect("scheduled");
+        assert!(
+            (595 * NS_PER_MS..=605 * NS_PER_MS).contains(&next),
+            "{next}"
+        );
+        let onset = ms(30);
+        let d = g.j2945_decide(onset, max_itt, true, false);
+        assert!(d.critical && d.new_critical && d.rescheduled, "{d:?}");
+        assert_eq!(g.j2945_next(), Some(onset));
+        assert_eq!(
+            g.check(onset, &DccState::UNRESTRICTED),
+            Some(GenReason::Event)
+        );
+        // The event holds at the next decision: no longer new, and the BSM scheduled
+        // 600 ms on is more than 105 ms away, so it goes now again.
+        let d = g.j2945_decide(ms(100), max_itt, true, false);
+        assert!(d.critical && !d.new_critical && d.rescheduled, "{d:?}");
+        assert_eq!(
+            g.check(ms(100), &DccState::UNRESTRICTED),
+            Some(GenReason::Event)
+        );
+    }
+
+    /// The tracking error moves the BSM only when it is at least `vRescheduleTh` (25 ms)
+    /// away (6.3.8.5): 20 ms before the scheduled BSM the draw is not acted on and the BSM
+    /// goes as scheduled; 30 ms before, it goes now.
+    #[test]
+    fn a_tracking_error_within_25_ms_of_the_next_bsm_does_not_reschedule() {
+        let max_itt = Duration::from_millis(600);
+        let mut g = j2945_gen();
+        g.j2945_decide(0, max_itt, false, false);
+        g.check(0, &DccState::UNRESTRICTED).expect("first");
+        let next = g.j2945_next().expect("scheduled");
+        let near = next - 20 * NS_PER_MS;
+        let d = g.j2945_decide(near, max_itt, false, true);
+        assert!(!d.dynamics && !d.rescheduled, "{d:?}");
+        assert_eq!(g.j2945_next(), Some(next));
+        assert_eq!(g.check(near, &DccState::UNRESTRICTED), None, "an extra BSM");
+        assert_eq!(
+            g.check(next, &DccState::UNRESTRICTED),
+            Some(GenReason::Periodic)
+        );
+
+        let mut g = j2945_gen();
+        g.j2945_decide(0, max_itt, false, false);
+        g.check(0, &DccState::UNRESTRICTED).expect("first");
+        let far = g.j2945_next().expect("scheduled") - 30 * NS_PER_MS;
+        let d = g.j2945_decide(far, max_itt, false, true);
+        assert!(d.dynamics && d.rescheduled, "{d:?}");
+        assert_eq!(
+            g.check(far, &DccState::UNRESTRICTED),
+            Some(GenReason::Event)
+        );
+    }
+
+    /// Under a 100 ms `Max_ITT` the BSM is never more than 105 ms after the last one, so a
+    /// critical event that is no longer new, or a tracking error, leaves the schedule as
+    /// it is (6.3.8.6: `Next − LastTx > 100 + vTxRand`); and a `Max_ITT` that falls from
+    /// 600 to 200 ms brings the scheduled BSM forward to `LastTx + 200 ms`.
+    #[test]
+    fn the_schedule_moves_only_by_the_6_3_8_6_rules() {
+        let mut g = j2945_gen();
+        let hundred = Duration::from_millis(100);
+        g.j2945_decide(0, hundred, true, false);
+        g.check(0, &DccState::UNRESTRICTED).expect("first");
+        let next = g.j2945_next().expect("scheduled");
+        let d = g.j2945_decide(ms(50), hundred, true, true);
+        assert!(
+            d.critical && !d.new_critical && d.dynamics && !d.rescheduled,
+            "{d:?}"
+        );
+        assert_eq!(g.j2945_next(), Some(next));
+
+        let mut g = j2945_gen();
+        g.j2945_decide(0, Duration::from_millis(600), false, false);
+        g.check(0, &DccState::UNRESTRICTED).expect("first");
+        let d = g.j2945_decide(ms(100), Duration::from_millis(200), false, false);
+        assert!(d.max_itt && d.rescheduled, "{d:?}");
+        assert_eq!(g.j2945_next(), Some(ms(200)));
+        // Below vRescheduleTh the change is not acted on.
+        let mut g = j2945_gen();
+        g.j2945_decide(0, Duration::from_millis(220), false, false);
+        g.check(0, &DccState::UNRESTRICTED).expect("first");
+        let before = g.j2945_next();
+        let d = g.j2945_decide(ms(100), Duration::from_millis(200), false, false);
+        assert_eq!(d.max_itt, before.unwrap() >= ms(225), "{d:?}");
+    }
+
+    /// A fixed rate keeps its interval on the schedule: a nominal 800 ms (1.25 Hz) is not
+    /// shortened to the DCC's 100 ms on an idle channel, and a 50 ms one (20 Hz, with
+    /// `vMinITT` lowered to it) is not stretched to 100 ms.
+    #[test]
+    fn a_fixed_rate_keeps_its_interval_on_the_j2945_schedule() {
+        for (nominal, dcc) in [(800, 100), (50, 50)] {
+            let p = BsmGenParams {
+                nominal_itt: Duration::from_millis(nominal),
+                min_itt: Duration::from_millis(nominal.min(100)),
+                max_itt: Duration::from_millis(nominal.max(600)),
+            };
+            let mut g = BsmGenerator::new(p);
+            g.enable_j2945_schedule(J2945Timing::J2945_1, 1, NodeId::new(2));
+            let sent = drive(&mut g, Duration::from_millis(dcc), 12);
+            for v in intervals_ms(&sent) {
+                let n = nominal as f64;
+                assert!((n - 5.0..=n + 5.0).contains(&v), "{nominal} ms: {v}");
+            }
+        }
+    }
+
+    /// The schedule is a pure function of the seed, the unit and the decisions: two
+    /// generators driven alike send at the same instants, and another unit does not.
+    #[test]
+    fn the_j2945_schedule_is_keyed_and_deterministic() {
+        let hundred = Duration::from_millis(100);
+        let a = drive(&mut j2945_gen(), hundred, 50);
+        let b = drive(&mut j2945_gen(), hundred, 50);
+        assert_eq!(a, b);
+        let mut other = BsmGenerator::default();
+        other.enable_j2945_schedule(J2945Timing::J2945_1, 0x5eed, NodeId::new(8));
+        assert_ne!(a, drive(&mut other, hundred, 50));
+        let card = j2945_gen().card().clone();
+        card.validate()
+            .expect("the J2945/1 schedule card validates");
+        assert!(card.determinism.uses_rng);
+    }
+
+    #[test]
+    fn the_check_interval_is_never_coarser_than_the_minimum_period() {
+        let g = CamGenerator::default();
+        let params = *g.state().params();
+        assert!(params.t_check_cam_gen <= params.t_gen_cam_min);
+    }
+}

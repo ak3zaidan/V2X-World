@@ -1,0 +1,3085 @@
+//! The ETSI TS 103 759 observation classes 1–5, the F2MD-style checks, and the perception
+//! cross-check — the detector families
+//! *alongside* the legacy twelve rather than in place of them.
+//!
+//! # Why alongside
+//!
+//! The legacy suite's formulas and normalisation are frozen because the machine-learning
+//! contract's `detnorm_*` columns are those signals. A
+//! new family that changed them would invalidate the corpus. So this is a second suite
+//! with its own model card, its own thresholds — every one of them cited — and its own check ids,
+//! and a run may host both.
+//!
+//! # The five classes
+//!
+//! | Class | TS 103 759 | Checks here |
+//! |---|---|---|
+//! | 1 | implausible values | range, speed, acceleration, position confidence, oversized message |
+//! | 2 | inconsistency with previous messages from the same station | position, position/speed, speed, position/heading, beacon frequency, generation-time order, sudden appearance |
+//! | 3 | inconsistency with the local environment and the LDM | map position plausibility, certificate region |
+//! | 4 | inconsistency with on-board sensors | the perception cross-check |
+//! | 5 | inconsistency with other stations' messages | physical intersection, CPM consistency |
+//!
+//! Two envelope-level checks sit outside the classes, because a signature that did not
+//! verify is not an *observation* about the sender's behaviour.
+//!
+//! # A check that was not run is not a check that passed
+//!
+//! [`TsVerdict::score`] returns `Option<f64>`, and a check whose input this receiver does
+//! not have is **absent from the verdict** rather than scored zero. Four things are
+//! commonly absent, and each is counted so that a run can see it:
+//!
+//! * no perception ([`crate::obs::NoPerception`]) — class 4 cannot run at all;
+//! * a claim outside the sensor's coverage — class 4 must not run, because the absence of
+//!   a sensed object in a blind spot is the blind spot and not evidence;
+//! * no measured payload size ([`crate::obs::EnvelopeExtras`]) — the oversized-message
+//!   check has no input;
+//! * no declared own region — the certificate-region check has nothing to compare against.
+//!
+//! A suite that scored those zero would report a class-4 recall for a fleet with no
+//! sensors, and nobody would notice.
+//!
+//! # Why this suite does not implement [`crate::detect::Detector`]
+//!
+//! That trait returns a [`crate::detect::Verdict`], whose observations are typed on the
+//! [`crate::detect::DetectorId`] enum — and that enum is not a list of detectors, it is the
+//! `detnorm_*` **column order of the legacy corpus**. Adding a variant to it changes the
+//! on-disk feature table; making [`crate::detect::Observation::detector`] a string changes
+//! every reader of it, including the engine and the metrics crate. Neither is this crate's
+//! to do unilaterally, so this suite has its own [`TsVerdict`] and its own entry point, and
+//! reports through [`crate::report::MisbehaviourReport::from_named_checks`] — same wire
+//! shape, same quantisation, its own check ids. What the detector seam needs, and what the engine
+//! will want, is a string-typed observation; that is a finding
+//! for whoever owns `detect` and the engine's detector host, not something to paper over
+//! by mapping a TS 103 759 class onto a legacy check id it is not.
+//!
+//! # The four verification states are four different things
+//!
+//! This is the defect that produced a 98 % false-positive rate on honest traffic in the
+//! legacy suite's first port, and [`Ts103759Suite::check`] matches all four explicitly
+//! with no catch-all arm:
+//!
+//! * [`VerificationState::Valid`] — every check runs.
+//! * [`VerificationState::BadSignature`] — the receiver *tested* the signature and it
+//!   failed. [`Ts103759Check::SignatureInvalid`] fires; no content check runs, because the
+//!   content of a message whose signature failed is not evidence of anything.
+//! * [`VerificationState::UnknownCertificate`] — the receiver could not build a chain.
+//!   [`Ts103759Check::CertificateUnknown`] fires. This is a *different* finding from a bad
+//!   signature: it is a statement about this receiver's trust store, and a report citing
+//!   it names a different misbehaviour (P2PCD learning, an unknown authority) than one
+//!   citing a forged signature.
+//! * [`VerificationState::Unverified`] — the receiver's policy **deferred** the check.
+//!   Nothing fires, nothing is scored, and [`Ts103759Suite::deferred`] counts it. An
+//!   absence of evidence is not evidence of misbehaviour.
+
+use std::collections::{BTreeMap, VecDeque};
+
+use crate::capability::{angle_diff_rad, bearing_rad};
+use crate::cards::{LEGACY_PY, design, legacy_param, paper, standard};
+use crate::consistency::{
+    CvKalman, Footprint, chi2_quantile, chord_factor, circle_inside_fraction,
+    interval_inside_fraction, overlap_ratio, reachable_distance,
+};
+use crate::ctx::{ThreatCtx, ThreatCtxExt};
+use crate::detect::DetectorCost;
+use crate::obs::{
+    EnvelopeExtras, FrameExtras, LocalEnvironment, LocalPerception, NoPerception, ObservedKind,
+    ObservedMessage, OwnFootprint, PerceivedObject, RegionId, SelfBelief, VerificationState,
+};
+use crate::records::DetObservation;
+use v2xw_core::card::{
+    Determinism, Equation, Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation,
+    ValidationStatus,
+};
+use v2xw_core::math;
+use v2xw_core::model::Model;
+use v2xw_core::time::{SimTime, ns_to_secs};
+
+/// The model id this suite's card and every `det.observation` it writes carry.
+pub const MODEL_ID: &str = "threat/detector/ts103759-observations";
+
+/// A TS 103 759 misbehaviour observation class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ObservationClass {
+    /// Class 1: implausible values.
+    ImplausibleValues,
+    /// Class 2: inconsistency with previous messages from the same station.
+    PreviousMessages,
+    /// Class 3: inconsistency with the local environment or the LDM.
+    LocalEnvironment,
+    /// Class 4: inconsistency with on-board sensors.
+    OnBoardSensors,
+    /// Class 5: inconsistency with other stations' messages.
+    OtherStations,
+    /// Not an observation class: an envelope-level cryptographic conclusion.
+    Envelope,
+}
+
+impl ObservationClass {
+    /// Every class, 1 to 5, then the envelope group.
+    pub const ALL: [ObservationClass; 6] = [
+        ObservationClass::ImplausibleValues,
+        ObservationClass::PreviousMessages,
+        ObservationClass::LocalEnvironment,
+        ObservationClass::OnBoardSensors,
+        ObservationClass::OtherStations,
+        ObservationClass::Envelope,
+    ];
+
+    /// The class number TS 103 759 gives it; `0` for the envelope group.
+    #[must_use]
+    pub const fn number(self) -> u8 {
+        match self {
+            ObservationClass::ImplausibleValues => 1,
+            ObservationClass::PreviousMessages => 2,
+            ObservationClass::LocalEnvironment => 3,
+            ObservationClass::OnBoardSensors => 4,
+            ObservationClass::OtherStations => 5,
+            ObservationClass::Envelope => 0,
+        }
+    }
+}
+
+/// One check in this suite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Ts103759Check {
+    /// The claimed position is further from the receiver than any link could reach.
+    RangePlausibility,
+    /// The claimed speed is above anything a vehicle does.
+    SpeedPlausibility,
+    /// The implied acceleration is above anything a vehicle does.
+    AccelerationPlausibility,
+    /// The broadcast position confidence is outside its plausible bound.
+    ConfidencePlausibility,
+    /// The message is larger than the largest conforming payload.
+    OversizedMessage,
+    /// The claimed displacement is further than the plausible maximum speed allows.
+    PositionConsistency,
+    /// The claimed displacement disagrees with the claimed speed over the interval.
+    PositionSpeedConsistency,
+    /// The claimed speed changed by more than the interval allows, asymmetrically for
+    /// acceleration and braking.
+    SpeedConsistency,
+    /// The claimed heading disagrees with the bearing of the claimed motion.
+    PositionHeadingConsistency,
+    /// The sender is transmitting more often than the minimum inter-beacon time.
+    BeaconFrequency,
+    /// The generation time did not advance.
+    GenerationTimeOrder,
+    /// A station was first heard implausibly close.
+    SuddenAppearance,
+    /// The claimed position is not on any road the node's map knows.
+    PositionPlausibility,
+    /// The certificate states a region other than the receiver's own.
+    ForeignRegion,
+    /// No object this node's own sensors hold corroborates a claim inside their coverage.
+    PerceptionCrossCheck,
+    /// Two stations claim to occupy the same space.
+    Intersection,
+    /// A collective-perception message's objects are not corroborated by this node's own
+    /// perception, inside the part of the region this node can see.
+    CpmConsistency,
+    /// The signature was tested and did not verify.
+    SignatureInvalid,
+    /// The signer's certificate chain could not be built.
+    CertificateUnknown,
+    /// The time-averaged normalised innovation squared of a constant-velocity Kalman
+    /// filter on the claimed track exceeds its χ² gate.
+    KalmanConsistency,
+    /// The claimed displacement lies outside the distance reachable between the two
+    /// claimed speeds under the vehicle classes' acceleration and braking limits.
+    PositionSpeedEnvelope,
+    /// The mean speed the displacement implies is further from the claimed speeds than
+    /// the acceleration and braking limits allow (F2MD PositionSpeedMaxConsistency).
+    PositionSpeedMaxConsistency,
+    /// The claimed oriented footprint overlaps another station's, or this receiver's own,
+    /// by more than the threshold share.
+    BoxIntersection,
+}
+
+impl Ts103759Check {
+    /// Every check, grouped by class.
+    pub const ALL: [Ts103759Check; 23] = [
+        Ts103759Check::RangePlausibility,
+        Ts103759Check::SpeedPlausibility,
+        Ts103759Check::AccelerationPlausibility,
+        Ts103759Check::ConfidencePlausibility,
+        Ts103759Check::OversizedMessage,
+        Ts103759Check::PositionConsistency,
+        Ts103759Check::PositionSpeedConsistency,
+        Ts103759Check::SpeedConsistency,
+        Ts103759Check::PositionHeadingConsistency,
+        Ts103759Check::BeaconFrequency,
+        Ts103759Check::GenerationTimeOrder,
+        Ts103759Check::SuddenAppearance,
+        Ts103759Check::KalmanConsistency,
+        Ts103759Check::PositionSpeedEnvelope,
+        Ts103759Check::PositionSpeedMaxConsistency,
+        Ts103759Check::PositionPlausibility,
+        Ts103759Check::ForeignRegion,
+        Ts103759Check::PerceptionCrossCheck,
+        Ts103759Check::Intersection,
+        Ts103759Check::CpmConsistency,
+        Ts103759Check::BoxIntersection,
+        Ts103759Check::SignatureInvalid,
+        Ts103759Check::CertificateUnknown,
+    ];
+
+    /// The check's id, as a `det.observation` record and a report's reason code spell it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Ts103759Check::RangePlausibility => "rangePlausibility",
+            Ts103759Check::SpeedPlausibility => "speedPlausibility",
+            Ts103759Check::AccelerationPlausibility => "accelerationPlausibility",
+            Ts103759Check::ConfidencePlausibility => "confidencePlausibility",
+            Ts103759Check::OversizedMessage => "oversizedMessage",
+            Ts103759Check::PositionConsistency => "positionConsistency",
+            Ts103759Check::PositionSpeedConsistency => "positionSpeedConsistencyTs",
+            Ts103759Check::SpeedConsistency => "speedConsistency",
+            Ts103759Check::PositionHeadingConsistency => "positionHeadingConsistency",
+            Ts103759Check::BeaconFrequency => "beaconFrequencyTs",
+            Ts103759Check::GenerationTimeOrder => "generationTimeOrder",
+            Ts103759Check::SuddenAppearance => "suddenAppearance",
+            Ts103759Check::PositionPlausibility => "positionPlausibility",
+            Ts103759Check::ForeignRegion => "foreignRegion",
+            Ts103759Check::PerceptionCrossCheck => "perceptionCrossCheck",
+            Ts103759Check::Intersection => "intersection",
+            Ts103759Check::CpmConsistency => "cpmConsistency",
+            Ts103759Check::SignatureInvalid => "signatureInvalid",
+            Ts103759Check::CertificateUnknown => "certificateUnknown",
+            Ts103759Check::KalmanConsistency => "kalmanConsistencyTs",
+            Ts103759Check::PositionSpeedEnvelope => "positionSpeedEnvelope",
+            Ts103759Check::PositionSpeedMaxConsistency => "positionSpeedMaxConsistency",
+            Ts103759Check::BoxIntersection => "boxIntersection",
+        }
+    }
+
+    /// Parses a check id.
+    #[must_use]
+    pub fn parse(id: &str) -> Option<Self> {
+        Ts103759Check::ALL.into_iter().find(|c| c.as_str() == id)
+    }
+
+    /// Which observation class it belongs to.
+    #[must_use]
+    pub const fn class(self) -> ObservationClass {
+        match self {
+            Ts103759Check::RangePlausibility
+            | Ts103759Check::SpeedPlausibility
+            | Ts103759Check::AccelerationPlausibility
+            | Ts103759Check::ConfidencePlausibility
+            | Ts103759Check::OversizedMessage => ObservationClass::ImplausibleValues,
+            Ts103759Check::PositionConsistency
+            | Ts103759Check::PositionSpeedConsistency
+            | Ts103759Check::SpeedConsistency
+            | Ts103759Check::PositionHeadingConsistency
+            | Ts103759Check::BeaconFrequency
+            | Ts103759Check::GenerationTimeOrder
+            | Ts103759Check::SuddenAppearance
+            | Ts103759Check::KalmanConsistency
+            | Ts103759Check::PositionSpeedEnvelope
+            | Ts103759Check::PositionSpeedMaxConsistency => ObservationClass::PreviousMessages,
+            Ts103759Check::PositionPlausibility | Ts103759Check::ForeignRegion => {
+                ObservationClass::LocalEnvironment
+            }
+            Ts103759Check::PerceptionCrossCheck => ObservationClass::OnBoardSensors,
+            Ts103759Check::Intersection
+            | Ts103759Check::CpmConsistency
+            | Ts103759Check::BoxIntersection => ObservationClass::OtherStations,
+            Ts103759Check::SignatureInvalid | Ts103759Check::CertificateUnknown => {
+                ObservationClass::Envelope
+            }
+        }
+    }
+
+    /// Every check in one class, in [`Ts103759Check::ALL`] order.
+    #[must_use]
+    pub fn in_class(class: ObservationClass) -> Vec<Ts103759Check> {
+        Ts103759Check::ALL
+            .into_iter()
+            .filter(|c| c.class() == class)
+            .collect()
+    }
+}
+
+impl core::fmt::Display for Ts103759Check {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// One check firing on one message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TsObservation {
+    /// Which check.
+    pub check: Ts103759Check,
+    /// Its normalised score, ≈ 1 at the firing threshold.
+    pub score: f64,
+    /// The subject: the signer's certificate digest in hex.
+    pub subject: String,
+    /// When the observation was made, on the observing node's clock.
+    pub at: SimTime,
+}
+
+/// What one message produced.
+///
+/// [`TsVerdict::score`] is an `Option` on purpose: a check that could not run is absent,
+/// not zero. See the module documentation.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TsVerdict {
+    /// The subject: the signer's certificate digest in hex.
+    pub subject: String,
+    /// The score of every check that **ran**.
+    pub scores: BTreeMap<Ts103759Check, f64>,
+    /// The checks that fired, highest score first.
+    pub fired: Vec<TsObservation>,
+}
+
+impl TsVerdict {
+    /// The score of `check`, or `None` when this receiver could not run it.
+    #[must_use]
+    pub fn score(&self, check: Ts103759Check) -> Option<f64> {
+        self.scores.get(&check).copied()
+    }
+
+    /// Whether `check` ran at all.
+    #[must_use]
+    pub fn evaluated(&self, check: Ts103759Check) -> bool {
+        self.scores.contains_key(&check)
+    }
+
+    /// True when at least one check fired.
+    #[must_use]
+    pub fn fired(&self) -> bool {
+        !self.fired.is_empty()
+    }
+
+    /// The highest-scoring fired check: the reason a report leads with.
+    #[must_use]
+    pub fn leading(&self) -> Option<&TsObservation> {
+        self.fired.first()
+    }
+
+    /// The checks that fired, as reason codes in firing order.
+    #[must_use]
+    pub fn reason_codes(&self) -> Vec<String> {
+        self.fired
+            .iter()
+            .map(|o| o.check.as_str().to_string())
+            .collect()
+    }
+
+    /// The scores that ran, as `(check id, score)` pairs in check order — the fingerprint
+    /// columns a report carries.
+    #[must_use]
+    pub fn columns(&self) -> Vec<(String, f64)> {
+        self.scores
+            .iter()
+            .map(|(c, v)| (c.as_str().to_string(), crate::records::q(*v)))
+            .collect()
+    }
+
+    /// The largest score among the checks that ran.
+    #[must_use]
+    pub fn max(&self) -> f64 {
+        self.scores.values().copied().fold(0.0, f64::max)
+    }
+
+    /// The highest score in one class, over the checks of that class that ran.
+    #[must_use]
+    pub fn class_max(&self, class: ObservationClass) -> f64 {
+        self.scores
+            .iter()
+            .filter(|(c, _)| c.class() == class)
+            .map(|(_, v)| *v)
+            .fold(0.0, f64::max)
+    }
+}
+
+/// Everything the suite compares against. Every default is cited.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ts103759Params {
+    /// An explicit acceptance range (ART), metres: the furthest a claim can plausibly be
+    /// from the receiver. `None`, the default, uses [`Ts103759Params::acceptance_ranges`]
+    /// for [`Ts103759Params::environment`] — the range derived from this engine's own
+    /// link budget (F2MD's `MAX_PLAUSIBLE_RANGE` 420 m is Veins' 20 mW radio, not ours).
+    /// [`Ts103759Params::art_m`] is the value in
+    /// force.
+    pub max_plausible_range_m: Option<f64>,
+    /// The receiver's propagation environment, which selects the acceptance range.
+    pub environment: RadioEnvironment,
+    /// The acceptance range per environment, metres ([`AcceptanceRanges::DERIVED`]).
+    pub acceptance_ranges: AcceptanceRanges,
+    /// The fastest a vehicle plausibly goes, m/s (F2MD `MIN_MAX_SPEED`, 40).
+    pub max_plausible_speed_mps: f64,
+    /// The hardest a vehicle plausibly accelerates, m/s²: the largest `accel_mps2` over
+    /// the engine's vehicle classes (`v2xw_mobility::classes`, motorcycle 6.0, SUMO vType
+    /// defaults). A receiver does not know a sender's class, so the limit covers them
+    /// all. F2MD's `MAX_PLAUSIBLE_ACCEL` 3 is [`Ts103759Params::f2md_kinematics`].
+    pub max_plausible_accel_mps2: f64,
+    /// The hardest a vehicle plausibly brakes, m/s²: the largest `emergency_decel_mps2`
+    /// over the engine's vehicle classes (motorcycle and moped 10.0, passenger 9.0).
+    /// F2MD's `MAX_PLAUSIBLE_DECEL` 4.5 flags every honest emergency stop; it is
+    /// [`Ts103759Params::f2md_kinematics`].
+    pub max_plausible_decel_mps2: f64,
+    /// The largest plausible broadcast position confidence, metres (F2MD
+    /// `MAX_CONFIDENCE_RANGE`, 10).
+    pub max_confidence_m: f64,
+    /// The largest conforming payload, bytes (maximum MSDU 2 304).
+    pub max_payload_bytes: u32,
+    /// The message profile the beacon-timing thresholds are taken from: the shortest
+    /// and longest conforming interval and the jitter tolerance
+    /// ([`BeaconProfile::BSM_J2945_1`] unless set).
+    pub beacon_profile: BeaconProfile,
+    /// An explicit longest interval the consistency checks will compare across, seconds.
+    /// `None`, the default, is [`MAX_TIME_DELTA_INTERVALS`] (F2MD `MAX_TIME_DELTA` 3.1 s
+    /// at 1 Hz, re-expressed in intervals) times the profile's longest conforming
+    /// interval; [`Ts103759Params::time_delta_s`] is the value in force.
+    pub max_time_delta_s: Option<f64>,
+    /// The consistency margin, metres (F2MD `MAX_MGT_RNG`, 4).
+    pub mgt_rng_m: f64,
+    /// The margin on a claimed speed increase, m/s per second (F2MD `MAX_MGT_RNG_UP`,
+    /// 2.1).
+    pub mgt_rng_up_mps: f64,
+    /// The margin on a claimed speed decrease, m/s per second (F2MD `MAX_MGT_RNG_DOWN`,
+    /// 6.2).
+    pub mgt_rng_down_mps: f64,
+    /// The largest plausible heading change, degrees (F2MD `MAX_HEADING_CHANGE`, 90).
+    pub max_heading_change_deg: f64,
+    /// The interval within which the heading check compares, seconds (F2MD
+    /// `POS_HEADING_TIME`, 1.1).
+    pub pos_heading_time_s: f64,
+    /// An explicit minimum conforming inter-beacon time, seconds. `None`, the default, is
+    /// the profile's shortest conforming interval less its jitter tolerance
+    /// ([`BeaconProfile::min_beacon_interval_s`]): 75 ms for a BSM. F2MD's
+    /// `MAX_BEACON_FREQUENCY` 0.9 s is the same rule for a 1 Hz VeReMi beacon, and taken
+    /// as it stands it flags every honest 10 Hz BSM sender.
+    /// [`Ts103759Params::min_interval_s`] is the value in force.
+    pub min_beacon_interval_s: Option<f64>,
+    /// An explicit time a receiver must have listened before a first sighting counts as
+    /// sudden, seconds. `None`, the default, is [`MAX_SA_TIME_INTERVALS`] (F2MD
+    /// `MAX_SA_TIME` 2.1 s at 1 Hz) times the profile's longest conforming interval;
+    /// [`Ts103759Params::sa_time_s`] is the value in force.
+    pub max_sa_time_s: Option<f64>,
+    /// The furthest a sudden appearance is considered at all, metres (F2MD
+    /// `MAX_SA_RANGE`, 420).
+    pub max_sa_range_m: f64,
+    /// Inside this distance, a first sighting is a sudden appearance, metres.
+    pub sudden_appearance_m: f64,
+    /// The tolerated distance from the nearest known road, metres (F2MD
+    /// `MAX_DISTANCE_FROM_ROUTE`, 2).
+    pub max_distance_from_route_m: f64,
+    /// Two stations closer than this are claiming the same space, metres (F2MD
+    /// `MAX_PROXIMITY_DISTANCE`, 2).
+    pub proximity_distance_m: f64,
+    /// The longitudinal proximity box, metres (F2MD `MAX_PROXIMITY_RANGE_L`, 30).
+    pub proximity_range_l_m: f64,
+    /// How long another station's claim stays comparable, seconds (F2MD
+    /// `MAX_DELTA_INTER`, 2.0).
+    pub max_delta_inter_s: f64,
+    /// How many uncertainty sigmas a residual must exceed (the legacy
+    /// `detector_z_threshold`, 3.0).
+    pub z_threshold: f64,
+    /// The floor on the uncertainty scale, metres (the legacy `consistency_threshold_m`,
+    /// 5.0).
+    pub gate_floor_m: f64,
+    /// The score an envelope-level failure reports (the legacy hard-fail score, 1.5).
+    pub hard_fail_score: f64,
+    /// Consecutive violations before a check fires (the legacy `detector_min_consec`, 2).
+    pub min_consecutive: u32,
+    /// The fraction of a CPM's visible objects that must be uncorroborated before the
+    /// CPM-consistency check fires.
+    pub cpm_unmatched_fraction: f64,
+    /// The region this receiver is in, when the scenario declares one.
+    ///
+    /// `None` leaves [`Ts103759Check::ForeignRegion`] unevaluated — not passed.
+    pub own_region: Option<RegionId>,
+    /// The floor on the Kalman check's position measurement σ, metres (F2MD's Kalman
+    /// checks floor the confidence at 4 m).
+    pub kalman_pos_floor_m: f64,
+    /// The floor on the Kalman check's speed measurement σ, m/s (F2MD, 1 m/s).
+    pub kalman_speed_floor_mps: f64,
+    /// What the broadcast position confidence is divided by to give the per-axis σ the
+    /// Kalman check uses. Default 2.4477: this engine's receivers broadcast the 95 %
+    /// circular radius (`v2xw_mobility::gnss::RAYLEIGH_95` · σ, the Gauss–Markov card's
+    /// "reported confidence"); 1 treats the confidence as one σ, as F2MD does.
+    pub kalman_conf_divisor: f64,
+    /// The white-noise-acceleration spectral density q, m²/s³. Default b² · T with b the
+    /// hardest braking of any vehicle class (10 m/s²) and T the BSM nominal interval
+    /// (0.1 s): Bar-Shalom et al. 2001 §6.2.2 size q so that √(q·T) is the largest
+    /// velocity change over one sampling interval.
+    pub kalman_q_m2ps3: f64,
+    /// The standard-normal quantile of the Kalman check's χ² gate (3.0902: p = 0.999).
+    pub kalman_gate_z: f64,
+    /// How many messages the NIS is averaged over (Bar-Shalom et al. §5.4.2, the
+    /// time-average NIS; 1 is the single-message test).
+    pub kalman_window: u32,
+    /// The envelope's distance margin, metres (F2MD `MAX_MGT_RNG`, 4), added to the
+    /// confidence term `Z · √(c₀² + c₁²)`.
+    pub envelope_margin_m: f64,
+    /// The PositionSpeedMaxConsistency margin on the acceleration limits, m/s² (F2MD's
+    /// `+ 4`).
+    pub psmax_margin_mps2: f64,
+    /// The share of the smaller footprint two claims must have in common before the
+    /// box-intersection check fires (F2MD, 0.5).
+    pub box_overlap_threshold: f64,
+    /// How claims are turned into per-check scores.
+    pub scoring: Scoring,
+    /// The CaTCh factor at or below which a check counts as failed (F2MD ThresholdApp,
+    /// 0.28125).
+    pub catch_threshold: f64,
+    /// How per-message scores become a firing.
+    pub fusion: Fusion,
+    /// The windowed mean's number of earlier messages (F2MD AggregationApp, 3).
+    pub mean_history: u32,
+    /// The windowed mean's window, seconds (F2MD AggregationApp, 10).
+    pub mean_window_s: f64,
+    /// The leaky bucket's penalty coefficient (F2MD BehavioralApp, 0.0005).
+    pub bucket_coeff: f64,
+    /// The leaky bucket's penalty exponent (F2MD BehavioralApp, 10).
+    pub bucket_exponent: f64,
+    /// What the bucket leaks per message (F2MD BehavioralApp, 1).
+    pub bucket_leak: f64,
+    /// The bucket level above which the pseudonym is reported (F2MD BehavioralApp,
+    /// 5.5066).
+    pub bucket_threshold: f64,
+    /// A pseudonym not heard for this long has its bucket removed, seconds (design: the
+    /// windowed mean's 10 s).
+    pub bucket_expiry_s: f64,
+}
+
+/// How a check's comparison becomes a score (as F2MD's `F2MDParameters.h` does).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scoring {
+    /// The threshold-normalised residual: ≈ 1 at the firing threshold (the default).
+    #[default]
+    Threshold,
+    /// CaTCh (Kamel et al., IEEE WCNC 2019): the share of the claim's confidence region
+    /// that is plausible, a factor f in [0, 1], reported as (1 − f)/(1 − θ) so that the
+    /// score is ≥ 1 exactly when f ≤ θ ([`Ts103759Params::catch_threshold`]). Applies to
+    /// range and speed plausibility, position consistency and the position/speed envelope;
+    /// every other check keeps its threshold score.
+    Catch,
+}
+
+impl Scoring {
+    /// Its settings label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Scoring::Threshold => "threshold",
+            Scoring::Catch => "catch",
+        }
+    }
+
+    /// Parses a settings label.
+    #[must_use]
+    pub fn parse(label: &str) -> Option<Self> {
+        [Scoring::Threshold, Scoring::Catch]
+            .into_iter()
+            .find(|m| m.label() == label)
+    }
+}
+
+/// How the per-message scores of one pseudonym become a firing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Fusion {
+    /// A check fires after `min_consecutive` messages in a row scored ≥ 1 (the default).
+    #[default]
+    Consecutive,
+    /// A check fires when the mean of its current score and up to `mean_history` earlier
+    /// scores inside `mean_window_s` is ≥ 1 (F2MD AggregationApp, Kamel et al. TVT 2020).
+    WindowedMean,
+    /// A per-pseudonym leaky bucket: each message adds `coeff · e^(exponent · (1 − f_min))`
+    /// with f_min the lowest check factor, leaks `bucket_leak`, and the checks failing on
+    /// a message fire while the bucket is above `bucket_threshold` (F2MD BehavioralApp,
+    /// TVT 2020). Keyed by pseudonym, so a removal cannot move a level onto another
+    /// pseudonym (F2MD defect D6, fixed).
+    LeakyBucket,
+}
+
+impl Fusion {
+    /// Its settings label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Fusion::Consecutive => "consecutive",
+            Fusion::WindowedMean => "windowed-mean",
+            Fusion::LeakyBucket => "leaky-bucket",
+        }
+    }
+
+    /// Parses a settings label.
+    #[must_use]
+    pub fn parse(label: &str) -> Option<Self> {
+        [
+            Fusion::Consecutive,
+            Fusion::WindowedMean,
+            Fusion::LeakyBucket,
+        ]
+        .into_iter()
+        .find(|m| m.label() == label)
+    }
+}
+
+impl Default for Ts103759Params {
+    fn default() -> Self {
+        Self {
+            max_plausible_range_m: None,
+            environment: RadioEnvironment::Highway,
+            acceptance_ranges: AcceptanceRanges::DERIVED,
+            max_plausible_speed_mps: 40.0,
+            max_plausible_accel_mps2: 6.0,
+            max_plausible_decel_mps2: 10.0,
+            max_confidence_m: 10.0,
+            max_payload_bytes: crate::attack::MAX_MSDU_BYTES,
+            beacon_profile: BeaconProfile::BSM_J2945_1,
+            max_time_delta_s: None,
+            mgt_rng_m: 4.0,
+            mgt_rng_up_mps: 2.1,
+            mgt_rng_down_mps: 6.2,
+            max_heading_change_deg: 90.0,
+            pos_heading_time_s: 1.1,
+            min_beacon_interval_s: None,
+            max_sa_time_s: None,
+            max_sa_range_m: 420.0,
+            sudden_appearance_m: 30.0,
+            max_distance_from_route_m: 2.0,
+            proximity_distance_m: 2.0,
+            proximity_range_l_m: 30.0,
+            max_delta_inter_s: 2.0,
+            z_threshold: 3.0,
+            gate_floor_m: 5.0,
+            hard_fail_score: 1.5,
+            min_consecutive: 2,
+            cpm_unmatched_fraction: 1.0,
+            own_region: None,
+            kalman_pos_floor_m: 4.0,
+            kalman_speed_floor_mps: 1.0,
+            kalman_conf_divisor: 2.447_746_830_680_826_5,
+            kalman_q_m2ps3: 10.0,
+            kalman_gate_z: 3.0902,
+            kalman_window: 10,
+            envelope_margin_m: 4.0,
+            psmax_margin_mps2: 4.0,
+            box_overlap_threshold: 0.5,
+            scoring: Scoring::Threshold,
+            catch_threshold: 0.28125,
+            fusion: Fusion::Consecutive,
+            mean_history: 3,
+            mean_window_s: 10.0,
+            bucket_coeff: 0.0005,
+            bucket_exponent: 10.0,
+            bucket_leak: 1.0,
+            bucket_threshold: 5.5066,
+            bucket_expiry_s: 10.0,
+        }
+    }
+}
+
+impl Ts103759Params {
+    /// The cited defaults for a receiver in `env` whose neighbours send `profile`.
+    #[must_use]
+    pub fn for_link(env: RadioEnvironment, profile: BeaconProfile) -> Self {
+        Self::default()
+            .with_environment(env)
+            .with_beacon_profile(profile)
+    }
+
+    /// The same thresholds with F2MD's kinematic limits (`MAX_PLAUSIBLE_ACCEL` 3 m/s²,
+    /// `MAX_PLAUSIBLE_DECEL` 4.5 m/s²) in place of the vehicle classes', for a
+    /// like-for-like F2MD comparison. They flag an honest emergency stop.
+    #[must_use]
+    pub fn f2md_kinematics(mut self) -> Self {
+        self.max_plausible_accel_mps2 = 3.0;
+        self.max_plausible_decel_mps2 = 4.5;
+        self
+    }
+
+    /// The same thresholds for a receiver in another propagation environment.
+    #[must_use]
+    pub fn with_environment(mut self, env: RadioEnvironment) -> Self {
+        self.environment = env;
+        self
+    }
+
+    /// The same thresholds with the beacon timing of another message profile.
+    #[must_use]
+    pub fn with_beacon_profile(mut self, profile: BeaconProfile) -> Self {
+        self.beacon_profile = profile;
+        self
+    }
+
+    /// The acceptance range in force, metres: the explicit `max_plausible_range_m`, or
+    /// the derived range for this receiver's environment.
+    #[must_use]
+    pub fn art_m(&self) -> f64 {
+        self.max_plausible_range_m
+            .unwrap_or_else(|| self.acceptance_ranges.get(self.environment))
+    }
+
+    /// The minimum conforming inter-beacon time in force, seconds.
+    #[must_use]
+    pub fn min_interval_s(&self) -> f64 {
+        self.min_beacon_interval_s
+            .unwrap_or_else(|| self.beacon_profile.min_beacon_interval_s())
+    }
+
+    /// The longest interval the consistency checks compare across, in force, seconds.
+    #[must_use]
+    pub fn time_delta_s(&self) -> f64 {
+        self.max_time_delta_s
+            .unwrap_or_else(|| self.beacon_profile.max_time_delta_s())
+    }
+
+    /// The listening time before a first sighting counts as sudden, in force, seconds.
+    #[must_use]
+    pub fn sa_time_s(&self) -> f64 {
+        self.max_sa_time_s
+            .unwrap_or_else(|| self.beacon_profile.max_sa_time_s())
+    }
+
+    /// Sets one numeric parameter by name, the way `detection.local[].params` reaches a
+    /// suite (as [`crate::us_mbr::UsMbrParams::apply`] does); false for a name the suite
+    /// does not read. The keys are order-independent: an explicit threshold
+    /// (`max_plausible_range_m`, `min_beacon_interval_s`, `max_time_delta_s`,
+    /// `max_sa_time_s`) wins over the derived one whatever order the keys arrive in, and
+    /// the `art_*_m` and `beacon_*` keys change what the derivation starts from.
+    pub fn apply(&mut self, key: &str, v: f64) -> bool {
+        match key {
+            "max_plausible_range_m" => self.max_plausible_range_m = Some(v),
+            "art_highway_m" => self.acceptance_ranges.highway_m = v,
+            "art_rural_m" => self.acceptance_ranges.rural_m = v,
+            "art_suburban_m" => self.acceptance_ranges.suburban_m = v,
+            "art_urban_m" => self.acceptance_ranges.urban_m = v,
+            "beacon_min_interval_s" => self.beacon_profile.min_interval_s = v,
+            "beacon_max_interval_s" => self.beacon_profile.max_interval_s = v,
+            "beacon_jitter_tolerance_s" => self.beacon_profile.jitter_tolerance_s = v,
+            "min_beacon_interval_s" => self.min_beacon_interval_s = Some(v),
+            "max_time_delta_s" => self.max_time_delta_s = Some(v),
+            "max_sa_time_s" => self.max_sa_time_s = Some(v),
+            "max_plausible_speed_mps" => self.max_plausible_speed_mps = v,
+            "max_plausible_accel_mps2" => self.max_plausible_accel_mps2 = v,
+            "max_plausible_decel_mps2" => self.max_plausible_decel_mps2 = v,
+            "max_confidence_m" => self.max_confidence_m = v,
+            "mgt_rng_m" => self.mgt_rng_m = v,
+            "mgt_rng_up_mps" => self.mgt_rng_up_mps = v,
+            "mgt_rng_down_mps" => self.mgt_rng_down_mps = v,
+            "max_heading_change_deg" => self.max_heading_change_deg = v,
+            "pos_heading_time_s" => self.pos_heading_time_s = v,
+            "max_sa_range_m" => self.max_sa_range_m = v,
+            "sudden_appearance_m" => self.sudden_appearance_m = v,
+            "max_distance_from_route_m" => self.max_distance_from_route_m = v,
+            "proximity_distance_m" => self.proximity_distance_m = v,
+            "proximity_range_l_m" => self.proximity_range_l_m = v,
+            "max_delta_inter_s" => self.max_delta_inter_s = v,
+            "z_threshold" => self.z_threshold = v,
+            "gate_floor_m" => self.gate_floor_m = v,
+            "hard_fail_score" => self.hard_fail_score = v,
+            "cpm_unmatched_fraction" => self.cpm_unmatched_fraction = v,
+            // Counts: rounded, and saturating at the type's bounds.
+            "min_consecutive" => self.min_consecutive = v.round() as u32,
+            "max_payload_bytes" => self.max_payload_bytes = v.round() as u32,
+            "kalman_window" => self.kalman_window = (v.round() as u32).max(1),
+            "mean_history" => self.mean_history = v.round() as u32,
+            "kalman_pos_floor_m" => self.kalman_pos_floor_m = v,
+            "kalman_speed_floor_mps" => self.kalman_speed_floor_mps = v,
+            "kalman_conf_divisor" => self.kalman_conf_divisor = v,
+            "kalman_q_m2ps3" => self.kalman_q_m2ps3 = v,
+            "kalman_gate_z" => self.kalman_gate_z = v,
+            "envelope_margin_m" => self.envelope_margin_m = v,
+            "psmax_margin_mps2" => self.psmax_margin_mps2 = v,
+            "box_overlap_threshold" => self.box_overlap_threshold = v,
+            "catch_threshold" => self.catch_threshold = v,
+            "mean_window_s" => self.mean_window_s = v,
+            "bucket_coeff" => self.bucket_coeff = v,
+            "bucket_exponent" => self.bucket_exponent = v,
+            "bucket_leak" => self.bucket_leak = v,
+            "bucket_threshold" => self.bucket_threshold = v,
+            "bucket_expiry_s" => self.bucket_expiry_s = v,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Sets one labelled parameter by name: `fusion` (`consecutive`, `windowed-mean`,
+    /// `leaky-bucket`) or `scoring` (`threshold`, `catch`). False for an unknown key or
+    /// label.
+    pub fn apply_label(&mut self, key: &str, label: &str) -> bool {
+        match key {
+            "fusion" => match Fusion::parse(label) {
+                Some(f) => self.fusion = f,
+                None => return false,
+            },
+            "scoring" => match Scoring::parse(label) {
+                Some(m) => self.scoring = m,
+                None => return false,
+            },
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// Every key [`Ts103759Params::apply_label`] reads.
+pub const LABEL_KEYS: [&str; 2] = ["fusion", "scoring"];
+
+/// Every key [`Ts103759Params::apply`] reads.
+pub const PARAM_KEYS: [&str; 49] = [
+    "max_plausible_range_m",
+    "art_highway_m",
+    "art_rural_m",
+    "art_suburban_m",
+    "art_urban_m",
+    "beacon_min_interval_s",
+    "beacon_max_interval_s",
+    "beacon_jitter_tolerance_s",
+    "min_beacon_interval_s",
+    "max_time_delta_s",
+    "max_sa_time_s",
+    "max_plausible_speed_mps",
+    "max_plausible_accel_mps2",
+    "max_plausible_decel_mps2",
+    "max_confidence_m",
+    "mgt_rng_m",
+    "mgt_rng_up_mps",
+    "mgt_rng_down_mps",
+    "max_heading_change_deg",
+    "pos_heading_time_s",
+    "max_sa_range_m",
+    "sudden_appearance_m",
+    "max_distance_from_route_m",
+    "proximity_distance_m",
+    "proximity_range_l_m",
+    "max_delta_inter_s",
+    "z_threshold",
+    "gate_floor_m",
+    "hard_fail_score",
+    "cpm_unmatched_fraction",
+    "min_consecutive",
+    "max_payload_bytes",
+    "kalman_pos_floor_m",
+    "kalman_speed_floor_mps",
+    "kalman_conf_divisor",
+    "kalman_q_m2ps3",
+    "kalman_gate_z",
+    "kalman_window",
+    "envelope_margin_m",
+    "psmax_margin_mps2",
+    "box_overlap_threshold",
+    "catch_threshold",
+    "mean_history",
+    "mean_window_s",
+    "bucket_coeff",
+    "bucket_exponent",
+    "bucket_leak",
+    "bucket_threshold",
+    "bucket_expiry_s",
+];
+
+// ---------------------------------------------------------------------------------------
+// Beacon timing from the message profile
+// ---------------------------------------------------------------------------------------
+
+/// F2MD's `MAX_TIME_DELTA` (3.1 s) in beacon intervals: F2MD sets it for a 1 Hz VeReMi
+/// beacon, so it is 3.1 intervals, and that is what carries over to another rate.
+pub const MAX_TIME_DELTA_INTERVALS: f64 = 3.1;
+
+/// F2MD's `MAX_SA_TIME` (2.1 s) in beacon intervals, for the same reason.
+pub const MAX_SA_TIME_INTERVALS: f64 = 2.1;
+
+/// The beacon timing a message profile allows, from which the beacon-frequency check and
+/// the interval windows are derived.
+///
+/// The windows scale with the **longest** conforming interval rather than the nominal
+/// one: a J2945/1 sender under congestion control stretches its interval towards
+/// `vMaxITT`, and a window sized for 100 ms would then compare no two of its messages at
+/// all. At 1 Hz the two are the same, which is how F2MD's 3.1 s and 2.1 s come back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BeaconProfile {
+    /// The profile's id (the preset it started from).
+    pub id: &'static str,
+    /// The shortest conforming interval between two messages, seconds.
+    pub min_interval_s: f64,
+    /// The longest conforming interval, seconds.
+    pub max_interval_s: f64,
+    /// How far below the shortest interval an honest arrival gap may fall, seconds:
+    /// generation jitter and channel-access delay on the two messages a gap spans.
+    pub jitter_tolerance_s: f64,
+    /// Whether the first message of a critical event is exempt from the beacon-frequency
+    /// check. SAE J2945/1 6.3.8.6 sends a new critical event's BSM at once, however soon
+    /// after the previous BSM (`NEW_TxDecision_Critical_Event`), so that one gap may be
+    /// far below `vMinITT` from an honest sender. The receiver sees the onset as the
+    /// first BSM whose `accelSet.long` is at or past the hard-braking deceleration
+    /// ([`CRITICAL_DECEL_MPS2`]) after one that was not.
+    pub critical_onset_exempt: bool,
+}
+
+/// The deceleration a receiver takes as a sender's critical event, m/s²: J2735's
+/// `eventHardBraking`, 0.4 g, which is the J2945/1 critical-event threshold for a light
+/// vehicle (a heavy one's 0.2 g is not told apart: the BSM's vehicle class is not in the
+/// observation).
+pub const CRITICAL_DECEL_MPS2: f64 = 0.4 * 9.806_65;
+
+impl BeaconProfile {
+    /// The US BSM, SAE J2945/1: 100 ms nominal and `vMinITT`, `vMaxITT` 600 ms
+    /// (`v2xw_msg::BsmGenParams::j2945_1`). The 25 ms tolerance
+    /// covers J2945/1's own `RandOffset` (±5 ms on each BSM, 6.3.8.8, so an honest
+    /// interval is 95 ms at the shortest) or the engine's 10 ms hand-off jitter elsewhere
+    /// (`v2xw_msg::GenerationTiming`, ns-3's `TxMaxDelay`), and leaves 15 ms for EDCA
+    /// channel-access and queueing differences between two consecutive frames. A 20 Hz
+    /// sender's 50 ms gaps stay well under the resulting 75 ms. The first BSM of a
+    /// critical event is exempt (6.3.8.6).
+    pub const BSM_J2945_1: BeaconProfile = BeaconProfile {
+        id: "bsm-j2945-1",
+        min_interval_s: 0.1,
+        max_interval_s: 0.6,
+        jitter_tolerance_s: 0.025,
+        critical_onset_exempt: true,
+    };
+
+    /// The ETSI CAM, EN 302 637-2 V1.4.1 §6.1.3: `T_GenCamMin` 100 ms, `T_GenCamMax`
+    /// 1,000 ms, with the BSM's tolerance.
+    pub const CAM_EN302637_2: BeaconProfile = BeaconProfile {
+        id: "cam-en302637-2",
+        min_interval_s: 0.1,
+        max_interval_s: 1.0,
+        jitter_tolerance_s: 0.025,
+        critical_onset_exempt: false,
+    };
+
+    /// F2MD's own 1 Hz VeReMi beacon, for comparison runs: it reproduces
+    /// `MAX_BEACON_FREQUENCY` 0.9 s, `MAX_TIME_DELTA` 3.1 s and `MAX_SA_TIME` 2.1 s
+    /// (veins-f2md `F2MDParameters.h`).
+    pub const F2MD_VEREMI_1HZ: BeaconProfile = BeaconProfile {
+        id: "f2md-veremi-1hz",
+        min_interval_s: 1.0,
+        max_interval_s: 1.0,
+        jitter_tolerance_s: 0.1,
+        critical_onset_exempt: false,
+    };
+
+    /// Every shipped profile.
+    pub const ALL: [BeaconProfile; 3] = [
+        BeaconProfile::BSM_J2945_1,
+        BeaconProfile::CAM_EN302637_2,
+        BeaconProfile::F2MD_VEREMI_1HZ,
+    ];
+
+    /// The profile with this id.
+    #[must_use]
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.id == id)
+    }
+
+    /// The minimum conforming arrival gap: the shortest interval less the tolerance.
+    #[must_use]
+    pub fn min_beacon_interval_s(&self) -> f64 {
+        (self.min_interval_s - self.jitter_tolerance_s).max(0.0)
+    }
+
+    /// The longest interval the consistency checks compare across.
+    #[must_use]
+    pub fn max_time_delta_s(&self) -> f64 {
+        MAX_TIME_DELTA_INTERVALS * self.max_interval_s
+    }
+
+    /// How long a receiver listens before a first sighting counts as sudden.
+    #[must_use]
+    pub fn max_sa_time_s(&self) -> f64 {
+        MAX_SA_TIME_INTERVALS * self.max_interval_s
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The acceptance range from this engine's own link budget
+// ---------------------------------------------------------------------------------------
+
+/// The propagation environment a receiver is in: the same four classes, with the same
+/// labels, as `v2xw_world::model::EnvClass`, which this crate does not depend on (see
+/// the crate documentation, "The seam").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RadioEnvironment {
+    /// A motorway corridor.
+    Highway,
+    /// Open country.
+    Rural,
+    /// Low-rise built-up area.
+    Suburban,
+    /// Dense built-up area.
+    Urban,
+}
+
+impl RadioEnvironment {
+    /// Every environment.
+    pub const ALL: [RadioEnvironment; 4] = [
+        RadioEnvironment::Highway,
+        RadioEnvironment::Rural,
+        RadioEnvironment::Suburban,
+        RadioEnvironment::Urban,
+    ];
+
+    /// The label `EnvClass` uses.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            RadioEnvironment::Highway => "highway",
+            RadioEnvironment::Rural => "rural",
+            RadioEnvironment::Suburban => "suburban",
+            RadioEnvironment::Urban => "urban",
+        }
+    }
+
+    /// The environment with this label.
+    #[must_use]
+    pub fn parse(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|e| e.label() == label)
+    }
+}
+
+/// The transmit power the acceptance range is derived at, dBm: the engine's broadcast
+/// default (`v2xw_radio::types::FrameDescriptor::broadcast`).
+pub const ART_TX_POWER_DBM: f64 = 23.0;
+/// The antenna gain at each end, dBi: a car's default (`ActorClass::Car`, TR 36.885
+/// Table A.1.1-1).
+pub const ART_ANTENNA_GAIN_DBI: f64 = 3.0;
+/// The receiver sensitivity floor, dBm: the engine's default, a fielded OBU at
+/// 6 Mbit/s (`SensitivityPreset::MeasuredObu` at `Mcs::R6Qpsk12`).
+pub const ART_SENSITIVITY_DBM: f64 = -92.0;
+/// The carrier the derivation uses, Hz: the engine's default channel (`ChannelId::CCH`).
+pub const ART_CARRIER_HZ: f64 = 5.9e9;
+/// The margin above the median reach, in shadowing standard deviations of the law: a
+/// link this far out is decodable only on a 3σ shadowing upside (0.13 % one-sided).
+pub const ART_MARGIN_SIGMAS: f64 = 3.0;
+
+/// One row of the acceptance-range derivation: the line-of-sight reach of one of the
+/// engine's tier-default propagation laws in one environment, metres.
+///
+/// The distance `d` solves `P_tx + 2·G − PL_LOS(d) + k·σ = S` ([`ART_TX_POWER_DBM`],
+/// [`ART_ANTENNA_GAIN_DBI`], [`ART_MARGIN_SIGMAS`], [`ART_SENSITIVITY_DBM`]) with the
+/// law's own line-of-sight σ. `tests/ts103759.rs` recomputes every row from
+/// `v2xw-radio` and fails when one drifts by more than a metre.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArtRow {
+    /// The propagation model id.
+    pub law: &'static str,
+    /// The engine tier that selects it by default.
+    pub tier: &'static str,
+    /// The environment.
+    pub environment: RadioEnvironment,
+    /// The law's line-of-sight shadowing σ, dB.
+    pub sigma_db: f64,
+    /// The reach, metres (rounded to the metre).
+    pub reach_m: f64,
+}
+
+const fn art_row(
+    law: &'static str,
+    tier: &'static str,
+    environment: RadioEnvironment,
+    sigma_db: f64,
+    reach_m: f64,
+) -> ArtRow {
+    ArtRow {
+        law,
+        tier,
+        environment,
+        sigma_db,
+        reach_m,
+    }
+}
+
+/// The derivation, for every tier-default law and environment.
+///
+/// Free space has no shadowing. The log-distance rows are Abbas 2015's measured highway
+/// and urban LOS fits (`LogDistancePreset::for_environment`: rural takes the highway row
+/// and suburban the urban one). The TR 37.885 rows are its highway and urban LOS laws,
+/// which the high tier's `propagation/v2v-urban-geometric` also uses in line of sight;
+/// the urban law's 16.7 dB per decade reaches furthest of all.
+pub const ART_DERIVATION: [ArtRow; 12] = {
+    use RadioEnvironment::{Highway, Rural, Suburban, Urban};
+    const FS: &str = "propagation/free-space";
+    const LD: &str = "propagation/log-distance-shadowing";
+    const TR: &str = "propagation/tr37885";
+    [
+        art_row(FS, "abstract", Highway, 0.0, 4_537.0),
+        art_row(FS, "abstract", Rural, 0.0, 4_537.0),
+        art_row(FS, "abstract", Suburban, 0.0, 4_537.0),
+        art_row(FS, "abstract", Urban, 0.0, 4_537.0),
+        art_row(LD, "medium", Highway, 3.95, 5_604.0),
+        art_row(LD, "medium", Rural, 3.95, 5_604.0),
+        art_row(LD, "medium", Suburban, 4.15, 6_479.0),
+        art_row(LD, "medium", Urban, 4.15, 6_479.0),
+        art_row(TR, "high", Highway, 3.0, 12_857.0),
+        art_row(TR, "high", Rural, 3.0, 12_857.0),
+        art_row(TR, "high", Suburban, 3.0, 41_955.0),
+        art_row(TR, "high", Urban, 3.0, 41_955.0),
+    ]
+};
+
+/// The acceptance range per environment, metres.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcceptanceRanges {
+    /// Highway.
+    pub highway_m: f64,
+    /// Rural.
+    pub rural_m: f64,
+    /// Suburban.
+    pub suburban_m: f64,
+    /// Urban.
+    pub urban_m: f64,
+}
+
+impl AcceptanceRanges {
+    /// The longest reach of [`ART_DERIVATION`] in each environment, so that an honest
+    /// line-of-sight link is inside the range whichever tier the run uses.
+    pub const DERIVED: AcceptanceRanges = AcceptanceRanges {
+        highway_m: 12_857.0,
+        rural_m: 12_857.0,
+        suburban_m: 41_955.0,
+        urban_m: 41_955.0,
+    };
+
+    /// The range for one environment.
+    #[must_use]
+    pub const fn get(&self, env: RadioEnvironment) -> f64 {
+        match env {
+            RadioEnvironment::Highway => self.highway_m,
+            RadioEnvironment::Rural => self.rural_m,
+            RadioEnvironment::Suburban => self.suburban_m,
+            RadioEnvironment::Urban => self.urban_m,
+        }
+    }
+}
+
+/// The extra inputs the class-3, class-4 and class-5 checks need, beyond the message and
+/// the node's own belief.
+///
+/// A struct rather than three more arguments, and every field optional-by-construction, so
+/// that a host which has only some of them says so in the types instead of passing a
+/// default that looks like a measurement.
+pub struct CrossCheckInputs<'a> {
+    /// This node's own perception. [`NoPerception`] is the honest answer for a node
+    /// without sensors.
+    pub perception: &'a dyn LocalPerception,
+    /// The two envelope fields the message itself does not carry.
+    pub envelope: Option<&'a EnvelopeExtras>,
+    /// The frame's vehicle size and speed and heading confidences, when the host
+    /// recorded them (the box-intersection and Kalman checks).
+    pub frame: Option<&'a FrameExtras>,
+    /// This receiver's own footprint from its own belief (the box-intersection check).
+    pub own: Option<&'a OwnFootprint>,
+}
+
+impl CrossCheckInputs<'static> {
+    /// The inputs a node with neither sensors nor recorded envelope extras has.
+    ///
+    /// Not "everything checks out": every check whose input is missing is absent from the
+    /// verdict and counted as a skip.
+    #[must_use]
+    pub fn none() -> Self {
+        CrossCheckInputs {
+            perception: &NoPerception,
+            envelope: None,
+            frame: None,
+            own: None,
+        }
+    }
+}
+
+impl<'a> CrossCheckInputs<'a> {
+    /// The inputs a node with perception but no recorded envelope extras has.
+    #[must_use]
+    pub fn with_perception(perception: &'a dyn LocalPerception) -> Self {
+        Self {
+            perception,
+            envelope: None,
+            frame: None,
+            own: None,
+        }
+    }
+
+    /// The same inputs with the frame's extras.
+    #[must_use]
+    pub fn and_frame(mut self, frame: &'a FrameExtras) -> Self {
+        self.frame = Some(frame);
+        self
+    }
+
+    /// The same inputs with this receiver's own footprint.
+    #[must_use]
+    pub fn and_own(mut self, own: &'a OwnFootprint) -> Self {
+        self.own = Some(own);
+        self
+    }
+}
+
+/// One claimed fix this receiver kept.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Fix {
+    x: f64,
+    y: f64,
+    speed: f64,
+    heading: f64,
+    conf: f64,
+    at: SimTime,
+    generation_time: SimTime,
+    /// The message claimed a critical event's deceleration ([`CRITICAL_DECEL_MPS2`]).
+    critical: bool,
+}
+
+/// Whether a message claims a critical event's deceleration: a beacon whose
+/// `accelSet.long` is at or past [`CRITICAL_DECEL_MPS2`].
+fn claims_critical(m: &ObservedMessage) -> bool {
+    matches!(m.kind, ObservedKind::Beacon)
+        && m.bsm
+            .accel_long_mps2
+            .is_some_and(|a| a <= -CRITICAL_DECEL_MPS2)
+}
+
+/// Per-subject state.
+#[derive(Debug, Clone, PartialEq)]
+struct SubjectState {
+    last: Fix,
+    first_seen: SimTime,
+    streak: BTreeMap<Ts103759Check, u32>,
+    /// The windowed mean's earlier scores per check, oldest first.
+    history: BTreeMap<Ts103759Check, VecDeque<(SimTime, f64)>>,
+}
+
+/// One sender's Kalman track.
+#[derive(Debug, Clone, PartialEq)]
+struct Track {
+    kf: CvKalman,
+    at: SimTime,
+    nis: VecDeque<f64>,
+}
+
+/// One sender's newest footprint claim, for the box-intersection check.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct BoxClaim {
+    footprint: Footprint,
+    speed: f64,
+    at: SimTime,
+}
+
+/// One pseudonym's leaky bucket.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Bucket {
+    level: f64,
+    at: SimTime,
+}
+
+/// The TS 103 759 observation suite.
+#[derive(Debug, Clone)]
+pub struct Ts103759Suite {
+    card: ModelCard,
+    params: Ts103759Params,
+    subjects: BTreeMap<[u8; 8], SubjectState>,
+    /// The newest claim per signer, for the class-5 intersection check.
+    /// Each claim keeps its claimed speed and heading, so it is compared where the station
+    /// has since moved to, not where it was.
+    recent: BTreeMap<[u8; 8], (f64, f64, f64, f64, SimTime)>,
+    /// The newest footprint per signer, for the box-intersection check.
+    boxes: BTreeMap<[u8; 8], BoxClaim>,
+    /// The Kalman track per signer.
+    tracks: BTreeMap<[u8; 8], Track>,
+    /// The leaky bucket per pseudonym, keyed by the pseudonym itself (F2MD D6 fixed).
+    buckets: BTreeMap<[u8; 8], Bucket>,
+    skipped_no_size: u64,
+    /// When this receiver started listening, on its own clock.
+    listening_since: Option<SimTime>,
+    deferred: u64,
+    class4_evaluated: u64,
+    class4_skipped_no_perception: u64,
+    class4_skipped_outside_coverage: u64,
+    skipped_no_envelope: u64,
+    skipped_no_region: u64,
+}
+
+impl Ts103759Suite {
+    /// The suite with the given thresholds.
+    #[must_use]
+    pub fn new(params: Ts103759Params) -> Self {
+        Self {
+            card: card(&params),
+            params,
+            subjects: BTreeMap::new(),
+            recent: BTreeMap::new(),
+            boxes: BTreeMap::new(),
+            tracks: BTreeMap::new(),
+            buckets: BTreeMap::new(),
+            skipped_no_size: 0,
+            listening_since: None,
+            deferred: 0,
+            class4_evaluated: 0,
+            class4_skipped_no_perception: 0,
+            class4_skipped_outside_coverage: 0,
+            skipped_no_envelope: 0,
+            skipped_no_region: 0,
+        }
+    }
+
+    /// The suite with the cited defaults.
+    #[must_use]
+    pub fn cited_defaults() -> Self {
+        Self::new(Ts103759Params::default())
+    }
+
+    /// The thresholds it reads.
+    #[must_use]
+    pub fn params(&self) -> &Ts103759Params {
+        &self.params
+    }
+
+    /// How many messages were left unscored because this node's policy had not verified
+    /// them.
+    ///
+    /// The number that matters most in this crate: under a verify-on-demand policy it is
+    /// most of the traffic, and a suite that scored those messages as cryptographic
+    /// failures produced a 98 % false-positive rate on honest traffic.
+    #[must_use]
+    pub fn deferred(&self) -> u64 {
+        self.deferred
+    }
+
+    /// How many claims the class-4 cross-check actually evaluated.
+    #[must_use]
+    pub fn class4_evaluated(&self) -> u64 {
+        self.class4_evaluated
+    }
+
+    /// How many claims class 4 skipped because this node has no perception.
+    ///
+    /// If this is the whole traffic, the class-4 recall of the run is meaningless, and
+    /// this counter is how a reader knows.
+    #[must_use]
+    pub fn class4_skipped_no_perception(&self) -> u64 {
+        self.class4_skipped_no_perception
+    }
+
+    /// How many claims class 4 skipped because they were outside the sensor's coverage.
+    #[must_use]
+    pub fn class4_skipped_outside_coverage(&self) -> u64 {
+        self.class4_skipped_outside_coverage
+    }
+
+    /// How many messages the oversized-message check could not run on for want of a
+    /// measured payload size.
+    #[must_use]
+    pub fn skipped_no_envelope(&self) -> u64 {
+        self.skipped_no_envelope
+    }
+
+    /// How many messages the certificate-region check could not run on because the
+    /// receiver's own region was not declared.
+    #[must_use]
+    pub fn skipped_no_region(&self) -> u64 {
+        self.skipped_no_region
+    }
+
+    /// How many messages the box-intersection check could not run on because the frame
+    /// carried no vehicle size.
+    #[must_use]
+    pub fn skipped_no_size(&self) -> u64 {
+        self.skipped_no_size
+    }
+
+    /// The leaky-bucket level of one pseudonym, `None` when it has no bucket.
+    #[must_use]
+    pub fn bucket(&self, signer: &[u8; 8]) -> Option<f64> {
+        self.buckets.get(signer).map(|b| b.level)
+    }
+
+    /// The pseudonyms that hold a bucket, in order.
+    #[must_use]
+    pub fn bucket_pseudonyms(&self) -> Vec<[u8; 8]> {
+        self.buckets.keys().copied().collect()
+    }
+
+    /// Drops one pseudonym's bucket (for example when the authority revoked it). The
+    /// other pseudonyms' levels stay on their own pseudonyms.
+    pub fn remove_bucket(&mut self, signer: &[u8; 8]) -> bool {
+        self.buckets.remove(signer).is_some()
+    }
+
+    /// Drops the per-sender state of a sender that will never be heard again. Its other
+    /// tables age out on their own.
+    pub fn forget_subject(&mut self, signer: &[u8; 8]) {
+        self.subjects.remove(signer);
+    }
+
+    /// How many distinct subjects it is tracking.
+    #[must_use]
+    pub fn tracked_subjects(&self) -> usize {
+        self.subjects.len()
+    }
+
+    /// When this receiver first heard `signer`, on its own clock.
+    ///
+    /// The sudden-appearance check's own input, and the quantity a privacy observer and a
+    /// detector disagree about: a pseudonym change makes one vehicle two first sightings.
+    #[must_use]
+    pub fn first_seen(&self, signer: &[u8; 8]) -> Option<SimTime> {
+        self.subjects.get(signer).map(|s| s.first_seen)
+    }
+
+    /// When this receiver started listening, on its own clock.
+    #[must_use]
+    pub fn listening_since(&self) -> Option<SimTime> {
+        self.listening_since
+    }
+
+    /// The uncertainty gate for a claim of confidence `conf`: `z · max(conf, floor)`.
+    fn gate(&self, conf_m: f64) -> f64 {
+        self.params.z_threshold * conf_m.max(self.params.gate_floor_m)
+    }
+
+    /// The class-1 checks, which need nothing but the message.
+    fn class1(
+        &mut self,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
+        let p = self.params.clone();
+        let d = math::hypot(m.claimed_x_m - me.x_m, m.claimed_y_m - me.y_m);
+        out.scores
+            .insert(Ts103759Check::RangePlausibility, d / p.art_m());
+        out.scores.insert(
+            Ts103759Check::SpeedPlausibility,
+            m.claimed_speed_mps.abs() / p.max_plausible_speed_mps,
+        );
+        out.scores.insert(
+            Ts103759Check::ConfidencePlausibility,
+            m.claimed_pos_confidence_m.max(0.0) / p.max_confidence_m,
+        );
+        match x.envelope.and_then(|e| e.payload_bytes) {
+            Some(bytes) => {
+                out.scores.insert(
+                    Ts103759Check::OversizedMessage,
+                    f64::from(bytes) / f64::from(p.max_payload_bytes),
+                );
+            }
+            None => self.skipped_no_envelope += 1,
+        }
+        if p.scoring == Scoring::Catch {
+            // CaTCh: the share of the claim's confidence disc inside the acceptance range,
+            // and the share of its speed interval under the plausible maximum.
+            let f = circle_inside_fraction(m.claimed_pos_confidence_m.max(0.0), d, p.art_m());
+            out.scores
+                .insert(Ts103759Check::RangePlausibility, self.catch_score(f));
+            let cv = speed_conf(x.frame, p.kalman_speed_floor_mps);
+            let v = m.claimed_speed_mps.abs();
+            let f = interval_inside_fraction(
+                v - cv,
+                v + cv,
+                f64::NEG_INFINITY,
+                p.max_plausible_speed_mps,
+            );
+            out.scores
+                .insert(Ts103759Check::SpeedPlausibility, self.catch_score(f));
+        }
+    }
+
+    /// A CaTCh factor in [0, 1] as a score on this suite's scale: (1 − f)/(1 − θ).
+    fn catch_score(&self, f: f64) -> f64 {
+        (1.0 - f.clamp(0.0, 1.0)) / (1.0 - self.params.catch_threshold).max(1e-9)
+    }
+
+    /// The class-2 checks over one interval `dt` in (0, MAX_TIME_DELTA]: the
+    /// reachable-distance envelope and PositionSpeedMaxConsistency.
+    fn envelope(&self, prev: Fix, m: &ObservedMessage, dt: f64, disp: f64, out: &mut TsVerdict) {
+        let p = &self.params;
+        let (v0, v1) = (prev.speed.abs(), m.claimed_speed_mps.abs());
+        let (lo, hi) = reachable_distance(
+            v0,
+            v1,
+            dt,
+            p.max_plausible_accel_mps2,
+            p.max_plausible_decel_mps2,
+            p.max_plausible_speed_mps,
+        );
+        // The envelope is a path length and the displacement a chord: on a curve the
+        // chord is shorter, by sin(θ/2)/(θ/2) for an arc turning θ.
+        let turn = angle_diff_rad(m.claimed_heading_rad, prev.heading);
+        let lo_chord = lo * chord_factor(turn);
+        // How far the two claimed positions can honestly be off, from their broadcast
+        // confidences.
+        let c = math::hypot(prev.conf.max(0.0), m.claimed_pos_confidence_m.max(0.0));
+        let tol = p.envelope_margin_m + p.z_threshold * c;
+        let env_score = match p.scoring {
+            Scoring::Threshold => (lo_chord - disp).max(disp - hi).max(0.0) / tol.max(1e-9),
+            Scoring::Catch => self.catch_score(interval_inside_fraction(
+                disp - c,
+                disp + c,
+                lo_chord - p.envelope_margin_m,
+                hi + p.envelope_margin_m,
+            )),
+        };
+        out.scores
+            .insert(Ts103759Check::PositionSpeedEnvelope, env_score);
+        // PositionSpeedMaxConsistency: the mean speed d/Δt against the claimed speeds.
+        let mean_v = disp / dt;
+        let slow = v0.max(v1) - mean_v - (p.max_plausible_decel_mps2 + p.psmax_margin_mps2) * dt;
+        let fast = mean_v - v0.min(v1) - (p.max_plausible_accel_mps2 + p.psmax_margin_mps2) * dt;
+        let allowed = tol / dt;
+        out.scores.insert(
+            Ts103759Check::PositionSpeedMaxConsistency,
+            slow.max(fast).max(0.0) / allowed.max(1e-9),
+        );
+    }
+
+    /// The Kalman consistency check: one constant-velocity filter per sender, measurement
+    /// noise from the broadcast confidences (floored), NIS averaged over the last
+    /// `kalman_window` messages against the χ² quantile of 4·n degrees of freedom.
+    fn kalman(
+        &mut self,
+        m: &ObservedMessage,
+        t: SimTime,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
+        let p = &self.params;
+        let sp = (m.claimed_pos_confidence_m / p.kalman_conf_divisor.max(1e-9))
+            .max(p.kalman_pos_floor_m);
+        let sv = speed_conf(x.frame, p.kalman_speed_floor_mps);
+        let sh = x
+            .frame
+            .and_then(|f| f.heading_confidence_rad)
+            .unwrap_or(0.0)
+            .max(0.0);
+        let v = m.claimed_speed_mps;
+        let (r_pos, r_vel) = (sp * sp, sv * sv + (v * sh) * (v * sh));
+        let (sn, cs) = math::sin_cos(m.claimed_heading_rad);
+        let z = [m.claimed_x_m, v * cs, m.claimed_y_m, v * sn];
+        let window = p.time_delta_s();
+        let (q, n, gate_z) = (
+            p.kalman_q_m2ps3,
+            p.kalman_window.max(1) as usize,
+            p.kalman_gate_z,
+        );
+        match self.tracks.get_mut(&m.signer) {
+            Some(tr) => {
+                let dt = ns_to_secs(t.saturating_sub(tr.at));
+                if dt <= 0.0 {
+                    // Two claims at one instant: no interval to predict over.
+                    return;
+                }
+                if dt > window {
+                    // Too long a gap for a comparison: start again, absent rather than zero.
+                    *tr = Track {
+                        kf: CvKalman::init(z, r_pos, r_vel),
+                        at: t,
+                        nis: VecDeque::new(),
+                    };
+                    return;
+                }
+                let nis = tr.kf.step(dt, q, z, r_pos, r_vel);
+                tr.at = t;
+                tr.nis.push_back(nis);
+                while tr.nis.len() > n {
+                    tr.nis.pop_front();
+                }
+                let sum: f64 = tr.nis.iter().sum();
+                let k = 4.0 * tr.nis.len() as f64;
+                out.scores.insert(
+                    Ts103759Check::KalmanConsistency,
+                    sum / chi2_quantile(k, gate_z).max(1e-9),
+                );
+            }
+            None => {
+                self.tracks.insert(
+                    m.signer,
+                    Track {
+                        kf: CvKalman::init(z, r_pos, r_vel),
+                        at: t,
+                        nis: VecDeque::new(),
+                    },
+                );
+            }
+        }
+        // A track not updated inside the window is dead; the sweep is bounded by the
+        // number of signers heard in one window.
+        let cutoff = t.saturating_sub(v2xw_core::time::secs_to_ns(window));
+        self.tracks.retain(|_, tr| tr.at >= cutoff);
+    }
+
+    /// The box-intersection check: this claim's oriented footprint against every other
+    /// station's newest footprint inside `MAX_DELTA_INTER` (moved on along its claimed
+    /// heading at its claimed speed to this instant) and against this receiver's own
+    /// footprint from its own belief. The overlap share of the smaller footprint is scaled
+    /// down linearly with the other claim's age, (W − age)/W.
+    fn box_intersection(
+        &mut self,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        t: SimTime,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
+        let p = &self.params;
+        let w = p.max_delta_inter_s.max(1e-9);
+        let cutoff = t.saturating_sub(v2xw_core::time::secs_to_ns(w));
+        let size = x
+            .frame
+            .and_then(|f| Some((f.length_m?, f.width_m?, f.reference)));
+        let Some((len, wid, reference)) = size else {
+            self.skipped_no_size += 1;
+            self.boxes.retain(|_, b| b.at >= cutoff);
+            return;
+        };
+        let mine = Footprint::from_claim(
+            m.claimed_x_m,
+            m.claimed_y_m,
+            m.claimed_heading_rad,
+            len,
+            wid,
+            reference,
+        );
+        let mut worst: Option<f64> = None;
+        for (signer, b) in &self.boxes {
+            if *signer == m.signer || b.at < cutoff {
+                continue;
+            }
+            let age = ns_to_secs(t.saturating_sub(b.at));
+            let (sn, cs) = math::sin_cos(b.footprint.heading_rad);
+            let moved = b.footprint.shifted(b.speed * age * cs, b.speed * age * sn);
+            let scaled = overlap_ratio(&mine, &moved) * ((w - age) / w).clamp(0.0, 1.0);
+            if worst.is_none_or(|v| scaled > v) {
+                worst = Some(scaled);
+            }
+        }
+        if let Some(own) = x.own {
+            let f = Footprint::from_claim(
+                me.x_m,
+                me.y_m,
+                own.heading_rad,
+                own.length_m,
+                own.width_m,
+                own.reference,
+            );
+            let r = overlap_ratio(&mine, &f);
+            if worst.is_none_or(|v| r > v) {
+                worst = Some(r);
+            }
+        }
+        if let Some(r) = worst {
+            out.scores.insert(
+                Ts103759Check::BoxIntersection,
+                r / p.box_overlap_threshold.max(1e-9),
+            );
+        }
+        self.boxes.insert(
+            m.signer,
+            BoxClaim {
+                footprint: mine,
+                speed: m.claimed_speed_mps,
+                at: t,
+            },
+        );
+        self.boxes.retain(|_, b| b.at >= cutoff);
+    }
+
+    /// The class-2 checks, which need the previous message from this station.
+    fn class2(&self, prev: Fix, m: &ObservedMessage, t: SimTime, out: &mut TsVerdict) {
+        let p = &self.params;
+        let dt = ns_to_secs(t.saturating_sub(prev.at));
+        let disp = math::hypot(m.claimed_x_m - prev.x, m.claimed_y_m - prev.y);
+        let tol = self.gate(m.claimed_pos_confidence_m);
+
+        // The generation time must advance. A repeat or a rewind is a replay, and it is a
+        // hard finding rather than a scaled residual.
+        if m.claimed_generation_time <= prev.generation_time {
+            out.scores
+                .insert(Ts103759Check::GenerationTimeOrder, p.hard_fail_score);
+        } else {
+            out.scores.insert(Ts103759Check::GenerationTimeOrder, 0.0);
+        }
+
+        // The beacon rate: fires when the gap is shorter than the conforming minimum. The
+        // first BSM of a critical event goes at once under J2945/1 (6.3.8.6), so its gap
+        // is no finding.
+        if dt > 0.0 {
+            let onset =
+                p.beacon_profile.critical_onset_exempt && claims_critical(m) && !prev.critical;
+            let score = if onset { 0.0 } else { p.min_interval_s() / dt };
+            out.scores.insert(Ts103759Check::BeaconFrequency, score);
+        }
+
+        // Everything else compares across an interval, and an interval longer than
+        // MAX_TIME_DELTA is not a comparison: the station may legitimately have gone
+        // anywhere. Absent, not zero.
+        if dt <= 0.0 || dt > p.time_delta_s() {
+            return;
+        }
+        let pc = match p.scoring {
+            Scoring::Threshold => disp / (p.max_plausible_speed_mps * dt + tol),
+            // CaTCh: the share of this claim's confidence disc inside the disc the previous
+            // claim (widened by its own confidence) can reach at the plausible maximum.
+            Scoring::Catch => self.catch_score(circle_inside_fraction(
+                m.claimed_pos_confidence_m.max(0.0),
+                disp,
+                p.max_plausible_speed_mps * dt + prev.conf.max(0.0),
+            )),
+        };
+        out.scores.insert(Ts103759Check::PositionConsistency, pc);
+        self.envelope(prev, m, dt, disp, out);
+        let avg_v = 0.5 * (m.claimed_speed_mps + prev.speed);
+        out.scores.insert(
+            Ts103759Check::PositionSpeedConsistency,
+            (disp - avg_v * dt).abs() / (p.mgt_rng_m + tol),
+        );
+        let dv = m.claimed_speed_mps - prev.speed;
+        // The speed change allowed over the interval: the vehicle classes' limit, never
+        // less than F2MD's margins (which alone flag an honest car launching at its
+        // 2.6 m/s² class acceleration).
+        let allowed = if dv >= 0.0 {
+            p.mgt_rng_up_mps.max(p.max_plausible_accel_mps2) * dt
+        } else {
+            p.mgt_rng_down_mps.max(p.max_plausible_decel_mps2) * dt
+        };
+        out.scores.insert(
+            Ts103759Check::SpeedConsistency,
+            dv.abs() / allowed.max(1e-9),
+        );
+        out.scores.insert(
+            Ts103759Check::AccelerationPlausibility,
+            (dv / dt).abs()
+                / if dv >= 0.0 {
+                    p.max_plausible_accel_mps2
+                } else {
+                    p.max_plausible_decel_mps2
+                },
+        );
+        // The heading check needs a short baseline and a displacement big enough for the
+        // bearing to mean anything; otherwise it is measuring noise.
+        if dt <= p.pos_heading_time_s && disp > tol {
+            let bearing = bearing_rad(prev.x, prev.y, m.claimed_x_m, m.claimed_y_m);
+            let off = angle_diff_rad(m.claimed_heading_rad, bearing).to_degrees();
+            out.scores.insert(
+                Ts103759Check::PositionHeadingConsistency,
+                off / p.max_heading_change_deg,
+            );
+        }
+    }
+
+    /// The class-3 checks: the node's own map, and the region its own credentials say it
+    /// is in.
+    fn class3(
+        &mut self,
+        m: &ObservedMessage,
+        env: &dyn LocalEnvironment,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
+        let p = self.params.clone();
+        let off = env.distance_to_road_m(m.claimed_x_m, m.claimed_y_m);
+        let score = match p.scoring {
+            Scoring::Threshold => off / p.max_distance_from_route_m,
+            // CaTCh (WCNC 2019): the share of the stated confidence disc that lies within
+            // the plausible band around the road, so an honest claim pushed off the lane
+            // by an error its own confidence states is not scored as off the road.
+            Scoring::Catch => self.catch_score(circle_inside_fraction(
+                m.claimed_pos_confidence_m.max(0.0),
+                off,
+                p.max_distance_from_route_m + m.claimed_pos_confidence_m.max(0.0),
+            )),
+        };
+        out.scores
+            .insert(Ts103759Check::PositionPlausibility, score);
+        match (x.envelope.and_then(|e| e.cert_region), p.own_region) {
+            (Some(stated), Some(own)) => {
+                let score = if stated == own {
+                    0.0
+                } else {
+                    p.hard_fail_score
+                };
+                out.scores.insert(Ts103759Check::ForeignRegion, score);
+            }
+            _ => self.skipped_no_region += 1,
+        }
+    }
+
+    /// The class-4 cross-check: the claim against this node's own sensors.
+    ///
+    /// Runs only for a claim inside the sensor's coverage. Outside it, the absence of a
+    /// sensed object is the sensor's blind spot, and scoring it would accuse every vehicle
+    /// behind a building.
+    fn class4(
+        &mut self,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
+        if !x.perception.available() {
+            self.class4_skipped_no_perception += 1;
+            return;
+        }
+        if !x.perception.covers(me, m.claimed_x_m, m.claimed_y_m) {
+            self.class4_skipped_outside_coverage += 1;
+            return;
+        }
+        self.class4_evaluated += 1;
+        let gate = self.gate(m.claimed_pos_confidence_m);
+        let score = match x.perception.nearest_object_m(m.claimed_x_m, m.claimed_y_m) {
+            // Nothing sensed anywhere, inside coverage: the strongest evidence this check
+            // can produce, and it saturates rather than running to infinity.
+            None => self.params.hard_fail_score,
+            Some(d) => (d / gate.max(1e-9)).min(self.params.hard_fail_score),
+        };
+        out.scores
+            .insert(Ts103759Check::PerceptionCrossCheck, score);
+    }
+
+    /// The class-5 checks: this message against what other stations said.
+    fn class5(
+        &mut self,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        t: SimTime,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
+        let p = self.params.clone();
+        let window = v2xw_core::time::secs_to_ns(p.max_delta_inter_s);
+        let cutoff = t.saturating_sub(window);
+        let mut nearest: Option<f64> = None;
+        for (signer, (ox, oy, speed, heading, at)) in &self.recent {
+            if *signer == m.signer || *at < cutoff {
+                continue;
+            }
+            // The other claim moved on at its own claimed velocity, as the box check
+            // moves it: compared where it stood, a follower driving over the spot its
+            // leader claimed up to 2 s earlier "intersected" it (2.0 % of
+            // honest messages fired on the Midtown base run).
+            let age = ns_to_secs(t.saturating_sub(*at));
+            let (sn, cs) = math::sin_cos(*heading);
+            let d = math::hypot(
+                *ox + speed * age * cs - m.claimed_x_m,
+                *oy + speed * age * sn - m.claimed_y_m,
+            );
+            if nearest.is_none_or(|b| d < b) {
+                nearest = Some(d);
+            }
+        }
+        if let Some(d) = nearest {
+            out.scores.insert(
+                Ts103759Check::Intersection,
+                p.proximity_distance_m / d.max(1e-9),
+            );
+        }
+        self.recent.insert(
+            m.signer,
+            (
+                m.claimed_x_m,
+                m.claimed_y_m,
+                m.claimed_speed_mps,
+                m.claimed_heading_rad,
+                t,
+            ),
+        );
+        // A cell nobody has claimed inside the window is dead; the sweep is bounded by the
+        // number of signers heard in one window.
+        self.recent.retain(|_, (_, _, _, _, at)| *at >= cutoff);
+
+        if let ObservedKind::Cpm(objects) = &m.kind {
+            self.cpm_consistency(me, objects, &p, x, out);
+        }
+    }
+
+    /// The CPM cross-check: the objects a sender claims to perceive, against the ones this
+    /// node's own sensors hold, over the part of the region this node can see.
+    fn cpm_consistency(
+        &mut self,
+        me: &SelfBelief,
+        objects: &[PerceivedObject],
+        p: &Ts103759Params,
+        x: &CrossCheckInputs<'_>,
+        out: &mut TsVerdict,
+    ) {
+        if !x.perception.available() {
+            self.class4_skipped_no_perception += 1;
+            return;
+        }
+        // A CPM carries no per-object confidence a receiver can read, so the gate is the
+        // floor rather than a broadcast uncertainty.
+        let gate = p.z_threshold * p.gate_floor_m;
+        let mut visible = 0_u32;
+        let mut unmatched = 0_u32;
+        for o in objects {
+            // Only objects THIS node can see are evidence. An object the sender reports
+            // from beyond our range, outside our field of view or behind a building is
+            // exactly what collective perception is for, and counting it as
+            // uncorroborated would accuse every honest CPM in the run.
+            if !x.perception.covers(me, o.x_m(), o.y_m()) {
+                continue;
+            }
+            visible += 1;
+            match x.perception.nearest_object_m(o.x_m(), o.y_m()) {
+                None => unmatched += 1,
+                Some(d) => {
+                    if d > gate {
+                        unmatched += 1;
+                    }
+                }
+            }
+        }
+        if visible == 0 {
+            return;
+        }
+        let fraction = f64::from(unmatched) / f64::from(visible);
+        out.scores.insert(
+            Ts103759Check::CpmConsistency,
+            fraction / p.cpm_unmatched_fraction.max(1e-9),
+        );
+    }
+
+    /// Runs the suite on one message.
+    ///
+    /// The entry point with the cross-check inputs. [`Ts103759Suite::on_message`] is the
+    /// same call with [`CrossCheckInputs::none`], for a host that has neither perception
+    /// nor recorded envelope extras — and it is *counted* as unchecked rather than passed.
+    pub fn check(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        env: &dyn LocalEnvironment,
+        x: &CrossCheckInputs<'_>,
+    ) -> TsVerdict {
+        // The receiver's own clock at reception, never the simulator's.
+        let t = m.received_at;
+        if self.listening_since.is_none() {
+            self.listening_since = Some(t);
+        }
+        let mut out = TsVerdict {
+            subject: m.signer_hex(),
+            ..TsVerdict::default()
+        };
+
+        // The four verification states mean four different things. No catch-all arm.
+        match m.verification {
+            VerificationState::Unverified => {
+                // NOT CHECKED, because this node's policy deferred it. Nothing is scored,
+                // nothing fires, and the count is what a reader needs to interpret every
+                // other number in the run.
+                self.deferred += 1;
+                return out;
+            }
+            VerificationState::BadSignature => {
+                out.scores
+                    .insert(Ts103759Check::SignatureInvalid, self.params.hard_fail_score);
+                self.fire(m, t, &mut out);
+                emit(ctx, me.node, &out);
+                return out;
+            }
+            VerificationState::UnknownCertificate => {
+                out.scores.insert(
+                    Ts103759Check::CertificateUnknown,
+                    self.params.hard_fail_score,
+                );
+                self.fire(m, t, &mut out);
+                emit(ctx, me.node, &out);
+                return out;
+            }
+            VerificationState::Valid => {}
+        }
+
+        // Verified: the content is evidence, so every class that has its inputs runs.
+        self.class1(me, m, x, &mut out);
+        let known = self.subjects.get(&m.signer).map(|s| s.last);
+        match known {
+            Some(prev) => self.class2(prev, m, t, &mut out),
+            None => {
+                // A first sighting has no previous message, so class 2 does not run — with
+                // one exception, which is the check that exists *because* it is a first
+                // sighting.
+                let d = math::hypot(m.claimed_x_m - me.x_m, m.claimed_y_m - me.y_m);
+                let listening = ns_to_secs(t.saturating_sub(self.listening_since.unwrap_or(t)));
+                if listening > self.params.sa_time_s() && d < self.params.max_sa_range_m {
+                    out.scores.insert(
+                        Ts103759Check::SuddenAppearance,
+                        self.params.sudden_appearance_m / d.max(1e-9),
+                    );
+                }
+            }
+        }
+        self.kalman(m, t, x, &mut out);
+        self.class3(m, env, x, &mut out);
+        self.class4(me, m, x, &mut out);
+        self.class5(me, m, t, x, &mut out);
+        self.box_intersection(me, m, t, x, &mut out);
+
+        self.fire(m, t, &mut out);
+        // Keep this claim as the previous one for the next message from this station.
+        let fix = Fix {
+            x: m.claimed_x_m,
+            y: m.claimed_y_m,
+            speed: m.claimed_speed_mps,
+            heading: m.claimed_heading_rad,
+            conf: m.claimed_pos_confidence_m,
+            at: t,
+            generation_time: m.claimed_generation_time,
+            critical: claims_critical(m),
+        };
+        // `entry` rather than `get_mut` + `insert`: the borrow checker rejects the second
+        // form, and the entry form is also the one that cannot forget the `first_seen` a
+        // fresh subject needs.
+        self.subjects
+            .entry(m.signer)
+            .and_modify(|st| st.last = fix)
+            .or_insert_with(|| SubjectState {
+                last: fix,
+                first_seen: t,
+                streak: BTreeMap::new(),
+                history: BTreeMap::new(),
+            });
+        emit(ctx, me.node, &out);
+        out
+    }
+
+    /// The same call for a host with neither perception nor envelope extras.
+    pub fn on_message(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+        env: &dyn LocalEnvironment,
+    ) -> TsVerdict {
+        let x = CrossCheckInputs::none();
+        self.check(ctx, me, m, env, &x)
+    }
+
+    /// What one call costs the node's CPU.
+    ///
+    /// Not measured: declared on the card as a placeholder, as the legacy suite's is.
+    #[must_use]
+    pub fn cost(&self) -> DetectorCost {
+        DetectorCost {
+            per_message_us: 25.0,
+        }
+    }
+
+    /// Applies the streak gate and orders the fired set, highest score first.
+    ///
+    /// The gate is the legacy suite's: a check fires only after `min_consecutive` messages
+    /// in a row from the same signer scored at or above 1. A single GNSS outlier is one
+    /// sample; a real kinematic attack persists. A check that did not *run* does not reset
+    /// the streak either, because an absent input is not a passing check.
+    fn fire(&mut self, m: &ObservedMessage, t: SimTime, out: &mut TsVerdict) {
+        let min = self.params.min_consecutive;
+        let subject = out.subject.clone();
+        let entry = self
+            .subjects
+            .entry(m.signer)
+            .or_insert_with(|| SubjectState {
+                last: Fix {
+                    x: m.claimed_x_m,
+                    y: m.claimed_y_m,
+                    speed: m.claimed_speed_mps,
+                    heading: m.claimed_heading_rad,
+                    conf: m.claimed_pos_confidence_m,
+                    at: t,
+                    generation_time: m.claimed_generation_time,
+                    critical: claims_critical(m),
+                },
+                first_seen: t,
+                streak: BTreeMap::new(),
+                history: BTreeMap::new(),
+            });
+        let mut fired: Vec<TsObservation> = Vec::new();
+        let p = &self.params;
+        match p.fusion {
+            Fusion::Consecutive => {
+                for (check, score) in &out.scores {
+                    let run = entry.streak.entry(*check).or_insert(0);
+                    *run = if *score >= 1.0 { *run + 1 } else { 0 };
+                    if *run >= min {
+                        fired.push(TsObservation {
+                            check: *check,
+                            score: *score,
+                            subject: subject.clone(),
+                            at: t,
+                        });
+                    }
+                }
+            }
+            Fusion::WindowedMean => {
+                let cutoff = t.saturating_sub(v2xw_core::time::secs_to_ns(p.mean_window_s));
+                let keep = p.mean_history as usize;
+                for (check, score) in &out.scores {
+                    let h = entry.history.entry(*check).or_default();
+                    while h.front().is_some_and(|(at, _)| *at < cutoff) {
+                        h.pop_front();
+                    }
+                    let n = h.len() as f64 + 1.0;
+                    let mean = (h.iter().map(|(_, v)| *v).sum::<f64>() + *score) / n;
+                    h.push_back((t, *score));
+                    while h.len() > keep {
+                        h.pop_front();
+                    }
+                    if mean >= 1.0 {
+                        fired.push(TsObservation {
+                            check: *check,
+                            score: mean,
+                            subject: subject.clone(),
+                            at: t,
+                        });
+                    }
+                }
+            }
+            Fusion::LeakyBucket => {
+                // The lowest factor over the checks that ran, on the CaTCh scale
+                // f = 1 − s·(1 − θ), so that a score of 1 is the factor θ.
+                let theta = p.catch_threshold;
+                let f_min = out
+                    .scores
+                    .values()
+                    .map(|s| (1.0 - s * (1.0 - theta)).clamp(0.0, 1.0))
+                    .fold(1.0, f64::min);
+                let expiry = t.saturating_sub(v2xw_core::time::secs_to_ns(p.bucket_expiry_s));
+                // Removal by key: no other pseudonym's level moves (F2MD D6).
+                self.buckets.retain(|k, b| *k == m.signer || b.at >= expiry);
+                let b = self
+                    .buckets
+                    .entry(m.signer)
+                    .or_insert(Bucket { level: 0.0, at: t });
+                let penalty = p.bucket_coeff * math::exp(p.bucket_exponent * (1.0 - f_min));
+                b.level = (b.level + penalty - p.bucket_leak).max(0.0);
+                b.at = t;
+                if b.level > p.bucket_threshold {
+                    for (check, score) in &out.scores {
+                        if *score >= 1.0 {
+                            fired.push(TsObservation {
+                                check: *check,
+                                score: *score,
+                                subject: subject.clone(),
+                                at: t,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        fired.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(core::cmp::Ordering::Equal)
+                .then(a.check.cmp(&b.check))
+        });
+        out.fired = fired;
+    }
+}
+
+/// The speed confidence a frame broadcasts, floored.
+fn speed_conf(frame: Option<&FrameExtras>, floor: f64) -> f64 {
+    frame
+        .and_then(|f| f.speed_confidence_mps)
+        .unwrap_or(0.0)
+        .max(floor)
+}
+
+impl Model for Ts103759Suite {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+/// Writes a `det.observation` for each fired check.
+fn emit(ctx: &mut dyn ThreatCtx, node: v2xw_core::ids::NodeId, v: &TsVerdict) {
+    for o in &v.fired {
+        ctx.emit(DetObservation::new(
+            o.at,
+            node,
+            o.check.as_str(),
+            &o.subject,
+            o.score,
+        ));
+    }
+}
+
+/// A card row for an acceptance range, with the derivation's per-law reaches in its note.
+fn art_param(name: &str, value: f64, env: RadioEnvironment, in_force: bool) -> Parameter {
+    use serde_json::json;
+    let rows: Vec<String> = ART_DERIVATION
+        .iter()
+        .filter(|r| r.environment == env)
+        .map(|r| format!("{} ({}) {} m", r.law, r.tier, r.reach_m))
+        .collect();
+    let what = if in_force {
+        format!(
+            "the range in force: max_plausible_range_m when set, else art_{}_m",
+            env.label()
+        )
+    } else {
+        format!("the {} acceptance range", env.label())
+    };
+    let mut q = Parameter::new(
+        name,
+        "m",
+        json!(value),
+        Source {
+            kind: SourceKind::Code,
+            reference: "crates/v2xw-radio link budget (prop::friis_loss_db, \
+                        LogDistancePreset::for_environment, prop::tr37885_*_los_db; \
+                        phy::SensitivityPreset::MeasuredObu at Mcs::R6Qpsk12), \
+                        derived from this engine's link budget per environment instead of F2MD's 420 m (Veins, 20 mW)"
+                .to_string(),
+            accessed: Some(crate::cards::LEGACY_ACCESSED.to_string()),
+            note: Some(format!(
+                "{what}; 23 dBm, 3 dBi at each end, −92 dBm, 3σ margin, 5.9 GHz; per law in \
+                 {}: {}. Replaces F2MD's 420 m (Veins at 20 mW).",
+                env.label(),
+                rows.join(", ")
+            )),
+        },
+    );
+    q.range = Some(vec![json!(0.0), json!(1.0e6)]);
+    q
+}
+
+/// A card row for a threshold derived from the beacon profile.
+fn derived_param(name: &str, value: f64, rule: &str) -> Parameter {
+    use serde_json::json;
+    Parameter::new(
+        name,
+        "s",
+        json!(value),
+        Source {
+            kind: SourceKind::Code,
+            reference: "beacon timing from the message profile: BSM 100 ms (SAE J2945/1), CAM T_GenCamMin 100 ms (ETSI EN 302 637-2)"
+                .to_string(),
+            accessed: Some(crate::cards::LEGACY_ACCESSED.to_string()),
+            note: Some(format!("{rule}; set explicitly to override")),
+        },
+    )
+}
+
+/// The model card for the suite.
+#[must_use]
+pub fn card(p: &Ts103759Params) -> ModelCard {
+    use serde_json::json;
+    let f2md = crate::cards::code("veins-f2md F2MDParameters.h (detector/f2md-checks)");
+    let ts = standard("ETSI TS 103 759 V2.2.1 (2026-01), misbehaviour observation classes 1–5");
+    let tvt = paper(
+        "Kamel, Kaiser, Jemaa, Cincilla, Urien, 'Feasibility study of misbehavior detection \
+         mechanisms in cooperative intelligent transport systems', IEEE TVT 69(6), 2020 \
+         (F2MD check, aggregation and behavioural constants; F2MDParameters.h as read)",
+    );
+    let catch = paper(
+        "Kamel, Jemaa, Kaiser, Urien, 'CaTCh: a confidence range tolerant misbehavior \
+         detection approach', IEEE WCNC 2019",
+    );
+    let bar_shalom = paper(
+        "Bar-Shalom, Li, Kirubarajan, Estimation with Applications to Tracking and \
+         Navigation, Wiley 2001, §5.4.2 (NIS test) and §6.2.2 (white-noise acceleration); \
+         Wilson and Hilferty, PNAS 17, 1931 (χ² quantile)",
+    );
+    let classes = design(
+        "vehicle classes (v2xw_mobility::classes, SUMO vType defaults): the \
+         largest accel_mps2 (6.0) and emergency_decel_mps2 (10.0) over the classes",
+    );
+    let mut card = ModelCard::new(
+        MODEL_ID,
+        Family::Detector,
+        "1.0.0",
+        "The ETSI TS 103 759 observation classes 1–5 with F2MD-style check semantics and \
+         the perception cross-check, normalised so that a score of ≈ 1 is the firing \
+         threshold. Runs alongside the legacy twelve, not instead of them.",
+    );
+    card.tier = vec![Tier::Medium, Tier::High];
+    card.equations = vec![
+        Equation::new("range plausibility", "|claim − self| / ART(environment)"),
+        Equation::new(
+            "acceptance range (ART)",
+            "ART(env) = max over the tier-default LOS laws L of d solving \
+             P_tx + 2·G − PL_L(d) + 3·σ_L = S, with P_tx 23 dBm, G 3 dBi, S −92 dBm \
+             (ART_DERIVATION, recomputed from v2xw-radio by tests/ts103759.rs)",
+        ),
+        Equation::new("speed plausibility", "|v_claimed| / max_plausible_speed"),
+        Equation::new(
+            "acceleration plausibility",
+            "|Δv/Δt| / (max_accel if Δv ≥ 0 else max_decel)",
+        ),
+        Equation::new(
+            "position consistency",
+            "Δs / (max_plausible_speed·Δt + Z·max(conf, floor))",
+        ),
+        Equation::new(
+            "position/speed consistency",
+            "|Δs − v̄·Δt| / (MAX_MGT_RNG + Z·max(conf, floor))",
+        ),
+        Equation::new(
+            "speed consistency",
+            "|Δv| / (max(MAX_MGT_RNG_UP, a_max)·Δt if Δv ≥ 0 else \
+             max(MAX_MGT_RNG_DOWN, b_max)·Δt), a_max and b_max from the vehicle classes",
+        ),
+        Equation::new(
+            "position/heading consistency",
+            "angle(heading_claimed, bearing(prev → now)) / MAX_HEADING_CHANGE, for \
+             Δt ≤ POS_HEADING_TIME and Δs > Z·max(conf, floor)",
+        ),
+        Equation::new(
+            "beacon frequency",
+            "(T_min − jitter_tolerance) / Δt_rx, from the message profile (BSM: \
+             (100 − 25) ms) — fires when the gap is shorter than the conforming minimum",
+        ),
+        Equation::new(
+            "interval windows",
+            "MAX_TIME_DELTA = 3.1·T_max, MAX_SA_TIME = 2.1·T_max, T_max the profile's \
+             longest conforming interval (F2MD's 3.1 s and 2.1 s at 1 Hz)",
+        ),
+        Equation::new(
+            "sudden appearance",
+            "on a first sighting after MAX_SA_TIME of listening and inside MAX_SA_RANGE: \
+             sudden_appearance_m / |claim − self|",
+        ),
+        Equation::new(
+            "map position plausibility",
+            "distance to nearest known road / MAX_DISTANCE_FROM_ROUTE",
+        ),
+        Equation::new(
+            "perception cross-check (class 4)",
+            "for a claim inside the sensor's coverage: \
+             min(d(claim, nearest sensed object) / (Z·max(conf, floor)), hard_fail); \
+             saturates at hard_fail when nothing is sensed at all",
+        ),
+        Equation::new(
+            "intersection (class 5)",
+            "MAX_PROXIMITY_DISTANCE / d(claim, nearest other station's claim in \
+             MAX_DELTA_INTER)",
+        ),
+        Equation::new(
+            "CPM consistency (class 5)",
+            "(uncorroborated visible objects / visible objects) / cpm_unmatched_fraction",
+        ),
+        Equation::new(
+            "Kalman consistency (class 2)",
+            "CV filter per sender and axis, x = (p, v), Q = q·[[Δt³/3, Δt²/2], [Δt²/2, Δt]], \
+             z = (x, v cos h, y, v sin h), R = diag(max(conf, 4 m)², max(σ_v, 1 m/s)² + \
+             (v·σ_h)²); score = Σ NIS over the last n messages / χ²(4n, z_gate) \
+             (Wilson–Hilferty)",
+        ),
+        Equation::new(
+            "position/speed envelope (class 2)",
+            "[d_min, d_max] reachable from v₀ to v₁ in Δt under a_env, b_env, v_max; \
+             score = max(d_min·sinc(θ/2) − Δs, Δs − d_max, 0) / (MAX_MGT_RNG + Z·√(c₀² + c₁²))",
+        ),
+        Equation::new(
+            "PositionSpeedMaxConsistency (class 2)",
+            "max(max(v) − Δs/Δt − (b_env + m)·Δt, Δs/Δt − min(v) − (a_env + m)·Δt, 0) / \
+             ((MAX_MGT_RNG + Z·√(c₀² + c₁²))/Δt)",
+        ),
+        Equation::new(
+            "box intersection (class 5)",
+            "max over other claims within W of area(B ∩ B')/min(area) · (W − age)/W, B' moved \
+             on by v'·age along h', and over the receiver's own footprint; / box_overlap_threshold",
+        ),
+        Equation::new(
+            "CaTCh scoring (scoring = catch)",
+            "score = (1 − f)/(1 − θ), f the plausible share of the confidence disc or interval",
+        ),
+        Equation::new(
+            "windowed mean (fusion = windowed-mean)",
+            "fires when mean(current score, ≤ mean_history earlier within mean_window_s) ≥ 1",
+        ),
+        Equation::new(
+            "leaky bucket (fusion = leaky-bucket)",
+            "TMO ← max(0, TMO + coeff·e^(exponent·(1 − f_min)) − leak), f_min = min over checks \
+             of 1 − s·(1 − θ); the failing checks fire while TMO > bucket_threshold",
+        ),
+    ];
+    card.parameters = vec![
+        art_param("max_plausible_range_m", p.art_m(), p.environment, true),
+        {
+            let mut q = Parameter::new(
+                "environment",
+                "-",
+                json!(p.environment.label()),
+                design(
+                    "the plausible-range threshold (ART) per environment, from this engine's link \
+                     budget instead of F2MD's 420 m (Veins, 20 mW)",
+                ),
+            );
+            q.range = Some(
+                RadioEnvironment::ALL
+                    .iter()
+                    .map(|e| json!(e.label()))
+                    .collect(),
+            );
+            q
+        },
+        art_param(
+            "art_highway_m",
+            p.acceptance_ranges.highway_m,
+            RadioEnvironment::Highway,
+            false,
+        ),
+        art_param(
+            "art_rural_m",
+            p.acceptance_ranges.rural_m,
+            RadioEnvironment::Rural,
+            false,
+        ),
+        art_param(
+            "art_suburban_m",
+            p.acceptance_ranges.suburban_m,
+            RadioEnvironment::Suburban,
+            false,
+        ),
+        art_param(
+            "art_urban_m",
+            p.acceptance_ranges.urban_m,
+            RadioEnvironment::Urban,
+            false,
+        ),
+        Parameter::new(
+            "max_plausible_speed_mps",
+            "m/s",
+            json!(p.max_plausible_speed_mps),
+            f2md.clone(),
+        ),
+        Parameter::new(
+            "max_plausible_accel_mps2",
+            "m/s^2",
+            json!(p.max_plausible_accel_mps2),
+            classes.clone(),
+        ),
+        Parameter::new(
+            "max_plausible_decel_mps2",
+            "m/s^2",
+            json!(p.max_plausible_decel_mps2),
+            classes.clone(),
+        ),
+        Parameter::new(
+            "max_confidence_m",
+            "m",
+            json!(p.max_confidence_m),
+            f2md.clone(),
+        ),
+        Parameter::new(
+            "max_payload_bytes",
+            "B",
+            json!(p.max_payload_bytes),
+            standard("IEEE 802.11 maximum MSDU, 2 304 B"),
+        ),
+        {
+            let mut q = Parameter::new(
+                "beacon_profile",
+                "-",
+                json!(p.beacon_profile.id),
+                standard(
+                    "SAE J2945/1 (BSM 100 ms, vMinITT 100 ms, vMaxITT 600 ms) and EN 302 637-2 V1.4.1 §6.1.3 (T_GenCamMin \
+                     100 ms, T_GenCamMax 1 s)",
+                ),
+            );
+            q.range = Some(BeaconProfile::ALL.iter().map(|b| json!(b.id)).collect());
+            q
+        },
+        Parameter::new(
+            "beacon_min_interval_s",
+            "s",
+            json!(p.beacon_profile.min_interval_s),
+            standard("SAE J2945/1 vMinITT / EN 302 637-2 V1.4.1 §6.1.3 T_GenCamMin (100 ms)"),
+        ),
+        {
+            let mut q = Parameter::new(
+                "beacon_max_interval_s",
+                "s",
+                json!(p.beacon_profile.max_interval_s),
+                standard(
+                    "SAE J2945/1 vMaxITT (600 ms, UNVERIFIED) / \
+                     EN 302 637-2 V1.4.1 §6.1.3 T_GenCamMax (1 s)",
+                ),
+            );
+            q.calibration = Some(
+                "confirm vMaxITT against the J2945/1 text once it is cached; the windows \
+                 scale with it."
+                    .to_string(),
+            );
+            q
+        },
+        {
+            let mut q = Parameter::new(
+                "beacon_jitter_tolerance_s",
+                "s",
+                json!(p.beacon_profile.jitter_tolerance_s),
+                Source {
+                    kind: SourceKind::TodoCalibrate,
+                    reference: "v2xw_msg::GenerationTiming (10 ms hand-off jitter, ns-3 \
+                                BsmApplication TxMaxDelay) plus a 15 ms channel-access \
+                                allowance"
+                        .to_string(),
+                    accessed: Some(crate::cards::LEGACY_ACCESSED.to_string()),
+                    note: Some("the F2MD 1 Hz profile's 0.1 s is F2MD's own 1 − 0.9 s".to_string()),
+                },
+            );
+            q.calibration = Some(
+                "measure the honest BSM inter-arrival distribution at the receiver in a \
+                 dense benign run (CBR near the DCC thresholds) and set the tolerance so \
+                 that fewer than 1 in 10^4 consecutive gap pairs fall under the minimum."
+                    .to_string(),
+            );
+            q
+        },
+        derived_param(
+            "max_time_delta_s",
+            p.time_delta_s(),
+            "MAX_TIME_DELTA_INTERVALS (3.1, F2MD MAX_TIME_DELTA at 1 Hz) × \
+             beacon_max_interval_s",
+        ),
+        Parameter::new("mgt_rng_m", "m", json!(p.mgt_rng_m), f2md.clone()),
+        Parameter::new(
+            "mgt_rng_up_mps",
+            "m/s per s",
+            json!(p.mgt_rng_up_mps),
+            f2md.clone(),
+        ),
+        Parameter::new(
+            "mgt_rng_down_mps",
+            "m/s per s",
+            json!(p.mgt_rng_down_mps),
+            f2md.clone(),
+        ),
+        Parameter::new(
+            "max_heading_change_deg",
+            "deg",
+            json!(p.max_heading_change_deg),
+            f2md.clone(),
+        ),
+        Parameter::new(
+            "pos_heading_time_s",
+            "s",
+            json!(p.pos_heading_time_s),
+            f2md.clone(),
+        ),
+        derived_param(
+            "min_beacon_interval_s",
+            p.min_interval_s(),
+            "beacon_min_interval_s − beacon_jitter_tolerance_s (F2MD MAX_BEACON_FREQUENCY \
+             0.9 s is the same rule at 1 Hz)",
+        ),
+        derived_param(
+            "max_sa_time_s",
+            p.sa_time_s(),
+            "MAX_SA_TIME_INTERVALS (2.1, F2MD MAX_SA_TIME at 1 Hz) × beacon_max_interval_s",
+        ),
+        Parameter::new("max_sa_range_m", "m", json!(p.max_sa_range_m), f2md.clone()),
+        {
+            let mut q = Parameter::new(
+                "sudden_appearance_m",
+                "m",
+                json!(p.sudden_appearance_m),
+                Source {
+                    kind: SourceKind::TodoCalibrate,
+                    reference:
+                        "veins-f2md F2MDParameters.h gives MAX_SA_RANGE and MAX_SA_TIME for \
+                                SuddenAppearence but not the predicate"
+                            .to_string(),
+                    accessed: Some(crate::cards::LEGACY_ACCESSED.to_string()),
+                    note: Some(
+                        "the default is the F2MD longitudinal proximity box \
+                         (MAX_PROXIMITY_RANGE_L = 30 m), which is a stand-in for the \
+                         distance inside which a first sighting is implausible"
+                            .to_string(),
+                    ),
+                },
+            );
+            q.calibration = Some(
+                "re-implement the published description of F2MD's sudden-appearance check \
+                 (behaviour only: the F2MD source is GPL and all rights reserved, and is \
+                 not to be copied) and replace this with it; failing that, measure the \
+                 distribution of first-sighting distances in the benign reference run and \
+                 set the threshold below its lower tail."
+                    .to_string(),
+            );
+            q
+        },
+        Parameter::new(
+            "max_distance_from_route_m",
+            "m",
+            json!(p.max_distance_from_route_m),
+            f2md.clone(),
+        ),
+        Parameter::new(
+            "proximity_distance_m",
+            "m",
+            json!(p.proximity_distance_m),
+            f2md.clone(),
+        ),
+        Parameter::new(
+            "proximity_range_l_m",
+            "m",
+            json!(p.proximity_range_l_m),
+            f2md.clone(),
+        ),
+        Parameter::new(
+            "max_delta_inter_s",
+            "s",
+            json!(p.max_delta_inter_s),
+            f2md.clone(),
+        ),
+        legacy_param(
+            "z_threshold",
+            "-",
+            json!(p.z_threshold),
+            LEGACY_PY,
+            "PipelineConfig.detector_z_threshold",
+        ),
+        legacy_param(
+            "gate_floor_m",
+            "m",
+            json!(p.gate_floor_m),
+            LEGACY_PY,
+            "PipelineConfig.consistency_threshold_m",
+        ),
+        legacy_param(
+            "hard_fail_score",
+            "-",
+            json!(p.hard_fail_score),
+            LEGACY_PY,
+            "the detection pass (1.5)",
+        ),
+        legacy_param(
+            "min_consecutive",
+            "-",
+            json!(p.min_consecutive),
+            LEGACY_PY,
+            "PipelineConfig.detector_min_consec",
+        ),
+        {
+            let mut q = Parameter::new(
+                "cpm_unmatched_fraction",
+                "-",
+                json!(p.cpm_unmatched_fraction),
+                Source {
+                    kind: SourceKind::TodoCalibrate,
+                    reference: "no source gives a CPM consistency threshold".to_string(),
+                    accessed: Some(crate::cards::LEGACY_ACCESSED.to_string()),
+                    note: Some(
+                        "1.0 fires only when none of a CPM's visible objects is corroborated, \
+                         which is the one fraction that is a structural statement rather than \
+                         a chosen number"
+                            .to_string(),
+                    ),
+                },
+            );
+            q.range = Some(vec![json!(0.0), json!(1.0)]);
+            q.calibration = Some(
+                "measure the corroboration rate of benign CPMs against the perception model at each scenario density, and set the fraction above \
+                 the benign tail; the perception model's own detection-probability curve is \
+                 itself uncalibrated (§12.1), so this cannot be settled before that one is."
+                    .to_string(),
+            );
+            q
+        },
+        Parameter::new(
+            "kalman_pos_floor_m",
+            "m",
+            json!(p.kalman_pos_floor_m),
+            tvt.clone(),
+        ),
+        Parameter::new(
+            "kalman_speed_floor_mps",
+            "m/s",
+            json!(p.kalman_speed_floor_mps),
+            tvt.clone(),
+        ),
+        Parameter::new(
+            "kalman_conf_divisor",
+            "-",
+            json!(p.kalman_conf_divisor),
+            design(
+                "models/gnss gauss-markov card: reported confidence = RAYLEIGH_95 · √(σ² + σ_b²)",
+            ),
+        ),
+        Parameter::new(
+            "kalman_q_m2ps3",
+            "m^2/s^3",
+            json!(p.kalman_q_m2ps3),
+            bar_shalom.clone(),
+        ),
+        Parameter::new(
+            "kalman_gate_z",
+            "-",
+            json!(p.kalman_gate_z),
+            bar_shalom.clone(),
+        ),
+        Parameter::new(
+            "kalman_window",
+            "messages",
+            json!(p.kalman_window),
+            bar_shalom.clone(),
+        ),
+        Parameter::new("envelope_margin_m", "m", json!(p.envelope_margin_m), f2md),
+        Parameter::new(
+            "psmax_margin_mps2",
+            "m/s^2",
+            json!(p.psmax_margin_mps2),
+            tvt.clone(),
+        ),
+        Parameter::new(
+            "box_overlap_threshold",
+            "-",
+            json!(p.box_overlap_threshold),
+            tvt.clone(),
+        ),
+        {
+            let mut q = Parameter::new("scoring", "-", json!(p.scoring.label()), catch.clone());
+            q.range = Some(vec![json!("threshold"), json!("catch")]);
+            q
+        },
+        Parameter::new(
+            "catch_threshold",
+            "-",
+            json!(p.catch_threshold),
+            catch.clone(),
+        ),
+        {
+            let mut q = Parameter::new("fusion", "-", json!(p.fusion.label()), tvt.clone());
+            q.range = Some(vec![
+                json!("consecutive"),
+                json!("windowed-mean"),
+                json!("leaky-bucket"),
+            ]);
+            q
+        },
+        Parameter::new(
+            "mean_history",
+            "messages",
+            json!(p.mean_history),
+            tvt.clone(),
+        ),
+        Parameter::new("mean_window_s", "s", json!(p.mean_window_s), tvt.clone()),
+        Parameter::new("bucket_coeff", "-", json!(p.bucket_coeff), tvt.clone()),
+        Parameter::new(
+            "bucket_exponent",
+            "-",
+            json!(p.bucket_exponent),
+            tvt.clone(),
+        ),
+        Parameter::new("bucket_leak", "-", json!(p.bucket_leak), tvt.clone()),
+        Parameter::new(
+            "bucket_threshold",
+            "-",
+            json!(p.bucket_threshold),
+            tvt.clone(),
+        ),
+        Parameter::new(
+            "bucket_expiry_s",
+            "s",
+            json!(p.bucket_expiry_s),
+            design("bucket removal after the 10 s window"),
+        ),
+    ];
+    card.sources = vec![
+        ts.clone(),
+        design("local misbehaviour detection: new detector families"),
+        crate::cards::code(
+            "veins-f2md F2MDParameters.h (detector/ts103759-observations, detector/f2md-checks)",
+        ),
+        design("the perception model the class-4 check reads"),
+        standard("ETSI TR 103 460 (misbehaviour-detection taxonomy: ART, eART, CoE, MPP, SAW)"),
+        standard("ETSI TS 103 324 (collective perception, the class-5 CPM check's subject)"),
+        tvt.clone(),
+        catch.clone(),
+        bar_shalom.clone(),
+    ];
+    card.assumptions = vec![
+        "Every input is belief: the node's own position estimate, its own clock, its own \
+         map, its own sensors and the messages it verified (invariant I-T2)."
+            .to_string(),
+        "A score of ≈ 1 is the firing threshold for every check, as in the legacy suite, \
+         so the two suites' fingerprints are comparable check by check."
+            .to_string(),
+        "A check whose input this receiver does not have is absent from the verdict, not \
+         scored zero, and the skip is counted."
+            .to_string(),
+        "The four verification states are handled separately: a deferred verification \
+         scores nothing at all."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "The TS's DENM-specific observations (the 500 ms EEBL plausibility window, the \
+         detection-time consistency at 80 % of the minimum threshold, the same-event \
+         correlation distances of 1 km and 100 m) are not implemented \
+         here: they need the DENM event fields, which ObservedKind carries only as a cause \
+         code. The legacy suite's denmPlausibility check covers the speed contradiction."
+            .to_string(),
+        "The TS's event-trust threshold (ETR ≥ TrustThreshold) is left to the deployment, \
+         as the TS does; it is todo-calibrate here."
+            .to_string(),
+        "Class 3 reads the map and the certificate region. Signal state is part of the \
+         class-3 LDM in the TS and does not reach a detector here: SPaT is encoded \
+         (v2xw_msg::j2735::spat) and broadcast (v2xw_node::rsu), but crate::obs carries no \
+         signal-state belief, so a false SPaT from a compromised road-side unit \
+         (crate::attack_rsu) cannot be cross-checked. Adding it means a LocalSignalState \
+         trait beside LocalEnvironment, on the same declared-capability footing."
+            .to_string(),
+        "The class-4 cross-check needs a perception model. With NoPerception it runs on \
+         nothing, and class4_skipped_no_perception is the count that says so; a run that \
+         reports a class-4 recall without reading that counter is reporting nothing."
+            .to_string(),
+        "The F2MD checks are re-implemented from the veins-f2md F2MDParameters.h constants and the published descriptions; no F2MD source was used. The scores are \
+         normalised on this crate's convention rather than F2MD's own, so a threshold \
+         matches but a score does not compare digit for digit with an F2MD run."
+            .to_string(),
+        "The acceptance range is the line-of-sight reach of the longest-reaching \
+         tier-default law. In urban and suburban areas that is TR 37.885's urban LOS law, \
+         whose 16.7 dB per decade puts the range near 42 km, so range plausibility is close \
+         to inert there: in a city the obstacle stack, not the range, ends a link. The \
+         range includes no fast-fading upside (a Nakagami up-fade at the high tier), and it \
+         is taken at 23 dBm; a fleet radiating the US 33 dBm EIRP ceiling reaches about \
+         7 dB further and needs art_*_m raised."
+            .to_string(),
+        "The beacon-timing thresholds assume every sender in range uses the receiver's \
+         beacon_profile; a mixed BSM and CAM neighbourhood shares the 100 ms minimum but \
+         not the longest interval."
+            .to_string(),
+        "The per-message CPU cost is a placeholder, not a measurement.".to_string(),
+        "The class 2 and class 5 checks are re-implemented from Kamel et al. TVT 2020, WCNC 2019 and \
+         Bar-Shalom et al. 2001. F2MD was read for behaviour only and no code was copied. \
+         The Kalman check divides the broadcast position confidence by kalman_conf_divisor \
+         (2.4477, this engine's 95 % radius; F2MD uses the confidence as one σ), and the \
+         envelope tolerance uses it undivided. The box check needs the \
+         frame's vehicle size (FrameExtras) and is unchecked without it."
+            .to_string(),
+        "The suite is not yet selectable in detection.local, so its settings (including \
+         fusion and scoring) reach it only through Ts103759Params::apply / apply_label."
+            .to_string(),
+    ];
+    card.determinism = Determinism {
+        uses_rng: false,
+        rng_domains: Vec::new(),
+    };
+    card.validation = Validation {
+        status: ValidationStatus::UnitTested,
+        references: vec![ts],
+        tests: vec![
+            "ts103759::a_deferred_verification_scores_nothing_at_all".to_string(),
+            "ts103759::the_four_verification_states_produce_four_outcomes".to_string(),
+            "ts103759::the_perception_cross_check_catches_a_ghost_inside_the_field_of_view"
+                .to_string(),
+            "ts103759::a_claim_outside_the_sensor_coverage_is_unchecked_not_passed".to_string(),
+            "ts103759::benign_traffic_stays_quiet".to_string(),
+            "ts103759::an_honest_10_hz_bsm_sender_raises_no_beacon_frequency_event".to_string(),
+            "ts103759::a_20_hz_sender_raises_beacon_frequency".to_string(),
+            "ts103759::the_1_hz_profile_reproduces_f2md".to_string(),
+            "ts103759::the_acceptance_range_is_the_engine_link_budget".to_string(),
+            "ts103759::an_honest_los_highway_link_never_fires_and_twice_the_range_does".to_string(),
+            "ts103759_kalman_box_fusion::a_slow_drift_the_pairwise_checks_miss_is_caught_by_the_kalman_check"
+                .to_string(),
+            "ts103759_kalman_box_fusion::boxes_side_by_side_and_in_a_tight_queue_do_not_fire_and_ghosts_do"
+                .to_string(),
+            "ts103759_kalman_box_fusion::an_honest_emergency_stop_is_not_flagged".to_string(),
+            "ts103759_kalman_box_fusion::the_leaky_bucket_keeps_each_level_on_its_own_pseudonym".to_string(),
+            "ts103759_kalman_box_fusion::honest_gauss_markov_traffic_stays_under_the_stated_bounds".to_string(),
+        ],
+    };
+    card.cost = Some(v2xw_core::card::CostClass {
+        per_call_us: Some(25.0),
+        notes: Some(
+            "Placeholder: twenty-three scalar checks, one map query and one nearest-object \
+             query per message. Not measured."
+                .to_string(),
+        ),
+    });
+    card
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_check_parses_and_belongs_to_exactly_one_class() {
+        assert_eq!(Ts103759Check::ALL.len(), 23);
+        for c in Ts103759Check::ALL {
+            assert_eq!(Ts103759Check::parse(c.as_str()), Some(c));
+        }
+        assert_eq!(Ts103759Check::parse("positionJump"), None);
+        let mut total = 0;
+        for class in ObservationClass::ALL {
+            total += Ts103759Check::in_class(class).len();
+        }
+        assert_eq!(total, Ts103759Check::ALL.len());
+        // The five observation classes are 1..=5, and the envelope group is not one.
+        assert_eq!(ObservationClass::ImplausibleValues.number(), 1);
+        assert_eq!(ObservationClass::OtherStations.number(), 5);
+        assert_eq!(ObservationClass::Envelope.number(), 0);
+    }
+
+    #[test]
+    fn each_class_has_at_least_one_check() {
+        for class in ObservationClass::ALL {
+            assert!(
+                !Ts103759Check::in_class(class).is_empty(),
+                "class {} has no check",
+                class.number()
+            );
+        }
+    }
+
+    #[test]
+    fn the_card_validates_and_every_default_is_cited_or_planned() {
+        let c = card(&Ts103759Params::default());
+        c.validate().unwrap();
+        c.check_api_version().unwrap();
+        for p in &c.parameters {
+            let cited = p.source.kind != SourceKind::TodoCalibrate;
+            let planned = p.calibration.as_ref().is_some_and(|s| !s.trim().is_empty());
+            assert!(cited || planned, "{}", p.name);
+        }
+        // Every threshold the suite reads is declared (invariant I-C3).
+        for name in [
+            "max_plausible_range_m",
+            "max_plausible_speed_mps",
+            "max_plausible_accel_mps2",
+            "max_plausible_decel_mps2",
+            "max_confidence_m",
+            "max_payload_bytes",
+            "max_time_delta_s",
+            "mgt_rng_m",
+            "mgt_rng_up_mps",
+            "mgt_rng_down_mps",
+            "max_heading_change_deg",
+            "pos_heading_time_s",
+            "min_beacon_interval_s",
+            "max_sa_time_s",
+            "max_sa_range_m",
+            "sudden_appearance_m",
+            "max_distance_from_route_m",
+            "proximity_distance_m",
+            "proximity_range_l_m",
+            "max_delta_inter_s",
+            "z_threshold",
+            "gate_floor_m",
+            "hard_fail_score",
+            "min_consecutive",
+            "cpm_unmatched_fraction",
+            "environment",
+            "art_highway_m",
+            "art_rural_m",
+            "art_suburban_m",
+            "art_urban_m",
+            "beacon_profile",
+            "beacon_min_interval_s",
+            "beacon_max_interval_s",
+            "beacon_jitter_tolerance_s",
+            "fusion",
+            "scoring",
+        ] {
+            assert!(
+                c.parameters.iter().any(|p| p.name == name),
+                "undeclared parameter {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cited_defaults_are_the_numbers_04_models_gives() {
+        let p = Ts103759Params::default();
+        // The acceptance range is this engine's own, not Veins' 420 m.
+        assert_eq!(p.max_plausible_range_m, None);
+        assert_eq!(p.environment, RadioEnvironment::Highway);
+        assert_eq!(p.art_m(), AcceptanceRanges::DERIVED.highway_m);
+        assert_eq!(p.max_plausible_speed_mps, 40.0);
+        // The vehicle classes' limits, not F2MD's 3 / 4.5 (a fix of F2MD's flag
+        // an honest emergency stop); F2MD's are the f2md_kinematics preset.
+        assert_eq!(p.max_plausible_accel_mps2, 6.0);
+        assert_eq!(p.max_plausible_decel_mps2, 10.0);
+        let f = Ts103759Params::default().f2md_kinematics();
+        assert_eq!(f.max_plausible_accel_mps2, 3.0);
+        assert_eq!(f.max_plausible_decel_mps2, 4.5);
+        assert_eq!(p.max_confidence_m, 10.0);
+        // The beacon timing is the BSM's; the 1 Hz profile gives
+        // F2MD's 3.1 / 0.9 / 2.1 s (tests/ts103759.rs::the_1_hz_profile_reproduces_f2md).
+        assert_eq!(p.beacon_profile, BeaconProfile::BSM_J2945_1);
+        assert!((p.time_delta_s() - 1.86).abs() < 1e-12);
+        assert_eq!(p.mgt_rng_m, 4.0);
+        assert_eq!(p.mgt_rng_up_mps, 2.1);
+        assert_eq!(p.mgt_rng_down_mps, 6.2);
+        assert_eq!(p.max_heading_change_deg, 90.0);
+        assert_eq!(p.pos_heading_time_s, 1.1);
+        assert!((p.min_interval_s() - 0.075).abs() < 1e-12);
+        assert!((p.sa_time_s() - 1.26).abs() < 1e-12);
+        assert_eq!(p.max_sa_range_m, 420.0);
+        assert_eq!(p.max_distance_from_route_m, 2.0);
+        assert_eq!(p.proximity_distance_m, 2.0);
+        assert_eq!(p.proximity_range_l_m, 30.0);
+        assert_eq!(p.max_delta_inter_s, 2.0);
+        assert_eq!(p.max_payload_bytes, 2_304);
+        assert_eq!(p.own_region, None);
+    }
+
+    #[test]
+    fn every_settings_key_is_on_the_card_and_is_read() {
+        let c = card(&Ts103759Params::default());
+        for key in PARAM_KEYS {
+            assert!(
+                c.parameters.iter().any(|p| p.name == key),
+                "{key} is a setting the card does not declare"
+            );
+            let mut p = Ts103759Params::default();
+            assert!(p.apply(key, 7.0), "{key} is listed but not read");
+            assert_ne!(p, Ts103759Params::default(), "{key} changed nothing");
+        }
+        assert!(!Ts103759Params::default().apply("maxPlausibleRange", 1.0));
+    }
+
+    #[test]
+    fn an_explicit_threshold_wins_over_the_derivation_in_either_order() {
+        let mut a = Ts103759Params::default();
+        a.apply("max_plausible_range_m", 900.0);
+        a.apply("art_highway_m", 3_000.0);
+        let mut b = Ts103759Params::default();
+        b.apply("art_highway_m", 3_000.0);
+        b.apply("max_plausible_range_m", 900.0);
+        assert_eq!(a, b);
+        assert_eq!(a.art_m(), 900.0);
+        let mut c = Ts103759Params::default().with_environment(RadioEnvironment::Urban);
+        c.apply("art_urban_m", 3_000.0);
+        assert_eq!(c.art_m(), 3_000.0);
+        let mut d = Ts103759Params::default();
+        d.apply("beacon_jitter_tolerance_s", 0.05);
+        assert!((d.min_interval_s() - 0.05).abs() < 1e-12);
+        d.apply("min_beacon_interval_s", 0.08);
+        assert_eq!(d.min_interval_s(), 0.08);
+    }
+
+    #[test]
+    fn the_acceptance_range_per_environment_is_the_longest_derived_reach() {
+        for env in RadioEnvironment::ALL {
+            let longest = ART_DERIVATION
+                .iter()
+                .filter(|r| r.environment == env)
+                .map(|r| r.reach_m)
+                .fold(0.0, f64::max);
+            assert_eq!(
+                AcceptanceRanges::DERIVED.get(env),
+                longest,
+                "{}",
+                env.label()
+            );
+            assert_eq!(RadioEnvironment::parse(env.label()), Some(env));
+        }
+        for b in BeaconProfile::ALL {
+            assert_eq!(BeaconProfile::parse(b.id), Some(b));
+        }
+    }
+
+    #[test]
+    fn an_unevaluated_check_is_absent_rather_than_zero() {
+        let v = TsVerdict::default();
+        assert_eq!(v.score(Ts103759Check::PerceptionCrossCheck), None);
+        assert!(!v.evaluated(Ts103759Check::PerceptionCrossCheck));
+        let mut v2 = TsVerdict::default();
+        v2.scores.insert(Ts103759Check::PerceptionCrossCheck, 0.0);
+        assert_eq!(v2.score(Ts103759Check::PerceptionCrossCheck), Some(0.0));
+        assert!(v2.evaluated(Ts103759Check::PerceptionCrossCheck));
+    }
+}

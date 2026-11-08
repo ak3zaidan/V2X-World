@@ -1,0 +1,14 @@
+{
+ "generator": "tools/oracle (scms_oracle.emit v1)",
+ "files": {
+  "butterfly.json": "baf3dd6c7a1b6c471803d0298bdf809da3bd6a2c15534a89ccce68b42ab01d1e",
+  "ccm.json": "8949e915c2cf425f494ae56d64fb24a00b9f807255812798fcc2259d176af9c3",
+  "chain_explicit.json": "58f80139861ec9003091db386503805904233f45929834a94e79131ebd9590ba",
+  "ecdsa_1609.json": "e73715b104e78d8efd3de563142884d6dde0cb195c7aae60a53386c96223fbf9",
+  "ecies.json": "b2147242f590938dd8ccb667e71a82dc9f12265bd201d866eec44abecf7e05c2",
+  "ecqv_1609.json": "ee8753a807a74e514c589f40132e0712b972cd89d7748bc8a41fa4c67b24780a",
+  "hashedid.json": "fde70c0fef48fe0f66a860f929ebfc3a650b8e690ab9ad69e11d0f8b7fe4d40a",
+  "linkage.json": "63f52a778a724909bf1a7d16b3292a0c51392a402e49d1961a653019fa1f30ad",
+  "time.json": "64c41b57fffe523769a0179c07a6760e80431fcdf1320004af3d939a1a3a49cc"
+ }
+}

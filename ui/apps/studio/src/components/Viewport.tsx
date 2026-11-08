@@ -1,0 +1,307 @@
+/**
+ * The viewport: one canvas, one `@vwp/viewer` scene, and the toolbar (`[overlays ▾] [camera ▾]
+ * [follow: …]`).
+ *
+ * The click handler is the signature interaction — click a vehicle on the top-down
+ * map and the camera flies down into a chase view of it. `Viewer.pickAtPixel` resolves the hit and
+ * `engine.selectActor` does the rest: `viewer.flyTo`, plus `view.follow` (§6.7), which is also what
+ * subscribes the node to `Telemetry` frames and therefore what populates the OBU HUD.
+ */
+
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { CAMERA_MODES } from "@vwp/viewer";
+
+import { FreeCameraHint } from "./FreeCameraHint.js";
+import { CameraPicker } from "./CameraPicker.js";
+import { ObuHud } from "./ObuHud.js";
+import { OverlayMenu } from "./OverlayMenu.js";
+import { StateLegend } from "./StateLegend.js";
+import { StatsChip } from "./StatsReadout.js";
+import { actorNoun } from "../lib/actorNoun.js";
+import { rsuCount } from "../lib/security.js";
+import { radioBreakdown } from "../lib/format.js";
+import { engine } from "../state/engine.js";
+import { useStudio } from "../state/store.js";
+
+/**
+ * The world build report, for developer mode: lanes, buildings and roadside units.
+ *
+ * The roadside units are the run's radios of kind "rsu" in the node table, which is what the
+ * inspector counts too. It used to print the world's mounting sites, and a unit placed by
+ * `position_m` stands on no site, so the chip said "0 RSUs" beside one (QA, 2026-09-24). An engine
+ * whose Hello does not list its roadside units falls back to the scenario's `actors.rsus`, and with
+ * neither the chip names what it is counting: sites.
+ */
+function WorldChip({ world }: { world: { lanes: number; buildings: number; sites: number } | null }): React.JSX.Element {
+  const scenario = useStudio((s) => s.scenario);
+  const radios = useStudio((s) => s.radios);
+  const roadside = useMemo(() => {
+    void radios;
+    return radioBreakdown(engine.nodes.values()).roadside;
+  }, [radios]);
+  if (!world) {
+    return (
+      <span className="chip" title="World build report from @vwp/viewer" data-testid="world-chip">
+        world loading…
+      </span>
+    );
+  }
+  const rsus = roadside > 0 ? roadside : rsuCount(scenario);
+  return (
+    <span className="chip" title="World build report from @vwp/viewer" data-testid="world-chip">
+      {world.lanes} lanes · {world.buildings} buildings ·{" "}
+      {rsus !== null ? `${rsus} RSU${rsus === 1 ? "" : "s"}` : `${world.sites} RSU sites`}
+    </span>
+  );
+}
+
+/** A handle for Playwright and for notebooks driving the Studio. */
+declare global {
+  interface Window {
+    __vwpStudio?: {
+      engine: typeof engine;
+      selectFirstActor: () => number | null;
+      fps: () => number;
+      actorCount: () => number;
+      /** The page's log lines, newest first — what a test checks for an error the user saw. */
+      logs: () => readonly { level: string; target: string; message: string }[];
+    };
+  }
+}
+
+export function Viewport(): React.JSX.Element {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const theme = useStudio((s) => s.theme);
+  const selectedActor = useStudio((s) => s.selectedActor);
+  const cameraMode = useStudio((s) => s.cameraMode);
+  const selectedNode = useStudio((s) => s.selectedNode);
+  const world = useStudio((s) => s.world);
+  const runState = useStudio((s) => s.run.state);
+  const overlayOpen = useStudio((s) => s.inspectorOpen);
+  const devDetails = useStudio((s) => s.devDetails);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = hostRef.current;
+    if (!canvas || !host) return;
+
+    // Idempotent: `Viewer.mount` returns early for a canvas it already owns, which is what makes
+    // React 19's StrictMode double-invoke harmless. The viewer is deliberately *not* disposed on
+    // cleanup — it outlives this component and belongs to the engine.
+    const viewer = engine.mountViewer(canvas, theme);
+    engine.attachViewer();
+    const detachInput = viewer.cameras.attachInput(canvas);
+
+    // The camera frames the part of the viewport nothing floats over. The OBU HUD is anchored to
+    // the bottom and the toolbar to the top; a chase camera puts its vehicle just below the centre
+    // of the frame, which with a 760 px HUD on a 1,280 x 800 window was under the HUD's header
+    // (`subjectCoveredBy div.hud-head` in the capture tour). Their rectangles become the camera's
+    // view insets, re-measured whenever either changes size or the HUD mounts or unmounts.
+    const syncInsets = (): void => {
+      const box = host.getBoundingClientRect();
+      if (box.height <= 0) return;
+      let top = 0;
+      let bottom = 0;
+      const toolbar = host.querySelector(".viewport-toolbar");
+      if (toolbar) top = Math.max(0, toolbar.getBoundingClientRect().bottom - box.top);
+      host.style.setProperty("--vp-toolbar-bottom", `${Math.round(top)}px`);
+      const hud = host.querySelector('[data-testid="obu-hud"]');
+      if (hud && !hud.classList.contains("docked")) {
+        const r = hud.getBoundingClientRect();
+        // Only a panel that spans the middle of the viewport can cover a centred subject.
+        const spansCentre = r.left < box.left + box.width * 0.6 && r.right > box.left + box.width * 0.4;
+        if (r.height > 0 && spansCentre) bottom = Math.max(0, box.bottom - r.top);
+      }
+      viewer.setViewInsets({ top, bottom });
+    };
+    const observer = new ResizeObserver(() => {
+      viewer.resize(host.clientWidth, host.clientHeight);
+      syncInsets();
+    });
+    observer.observe(host);
+    const watched = new Set<Element>();
+    const watch = (): void => {
+      for (const el of host.querySelectorAll('.viewport-toolbar, [data-testid="obu-hud"]')) {
+        if (!watched.has(el)) {
+          watched.add(el);
+          observer.observe(el);
+        }
+      }
+      syncInsets();
+    };
+    const mutations = new MutationObserver(watch);
+    mutations.observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+    viewer.resize(host.clientWidth, host.clientHeight);
+    watch();
+
+    window.__vwpStudio = {
+      engine,
+      logs: () => useStudio.getState().logs,
+      selectFirstActor: () => {
+        const client = engine.client;
+        if (!client) return null;
+        const poses = client.poses;
+        for (let slot = 0; slot < poses.count; slot++) {
+          if (poses.occupied[slot] === 1) {
+            const id = poses.actorId[slot];
+            void engine.selectActor(id, "chase");
+            return id;
+          }
+        }
+        return null;
+      },
+      fps: () => engine.viewer?.stats.snapshot().fps ?? 0,
+      actorCount: () => engine.client?.poses.count ?? 0,
+    };
+
+    return () => {
+      observer.disconnect();
+      mutations.disconnect();
+      detachInput();
+    };
+    // `theme` is applied through its own effect; re-running this one would re-create the renderer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    engine.viewer?.setTheme(theme);
+  }, [theme]);
+
+  // A paused, finished or stopped run is *in* its newest state: hold the scene there instead of
+  // letting the interpolator glide every vehicle a step past it (measured 1.34 m on Manhattan).
+  useEffect(() => {
+    engine.viewer?.setStreamHeld(runState !== "running" && runState !== "seeking" && runState !== "loading");
+  }, [runState]);
+
+  // Where the pointer went down: a drag (looking round, panning) ends with a click event too, and
+  // released over a vehicle it flew the camera into a chase of it — out of the free camera the
+  // user was steering. A press that moved more than a few pixels is a drag, not a click.
+  const pressAt = useRef<{ x: number; y: number } | null>(null);
+  const onPointerDown = useCallback((ev: React.PointerEvent<HTMLCanvasElement>) => {
+    pressAt.current = { x: ev.clientX, y: ev.clientY };
+  }, []);
+
+  const onClick = useCallback((ev: React.MouseEvent<HTMLCanvasElement>) => {
+    const viewer = engine.viewer;
+    if (!viewer) return;
+    const press = pressAt.current;
+    pressAt.current = null;
+    if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 5) return;
+    const rect = ev.currentTarget.getBoundingClientRect();
+    const hit = viewer.pickAtPixel(ev.clientX - rect.left, ev.clientY - rect.top);
+    // A panel asked for a point on the map (the event editor's "pick on the map"): this click
+    // answers it and does nothing else.
+    const pick = useStudio.getState().mapPick;
+    if (pick !== null) {
+      useStudio.getState().setMapPick(null);
+      if (hit) pick.resolve({ x: hit.point.x, y: hit.point.y });
+      return;
+    }
+    if (!hit) {
+      void engine.selectActor(null);
+      return;
+    }
+    if (hit.kind === "actor") {
+      void engine.selectActor(hit.actorId, "chase");
+    } else if (hit.kind === "site") {
+      void engine.selectNode(hit.nodeId);
+    }
+  }, []);
+
+  const onKeyDown = useCallback((ev: React.KeyboardEvent<HTMLCanvasElement>) => {
+    // Keyboard control for the camera.
+    const index = CAMERA_MODES.indexOf(useStudio.getState().cameraMode);
+    if (ev.key === "[" || ev.key === "]") {
+      // Step past a view the viewer refuses (a street-level view before any vehicle exists, the
+      // roadside view on a map without masts). Trying only the next one left the keys stuck:
+      // Map → Chase was refused, the view stayed on Map, and the next press tried Chase again.
+      const step = ev.key === "]" ? 1 : CAMERA_MODES.length - 1;
+      for (let k = 1; k < CAMERA_MODES.length; k++) {
+        const next = CAMERA_MODES[(index + step * k) % CAMERA_MODES.length];
+        engine.setCameraMode(next);
+        if (useStudio.getState().cameraMode === next) break;
+      }
+      ev.preventDefault();
+    } else if (ev.key === "Escape") {
+      void engine.selectActor(null);
+    }
+  }, []);
+
+  const followLabel = selectedNode !== null ? engine.nodes.get(selectedNode)?.label || `node ${selectedNode}` : null;
+  const following = followLabel ?? (selectedActor !== null ? `${actorNoun(selectedActor)} ${selectedActor}` : null);
+  // The free and roadside cameras keep the selection (its HUD, its overlays) but stay where they are
+  // (`CameraController.setFollowPose` moves the target in every other mode), so there the chip must
+  // not say "Following".
+  const tracks = cameraMode !== "free" && cameraMode !== "rsu";
+
+  return (
+    <div className="viewport" ref={hostRef} data-testid="viewport">
+      <canvas
+        ref={canvasRef}
+        data-testid="viewer-canvas"
+        tabIndex={0}
+        onPointerDown={onPointerDown}
+        onClick={onClick}
+        onKeyDown={onKeyDown}
+        aria-label="Simulation view. Click a vehicle to follow it; [ and ] switch camera views."
+      />
+
+      {/*
+        The viewport shows the simulation, not chrome. Two small groups float over it: what is drawn
+        and how it is looked at on the left (the overlays, the camera and who it follows, as one
+        group), and on the right the key, folded to one chip until it is asked for. The world build
+        report and the renderer's frame counters are for whoever is debugging the page, so they
+        appear in developer mode only.
+      */}
+      <div className="viewport-toolbar">
+        <OverlayMenu />
+
+        <div className="vp-group" role="group" aria-label="Camera" data-testid="camera-group">
+          <CameraPicker />
+          {following ? (
+            <span
+              className="vp-follow on"
+              data-testid="follow-chip"
+              title={tracks ? `The camera follows ${following}` : `${following} is selected; the ${cameraMode === "free" ? "free" : "roadside"} camera does not follow it`}
+            >
+              <span className="vp-follow-label">{tracks ? "Following" : "Selected"}</span> {following}
+              <button
+                type="button"
+                className="vp-clear"
+                onClick={() => void engine.selectActor(null)}
+                aria-label="Stop following"
+                title="Stop following (Esc)"
+                data-testid="follow-clear"
+              >
+                ×
+              </button>
+            </span>
+          ) : null}
+        </div>
+
+        <span className="spacer grow" />
+
+        {devDetails ? (
+          <>
+            <WorldChip world={world} />
+            <StatsChip />
+          </>
+        ) : null}
+        <StateLegend />
+      </div>
+
+      {/*
+        There is no status note floating here any more. It said "Stream is closed. The viewport
+        shows the last decoded state." — the connection token, with no reason and no action, over
+        the picture. The same state is now one sentence with its button in `StatusBanner`, in the
+        flow above the viewport where it does not cover anything.
+      */}
+
+      {cameraMode === "free" ? <FreeCameraHint canvas={canvasRef.current} /> : null}
+      {/* The selected vehicle's HUD, only while something is selected and the vehicle overlay (which
+          says all of it and more, and would cut it in half) is closed. */}
+      {(selectedActor === null && selectedNode === null) || overlayOpen ? null : <ObuHud />}
+    </div>
+  );
+}

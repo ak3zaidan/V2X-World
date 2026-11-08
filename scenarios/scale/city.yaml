@@ -1,0 +1,44 @@
+# The city-scale rung: the scaling ladder's base with the `scale` section on — a 600 m box
+# around Fifth Avenue and 42nd Street driven microscopically, the rest of Midtown driven by
+# the queue network (Eissfeldt 2003, SUMO MESO), and the radio's focus region on the box.
+#
+# Nothing else differs from `base.yaml`: the same world, radio, security path and seed, so
+# a wall-clock comparison against the 1,000 and 10,000 rungs measures the tiering and
+# nothing else. Raise `max_total_vehicles` (or pass `--rate-veh-per-h` with a time-spread
+# demand) to push the fleet; the run report's `scale` block says how many radios were
+# awake and how many dormant.
+#
+# What the tiering costs in fidelity is on the two model cards
+# (`mobility/meso/queue`, `mobility/tiered/meso-micro`) and in `crates/v2xw-engine/src/scale.rs`:
+# outside the box vehicles are queues, not trajectories, and outside the radio margin they
+# have no radio.
+schema: v2xw/scenario/1
+meta:
+  name: scale-city
+  base: base.yaml
+  description: >-
+    The scaling ladder at city scale: a microscopic box in a mesoscopic Midtown, with the
+    radio's focus region on the box and dormant radios beyond its reach.
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 30000
+scale:
+  traffic:
+    model: mobility/tiered/meso-micro
+    region:
+      min_lat_deg: 40.7503
+      min_lon_deg: -73.9826
+      max_lat_deg: 40.7557
+      max_lon_deg: -73.9754
+  radio:
+    # 300 m: in Midtown's street canyons a link that long is non-line-of-sight, and the
+    # TR 37.885 urban NLOS law puts a 20 dBm BSM 300 m away at about -105 dBm, below the
+    # 10 MHz noise floor plus the receiver's noise figure (about -98 dBm). Vehicles beyond
+    # it still drive (as queues) but their radios are off; the radio's own line-of-sight
+    # reach, the default, would keep most of Midtown awake. Inside the margin a queued
+    # vehicle transmits and does not receive (`receive_in_margin: false`, the default).
+    margin_m: 300.0

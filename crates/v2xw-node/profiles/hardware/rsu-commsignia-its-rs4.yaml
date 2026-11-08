@@ -1,0 +1,62 @@
+# First RSU profile.
+id: rsu/commsignia-its-rs4
+kind: rsu
+version: 2026-10-11.1
+purpose: >-
+  Roadside unit (Commsignia ITS-RS4), the most complete public RSU datasheet
+  found. Two figures are carried as the brief states them rather than
+  reconciled: the brief's '<50 usec signing delay' is almost certainly an OCR error for
+  the corroborated cross-vendor SLI97 figure of <50 ms, and the radio block is
+  variant-dependent because the board takes interchangeable radios.
+sources:
+  - {kind: product-brief, ref: "Commsignia ITS-RS4 Product Brief v0.9.3 (2020-04-22)", accessed: 2026-09-18}
+  - {kind: press-release, ref: "Autotalks/Infineon SLI 97 announcement (signing-latency performance profile)", accessed: 2026-09-18}
+  - {kind: deployment-facts, ref: "USDOT CV Pilot deployment facts", accessed: 2026-09-18}
+cpu:
+  cores: {value: 4, source: "\"NXP i.MX 6, quad-core, 792 MHz\" [Commsignia ITS-RS4 Product Brief v0.9.3]"}
+  clock_hz: {value: 7.92e8, source: "[Commsignia ITS-RS4 Product Brief v0.9.3]"}
+  arch: {value: null, status: not-published, calibration: "the brief names the i.MX 6 only; confirm the core type from the NXP i.MX 6 Quad datasheet"}
+  dmips: {value: null, status: not-published, calibration: "not stated; derive from the NXP datasheet or measure with dhrystone on the device"}
+ram_bytes: {value: 2147483648, source: "2 GB DDR3 SDRAM [Commsignia ITS-RS4 Product Brief v0.9.3]"}
+flash_bytes: {value: 4294967296, source: "4 GB eMMC, plus dual micro-SD [Commsignia ITS-RS4 Product Brief v0.9.3]"}
+hsm:
+  kind: secure-element
+  part: {value: "Infineon SLI97 (32-bit security controller, CC EAL5+ platform); secure flash up to 1 MB 'SOLID FLASH', EAL6+", source: "[Commsignia ITS-RS4 Product Brief v0.9.3; Autotalks/Infineon SLI 97 announcement]"}
+  ops:
+    ecdsa-p256-verify:
+      throughput_per_s: {value: 2000, status: lower-bound, source: "brief: '>2000 verifications' — per second is implied by context, not stated numerically in that phrase [Commsignia ITS-RS4 Product Brief v0.9.3]; NIST and Brainpool. The Autotalks/Infineon SLI 97 announcement notes that line-rate verification on SLI97-based designs is done by the companion V2X communication processor, not the SLI97 itself"}
+      latency_us: {value: null, status: not-published, calibration: "NOT PUBLISHED; bench on device, timing back-to-back verifications against the brief's >2000/s claim"}
+      runs_on: accelerator
+    ecdsa-p256-sign:
+      throughput_per_s: {value: null, status: not-published, calibration: "not stated; bench on device"}
+      latency_us: {value: 50000, status: unverified, source: "the RS4 brief text as extracted reads '<50 usec signing delay' — UNVERIFIED, likely an OCR error [Commsignia ITS-RS4 Product Brief v0.9.3]; the corroborated cross-vendor figure for the SLI97/SLE97 family is '<50 ms' ECDSA-256 signing latency [Autotalks/Infineon SLI 97 announcement]. Modelled as 50000 us (the upper bound) until measured; flagged"}
+      runs_on: hsm
+  queue_depth: {value: null, status: todo-calibrate, calibration: "not published; measure with back-to-back sign requests"}
+  servers: {value: null, status: todo-calibrate, calibration: "not published; the brief does not say whether the SLI97 and the radio-variant verification engine serve concurrently. Measure"}
+# POST-QUANTUM SOFTWARE PROXY — FLAGGED, NOT A MEASUREMENT OF THIS DEVICE. No roadside unit
+# publishes a post-quantum figure, and its secure element runs ECDSA only, so a post-quantum
+# signature is checked in software on the application processor. Until a bench exists the
+# cost is the catalogue figure for the same primitive on the Cohda MK6, a deployed V2X unit,
+# from NDSS 2024 Table V (liboqs first, Botan for ML-DSA-44; other parameter sets scaled by the
+# cited pqm4 cycle ratio, v2xw-sec CostRatio). This RSU's CPU is an NXP i.MX 6 quad at 792 MHz [Commsignia ITS-RS4 Product Brief v0.9.3],
+# probably slower than the MK6, so the proxy is likely optimistic; run liboqs speed_sig on it.
+# Classical operations never use it. A scenario that relies on it gets a validation warning.
+pq_software_proxy: [hw-profile/cohda-mk6-liboqs, hw-profile/cohda-mk6-botan]
+software_crypto:
+  ecdsa-p256-verify: {us: null, status: not-published, calibration: "no benchmark on an i.MX 6 quad was found; PROXY = Pi 3B Cortex-A53 @ 1.2 GHz 1290 us [dchest Pi 3B/3B+ openssl speed gist], flagged; run openssl speed on the device"}
+  ecdsa-p256-sign: {us: null, status: not-published, calibration: "PROXY = Pi 3B 613 us [dchest Pi 3B/3B+ openssl speed gist], flagged; run openssl speed on the device"}
+radio:
+  rat: [dsrc-80211p, lte-v2x-pc5]
+  chipset: {value: null, status: not-published, calibration: "interchangeable radio variants on one board: Autotalks Secton, NXP TEF5100+SAF5100, Marvell 88W8987PA or Qualcomm 9150 [Commsignia ITS-RS4 Product Brief v0.9.3]. Name the fitted variant in the scenario and take its radio block from obu/unex-obu-301-craton2, obu/cohda-mk5 or obu/cohda-mk6c-qualcomm-9150 respectively"}
+  tx_power_dbm:
+    min: {value: null, status: not-published, calibration: "radio-variant dependent [Commsignia ITS-RS4 Product Brief v0.9.3]; inherit from the fitted variant's profile"}
+    max: {value: null, status: not-published, calibration: "radio-variant dependent [Commsignia ITS-RS4 Product Brief v0.9.3]; inherit from the fitted variant's profile"}
+    default: {value: null, status: not-published, calibration: "radio-variant dependent [Commsignia ITS-RS4 Product Brief v0.9.3]; inherit from the fitted variant's profile"}
+  sensitivity_dbm: {value: null, status: not-published, calibration: "radio-variant dependent [Commsignia ITS-RS4 Product Brief v0.9.3]; inherit from the fitted variant's profile"}
+  noise_figure_db: {value: null, status: not-published, calibration: "radio-variant dependent; the NXP variant's chip-level figure is 6 dB [NXP SAF5400 fact sheet]"}
+  antenna:
+    gain_dbi: {value: null, status: not-published, calibration: "not stated; the antenna is site-specific. 3GPP UE-type RSU assumption 3 dBi [3GPP TR 36.885 Annex A.1.1] is the fallback; take the fitted antenna's datasheet"}
+    height_m: {value: 5.0, status: evaluation-assumption, source: "the USDOT pilot sources reviewed give RSU counts and backhaul, not mounting heights [USDOT CV Pilot site pages (its.dot.gov)]; fallback = 3GPP TR 36.885 Annex A.1.1 UE-type RSU antenna height 5 m. Set per site from the survey or FHWA RSU spec v4.1"}
+    pattern: {value: null, status: not-published, calibration: "site-specific; take from the fitted antenna's datasheet"}
+power_w: {value: null, status: not-published, calibration: "8-32 V DC or PoE [Commsignia ITS-RS4 Product Brief v0.9.3]; draw not stated. Kapsch RIS-9260 '<25 W PoE 802.3at' [Kapsch RIS-9260 datasheet] and the Yunex RSU '12 W max' [Siemens/Yunex RSU datasheet] bracket the class; measure"}
+storage_model: inherit

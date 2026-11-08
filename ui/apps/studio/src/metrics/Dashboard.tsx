@@ -1,0 +1,465 @@
+/**
+ * The metrics dashboard: every measurement of the run, full screen, grouped by the question a
+ * researcher asks — channel load, delivery and reliability, latency, security and PKI, misbehaviour
+ * detection, privacy, traffic, safety applications — searchable, with favourites pinned first.
+ * Click a card to expand it.
+ *
+ * Opened by the header's Metrics button or the M key; Escape closes an expanded chart first and
+ * then the dashboard. Its state is its address (`model.ts` `MetricsRoute`): a link, a reload or the
+ * agent harness can open any chart, breakdown and range directly.
+ *
+ * It holds up on long, dense runs because it never draws or ships more than it shows: the overview
+ * is binned by the engine to 240 points per line, an expanded chart is decimated to its pixel width,
+ * breakdowns are pooled by the engine, and a node ranking of thousands is paged. Nothing polls while
+ * the dashboard is closed.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { CloseIcon } from "../shell/Icons.js";
+import { useStudio } from "../state/store.js";
+import { MetricCard } from "./Card.js";
+import { Expanded } from "./Expanded.js";
+import { classify, judgedSeries, LEVEL_LABEL, withExpectations, type HealthLevel } from "./health.js";
+import { HealthDot } from "./HealthBadge.js";
+import { useCatalogue, useOverview } from "./hooks.js";
+import { openRunSummary } from "./summaryStore.js";
+import { PendingMark, ScmsOverview, SCMS_TITLE, type ScmsReport } from "./ScmsOverview.js";
+import { CREDENTIAL_METRICS, OVERVIEW_SERIES, worst as worstLevel } from "./scmsModel.js";
+import { RAT_NAMES } from "./summaryModel.js";
+import { SignatureCompare } from "./SignatureCompare.js";
+import {
+  cardSeries,
+  clockText,
+  familiesOf,
+  focusRoute,
+  matchesSearch,
+  metricsHash,
+  observedCount,
+  parseMetricsHash,
+  relatedOf,
+  seriesOf,
+  DASHBOARD,
+  EMPTY_SERIES,
+  GROUPS,
+  type GroupId,
+  type MetricFamily,
+  type MetricsRoute,
+} from "./model.js";
+import { usePins } from "./pins.js";
+import { noteUnits } from "./tokens.js";
+import "./metrics.css";
+
+/** The run's radio technology, from the scenario the engine is running (`radio.rat`). */
+function radioTechnology(scenario: unknown): string | null {
+  const radio = (scenario as { radio?: { rat?: unknown } } | null)?.radio;
+  return typeof radio?.rat === "string" ? radio.rat : null;
+}
+
+/** Whether a card has anything to show, from the overview. */
+function measured(f: MetricFamily, series: ReadonlyMap<string, { t: Float64Array; v: Float64Array }>, latest: ReadonlyMap<string, number | null>): boolean {
+  if (f.headline !== null) return observedCount(series.get(f.headline) ?? EMPTY_SERIES) > 0;
+  return f.values.some((v) => (latest.get(v.series) ?? null) !== null);
+}
+
+export function MetricsDashboard({ close }: { close: () => void }): React.JSX.Element {
+  const active = useStudio((s) => s.panel === "metrics");
+  const run = useStudio((s) => s.run);
+  const hello = useStudio((s) => s.hello);
+  const rat = useStudio((s) => radioTechnology(s.scenario));
+  const profileNode = run.profile === "node";
+  const pins = usePins((s) => s.pins);
+  const [route, setRouteState] = useState<MetricsRoute>(() => parseMetricsHash(location.hash) ?? DASHBOARD);
+  const [query, setQuery] = useState(route.q ?? "");
+  const search = useRef<HTMLInputElement | null>(null);
+  const grid = useRef<HTMLDivElement | null>(null);
+
+  // The address is the state: read it when it changes from outside (a link, Back, a reload).
+  useEffect(() => {
+    const read = (): void => {
+      const r = parseMetricsHash(location.hash);
+      if (r !== null) setRouteState(r);
+    };
+    window.addEventListener("hashchange", read);
+    window.addEventListener("popstate", read);
+    return () => {
+      window.removeEventListener("hashchange", read);
+      window.removeEventListener("popstate", read);
+    };
+  }, []);
+  // Opened again from the header: the address is `#metrics` and says where it was left — unless
+  // the address itself names a view, which wins.
+  useEffect(() => {
+    if (!active) return;
+    const r = parseMetricsHash(location.hash);
+    if (r !== null && (r.metric !== null || r.group !== null || r.q !== null)) setRouteState(r);
+    else history.replaceState(history.state, "", `${location.pathname}${location.search}${metricsHash(route)}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  const setRoute = useCallback((patch: Partial<MetricsRoute>) => {
+    setRouteState((r) => {
+      const next = { ...r, ...patch };
+      if (useStudio.getState().panel === "metrics") {
+        history.replaceState(history.state, "", `${location.pathname}${location.search}${metricsHash(next)}`);
+      }
+      return next;
+    });
+  }, []);
+
+  const catalogue = useCatalogue(active);
+  useEffect(() => noteUnits(catalogue.defs), [catalogue.defs]);
+  // Each band as this run should be judged against it: a scenario that leaves vehicles without a
+  // cellular modem on purpose expects that many out of the backend's reach (`health.ts` `expectedBand`).
+  const scenario = useStudio((s) => s.scenario);
+  const families = useMemo(() => withExpectations(familiesOf(catalogue.defs), scenario), [catalogue.defs, scenario]);
+  const [scms, setScms] = useState<ScmsReport>({ verdicts: [], covered: [] });
+  // A node-profile session is refused every ground-truth metric; not asking saves a refusal each.
+  const asked = useMemo(() => families.filter((f) => !(profileNode && f.groundTruth)), [families, profileNode]);
+  // The headline lines, plus each health band's judged series where it is not the headline (a
+  // p99, a delivery ratio at 100 m), so a card can say whether its value is healthy.
+  const lineNames = useMemo(() => {
+    const out = asked.flatMap((f) => (f.headline === null ? [] : [f.headline]));
+    for (const f of asked) {
+      if (f.health === null) continue;
+      const j = judgedSeries(f.base, f.health);
+      if (!out.includes(j) && seriesOf(f).includes(j)) out.push(j);
+    }
+    // The credential overview's numbers and trends (a p95, a ratio) where no card asks for them.
+    for (const n of OVERVIEW_SERIES) if (!out.includes(n) && asked.some((f) => seriesOf(f).includes(n))) out.push(n);
+    return out;
+  }, [asked]);
+  const barNames = useMemo(() => asked.flatMap((f) => (f.headline === null ? cardSeries(f) : [])), [asked]);
+  const expanded = route.metric === null ? null : (families.find((f) => f.base === route.metric || seriesOf(f).includes(route.metric as string)) ?? null);
+  // The overview is idle while a chart is expanded: nothing on screen would show it.
+  const overview = useOverview(lineNames, barNames, active && expanded === null);
+
+  const open = useCallback(
+    (f: MetricFamily) => {
+      setRoute({ metric: f.base, breakdown: null, from: null, to: null });
+      grid.current?.scrollTo({ top: 0 });
+    },
+    [setRoute],
+  );
+  const back = useCallback(() => setRoute({ metric: null, breakdown: null, from: null, to: null }), [setRoute]);
+
+  // Search follows the address, lightly: the address is rewritten when typing pauses.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      if ((route.q ?? "") !== query) setRoute({ q: query === "" ? null : query });
+    }, 300);
+    return () => clearTimeout(id);
+  }, [query, route.q, setRoute]);
+
+  // Another view asked for a set of metrics (the Backend view's "Metrics for the RA"): one metric
+  // opens expanded; several are found by the longest name prefix they share. The request is
+  // consumed either way.
+  const focus = useStudio((s) => s.metricsFocus);
+  useEffect(() => {
+    if (focus === null) return;
+    useStudio.getState().setMetricsFocus(null);
+    const to = focusRoute(focus.metrics);
+    setQuery(to.q ?? "");
+    setRoute({ metric: to.metric, breakdown: null, from: null, to: null, q: to.q });
+  }, [focus, setRoute]);
+
+  // A group named in the address is scrolled to.
+  useEffect(() => {
+    if (!active || route.group === null || expanded !== null) return;
+    document.getElementById(`metrics-group-${route.group}`)?.scrollIntoView({ block: "start" });
+  }, [active, route.group, expanded, families.length]);
+
+  // The dashboard's keys, wherever the focus is while it is open: a click on the chart (a canvas)
+  // or on a control that then unmounts (a related metric) leaves the focus on the page body, and
+  // Escape there must still collapse the chart before it closes the dashboard. Captured on the
+  // window ahead of the shell's own Escape, which then sees it handled.
+  const keys = useRef({ expanded: false, query, back });
+  keys.current = { expanded: expanded !== null, query, back };
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      const k = keys.current;
+      const target = ev.target instanceof HTMLElement ? ev.target : null;
+      const typing = target?.closest("input, textarea, select, [contenteditable='true']") != null;
+      if (ev.key === "Escape") {
+        if (k.expanded) {
+          k.back();
+          ev.preventDefault();
+        } else if (k.query !== "" && target === search.current) {
+          setQuery("");
+          ev.preventDefault();
+        }
+        return;
+      }
+      if (ev.key === "/" && !typing) {
+        if (k.expanded) k.back();
+        search.current?.focus();
+        ev.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [active]);
+
+  const ready = overview.status === "ready";
+  const filtered = families.filter((f) => matchesSearch(f, query));
+  const pinned = pins.map((p) => filtered.find((f) => f.base === p)).filter((f): f is MetricFamily => f !== undefined);
+  const byGroup = GROUPS.map((g) => {
+    const list = filtered.filter((f) => f.group === g.id);
+    const shown = ready ? list.filter((f) => measured(f, overview.series, overview.latest)) : list;
+    const unmeasured = ready ? list.filter((f) => !measured(f, overview.series, overview.latest)) : [];
+    // A metric with no per-window value that the credential overview shows pooled over the run is
+    // not "no data": its card points there.
+    const pooledAbove = query === "" ? unmeasured.filter((f) => scms.covered.includes(f.base)) : [];
+    const missing = unmeasured.filter((f) => !pooledAbove.includes(f));
+    return { g, shown, missing, pooledAbove };
+  }).filter((x) => x.shown.length + x.missing.length > 0);
+  const measuredCount = ready ? families.filter((f) => measured(f, overview.series, overview.latest)).length : null;
+
+  // Health at a glance: every banded metric's newest judged value, worst first.
+  const health = ready
+    ? families
+        .flatMap((f) => {
+          if (f.health === null) return [];
+          const v = overview.latest.get(judgedSeries(f.base, f.health)) ?? null;
+          const level = classify(f.health, v);
+          return level === null ? [] : [{ f, level }];
+        })
+        .sort((a, b) => rank(b.level) - rank(a.level) || a.f.label.localeCompare(b.f.label))
+    : [];
+  const groupLevel = (id: GroupId): HealthLevel | null => {
+    let worst: HealthLevel | null = null;
+    for (const h of health) if (h.f.group === id && (worst === null || rank(h.level) > rank(worst))) worst = h.level;
+    return worst;
+  };
+
+  const credentials = families.some((f) => CREDENTIAL_METRICS.includes(f.base));
+  const scrollToGroup = (id: GroupId | "pinned" | "scms"): void => {
+    if (expanded !== null) back();
+    setRoute({ group: id });
+    requestAnimationFrame(() => document.getElementById(`metrics-group-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  };
+
+  const runLine = `${hello?.scenarioName ?? "run"} · ${clockText(run.tNs / 1e9)}${run.tEndNs > 0 ? ` of ${clockText(run.tEndNs / 1e9)}` : ""} simulated · ${run.state}${rat ? ` · Radio: ${RAT_NAMES[rat] ?? rat}` : ""}`;
+  const scmsLevel = worstLevel(scms.verdicts.map((v) => v.level));
+  const scmsPending = scms.verdicts.some((v) => v.pending);
+
+  return (
+    <div className="fullpanel-inner metrics-panel" data-testid="metrics-panel">
+      <div className="fullpanel-head">
+        <h2>Metrics</h2>
+        <span className="dim" data-testid="metrics-run">
+          {runLine}
+          {measuredCount !== null ? ` · ${measuredCount} of ${families.length} measured` : ""}
+        </span>
+        <span className="grow" />
+        <button type="button" className="small" onClick={openRunSummary} data-testid="metrics-open-summary" title="How the run performed: headline results, anything unhealthy, bottlenecks">
+          Run summary
+        </button>
+        <input
+          ref={search}
+          type="search"
+          className="metrics-search"
+          placeholder="Search metrics  /"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            if (expanded !== null && e.target.value !== "") back();
+          }}
+          aria-label="Search metrics by name, definition, unit or group"
+          data-testid="metrics-search"
+        />
+        <button type="button" className="icon-button" onClick={close} aria-label="Close the metrics" title="Close (Esc)" data-testid="metrics-close">
+          <CloseIcon />
+        </button>
+      </div>
+      <div className="metrics-layout">
+        <nav className="metrics-nav" aria-label="Metric groups">
+          <p className="metrics-nav-key" data-testid="metrics-nav-key" title="A group's mark is its worst metric's level in the newest window; the numbers are metrics measured out of those the run can measure.">
+            <span>
+              <HealthDot level="unhealthy" />
+              unhealthy
+            </span>
+            <span>
+              <HealthDot level="caution" />
+              caution
+            </span>
+            <span>
+              <HealthDot level="healthy" />
+              healthy
+            </span>
+            <span className="mono">n/m measured</span>
+          </p>
+          {credentials && query === "" ? (
+            <button
+              type="button"
+              className="linklike nav-item nav-scms"
+              onClick={() => scrollToGroup("scms")}
+              title={scms.verdicts.length > 0 ? scms.verdicts.map((v) => `${v.question} ${v.answer}`).join("\n") : "The credential system at a glance: its questions, answered"}
+              data-testid="metrics-nav-scms"
+              data-level={scmsLevel ?? (scmsPending ? "pending" : "none")}
+            >
+              <span>
+                {scmsLevel !== null && scmsLevel !== "healthy" ? <HealthDot level={scmsLevel} /> : scmsLevel === null && scmsPending ? <PendingMark compact /> : null}
+                {SCMS_TITLE}
+              </span>
+            </button>
+          ) : null}
+          {pinned.length > 0 ? (
+            <button type="button" className="linklike nav-item" onClick={() => scrollToGroup("pinned")}>
+              <span>Pinned</span>
+              <span className="dim">{pinned.length}</span>
+            </button>
+          ) : null}
+          {byGroup.map(({ g, shown, missing, pooledAbove }) => (
+            <button
+              key={g.id}
+              type="button"
+              className={`linklike nav-item${expanded?.group === g.id ? " current" : ""}`}
+              onClick={() => scrollToGroup(g.id)}
+              title={g.question}
+              data-testid={`metrics-nav-${g.id}`}
+            >
+              <span>
+                {(() => {
+                  const lv = groupLevel(g.id);
+                  return lv !== null && lv !== "healthy" ? <HealthDot level={lv} /> : null;
+                })()}
+                {g.label}
+              </span>
+              <span className="dim" title={ready ? `${shown.length + pooledAbove.length} of ${shown.length + missing.length + pooledAbove.length} measured${pooledAbove.length > 0 ? `, ${pooledAbove.length} as run totals in ${SCMS_TITLE}` : ""}` : undefined}>
+                {ready ? `${shown.length + pooledAbove.length}/${shown.length + missing.length + pooledAbove.length}` : shown.length}
+              </span>
+            </button>
+          ))}
+        </nav>
+        <div className="metrics-main" ref={grid}>
+          {catalogue.status === "error" && families.length === 0 ? (
+            <p className="metrics-message" data-testid="metrics-message">
+              The engine did not say what it measures{catalogue.error ? ` (${catalogue.error})` : ""}. It may still be starting; this page asks again when the connection or the run changes.
+            </p>
+          ) : catalogue.status === "loading" && families.length === 0 ? (
+            <p className="metrics-message dim">Asking the engine what it measures…</p>
+          ) : families.length === 0 ? (
+            <p className="metrics-message" data-testid="metrics-message">
+              This engine publishes no metric catalogue, so there is nothing to lay out. A run of the real engine measures delivery, latency, channel load and more.
+            </p>
+          ) : expanded !== null ? (
+            <Expanded key={expanded.base} f={expanded} route={route} setRoute={setRoute} active={active} onBack={back} rat={rat} related={relatedOf(expanded, asked)} />
+          ) : route.metric !== null ? (
+            <p className="metrics-message" data-testid="metrics-message">
+              This run does not measure <code>{route.metric}</code>, so the link has nothing to open.{" "}
+              <button type="button" className="small" onClick={back}>
+                All metrics
+              </button>
+            </p>
+          ) : (
+            <>
+              {query !== "" && filtered.length === 0 ? <p className="metrics-message dim">No metric matches “{query}”.</p> : null}
+              {query === "" && health.length > 0 ? (
+                <section className="mhealth-strip" data-testid="metrics-health-strip" aria-label="Health now, judged on the newest window">
+                  <h3>
+                    Health now
+                    <span className="mhealth-when dim">newest window</span>
+                    <span className="mhealth-counts dim" data-testid="metrics-health-counts">
+                      {(["unhealthy", "caution", "healthy"] as const)
+                        .map((l) => [l, health.filter((h) => h.level === l).length] as const)
+                        .filter(([, n]) => n > 0)
+                        .map(([l, n]) => `${n} ${LEVEL_LABEL[l].toLowerCase()}`)
+                        .join(" · ")}
+                    </span>
+                    <span
+                      className="mx-info"
+                      tabIndex={0}
+                      title="Each metric with a published healthy range, judged on its newest window against the standard or study behind it, so a metric that was out of range earlier can be healthy now; the run summary judges the whole run. Open one to see the thresholds and their source."
+                    >
+                      i
+                    </span>
+                  </h3>
+                  <div className="mhealth-chips">
+                    {health.map(({ f, level }) => (
+                      <button
+                        key={f.base}
+                        type="button"
+                        className={`mhealth-chip ${level}`}
+                        onClick={() => open(f)}
+                        title={`${LEVEL_LABEL[level]}: ${f.label}`}
+                        data-testid={`health-chip-${f.base}`}
+                        data-level={level}
+                      >
+                        <HealthDot level={level} />
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {query === "" ? <ScmsOverview families={asked} overview={overview} active={active && expanded === null} onOpen={open} onReport={setScms} /> : null}
+              {pinned.length > 0 ? (
+                <section id="metrics-group-pinned" className="mgroup" data-testid="metrics-group-pinned">
+                  <h3>Pinned</h3>
+                  <div className="mgrid">
+                    {pinned.map((f) => (
+                      <MetricCard key={f.base} f={f} overview={overview} runState={run.state} profileNode={profileNode} onOpen={open} />
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {byGroup.map(({ g, shown, missing, pooledAbove }) => (
+                <section key={g.id} id={`metrics-group-${g.id}`} className="mgroup" data-testid={`metrics-group-${g.id}`}>
+                  <h3>{g.label}</h3>
+                  <p className="dim mgroup-q">{g.question}</p>
+                  {shown.length > 0 ? (
+                    <div className="mgrid">
+                      {shown.map((f) => (
+                        <MetricCard key={f.base} f={f} overview={overview} runState={run.state} profileNode={profileNode} onOpen={open} />
+                      ))}
+                    </div>
+                  ) : null}
+                  {pooledAbove.length > 0 ? (
+                    <p className="mgroup-missing dim" data-testid={`metrics-pooled-${g.id}`}>
+                      Measured over the whole run rather than per window, so shown as run totals in{" "}
+                      <button type="button" className="linklike" onClick={() => scrollToGroup("scms")}>
+                        {SCMS_TITLE}
+                      </button>
+                      :{" "}
+                      {pooledAbove.map((f, i) => (
+                        <span key={f.base}>
+                          {i > 0 ? ", " : ""}
+                          <button type="button" className="linklike" onClick={() => open(f)} title={f.definition}>
+                            {f.label}
+                          </button>
+                        </span>
+                      ))}
+                      .
+                    </p>
+                  ) : null}
+                  {missing.length > 0 ? (
+                    <p className="mgroup-missing dim" data-testid={`metrics-missing-${g.id}`}>
+                      {run.state === "finished" ? "No window reported a value" : "No data yet"}:{" "}
+                      {missing.map((f, i) => (
+                        <span key={f.base}>
+                          {i > 0 ? ", " : ""}
+                          <button type="button" className="linklike" onClick={() => open(f)} title={f.definition}>
+                            {f.label}
+                          </button>
+                        </span>
+                      ))}
+                      .
+                    </p>
+                  ) : null}
+                </section>
+              ))}
+              <SignatureCompare />
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function rank(l: HealthLevel): number {
+  return l === "unhealthy" ? 2 : l === "caution" ? 1 : 0;
+}

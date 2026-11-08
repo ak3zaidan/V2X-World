@@ -1,0 +1,18 @@
+# Downtown Portland, Oregon — a second real city.
+#
+# portland-downtown.yaml as written (its own speed limits, right turn on red after a stop,
+# the Transit Mall bus lanes and the slow green wave), with the clock moved to 12:00 Pacific
+# (20:00 UTC) so the page draws it by day rather than at midnight.
+schema: v2xw/scenario/1
+
+meta:
+  base: portland-downtown.yaml
+  name: Downtown Portland, Oregon
+  description: >-
+    Downtown Portland at midday on its real one-way grid: bus lanes, cycle lanes, right turn
+    on red after a stop and signals timed for a slow green wave, with a connected fleet
+    signing safety messages.
+  tags: [portland, traffic, city, dsrc]
+
+time:
+  t0: "2027-03-04T20:00:00Z"

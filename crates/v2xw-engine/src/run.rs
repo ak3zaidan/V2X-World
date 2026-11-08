@@ -1,0 +1,13327 @@
+//! The main loop and the phase-parallel structure of the determinism contract.
+//!
+//! # Shape of a run
+//!
+//! One single-threaded event loop over one heap, and a small number of *phases* that are
+//! pure maps merged in id order. The loop never runs two events at once; the phases never
+//! touch the heap while they are mapping. That split is the determinism contract's, and it is
+//! what makes thread count change wall time and nothing else.
+//!
+//! ```text
+//! pop (time, priority, seq)
+//!   ├─ Control      p0  scenario timeline: weather, outage, demand, parameter change
+//!   ├─ MobilityStep p1  ── phase ──► map over actors (mobility provider), merge by ActorId
+//!   │                    publish Kinematics, rebuild the snapshot, spawn/retire nodes
+//!   ├─ PhyEnd       p3  ── phase ──► map over that frame's receivers, merge by NodeId
+//!   ├─ PhyStart     p5  one frame goes on the air; its receiver set is resolved at PhyEnd
+//!   ├─ NodePhase    p6  ── phase ──► map over nodes, merge by NodeId; node-local queues
+//!   │                    are drained *inside* the map and never reach the heap
+//!   └─ Observe      p9  metric flush, and the end-of-run sentinel
+//! ```
+//!
+//! # The mobility step publishes the instant it is dispatched at
+//!
+//! A mobility step dispatched at `t` advances the world to `t + dt`, so what it produces
+//! describes the *end* of the step. The phase therefore publishes in this order:
+//!
+//! ```text
+//! MobilityStep at t
+//!   1. gt.kinematics for every actor, stamped at t  (what the previous step produced)
+//!   2. one VWP Keyframe or Delta at t               (the same state, binary, §3.3/§3.4)
+//!   3. mobility.step(dt)                            (the world advances to t + dt)
+//!   4. absorb, reindex, beliefs
+//! ```
+//!
+//! Publishing the step's own result instead would file every record one mobility step
+//! before the state it describes, against the record's own `t` field — which is what the
+//! vertical-slice audit found. Steps 1 and 2 are two encodings of one fact and are
+//! deliberately adjacent: `tests/wire.rs` checks they agree, which neither can satisfy by
+//! being self-consistent.
+//!
+//! The binary stream is [`crate::snapshot`]. It is what a browser replays, and the Phase 1
+//! build produced none of it at all: `RecordingWriter::write_frame` was called from
+//! nowhere, so a recording carried JSON records and no snapshot frames.
+//!
+//! # Between mobility steps
+//!
+//! Mobility is periodic. A radio event at `t′` strictly inside a
+//! step reads a position from the **published extrapolation rule**,
+//! `pos(t′) = pos(t) + vel(t)·(t′ − t)` — [`v2xw_core::kinematics::Kinematics::extrapolate`],
+//! which is part of the interface contract (invariant I-M4) and not
+//! an engine convenience. [`Engine::position_at`] is the one place that rule is applied, so
+//! a second, subtly different extrapolation cannot appear in a second phase.
+//!
+//! # Time dilation
+//!
+//! A scenario may declare windows in which only the backend and
+//! the abstract mobility tiers run, so a 24-hour credential experiment finishes in
+//! minutes. The engine implements that by **not generating radio events** inside a window:
+//! `PhyStart` is not scheduled, so no frame, no reception and no verification cost exist
+//! for that period. The windows are in the manifest, and [`RunReport::suppressed_frames`]
+//! counts what was skipped, because a metric that silently reads zero inside a window is
+//! indistinguishable from a channel that was quiet.
+//!
+//! # What this loop does not do yet
+//!
+//! Stated rather than stubbed:
+//!
+//! * **Interference and capture.** A reception outcome here is a link-budget decision
+//!   against the noise floor, so SINR is SNR: concurrent frames do not raise each other's
+//!   denominator. That is `v2xw-radio`'s `OfdmPhy` high tier and a `MacTimer`-driven MAC,
+//!   and both are scheduled through the event classes this enum already carries.
+//! * **The MAC.** A frame reaches the air after the signing latency plus one AIFS; there
+//!   is no backoff, no CBR measurement and no DCC gate. `Event::MacTimer` is the class
+//!   those live at.
+//! * **Backend, credential protocol and detection.** `Event::NetDeliver` and
+//!   `Event::FlowTimer` are their classes; nothing schedules them here.
+//!
+//! Each gap is a missing *model*, not a missing seam: the event class, the phase and the
+//! record channel for each already exist.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use rayon::prelude::*;
+use v2xw_core::card::Tier;
+use v2xw_core::event::{EventClass, Scheduler};
+use v2xw_core::geom::Vec3;
+use v2xw_core::ids::{ActorId, FrameSeq, LinkKey, NodeId};
+use v2xw_core::kinematics::Kinematics;
+use v2xw_core::manifest::Manifest;
+use v2xw_core::provenance::ProvenanceLog;
+use v2xw_core::registry::{ParamSet, Registry};
+use v2xw_core::rng::{EntityRef, RngDomain, RngRegistry};
+use v2xw_core::time::{Duration, SimTime, WallClock};
+use v2xw_core::weather::WeatherState;
+use v2xw_metrics::channels::{ByteBucket, RxOutcome, SignerId, rx_cause};
+use v2xw_mobility::{
+    ActorSnapshot, DriverProfile, GnssEnv, GnssModel, Mobility, MobilityUpdate, VehicleClass,
+    VehicleView,
+};
+use v2xw_msg::generator::DccState;
+use v2xw_node::stores::VerificationState;
+use v2xw_node::{NodeConfig, RxDisposition, RxFrame, RxReport, RxStamp, StepOutcome, Transmission};
+use v2xw_radio::{
+    AccessCategory, Arrival, ChannelId, EdcaOcbMac, FrameDescriptor, FrameKind, InterferenceSource,
+    LossCause, Mac, MacSdu, Mcs, OfdmPhy, Phy, RadioEndpoint, RxHandle, SduRef, TxHandle,
+};
+use v2xw_record::{Cadence, Profile};
+use v2xw_world::World;
+
+use crate::adapters::{BoxedFading, BoxedPropagation};
+use crate::ctx::{EngineCtx, RunRecorder};
+use crate::error::{EngineError, Result, ScenarioError};
+use crate::event::{Event, Observe};
+use crate::records::{BusyShare, GtKinematics, MacCbr, NetBytes, NodeRx, NodeTx, PhyRx};
+use crate::scenario::Scenario;
+use crate::snapshot::{ActorState, SnapshotStream};
+
+mod coop;
+mod geonet;
+pub use geonet::GeonetWarning;
+mod gn_air;
+pub use gn_air::GnAirStats;
+mod gcbr;
+pub use gcbr::GlobalCbrTally;
+mod cpm_metrics;
+pub use cpm_metrics::CpmTally;
+mod air_bytes;
+pub use air_bytes::{AirBytes, TypeAir};
+pub(crate) mod channels;
+mod info_status;
+pub mod jamming;
+mod link;
+mod off_channel;
+mod radios;
+pub mod sidelink;
+
+/// The 5.9 GHz safety channel an 802.11p run transmits on when no regulation resolves,
+/// and the frequency the link budget is evaluated at.
+///
+/// Channel 172 is the SAE J2945/1 safety channel in the 2016 US band plan; 5.86–5.93 GHz
+/// maps it to 5.860 GHz + 5 MHz × (n − 172) with 10 MHz channels, which puts 172 at
+/// 5.860 GHz. A run's own channel is the region's (`Engine::dsrc_channel`,
+/// `radio.region`); this is only the fallback a scenario the loader refused would take.
+const SAFETY_CHANNEL: ChannelId = ChannelId(172);
+/// The centre frequency of [`SAFETY_CHANNEL`], hertz.
+const SAFETY_FREQ_HZ: f64 = 5.860e9;
+/// The AIFS a safety frame waits before the PHY may start it, at the abstract tier.
+///
+/// EDCA AC_VO on a 10 MHz OCB channel is the *floor* on access delay. At the medium and
+/// high tiers the MAC computes the whole of it — AIFS plus a contention-window countdown
+/// — and this constant is not used; the abstract tier models no medium access at all, so
+/// the floor is all there is. The value is AC_VI's rather than AC_VO's because it is the
+/// number the Phase 1 build shipped and changing it would move every abstract-tier digest
+/// for no modelling gain: `AIFS = SIFS + 2·slot = 32 µs + 2·13 µs = 58 µs`
+/// [IEEE 802.11-2020 Table 9-155, 10 MHz timing].
+const AIFS: Duration = Duration::from_micros(58);
+/// The spatial grid's cell size, and the plausible-range figure the
+/// misbehaviour detectors are handed.
+///
+/// It used to be the radio candidate range as well: every transmission was followed to
+/// 1 km and no further, which truncated reception, interference and sensing — in line of
+/// sight 802.11p still arrives at about −84 dBm at 1 km. The candidate range is now the
+/// link budget's (`radio.range`, [`crate::wiring::CandidateRangePlan`]); this constant
+/// only sizes the grid, whose query cost depends on the cell size and not its answer.
+const MAX_RANGE_M: f64 = 1000.0;
+
+/// The engine snapshot's grid cell, metres: a quarter of [`MAX_RANGE_M`].
+///
+/// A radius query's answer does not depend on the cell (it is filtered by distance and
+/// sorted), only its cost does. At 1 km a city extract of a few kilometres was nine
+/// cells, so every transmission's candidate query walked almost every actor in the city —
+/// at city scale (`crate::scale`) mostly vehicles whose radio is off. At 250 m a query
+/// visits the cells its circle touches and little else.
+const SNAPSHOT_CELL_M: f64 = MAX_RANGE_M / 4.0;
+/// How many frames one [`Event::MacTimer`] may grant before it reschedules itself.
+///
+/// A bound, not a model: `Mac::poll` drains one frame per call and re-arms the queue, so a
+/// node with a backlog would spin here. Eight is more than one generation period's worth
+/// of BSMs at the fastest cadence J2945/1 admits, so the bound is never the reason a frame
+/// waits, and a run that hit it would be a run whose MAC is not draining.
+const MAX_GRANTS_PER_TIMER: u32 = 8;
+
+/// Below this many links a frame's geometry map runs on the calling thread.
+///
+/// The event loop runs outside the `rayon` pool, so every parallel map is a hand-off: the
+/// job is injected, a sleeping worker is woken, and the loop blocks on a latch until it is
+/// done — tens of microseconds on a loaded machine, against a few microseconds a link.
+/// Every map here is indexed or re-sorted before use, so the thread it ran on reaches no
+/// output; this is a cost choice and nothing else.
+const PAR_MIN_LINKS: usize = 8;
+/// [`PAR_MIN_LINKS`] for the reception decisions, which are cheaper per receiver.
+const PAR_MIN_DECISIONS: usize = 24;
+
+/// The octets of the one SDU that relays a CRL: the signed `SecuredCrl`s it carries, all of
+/// them; `model` (the size model's) only when the run signs none.
+fn crl_sdu_bytes(secured: &[std::sync::Arc<[u8]>], model: u32) -> u32 {
+    let total: u64 = secured.iter().map(|s| s.len() as u64).sum();
+    if total == 0 {
+        model
+    } else {
+        u32::try_from(total).unwrap_or(u32::MAX)
+    }
+}
+
+/// How long a despawned node's per-link radio state is kept before
+/// [`Engine::sweep_retired_links`] may drop it. Far longer than anything that can still be
+/// in flight at a despawn — a frame lasts milliseconds — so the sweep never races one.
+const LINK_STATE_GRACE: Duration = Duration::from_secs(10);
+/// The radius J2945/1 counts neighbours inside, metres.
+///
+/// [Rostami et al. 2018 Eq. 1]: `N` is "vehicles within 100 m". The
+/// count is taken from the node's **own neighbour table** against its **own** position
+/// estimate, so it is a belief and not a ground-truth density (invariant I-C2).
+const J2945_DENSITY_RADIUS_M: f64 = 100.0;
+
+/// SAE J3161/1's density window: the neighbours heard in the last 1000 ms.
+const J3161_DENSITY_WINDOW_NS: u64 = 1_000_000_000;
+
+/// How long a verified SCMS-service WSA keeps its router available to a vehicle, ns:
+/// 1 s, ten WSAs at the RSU Spec's 10 Hz. **ASSUMPTION**: IEEE 1609.3
+/// leaves the available-service list's ageing to the implementation, and its text is
+/// paywalled; the count threshold (`WsaCountThreshold`) a provider may set is not modelled.
+const WSA_SERVICE_FRESH_NS: u64 = 1_000_000_000;
+
+/// The point a device's own GNSS truth stands at: where its messages say it is with the
+/// receiver's error removed.
+///
+/// A vehicle's is the centre of its body rectangle, the BSM position reference of SAE
+/// J2945/1 (2020) 6.2.3 `COORDSYSREF-001`: the published point (the rear bumper in every
+/// lane-following tier, [`VehicleClass::published_reference`]) moved
+/// [`v2xw_mobility::classes::centre_offset_m`] forward along the heading. Its BSM, path history and
+/// applications then all report the centre, which is where receivers take a BSM's
+/// position (`v2xw_node::apps`, `v2xw_threat::consistency::ReferencePoint::Centre`).
+/// Before, every vehicle reported its rear bumper: 2.5 m behind its centre for a car and
+/// 6 m for a bus, so a car queued 1 m behind a bus overlapped it in their BSMs. A
+/// vulnerable road user keeps its published point (SAE J2945/9, not J2945/1, governs its
+/// PSM). Height, velocity and heading are unchanged, and the radio's antenna index is
+/// not this point.
+#[must_use]
+pub fn own_position_truth(class: VehicleClass, published: &Kinematics) -> Kinematics {
+    let mut truth = *published;
+    if !class.is_vru() {
+        truth.pos = class.rectangle_centre(published);
+    }
+    truth
+}
+
+/// The keyed stream J2945/1's tracking-error draw comes from, one draw per node and
+/// 100 ms step.
+const J2945_TRACKING_STREAM: &str = "dcc/sae/j2945-1-rate-power/tracking";
+
+/// The keyed stream each unit's J2945/1 decision phase comes from, one draw per node
+/// ([`Engine::j2945_decision_phase`]).
+const J2945_DECISION_PHASE_STREAM: &str = "dcc/sae/j2945-1-rate-power/decision-phase";
+
+/// What one unit's J2945/1 transmission decision reads, sampled at a mobility step and
+/// decided at the end of the unit's own `vTxRateCntrlInt` ([`Engine::j2945_decision_phase`]):
+/// its own state as its navigation solution gives it, and whether the critical event
+/// condition holds ([`Engine::update_dcc`]).
+#[derive(Debug, Clone, Copy)]
+struct J2945Sample {
+    own: Option<v2xw_radio::HostState>,
+    critical: bool,
+}
+
+/// J2945/1's tracking-error Bernoulli draw (Eq. 5) for one unit's decision at `at`.
+fn j2945_tracking_draw(rng: &RngRegistry, node: NodeId, at: SimTime) -> f64 {
+    rng.checkout(
+        v2xw_core::rng::RngDomain::plugin(J2945_TRACKING_STREAM),
+        v2xw_core::rng::EntityRef::LinkFrame {
+            link: v2xw_core::ids::LinkKey::new(node, node),
+            frame: at,
+        },
+    )
+    .uniform(0.0, 1.0)
+}
+
+/// The keyed stream J2945/1's inference comes from: whether the neighbours are taken to
+/// have received a BSM, one draw per node and transmission.
+const J2945_INFERENCE_STREAM: &str = "dcc/sae/j2945-1-rate-power/inference";
+
+/// A unit's own state, as J2945/1's estimators take it, from its position estimate.
+fn host_state(belief: &v2xw_core::PositionEstimate, at: SimTime) -> v2xw_radio::HostState {
+    v2xw_radio::HostState {
+        x: belief.pos.x,
+        y: belief.pos.y,
+        speed_mps: belief.ground_speed_mps(),
+        heading_rad: belief.heading_rad,
+        at,
+    }
+}
+
+/// Where a backend transfer's byte-accounting id starts.
+///
+/// Invariant I-N1 checks that no id is attributed to two buckets, and a `node.tx` record's
+/// id is its frame number. Backend transfers — backhaul, cellular, backend network — are
+/// numbered by their own counter, so they are placed in a range no frame number reaches
+/// (2^41 frames is decades at any fleet size).
+const BACKEND_BYTES_ID_BASE: u64 = 1 << 41;
+
+/// A roadside unit's composite CRL as its RA served it when the unit asked: what a
+/// download on the unit's line carries, and, once landed and verified, what the unit holds
+/// and relays. The RA serves the file as it is at the request (1609.2.1 §6.3.5.7, the
+/// download of a file), so a list published while the download is on the line is not in
+/// it: the unit's next fetch brings it.
+#[derive(Debug, Clone, Default)]
+struct RsuCrlFile {
+    version: u32,
+    serial: u64,
+    entries: Vec<v2xw_sec::linkage::CrlLinkageEntry>,
+    secured: Vec<std::sync::Arc<[u8]>>,
+}
+
+/// How synchronised the frames going on the air are ([`Engine::air_burst_peaks`]).
+#[derive(Debug, Clone, Copy, Default)]
+struct AirBurst {
+    last_start: SimTime,
+    same_instant: u64,
+    peak_same_instant: u64,
+    peak_overlaps: usize,
+}
+
+impl AirBurst {
+    fn started(&mut self, now: SimTime) {
+        if self.same_instant > 0 && now == self.last_start {
+            self.same_instant += 1;
+        } else {
+            self.last_start = now;
+            self.same_instant = 1;
+        }
+        self.peak_same_instant = self.peak_same_instant.max(self.same_instant);
+    }
+}
+
+/// One node's MAC counters since its last `mac.cbr` report.
+#[derive(Debug, Clone, Copy, Default)]
+struct MacWindow {
+    /// Frames handed to the MAC.
+    frames: u64,
+    /// Their PSDU octets.
+    bytes: u64,
+    /// Their air time, µs.
+    airtime_us: u64,
+    /// Frames the MAC refused.
+    drops: u64,
+}
+
+/// The journey of a misbehaviour report to the roadside unit that forwards it, kept beside
+/// the backhaul transfer so the whole flow can be traced when it reaches the authority.
+#[derive(Debug, Clone, Copy)]
+struct ReportJourney {
+    msg: u64,
+    t_generated: SimTime,
+    t_sign_start: SimTime,
+    t_signed: SimTime,
+    t_tx_start: SimTime,
+    t_tx_end: SimTime,
+    t_arrival: SimTime,
+}
+
+/// Something in flight to or from the backend, by the SDU id its [`Event::NetDeliver`]
+/// carries.
+#[derive(Debug, Clone)]
+enum Transfer {
+    /// A misbehaviour report on its way to the Location Obscurer Proxy.
+    Report {
+        reporter: NodeId,
+        report: Box<v2xw_threat::MisbehaviourReport>,
+        /// The unit that relayed it, for a relayed report.
+        via: Option<NodeId>,
+        /// The air hop's stamps, for a relayed report.
+        journey: Option<ReportJourney>,
+        detected_at: SimTime,
+        sent_at: SimTime,
+        transport: v2xw_proto::Transport,
+    },
+    /// A CRL download over a vehicle's cellular downlink.
+    Crl {
+        node: NodeId,
+        version: u32,
+        entries: Vec<v2xw_sec::linkage::CrlLinkageEntry>,
+        requested_at: SimTime,
+        /// Broadcast on the eMBMS bearer rather than fetched (`crl_delivery: mbms`).
+        mbms: bool,
+        /// The signed CRLs the transfer carries (the eMBMS carousel's, every
+        /// provider's); `None`: what the vehicle's RA serves at delivery.
+        secured: Option<Vec<std::sync::Arc<[u8]>>>,
+    },
+}
+
+/// Which drivers follow GLOSA's speed advice, and the caps the followers drive under.
+///
+/// A driver decides once, the first time GLOSA advises them, with probability
+/// `apps.glosa_compliance`, on a stream keyed by the actor (so the decision is the same
+/// whatever else the run draws). A follower's speed is capped at the advised speed while
+/// the advice stands and uncapped when it ends; advice to stop is left to the driver, who
+/// stops at the red anyway.
+#[derive(Debug, Clone, Default)]
+struct GlosaDrivers {
+    compliance: f64,
+    seed: u64,
+    decided: BTreeMap<ActorId, bool>,
+    capped: BTreeMap<ActorId, f64>,
+    /// How long, seconds, a capped driver's advice has been missing.
+    missing: BTreeMap<ActorId, f64>,
+    /// When each driver's GLOSA was last looked at, seconds: under J2945/1 the node steps
+    /// at its own generation interval (100-600 ms), not at the mobility step.
+    seen_s: BTreeMap<ActorId, f64>,
+}
+
+/// How long a following driver keeps to the last advised speed when the advice drops out,
+/// seconds. The application gives none for a step or two whenever the ego's lane match
+/// wavers (a lane change, a SPaT a moment late), and a driver does not floor it the
+/// instant the display blanks: they hold the speed until it is plainly gone. This build's
+/// choice; without it a strategic lane change on the approach reset the cap every few
+/// steps and no follower ever reached the advised speed.
+pub const GLOSA_HOLD_S: f64 = 1.0;
+
+/// How fast a following driver slows to the advised speed, m/s per second: an early, gentle
+/// brake, the assisted driver of Treiber and Kesting's traffic-light-assistant study (half
+/// the 2 m/s² comfortable deceleration of signalised approaches; the source is at
+/// [`v2xw_mobility::engine::SPEED_CAP_BRAKE_MPS2`], which brakes the vehicle down to the
+/// cap at this rate). The cap is eased in at this rate rather than dropped at once, which
+/// would have the car-following model brake as hard as its free-road term allows.
+pub const GLOSA_EASE_MPS2: f64 = v2xw_mobility::engine::SPEED_CAP_BRAKE_MPS2;
+
+impl GlosaDrivers {
+    /// Drops what is kept on `actor`, who has left the run: the maps follow the live fleet.
+    fn forget(&mut self, actor: ActorId) {
+        self.decided.remove(&actor);
+        self.capped.remove(&actor);
+        self.missing.remove(&actor);
+        self.seen_s.remove(&actor);
+    }
+
+    /// The command, if any, that applies `advice` to `actor`'s driver, who is doing
+    /// `speed_mps` at `now_s`; `step_s` is the time taken as gone at the first look.
+    ///
+    /// The easing and the hold run on the time since the driver's last look: counted in
+    /// mobility steps per look, a node stepping every 300 ms eased at a third of
+    /// [`GLOSA_EASE_MPS2`] and held a lost advice three times as long (the applications test:
+    /// 8 of 24 standing advisories kept to, speeds 2 m/s over what 1 m/s² reaches in 4 s).
+    fn apply(
+        &mut self,
+        actor: ActorId,
+        advice: Option<v2xw_node::apps::SpeedAdvice>,
+        speed_mps: f64,
+        now_s: f64,
+        step_s: f64,
+    ) -> Option<v2xw_mobility::MobilityCommand> {
+        if self.compliance <= 0.0 {
+            return None;
+        }
+        let dt_s = self
+            .seen_s
+            .insert(actor, now_s)
+            .map_or(step_s, |last| (now_s - last).clamp(0.0, 2.0));
+        let target = advice.and_then(|a| a.target_mps);
+        if target.is_some() {
+            self.missing.remove(&actor);
+        }
+        match target {
+            Some(v) => {
+                let (compliance, seed) = (self.compliance, self.seed);
+                let follows = *self.decided.entry(actor).or_insert_with(|| {
+                    v2xw_core::rng::RngStream::derive(
+                        seed,
+                        v2xw_core::rng::RngDomain::plugin(GLOSA_COMPLIANCE_ID),
+                        v2xw_core::rng::EntityRef::Actor(actor),
+                    )
+                    .bool(compliance)
+                });
+                if !follows {
+                    return None;
+                }
+                // Ease the cap down from where the driver is, never faster than
+                // GLOSA_EASE_MPS2; raise it at once (a faster advice is not a hazard).
+                let from = self.capped.get(&actor).copied().unwrap_or(speed_mps.max(v));
+                let eased = if v < from {
+                    (from - GLOSA_EASE_MPS2 * dt_s).max(v)
+                } else {
+                    v
+                };
+                let v = v2xw_core::math::q3(eased);
+                if self
+                    .capped
+                    .get(&actor)
+                    .is_some_and(|c| (c - v).abs() < 0.05)
+                {
+                    return None;
+                }
+                self.capped.insert(actor, v);
+                Some(v2xw_mobility::MobilityCommand::SpeedCap {
+                    actor,
+                    v_mps: Some(v),
+                })
+            }
+            // Advice that says "no target" (pass at your own speed) lifts the cap at once;
+            // advice that is missing lifts it only once it has stayed missing for
+            // GLOSA_HOLD_S.
+            None if advice.is_none() && self.capped.contains_key(&actor) => {
+                let gone = self.missing.entry(actor).or_insert(0.0);
+                *gone += dt_s;
+                if *gone < GLOSA_HOLD_S {
+                    return None;
+                }
+                self.missing.remove(&actor);
+                self.capped.remove(&actor);
+                Some(v2xw_mobility::MobilityCommand::SpeedCap { actor, v_mps: None })
+            }
+            None => {
+                self.missing.remove(&actor);
+                self.capped
+                    .remove(&actor)
+                    .map(|_| v2xw_mobility::MobilityCommand::SpeedCap { actor, v_mps: None })
+            }
+        }
+    }
+}
+
+/// The model id GLOSA compliance draws under ([`v2xw_core::rng::RngDomain::plugin`]).
+pub const GLOSA_COMPLIANCE_ID: &str = "app/glosa/compliance";
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// The vehicles' receiver validation, summed over the run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReceiverValidationReport {
+    /// SPDUs validated to an installed root.
+    pub checked: u64,
+    /// SPDUs checked by signature only (no trust store installed).
+    pub chain_unchecked: u64,
+    /// Refusals, by rule (`v2xw_node::rxval::RxReject::name`).
+    pub refused: std::collections::BTreeMap<String, u64>,
+    /// CA paths and end-entity certificates validated (cache misses).
+    pub ca_validations: u64,
+    /// End-entity certificates validated.
+    pub ee_validations: u64,
+    /// Post-quantum issuer signatures checked on newly learned certificates (the NDSS 2024
+    /// Partially-Hybrid mode); 0 in every other mode, and then not serialised.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cert_pq_verifications: u64,
+    /// SPDUs whose signer was already validated (signature only).
+    pub ee_hits: u64,
+    /// Validated end-entity certificates evicted (capacity, or the peer cache dropped
+    /// the certificate).
+    pub ee_evictions: u64,
+    /// Cached validations a freshly installed CRL invalidated.
+    pub invalidated: u64,
+    /// Chain findings tolerated as the published US RA profile.
+    pub tolerated: u64,
+    /// Signers with an identified region no location could be placed in.
+    pub region_unchecked: u64,
+    /// Signed CRLs the vehicles verified and installed.
+    pub crls_accepted: u64,
+    /// Signed CRLs refused, by reason.
+    pub crls_refused: std::collections::BTreeMap<String, u64>,
+    /// Validation operations no hardware anchor priced.
+    pub unpriced: u64,
+    /// Simulated validation time charged, ns.
+    pub charged_ns: u64,
+}
+
+impl ReceiverValidationReport {
+    /// Nothing was validated.
+    pub fn is_empty(&self) -> bool {
+        self.checked == 0 && self.crls_accepted == 0 && self.crls_refused.is_empty()
+    }
+
+    fn add(&mut self, s: &v2xw_node::rxval::RxStats) {
+        self.checked += s.checked;
+        self.chain_unchecked += s.chain_unchecked;
+        for (k, v) in &s.refused {
+            *self.refused.entry((*k).to_string()).or_insert(0) += v;
+        }
+        self.ca_validations += s.ca_validations;
+        self.ee_validations += s.ee_validations;
+        self.cert_pq_verifications += s.cert_pq_verifications;
+        self.ee_hits += s.ee_hits;
+        self.ee_evictions += s.ee_evictions;
+        self.invalidated += s.invalidated;
+        self.tolerated += s.tolerated;
+        self.region_unchecked += s.region_unchecked;
+        self.crls_accepted += s.crls_accepted;
+        for (k, v) in &s.crls_refused {
+            *self.crls_refused.entry((*k).to_string()).or_insert(0) += v;
+        }
+        self.unpriced += s.unpriced;
+        self.charged_ns = self.charged_ns.saturating_add(s.charged_ns);
+    }
+}
+
+/// The longest a fast-forward stop may jump: a minute, so a request that was
+/// due and could not start is retried within a minute, and the Backend view still sees
+/// the week pass a minute at a time — about 10,080 backend ticks a week.
+pub const FAST_FORWARD_MAX_JUMP: Duration = Duration::from_secs(60);
+
+/// What the `time.fast_forward` windows of a run did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct FastForwardReport {
+    /// How many windows the run entered.
+    pub windows: u64,
+    /// Backend ticks run inside the windows: the instants the run stopped at because a
+    /// credential-system event was due.
+    pub backend_ticks: u64,
+    /// Mobility steps not simulated inside the windows: traffic frozen, no radio.
+    pub skipped_steps: u64,
+    /// Simulated nanoseconds spent inside the windows.
+    pub skipped_ns: u64,
+    /// Nanoseconds the traffic stood still across the windows, from the instant each froze
+    /// it to the live step that resumed it ([`Engine::resume_after_fast_forward`]): the
+    /// time the road's own clocks did not count.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub traffic_paused_ns: u64,
+    /// Why each stop inside the windows was scheduled when it was: the credential-system
+    /// source of the earliest wake ([`crate::phase2::Phase2::next_wake_cause`]), or
+    /// `max-jump` (nothing due within [`FAST_FORWARD_MAX_JUMP`]) or `window-end`. A
+    /// window that stops far more often than its backend has work shows here what keeps
+    /// waking it.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub stops_by_cause: BTreeMap<String, u64>,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+
+/// What one run produced.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RunReport {
+    /// How many events of each class were dispatched, in class order.
+    pub events_by_class: BTreeMap<String, u64>,
+    /// How many mobility steps ran.
+    pub mobility_steps: u64,
+    /// How many actors were ever spawned.
+    pub actors_spawned: u64,
+    /// Trips the demand produced that never reached the road (no room at the origin for
+    /// the whole insertion delay, or no route).
+    pub trips_dropped: u64,
+    /// Of [`Self::trips_dropped`], the trips with no route from their origin.
+    pub trips_unroutable: u64,
+    /// Why actors left the run, by cause (`TripComplete`, `RouteBlocked`, ...), in cause
+    /// order. A closure on the timeline shows here: a vehicle that could not avoid it
+    /// leaves at the barrier as `RouteBlocked`.
+    pub despawn_causes: BTreeMap<String, u64>,
+    /// Every application's warnings, labelled against ground truth
+    /// (`crate::app_truth`): issued, true, false, missed, and the lead time.
+    pub apps: BTreeMap<String, crate::app_truth::AppTally>,
+    /// How many nodes were ever created.
+    pub nodes_created: u64,
+    /// How many frames went on the air.
+    pub frames_transmitted: u64,
+    /// How many reception attempts were evaluated: one per (frame, candidate receiver).
+    ///
+    /// This is the denominator of the packet delivery ratio and the term that dominates
+    /// the cost of a dense run: it grows with the number
+    /// of frames times the number of candidates inside the link-budget range of each
+    /// (`radio.range`), so with the square of the vehicle count at fixed area. An arrival
+    /// under the noise floor less the range margin is not an attempt: it is counted in
+    /// [`RunReport::faint_arrivals`] and enters the receivers' interference only.
+    pub reception_attempts: u64,
+    /// How many (frame, receiver) pairs received a frame only as energy: under the noise
+    /// floor less `radio.range.margin_db`, or beyond `radio.range.max_m` in line of sight.
+    /// They are interference at the receivers they share with a reception attempt, and
+    /// energy in a sidelink receiver's sensing window; they are not reception attempts.
+    pub faint_arrivals: u64,
+    /// Under `radio.channels`: (frame, receiver) pairs a frame reached on a channel the
+    /// receiver has no radio on. They are energy there — leakage into its own channel —
+    /// and not reception attempts.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub untuned_arrivals: u64,
+    /// Messages a unit could not send because the channel map puts them on a
+    /// channel it has no radio for (a single-radio unit's service-channel message).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub untuned_tx_drops: u64,
+    /// Under `net.channel_access: alternating`: EDCA countdowns the IEEE 1609.4 gate
+    /// held because the unit's one radio was on the other channel's interval, or the
+    /// countdown ran into the interval end. Zero without alternating access.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub mac_gate_deferrals: u64,
+    /// Frames the gate held because they would start in a guard interval or cross
+    /// the end of their channel's interval (IEEE 1609.4-2016 §6.2.5; Veins Mac1609_4's
+    /// `timeLeftInSlot`, behaviour only).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub mac_guard_deferrals: u64,
+    /// The distance emergency-class vehicles drove in the run, metres (speed times
+    /// the mobility step, summed). Measured only when the scenario names
+    /// `traffic.emergency_yield` (on or off), so other reports are unchanged; in a fixed
+    /// window, faster emergency vehicles drive further. A completed-trip travel time
+    /// would be biased by the window (faster vehicles complete longer trips).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub emergency_distance_m: u64,
+    /// Invariant: single-radio frames that went on the air in a guard or across
+    /// their interval's end. Must be 0; a late poll is the only way to make one.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub straddling_frames: u64,
+    /// Greens the actuated or NEMA controllers ended early on a gap, over the
+    /// run (the `traffic.control` log's last `gap_outs`). Zero, and not written, under
+    /// fixed-time control.
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub signal_gap_outs: u64,
+    /// Greens they ended at their maximum (`max_outs`).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub signal_max_outs: u64,
+    /// Per channel, the busy time every unit tuned to it measured, summed over the
+    /// metric windows, ns. With [`RunReport::channel_window_ns`], the mean channel busy
+    /// ratio of each of the run's channels. Empty in a single-channel run.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub channel_busy_ns: BTreeMap<u16, u64>,
+    /// Per channel, the listening time those windows span, summed over the units
+    /// tuned to it, ns.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub channel_window_ns: BTreeMap<u16, u64>,
+    /// How many of those attempts decoded — the numerator of the packet delivery ratio.
+    pub receptions_ok: u64,
+    /// The attempts that did not decode, by the single loss cause invariant I-R3 allows.
+    pub rx_losses: BTreeMap<String, u64>,
+    /// How many frames were successfully received by at least one node.
+    pub frames_received: u64,
+    /// How many frames the MAC granted channel access to.
+    pub mac_grants: u64,
+    /// How many frames the MAC refused — a full access-category queue, or a frame over the
+    /// MSDU cap.
+    pub mac_drops: u64,
+    /// The total channel-access delay over every granted frame, nanoseconds: the interval
+    /// between the signature completing and the preamble going on the air. Divided by
+    /// [`RunReport::mac_grants`] it is the mean access delay, which is the one number that
+    /// says whether the MAC is doing anything.
+    pub mac_access_delay_ns: u64,
+    /// How many frames the PHY refused as too large for the MSDU cap
+    /// (the fragmenter must have acted first, and none is wired in).
+    pub phy_refusals: u64,
+    /// How many signed messages were refused before the MAC because they exceeded the
+    /// network layer's MTU (`fragmenter/none`: 1,400 octets for WSMP, 1,398 for
+    /// GeoNetworking).
+    pub net_mtu_refusals: u64,
+    /// How many frames were *not* generated because the instant fell in a time-dilation
+    /// window.
+    pub suppressed_frames: u64,
+    /// How many messages a node generated and began to sign whose signature (with its
+    /// hand-off) completes after the run's end, so they never reached the MAC. A healthy
+    /// run counts only the last instants' messages, about one per node; a signer that
+    /// cannot keep up (a sign time above the message interval: SLH-DSA-SHA2-128s on an
+    /// automotive SoC signs in seconds) counts nearly every message here. Without this
+    /// count such a run would put nothing on the air and no counter would say why.
+    pub signed_past_end: u64,
+    /// The credential system's calendar (`time.calendar`): `real`, the
+    /// deployment's weekly grid from the 2015 epoch, or `compressed`, whose i-period
+    /// numbers and calendar waits are not the deployment's. Empty for a run without a
+    /// credential backend.
+    pub calendar: String,
+    /// What the `time.fast_forward` windows skipped. All zeroes without one.
+    pub fast_forward: FastForwardReport,
+    /// How many times a roadside unit's SPaT failed to encode, so the unit sent its last
+    /// good one. Zero in a healthy run; anything else is an encoder defect.
+    pub infra_encode_failures: u64,
+    /// How many SDUs a splitting fragmenter sent as more than one frame
+    /// (`net.fragmenter`, `crate::frag`).
+    pub sdus_fragmented: u64,
+    /// How many fragment frames they went out as.
+    pub fragments_sent: u64,
+    /// Reassembly groups — one fragmented SDU (or certificate) at one receiver that had
+    /// any of its fragments in range — resolved with every fragment decoded.
+    pub reassembly_complete: u64,
+    /// Reassembly groups resolved with some fragment missing.
+    pub reassembly_lost: u64,
+    /// How many records the engine **emitted**.
+    ///
+    /// Not what was stored: a recorder can refuse a record the engine handed it (an
+    /// undeclared channel, a full disk), and this counts the handing over.
+    /// [`RunReport::records_written`] is what the recorder says it kept, and the two
+    /// disagreeing is exactly the condition a run report has to be able to state.
+    pub records: u64,
+    /// How many records the context refused, by the visibility rule.
+    pub records_refused: u64,
+    /// How many records the **recorder** confirms it stored, when it can say.
+    ///
+    /// `None` means the recorder does not report a count — a wrapper that forwards
+    /// [`crate::RunRecorder::write`] and nothing else, for instance. It is `None` rather
+    /// than zero on purpose: "I do not know" and "nothing was written" are different
+    /// facts and a report that conflated them would be the same defect one layer up.
+    pub records_written: Option<u64>,
+    /// How many VWP `Keyframe` frames the engine produced (vwp-v1 §3.3).
+    pub keyframes: u64,
+    /// How many VWP `Delta` frames the engine produced (vwp-v1 §3.4).
+    pub deltas: u64,
+    /// How many VWP frames the **recorder** confirms it stored, when it can say.
+    ///
+    /// Compared against `keyframes + deltas` it says whether the normative binary stream
+    /// reached the artefact. A recording whose frame count is zero while the engine
+    /// produced thousands is a recording a browser cannot replay, and that is now a
+    /// number in the report rather than something an auditor has to discover.
+    pub frames_written: Option<u64>,
+    /// The instant the loop stopped at.
+    pub end_ns: SimTime,
+    /// What the Phase 2 path did, when a scenario declared one
+    /// ([`crate::phase2`]). All zeroes when it did not.
+    pub phase2: crate::phase2::Phase2Report,
+    /// What the sidelink access layer did, when `radio.rat` selected LTE-V2X or NR-V2X.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidelink: Option<sidelink::SidelinkReport>,
+    /// How many of [`RunReport::nodes_created`] were pedestrians' and cyclists' devices
+    /// (`actors.vru.device_fraction`).
+    pub vru_devices_created: u64,
+    /// Provisioned credentials a device refused at installation because the key it was
+    /// handed does not reconstruct under its certificate (`d·G ≠ e·P_U + Q_ACA`), or that
+    /// could not be issued: each one is a certificate the device cannot sign with.
+    pub credentials_refused: u64,
+    /// What the vehicles' receiver validation did (`v2xw_node::rxval`): every
+    /// refusal by 1609.2 rule, CRLs accepted and refused, the published-RA findings
+    /// tolerated, and the validation time charged. Absent when no node validated.
+    #[serde(skip_serializing_if = "ReceiverValidationReport::is_empty")]
+    pub receiver_validation: ReceiverValidationReport,
+    /// How many PSMs and VAMs a VRU device wanted to send and did not: the EN 302 571 duty
+    /// cycle, the energy budget, or no credential (`v2xw_node::vru`).
+    pub vru_suppressed: u64,
+    /// Out-of-band P2PCD learning responses (`Ieee1609dot2Peer2PeerPDU`, PSID 136) the
+    /// nodes' P2P entities put on the air, each one a radio frame of its own, handed to
+    /// the MAC at the instant its back-off expired.
+    pub p2pcd_responses_on_air: u64,
+    /// What the city-scale radio gate did, when the scenario has a `scale` section with a
+    /// microscopic box ([`crate::scale::RadioGate`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<ScaleTally>,
+    /// Each multi-hop hazard warning (`net.geonet`): reach, latency, hops, overhead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub geonet: Vec<GeonetWarning>,
+    /// What the on-air GeoNetworking routers did (`net.geonet.forwarding: on-air`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gn_air: Option<GnAirStats>,
+    /// What the GeoNetworking global CBR did (`net.dcc_cbr: global`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gcbr: Option<GlobalCbrTally>,
+    /// Collective perception's object awareness, redundancy, sizes and rate (`cpm`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpm: Option<CpmTally>,
+    /// Every octet that went on the air, by layer, with the PHY's own time and the
+    /// forwarding share ([`AirBytes`]).
+    pub air_bytes: AirBytes,
+    /// The same frames by message type (`bsm`, `cam`, `denm`, `cpm`, ...): frames, octets,
+    /// mean size and air time, so each type's share of the channel load ([`TypeAir`]).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub air_by_type: BTreeMap<String, TypeAir>,
+}
+
+/// The city-scale radio gate's totals ([`crate::scale`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ScaleTally {
+    /// The radio margin around the microscopic box, metres (rounded).
+    pub margin_m: u64,
+    /// Node-steps a dormant node did not take.
+    pub dormant_node_steps: u64,
+    /// The most nodes awake at once.
+    pub peak_awake_nodes: u64,
+    /// The most nodes dormant at once.
+    pub peak_dormant_nodes: u64,
+    /// The most equipped vehicles at once whose node was not yet created (spawned beyond
+    /// the margin and never within it since).
+    pub peak_deferred_nodes: u64,
+}
+
+impl RunReport {
+    fn count(&mut self, class: EventClass) {
+        *self.events_by_class.entry(class.to_string()).or_insert(0) += 1;
+    }
+
+    fn lost(&mut self, cause: LossCause) {
+        *self
+            .rx_losses
+            .entry(cause_name(cause).to_string())
+            .or_insert(0) += 1;
+    }
+
+    /// The packet delivery ratio over reception attempts, or `None` when nothing was
+    /// attempted.
+    ///
+    /// Stated here rather than left to a caller's division, because the two numbers have
+    /// to be the paired ones: attempts inside the candidate
+    /// range as the denominator, decoded arrivals as the numerator. `frames_received`
+    /// counts frames that reached *at least one* node and is a different quantity.
+    #[must_use]
+    pub fn pdr(&self) -> Option<f64> {
+        // `then_some`, not `then`: the body is a cast and a division of two integers
+        // already in hand, so there is nothing to defer and `clippy::unnecessary_lazy_
+        // evaluations` says so. A zero denominator never reaches the division, because
+        // the predicate is what guards it.
+        (self.reception_attempts > 0)
+            .then_some(self.receptions_ok as f64 / self.reception_attempts as f64)
+    }
+}
+
+/// The horizontal distance from `p` to the segment `a → b`, metres.
+fn distance_to_segment_2d(p: Vec3, a: Vec3, b: Vec3) -> f64 {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 {
+        (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let q = Vec3::new(a.x + t * dx, a.y + t * dy, p.z);
+    p.distance_2d(q)
+}
+
+/// The first roadside unit's node id: unit `i` of `actors.rsus` is `ROADSIDE_ID_BASE + i`.
+///
+/// Out of the vehicle counter's way (a run mints one id per equipped actor from 0) and
+/// below the jammers' and the SCMS backend's offset ids, so a vehicle's node id, and every
+/// draw keyed by it, is the same whatever the roadside deployment.
+pub const ROADSIDE_ID_BASE: u32 = 0x4000_0000;
+
+/// The node id of roadside unit `i` ([`ROADSIDE_ID_BASE`]).
+#[must_use]
+pub fn roadside_node(i: usize) -> NodeId {
+    NodeId::new(ROADSIDE_ID_BASE + u32::try_from(i).expect("fewer than 2^30 roadside units"))
+}
+
+/// The kebab-case name a `phy.rx` record carries for a loss cause.
+///
+/// `LossCause` serialises kebab-case already, but a record field is a `&str` and going
+/// through `serde_json` for one word per lost frame is a measurable cost at the densities
+/// this engine is built for.
+const fn cause_name(cause: LossCause) -> &'static str {
+    match cause {
+        LossCause::OutOfRange => "out-of-range",
+        LossCause::BelowSensitivity => "below-sensitivity",
+        LossCause::Collision => "collision",
+        LossCause::PreambleMissed => "preamble-missed",
+        LossCause::HalfDuplex => "half-duplex",
+        LossCause::HiddenTerminal => "hidden-terminal",
+        LossCause::Jammed => "jammed",
+        LossCause::Fading => "fading",
+        LossCause::InBandEmission => "in-band-emission",
+        LossCause::ResourceCollision => "resource-collision",
+        LossCause::AdjacentChannel => "adjacent-channel",
+        LossCause::OffChannel => "off-channel",
+        // `LossCause` is `#[non_exhaustive]`: a cause added upstream lands here rather
+        // than failing the build, and reports itself as unknown rather than as something
+        // it is not.
+        _ => "unknown",
+    }
+}
+
+/// One `gt.spawn` or `gt.despawn` record waiting for the step's recorder.
+#[derive(Debug, Clone)]
+enum Lifecycle {
+    Spawn(crate::records::GtSpawn),
+    Despawn(crate::records::GtDespawn),
+}
+
+/// Everything the engine knows about one actor that the mobility update does not repeat.
+#[derive(Debug, Clone)]
+struct ActorRecord {
+    class: VehicleClass,
+    driver: DriverProfile,
+    node: Option<NodeId>,
+    last: Kinematics,
+    /// What the road user is doing (vwp-v1 §3.3.5), from the mobility update.
+    activity: u8,
+}
+
+/// The attacker's own frame a Sybil attacker's ghost frames copy (`Engine::ghost_frames`).
+#[derive(Clone, Copy)]
+struct GhostParent<'a> {
+    /// The attacker's own transmission.
+    tx: &'a Transmission,
+    /// Its frame, as handed down.
+    frame: &'a FrameState,
+    /// Its generation time, which each ghost's claimed time is shifted from.
+    generated: SimTime,
+    /// The padding its SDU carries, carried by each ghost too.
+    padding: u32,
+}
+
+/// A frame between the signature finishing and the last symbol arriving.
+///
+/// It lives in [`Engine::frames`] from the moment the node hands it down until its
+/// `PhyEnd`, so one entry covers three states: waiting for the MAC, granted and on the
+/// air, and being evaluated at its receivers.
+#[derive(Debug, Clone)]
+struct FrameState {
+    tx: NodeId,
+    /// The SAE congestion-control exception that sent this frame early (a critical event
+    /// or a tracking error), which its `node.tx` record names.
+    dcc_event: Option<v2xw_radio::J2945Trigger>,
+    /// The transmitter's ground-truth position at [`FrameState::start`], filled in when
+    /// the MAC's grant fixes that instant.
+    tx_pos: Vec3,
+    bytes: u32,
+    msg_type: v2xw_msg::MsgType,
+    signer: v2xw_msg::sec_types::HashedId8,
+    full_certificate: bool,
+    generation_time: SimTime,
+    claimed_pos: Vec3,
+    claimed_speed_mps: f64,
+    claimed_heading_rad: f64,
+    /// A BSM's `secMark` and `accelSet`, as its sender encoded them.
+    bsm: v2xw_node::bsm_timing::BsmExtras,
+    /// When the signature completed: the earliest the MAC may have the frame.
+    ready_at: SimTime,
+    /// When the preamble goes on the air — the MAC's grant, not the ready instant.
+    start: SimTime,
+    /// `start + air`.
+    end: SimTime,
+    air: Duration,
+    /// The frame as the PHY and the MAC see it, carrying the DCC-controlled power.
+    descriptor: FrameDescriptor,
+    /// The PHY's transmission handle, once [`Phy::begin_tx`] has issued one.
+    tx_handle: Option<TxHandle>,
+    /// The arrivals the engine registered with the PHY: receiver → (received power dBm,
+    /// transmitter-to-receiver distance m). A `BTreeMap`, so every walk over the receiver
+    /// set is in [`NodeId`] order without a sort.
+    arrivals: BTreeMap<NodeId, (f64, f64)>,
+    /// Receivers the frame reaches only as energy: below the noise floor less the
+    /// `radio.range` margin, or beyond the capped range in line of sight. Receiver →
+    /// received power, dBm. They are not reception attempts — no receiver can detect a
+    /// frame that far under its noise — but they are interference at every receiver they
+    /// share with a frame that is, and energy in a sidelink receiver's sensing window.
+    faint: BTreeMap<NodeId, f64>,
+    /// The transmitter's heading when the frame started, radians — its street's
+    /// direction, which the high tier's corner tracer reads. `None` for a roadside unit.
+    tx_heading: Option<f64>,
+    /// The application payload a Phase 2 message carries, for the two messages the
+    /// revocation path needs and no node runtime generates.
+    app: Option<AppPayload>,
+    /// Whether the frame's signature verifies. `false` only for an attacker's forged or
+    /// tampered message; the SPDU's signature octets are then corrupted, so a receiver
+    /// that checks the bytes finds it out by checking them, and one that has no bytes
+    /// reads this field.
+    signature_valid: bool,
+    /// The validity period of the genuine certificate an attacker signed under outside
+    /// that period (`ExpiredCert`, `NotYetValid`): [`v2xw_node::RxFrame::signer_validity`].
+    signer_validity: Option<(SimTime, SimTime)>,
+    /// The signed SPDU as it goes on the air, when the node's own generator built one.
+    ///
+    /// `None` for the two frames the engine synthesises on a node's behalf (the
+    /// misbehaviour report and the CRL broadcast), which size a payload from a protocol
+    /// table and never build one; the receiver then falls back to the engine's own
+    /// validity decision, which is what [`v2xw_node::RxFrame::spdu`] documents.
+    spdu: Option<Vec<u8>>,
+    /// For those two frames: the certificate of the credential that signed them (both
+    /// attach it), which every receiver validates to its own installed roots before the
+    /// engine's validity decision counts (without it a provider's frames
+    /// verified after the CTL dropped its root). `None` when `spdu` carries the bytes.
+    signer_certificate: Option<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
+    /// The facilities-layer payload's length in octets, when the node encoded one.
+    ///
+    /// This and [`FrameState::envelope_bytes`] are what make `node.tx`'s `payload_bytes`
+    /// and `envelope_bytes` real. They were null for every frame of the Phase 1 build,
+    /// which is why "security overhead as a fraction of airtime" — one of the three
+    /// results this simulator exists to produce — could not be computed from a recording
+    /// at all. `None` for a frame the engine sized from a protocol table rather than
+    /// encoding, which is the same set of frames `spdu` is `None` for.
+    payload_bytes: Option<u32>,
+    /// The 1609.2 envelope's cost in octets: the SPDU less the payload.
+    envelope_bytes: Option<u32>,
+    /// The sidelink resource the transport block was sent on, when the access layer is a
+    /// sidelink.
+    sl_resource: Option<v2xw_radio::SlResource>,
+    /// Co-slot sidelink transmissions at each receiver, declared as each one starts.
+    sl_interferers: BTreeMap<NodeId, Vec<v2xw_radio::SlInterferer>>,
+    /// Receivers inside a `high` focus region, whose reception the high-tier PHY rule
+    /// decides (preamble capture) whatever the surrounding tier is.
+    focus_high: std::collections::BTreeSet<NodeId>,
+    /// Each receiver's place against the focus region, when the run has one: the tag
+    /// `phy.rx` carries so boundary-biased links can be told apart.
+    focus_placement: BTreeMap<NodeId, &'static str>,
+    /// The transport block's sidelink state across its blind retransmissions.
+    sl: sidelink::SlFrame,
+    /// Every octet of the PSDU by layer (`v2xw_net::frame`). `bytes` is the SPDU a
+    /// receiver verifies; `layers.psdu_bytes()` is what went on the air, and what the air
+    /// time is computed from.
+    layers: v2xw_net::FrameLayers,
+    /// Octets of an attached certificate inside the envelope, when the node built one.
+    cert_bytes: Option<u32>,
+    /// The generation instant on the simulation's timeline (`generation_time` is the
+    /// sender's own clock, which is what the payload claims).
+    t_generated: SimTime,
+    /// When the sender's signer picked the message up, on the simulation's timeline.
+    t_sign_start: SimTime,
+    /// When the signature finished, on the simulation's timeline: `ready_at` less the
+    /// hand-off ([`Engine::hand_down`]).
+    t_signed: SimTime,
+    /// Of the channel-access delay, the AIFS, ns.
+    mac_aifs_ns: u64,
+    /// Of the channel-access delay, the backoff slots the MAC counted, ns.
+    mac_backoff_ns: u64,
+    /// What the message said, for the `node.tx` record ([`message_content`]).
+    content: Option<v2xw_metrics::channels::MsgContentView>,
+    /// The reception census taken when the frame went on the air: how many equipped
+    /// receivers were truly within each 20 m range of the transmitter, by bin index
+    /// (`phy.prr`, 3GPP TR 36.885 §A.2.1.4). Independent of the candidate set.
+    census: BTreeMap<u32, u32>,
+    /// For a fragment of a split SDU (a generic piece or a facilities segment): which
+    /// fragment of which SDU it is ([`crate::frag`]).
+    frag: Option<crate::frag::FragMeta>,
+    /// For an SPDU of a certificate cycle that carries a fragment of the hybrid
+    /// certificate: which fragment of which cycle.
+    cert_frag: Option<crate::frag::FragMeta>,
+    /// The GeoNetworking packet the frame carries, when the run forwards on the air.
+    gn: Option<gn_air::GnFrame>,
+    /// What the passive privacy observer reads from this frame, handed to it when the
+    /// frame goes on the air ([`Engine::start_frame`]), so a frame the MAC drops is never
+    /// heard and a link claim is never stamped before the frame was sent. It was read
+    /// when the frame was built, at its `ready` instant: on S, 219 of 643 `privacy.link`
+    /// claims were stamped up to 11.7 ms after the step that logged them.
+    privacy_obs: Option<PrivacyObs>,
+}
+
+/// What the passive privacy observer reads from one safety frame on the air: the signer
+/// digest, the claim, its stated confidence and a BSM's `msgCnt`.
+#[derive(Debug, Clone, Copy)]
+struct PrivacyObs {
+    signer: [u8; 8],
+    /// The generation instant on the simulation's timeline.
+    generated: SimTime,
+    /// Position, speed (m/s) and heading (rad) the frame claims.
+    claim: (Vec3, f64, f64),
+    confidence: f64,
+    seq: Option<u8>,
+}
+
+/// What became of a transmission [`Engine::hand_down_app`] was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandDown {
+    /// It went down to the MAC (whole, or in the fragmenter's pieces).
+    Sent,
+    /// The network layer refused it at its MTU (counted in `net_mtu_refusals`).
+    MtuRefused,
+    /// Not sent for another reason: past the horizon, or a dilated instant.
+    NotSent,
+}
+
+/// A broadcast CRL: the list's version, the entries this frame carries and every
+/// provider's signed CRL it relays unchanged.
+type CrlFrame = (
+    u32,
+    Vec<v2xw_sec::linkage::CrlLinkageEntry>,
+    Vec<std::sync::Arc<[u8]>>,
+);
+
+/// What a Phase 2 application message carries, beyond its length.
+///
+/// The node's application layer is what would hold these, and `v2xw-node`
+/// ships none, so the engine carries the payload beside the frame and acts on it at the
+/// receiver. Both are real messages with real lengths on the air; what is missing is a
+/// runtime that would decide to send them.
+#[derive(Debug, Clone)]
+#[allow(
+    clippy::type_complexity,
+    reason = "a one-off tuple read where it is built; an alias would hide its fields"
+)]
+enum AppPayload {
+    /// A misbehaviour report on its way to a roadside unit that forwards it.
+    Report(Box<v2xw_threat::MisbehaviourReport>),
+    /// A certificate revocation list broadcast by the roadside: the list's version (its
+    /// entry count) and the entries this frame carries, with every provider's signed CRL
+    /// it relays unchanged.
+    Crl(Box<CrlFrame>),
+}
+
+impl FrameState {
+    /// The PHY's id for this transmission, or zero before `begin_tx`.
+    fn tx_id(&self) -> u64 {
+        self.tx_handle.map_or(0, |h| h.id)
+    }
+}
+
+/// A configured run, ready to be driven.
+pub struct Engine {
+    scenario: Scenario,
+    world: World,
+    registry: Registry,
+    manifest: Manifest,
+    scheduler: Scheduler<Event>,
+    rng: RngRegistry,
+    provenance: ProvenanceLog,
+    params: ParamSet,
+    wall: WallClock,
+    snapshot: ActorSnapshot,
+    mobility: Box<dyn Mobility>,
+    gnss: Box<dyn GnssModel>,
+    propagation: Box<dyn BoxedPropagation>,
+    fading: Box<dyn BoxedFading>,
+    /// `radio.channel_model.fading_coherence: doppler`: fading draws are keyed by the
+    /// link's coherence block instead of the frame (`v2xw_radio::DopplerCoherence`).
+    coherence: Option<v2xw_radio::DopplerCoherence>,
+    /// The physical layer. One instance for the run: it holds the live arrival set, every
+    /// node's transmit intervals for the half-duplex test, and the air-time ledger.
+    phy: OfdmPhy,
+    /// Medium access, at the medium and high tiers. `None` at the abstract tier, which
+    /// models no medium access: there the frame reaches the air one AIFS after signing.
+    mac: Option<EdcaOcbMac>,
+    /// Congestion control, at the medium and high tiers.
+    dcc: Option<crate::wiring::EngineDcc>,
+    /// The gatekeeper of the channel map's service channel, a second instance of the
+    /// run's ETSI algorithm fed with that channel's own busy ratio. DCC is a per-channel loop: the
+    /// gate's `T_off` is set by the
+    /// channel's CBR (TS 102 687 Annex A) and spaces the transmissions on that channel,
+    /// and a unit's second radio is a second transmitter; one gate for both channels let a
+    /// MAP on the service channel hold the next SPaT on the safety channel back. `None`
+    /// without a service channel or with J2945/1, which does not gate.
+    dcc_service: Option<crate::wiring::EngineDcc>,
+    /// J2945/1's channel-quality bookkeeping (the BSMs each unit sent and each heard),
+    /// and the last sub-interval each unit updated its indicator in. Empty unless the
+    /// run's congestion control is J2945/1.
+    j2945_per: Option<v2xw_radio::PerWindow>,
+    j2945_quality_at: BTreeMap<NodeId, u64>,
+    /// Each on-board unit's own motion as its navigation solution gives it, for J2945/1's
+    /// tracking error (`v2xw_radio::SaeJ2945Dcc::on_tracking`): see
+    /// [`Engine::update_dcc`].
+    j2945_nav: BTreeMap<NodeId, v2xw_radio::HostState>,
+    /// Each unit's J2945/1 transmission decision still to be made in this mobility step, at
+    /// its own phase ([`Engine::on_j2945_decision`]), and what it reads.
+    j2945_sampled: BTreeMap<NodeId, J2945Sample>,
+    weather: WeatherState,
+    actors: BTreeMap<ActorId, ActorRecord>,
+    /// The actor each equipped node rides, kept beside [`Engine::actors`] so a node's
+    /// position is one lookup. It was a scan of every actor, made for every frame put on
+    /// the air and every node position asked for: quadratic in the fleet.
+    node_actor: BTreeMap<NodeId, ActorId>,
+    /// Records made where no recorder is in hand — an attacker's `gt.attack.action` from
+    /// inside the frame build, a digest's first `gt.subject` — written, in the order they
+    /// were made, after the node phase hands its frames down
+    /// ([`Engine::flush_deferred_records`]). Until this existed they went to a null
+    /// recorder, so a run never wrote the ground truth its detection metrics join on and
+    /// every `det_*` sample read zero trials.
+    deferred_records: Vec<(SimTime, v2xw_core::ctx::OwnedRecord)>,
+    /// The dataset exporter's record state (`crate::dataset_records`), when the scenario
+    /// names that exporter; `None` keeps every other run's recording unchanged.
+    dataset: Option<Box<crate::dataset_records::DatasetState>>,
+    /// Every application warning labelled against ground truth (`crate::app_truth`).
+    app_truth: crate::app_truth::AppTruth,
+    /// Which drivers follow GLOSA's advice, and the speed caps followers drive under.
+    glosa: GlosaDrivers,
+    /// The junction controllers' priority service (`crate::priority`, NTCIP 1211).
+    priority: crate::priority::PriorityControllers,
+    /// Vehicle-actuated signal control (`crate::actuated`, `traffic.signals`), inert under
+    /// fixed-time control.
+    actuated: crate::actuated::ActuatedControllers,
+    /// The traffic-control log last written (`traffic.control`), so a record goes out only
+    /// when something changed.
+    traffic_log: Option<crate::actuated::TrafficControlRecord>,
+    /// What the CPM-sending vehicles' sensors perceive (`crate::perception`), when the
+    /// scenario sends CPMs.
+    perception: Option<crate::perception::Perception>,
+    /// Nodes that have despawned and whose links' radio state has not been swept yet, in
+    /// despawn order ([`Engine::sweep_retired_links`]).
+    retired: Vec<(SimTime, NodeId)>,
+    /// What departed holders wrote to the modelled crypto directories, with when they left.
+    departed_crypto: Vec<(SimTime, v2xw_sec::crypto::ModeledDirectoryEntries)>,
+    /// Actors despawned since the last stream sweep ([`Engine::sweep_retired_links`]).
+    retired_actors: std::collections::BTreeSet<ActorId>,
+    /// Trips that ended since the last stream sweep (`Mobility::take_finished_trips`).
+    ended_trips: std::collections::BTreeSet<u64>,
+    /// Which cached streams are a trip's, with the demand model's own; built at first use.
+    trip_streams: Option<v2xw_mobility::TripStreams>,
+    /// The last `node.credentials` of vehicles that left in this step, recorded once the
+    /// step's recorder is at hand.
+    departed_credentials: Vec<v2xw_proto::scms::pki_view::NodeCredentials>,
+    /// The `gt.spawn` and `gt.despawn` records of this step, with their instants, kept
+    /// only when a SUMO exporter is named ([`crate::export::records_lifecycle`]) and
+    /// recorded once the step's recorder is at hand.
+    lifecycle: Vec<(SimTime, Lifecycle)>,
+    /// The receiver validation of every node that left the run (edge-case package):
+    /// summed into the report with the nodes still present. Until 2026-10-19 a departed
+    /// node's refusals were dropped from `receiver_validation` with it.
+    departed_rx: ReceiverValidationReport,
+    /// SRMs the nodes that left the run withheld for want of a valid identification
+    /// certificate, summed into `phase2.srm_unsigned_no_ident` with the live
+    /// nodes'.
+    departed_srm_no_ident: u64,
+    /// Per requester (the SRM's signer digest): how many SRMs the roadside units passed
+    /// to a junction's controller, and the first and last instant. What a test reads to
+    /// see whose requests were served ([`Engine::priority_requests_heard`]).
+    priority_heard: BTreeMap<[u8; 8], (u64, SimTime, SimTime)>,
+    /// **A test hook** ([`Engine::forge_srm_for_test`]): every ordinary vehicle's unit
+    /// sends SRMs as an emergency vehicle's does, while the SCMS provisions it as the
+    /// ordinary vehicle it is.
+    forge_srm: bool,
+    /// Emergency vehicles' distance so far, metres, when the scenario names
+    /// `traffic.emergency_yield` ([`RunReport::emergency_distance_m`]).
+    ev_distance_m: Option<f64>,
+    /// The actors' bodies at the last published state, for the vehicles-on-the-path
+    /// test; rebuilt with the snapshot, and only when vehicle blockage is composed.
+    bodies: link::BodyIndex,
+    /// The actors carrying a radio at the last published state, gridded: a frame's
+    /// candidate receivers and its census ([`radios`]).
+    radios: radios::RadioIndex,
+    /// Every hosted device: vehicles' OBUs and roadside units, and — when
+    /// `actors.vru.device_fraction` equips them — pedestrians' and cyclists' handsets
+    /// ([`crate::hosted::HostedNode`]).
+    nodes: BTreeMap<NodeId, crate::hosted::HostedNode>,
+    /// Frames each node has received and not yet processed, with the instant each
+    /// finished arriving and the token its `node.rx` record is joined by.
+    inboxes: BTreeMap<NodeId, Vec<(RxFrame, RxStamp)>>,
+    /// The network and transport stack every frame is framed with (`net.layer`).
+    net: v2xw_net::NetStack,
+    /// Reception attempts a node has been handed and has not yet resolved, by
+    /// (receiver, token): the `node.rx` record so far, waiting for its fate.
+    rx_pending: BTreeMap<(NodeId, u64), NodeRx>,
+    /// The next reception-attempt token.
+    next_rx_token: u64,
+    /// The scenario's fragmentation (`net.fragmenter`, [`crate::frag`]).
+    frag_plan: crate::frag::FragPlan,
+    /// Per receiver, the reassembly state of the strategy in force.
+    reassemblers: BTreeMap<NodeId, crate::frag::Strategy>,
+    /// Every fragmented SDU in progress at a receiver, by (receiver, SDU).
+    frag_groups: BTreeMap<(NodeId, v2xw_core::ids::SduId), crate::frag::FragGroup>,
+    /// Groups already resolved, until one more timeout has passed, so a fragment arriving
+    /// after its group's fate cannot open the group again.
+    frag_resolved: BTreeMap<(NodeId, v2xw_core::ids::SduId), SimTime>,
+    /// Per sender, its certificate cycle: SPDUs sent, and the cycle's SDU.
+    cert_cycles: BTreeMap<NodeId, (u64, v2xw_core::ids::SduId)>,
+    /// Per-node MAC counters since the last `mac.cbr` report.
+    mac_window: BTreeMap<NodeId, MacWindow>,
+    /// MAC timers that ran for a node already retired (a frame it handed over before it
+    /// left), for [`Engine::retired_mac_state`]: what `mac_window`'s live guard is for.
+    retired_mac_timers: u64,
+    /// The air's synchrony, for [`Engine::air_burst_peaks`]: the instant the last frame
+    /// started, how many started at it, the most that ever started in one nanosecond, and
+    /// the most interferer entries one frame's start declared. Read by nothing the run
+    /// computes or records.
+    air_burst: AirBurst,
+    /// Per node, where its current `mac.cbr` window began: the instant (its last report, or
+    /// its creation) and its MAC's running busy time then ([`CbrMeter::busy_total_ns`]).
+    ///
+    /// [`CbrMeter::busy_total_ns`]: v2xw_radio::mac::CbrMeter::busy_total_ns
+    cbr_mark: BTreeMap<NodeId, (SimTime, u64)>,
+    /// The run's own channel map (`radio.channels`); `None` in a single-channel
+    /// run, where every path below is the one it always was.
+    channel_plan: Option<channels::ChannelPlan>,
+    /// The IEEE 1609.4 schedule when `net.channel_access` is `alternating` and the
+    /// EDCA MAC carries its gate; `None` otherwise, where every path below is unchanged.
+    wave: Option<v2xw_radio::wave_schedule::ChannelSchedule>,
+    /// [`Engine::cbr_mark`] per `(node, channel)` for the per-channel busy totals of a
+    /// multi-channel run ([`RunReport::channel_busy_ns`]).
+    chan_mark: BTreeMap<(NodeId, u16), (SimTime, u64)>,
+    /// `node.rx` fates settled where no recorder is in hand (a receiver retired), written
+    /// at the next point that has one.
+    orphaned_rx: Vec<NodeRx>,
+    frames: BTreeMap<FrameSeq, FrameState>,
+    /// Which frames currently have a registered arrival at each receiver, so a new frame
+    /// can find the ones it overlaps without scanning every live frame.
+    live_at_rx: BTreeMap<NodeId, Vec<FrameSeq>>,
+    /// The frames each node has put on the air (`tx_handle` set) and that may still be
+    /// there, so carrier sense at a node finds its own transmission without scanning the
+    /// whole frame table — which holds every queued frame of every node, and made each MAC
+    /// poll of a saturated run cost O(nodes x queue). A superset: entries whose frame has
+    /// ended or gone are skipped when read and pruned at the node's next MAC poll.
+    on_air_tx: BTreeMap<NodeId, BTreeSet<FrameSeq>>,
+    /// The MAC timers queued and not yet dispatched, as `(instant, node, channel)`. A
+    /// second timer for the same node and channel at the same instant would poll the same
+    /// state machine twice in one nanosecond, and in a saturated run 93 % of all timer
+    /// events (4.2M of 4.5M) were such repeats, so [`Engine::schedule_mac_timer`] drops
+    /// it: the one already queued is the earliest by sequence, the one the kernel
+    /// dispatches first, so the order of every other event is unchanged.
+    mac_timers_queued: BTreeSet<(SimTime, NodeId, u16)>,
+    /// Frames whose signature has finished but which the MAC has not yet been handed,
+    /// per transmitter, keyed by (ready instant, frame) so the walk is in time order.
+    pending_tx: BTreeMap<NodeId, Vec<(SimTime, FrameSeq)>>,
+    /// The Phase 2 path, when the scenario declared one.
+    phase2: Option<crate::phase2::Phase2>,
+    /// Issues the credentials no protocol flow issues, under the run's ACA
+    /// ([`crate::credentials`]).
+    credential_factory: std::sync::Arc<crate::credentials::CredentialFactory>,
+    /// The pseudonym-change strategy's engine half and the eavesdropper's coverage
+    /// (`crate::pseudonym_policy`), when the scenario asks for either.
+    pseudonym_policy: Option<crate::pseudonym_policy::PseudonymPolicy>,
+    /// The per-device BSM timing model's calibration, when
+    /// `actors.vehicles.bsm_timing.enabled` is true (`v2xw_node::bsm_timing`): every
+    /// vehicle OBU is handed it at creation.
+    bsm_timing: Option<std::sync::Arc<v2xw_node::bsm_timing::BsmTimingCalibration>>,
+    /// Each vehicle's odometer and the store's change count at its last step, for the
+    /// policy.
+    policy_odometer: BTreeMap<NodeId, (f64, u32)>,
+    /// The roadside units' positions. They are nodes but not actors, so they are not in
+    /// the mobility snapshot and the reception phase has to find them here.
+    rsus: BTreeMap<NodeId, Vec3>,
+    /// Backend traffic in flight: reports to the proxy and CRL downloads, by the SDU id
+    /// their [`Event::NetDeliver`] carries.
+    transfers: BTreeMap<v2xw_core::ids::SduId, Transfer>,
+    /// The next backend SDU id.
+    next_sdu: u32,
+    /// The next `net.bytes` id for a backend transfer.
+    next_backend_bytes: u64,
+    /// Whether the roadside CRL broadcast timer is running.
+    crl_timer_armed: bool,
+    /// Each roadside unit's CRL download in flight over its backhaul, and when it lands:
+    /// the unit installs and broadcasts the list only once it has it.
+    rsu_crl_fetch: BTreeMap<NodeId, (SimTime, RsuCrlFile)>,
+    /// The composite CRL each roadside unit in the cycle installed last: what its
+    /// carousel relays, unchanged ([PRIMER] p.5).
+    rsu_crl_held: BTreeMap<NodeId, RsuCrlFile>,
+    /// A list was published while no unit's fetch was landing: the carousel starts at the
+    /// first step one does.
+    crl_carousel_pending: bool,
+    /// When each unit's fetch of this step's due list lands (in flight or landed), for the
+    /// carousel start: the list rides each unit's line once, as the unit's own fetch.
+    rsu_crl_landing: BTreeMap<NodeId, SimTime>,
+    next_node: u32,
+    next_frame: u32,
+    /// The producer of the normative `Keyframe`/`Delta` stream (vwp-v1 §3.3, §3.4).
+    snapshots: SnapshotStream,
+    /// Whether that stream is produced at all.
+    ///
+    /// On by default, because a recording without it is a recording a browser cannot
+    /// replay — the defect this field's default is set against. A scale measurement that
+    /// records nothing turns it off, since encoding ten thousand rows per step into
+    /// frames nobody stores is cost with no artefact.
+    snapshots_enabled: bool,
+    /// Which nodes put a frame on the air since the last mobility step, for §3.3.4's
+    /// `ST_TRANSMITTING` bit. A `BTreeSet`, so nothing about the frame depends on hash
+    /// iteration order.
+    transmitted_since_step: std::collections::BTreeSet<NodeId>,
+    /// Every vehicle's exterior lamps as the last mobility step left them (vwp-v1 §3.3.5):
+    /// the mobility model's brake, indicators and beacons, with the headlamps the time of
+    /// day and the weather call for ([`crate::daylight`]). Published on `gt.kinematics`
+    /// and in the snapshot stream.
+    lamps: BTreeMap<ActorId, u8>,
+    /// The vehicles standing at a kerbside stop after the last mobility step (`ST_PARKED`).
+    at_kerb: BTreeSet<ActorId>,
+    providers: v2xw_metrics::ProviderSet,
+    metric_period: Duration,
+    /// When the metric window now open began: the last flush, or zero. A
+    /// window's span is its own, which is shorter than the period at a fast-forward edge.
+    metric_window_start: SimTime,
+    /// The end of the warm-up, ns (`time.warmup_s`): no sample is recorded before it.
+    metric_warmup_ns: SimTime,
+    reverse_node_walk: bool,
+    /// Whether [`Engine::sweep_retired_links`] runs; always, outside a test.
+    link_sweep: bool,
+    /// Where each node's generator sits on the time axis (`v2xw_msg::GenerationTiming`).
+    gen_timing: v2xw_msg::GenerationTiming,
+    /// SAE J2945/1's own BSM schedule (6.3.8.5-6.3.8.8), when the run's US 802.11p
+    /// units have it (`crate::wiring::j2945_schedule`): each BSM at its scheduled instant
+    /// rather than on the node's 100 ms step.
+    j2945_timing: Option<v2xw_msg::J2945Timing>,
+    /// Each node's generation phase, drawn once when the node is created.
+    node_phase: BTreeMap<NodeId, Duration>,
+    /// The instant a node's first periodic step is due — its creation plus its whole
+    /// phase — for a node whose phase is longer than the mobility step. The per-step
+    /// schedule folds the phase into the step (`phase mod step`), and without this hold a
+    /// node with a 100 ms period on a 50 ms step started its generator at the first step
+    /// after creation, so a fleet created together put every BSM in the same half of each
+    /// 100 ms cycle (measured: no frame in 65-100 ms and 0-10 ms). Removed once passed.
+    node_first_step: BTreeMap<NodeId, SimTime>,
+    /// Each vehicle node's radio class, which sets its antenna height and gain.
+    node_class: BTreeMap<NodeId, v2xw_radio::ActorClass>,
+    /// What obstructs a link: buildings and terrain, as the scenario selected them.
+    obstacles: crate::wiring::ObstacleStack,
+    /// How far each transmission is followed (`radio.range`), derived from the link
+    /// budget.
+    range: crate::wiring::CandidateRangePlan,
+    /// The law outside any focus region, and the focus region's, for the per-link
+    /// decisions of who charges buildings and who needs street geometry.
+    main_law: crate::wiring::PropagationChoice,
+    focus_law: Option<crate::wiring::PropagationChoice>,
+    /// The measured vehicle antenna pattern (`radio.devices.obu.sampled_pattern`).
+    sampled_antenna: Option<std::sync::Arc<v2xw_radio::antenna::SampledAntenna>>,
+    /// The environment a sidelink link-level curve is read in: urban when the world's
+    /// land use at its centre is urban or suburban, highway otherwise (TR 37.885's two
+    /// CDL environments).
+    radio_env: v2xw_radio::NrEnvironment,
+    /// The regulation the radios transmit under (`radio.region`, `radio.channel`).
+    regulation: Option<crate::wiring::RadioRegulation>,
+    /// The channel an 802.11p run transmits on: the region's, 172 in the 2016 US plan.
+    dsrc_channel: ChannelId,
+    /// The rate every 802.11p safety frame is sent at (`radio.phy.data_rate_mbps`).
+    safety_mcs: Mcs,
+    /// The access category periodic messages are queued in (`radio.mac`).
+    periodic_ac: AccessCategory,
+    /// The access category event messages (DENM) are queued in.
+    event_ac: AccessCategory,
+    /// Whether a BSM is queued by its event flags, AC_VI or AC_VO
+    /// ([`crate::wiring::bsm_queue_by_flags`]).
+    bsm_by_flags: bool,
+    /// That channel's centre, Hz.
+    dsrc_freq_hz: f64,
+    /// Rain over the link (`weather/attenuation/itu-r-p838`), at the medium and high
+    /// propagation tiers.
+    rain: Option<v2xw_radio::RainAttenuation>,
+    /// The radio range a node's plausibility checks compare a sender's claimed distance
+    /// against (`acceptanceRangeThreshold`): the link budget's line-of-sight reach from the
+    /// strongest transmitter in the run. It was the fixed 1 km candidate range, which once
+    /// frames were followed as far as they physically reach flagged every honest sender
+    /// heard beyond 1 km — the legacy engine's own note is that a node must use *its*
+    /// range or it flags honest distant senders.
+    detector_range_m: f64,
+    /// The LTE-V2X or NR-V2X sidelink access layer, when `radio.rat` selects one. `None`
+    /// runs 802.11p through `phy`, `mac` and `dcc`.
+    sidelink: Option<sidelink::SidelinkAccess>,
+    /// The focus region and its radio stack, when `radio.tiers.focus` declares one.
+    focus: Option<crate::wiring::FocusStack>,
+    /// The jammers `threats.jammers` declared.
+    jamming: jamming::Jamming,
+    /// The scenario timeline's state: which lanes are closed and by whom, which demand
+    /// multipliers are in force. See [`crate::timeline`].
+    timeline: TimelineState,
+    /// The hand-off [`Engine::hand_down`] is adding to the frame being handed down, ns,
+    /// so [`Engine::hand_down_app`] can record the signature's own end apart from it.
+    pending_handoff: u64,
+    /// The on-air GeoNetworking layer (`net.geonet.forwarding: on-air`).
+    gn_air: Option<gn_air::GnOnAir>,
+    /// The GeoNetworking global CBR tables (`net.dcc_cbr: global`).
+    gcbr: Option<gcbr::GlobalCbr>,
+    /// The collective-perception meter (`messages.sets` with `cpm`).
+    cpm_meter: Option<cpm_metrics::CpmMeter>,
+    /// The 20 m bins of the reception census (`phy.prr`), the very bins the metric reads.
+    prr_bins: v2xw_metrics::bins::Bins,
+    /// When each node is next woken to hand over a finished signature check
+    /// ([`crate::event::NodeTask::Deliver`]): at most one pending wake per node.
+    node_wake: BTreeMap<NodeId, SimTime>,
+    /// The junction each SPaT- or MAP-broadcasting roadside unit is wired to.
+    infra_feeds: BTreeMap<NodeId, crate::infra::IntersectionFeed>,
+    /// Under `net.rsu_ip.air: sch`, each relaying unit by the /64 prefix
+    /// its WAVE Routing Advertisement gives: how a vehicle's learned router names a unit.
+    wsa_routers: BTreeMap<[u8; 8], NodeId>,
+    /// Under `net.rsu_ip.air: sch`, the service-channel session every relayed
+    /// download starts from: the loss curve and range of the run's link budget.
+    sch_template: Option<v2xw_radio::rsu_sch::RsuSchPath>,
+    /// Which nodes are dormant this step, when `scale` declares a microscopic box
+    /// ([`crate::scale::RadioGate`]).
+    radio_gate: Option<crate::scale::RadioGate>,
+    /// Equipped actors whose node is not created yet: spawned dormant (`crate::scale`).
+    deferred_nodes: BTreeSet<ActorId>,
+    report: RunReport,
+    /// Whether the last mobility step was a fast-forward stop (`time.fast_forward`).
+    in_fast_forward: bool,
+    /// The instant the current fast-forward window froze the traffic: the state every
+    /// actor holds is the state of this instant until the window ends.
+    ff_frozen_at: SimTime,
+    /// Whether [`Engine::advance`] has reached the end of the run.
+    ended: bool,
+}
+
+/// Whether a `safety.*` item waits for a vehicle that fits when none does at its instant:
+/// an `"auto"` pick does (a scenario cannot know where the demand will have put its
+/// vehicles); a named node does not.
+fn se_waits(item: &crate::scenario::schema::TimelineItem) -> bool {
+    matches!(
+        crate::safety_events::Pick::parse(item.params.get("target")),
+        Ok(crate::safety_events::Pick::Auto)
+    )
+}
+
+/// What the scenario timeline has put in force, as the control events leave it.
+#[derive(Debug, Default)]
+struct TimelineState {
+    /// The lanes each `closure` item closes, resolved against the world at build.
+    closures: BTreeMap<usize, Vec<v2xw_core::ids::LaneId>>,
+    /// How many active closures hold each lane shut: two overlapping closures of one lane
+    /// reopen it when the second ends, not the first.
+    closed: BTreeMap<v2xw_core::ids::LaneId, u32>,
+    /// The `demand.multiplier` items in force, by item.
+    multipliers: BTreeMap<usize, f64>,
+    /// The ratio of the arrival rate a `param.change` set to the scenario's own.
+    rate_ratio: f64,
+    /// The scenario's own arrival rate, veh/h, when its demand model takes one.
+    base_rate: Option<f64>,
+    /// The vehicle each `safety.breakdown` item stopped, so its `until` releases it.
+    broken_down: BTreeMap<usize, (ActorId, Option<NodeId>)>,
+    /// The nodes whose hazard warning lights are on: the vehicle's own switch, which its
+    /// facilities read like its own accelerometer.
+    hazard_lights: BTreeSet<NodeId>,
+    /// `safety.*` items whose `"auto"` pick found no vehicle that fits yet, by item, with
+    /// the instant they stop waiting: each mobility step tries them again.
+    waiting_safety: BTreeMap<usize, SimTime>,
+    /// Each `when` item's firings so far and the instant of the last one.
+    trigger_fires: BTreeMap<usize, (u32, SimTime)>,
+    /// What each `when` item's clause bound at its last firing.
+    bindings: BTreeMap<usize, crate::timeline::trigger::Binding>,
+}
+
+impl TimelineState {
+    /// The demand multiplier in force: every active multiplier and the rate ratio.
+    fn demand_multiplier(&self) -> f64 {
+        self.rate_ratio * self.multipliers.values().product::<f64>()
+    }
+}
+
+impl core::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Engine")
+            .field("scenario", &self.scenario.meta.name)
+            .field("actors", &self.actors.len())
+            .field("nodes", &self.nodes.len())
+            .field("pending", &self.scheduler.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Engine {
+    /// The measured link of `cellular/uu/packet-pf` for a vehicle's backend flow, or
+    /// `None` for the other Uu models (see `BackendAccess::packet_link`).
+    fn packet_link(&mut self, node: NodeId, pos: Vec3) -> Option<v2xw_proto::net::Link> {
+        let Engine {
+            scheduler,
+            rng,
+            world,
+            snapshot,
+            provenance,
+            params,
+            phase2,
+            ..
+        } = self;
+        let p = phase2.as_mut()?;
+        if p.access_mut().uu_id() != Some(v2xw_radio::cellular_packet::PacketUu::ID) {
+            return None;
+        }
+        let mut null = crate::ctx::NullRecorder::new();
+        let mut ctx = EngineCtx::new(
+            scheduler, rng, world, snapshot, provenance, params, &mut null,
+        );
+        p.access_mut().packet_link(&mut ctx, node, pos)
+    }
+
+    /// Builds a run from a validated scenario.
+    ///
+    /// `build_utc` is the caller's timestamp for the manifest; the engine may not read a
+    /// clock for itself. Pass an empty string for a
+    /// reproducibility comparison — the field is excluded from every digest either way.
+    ///
+    /// # Errors
+    /// [`EngineError::World`] if the world cannot be built, [`EngineError::Mobility`] if
+    /// the mobility provider refuses the world, [`EngineError::Registry`] if a model's
+    /// card does not validate, and [`EngineError::Scenario`] if the scenario is invalid.
+    pub fn build(scenario: Scenario, build_utc: &str) -> Result<Engine> {
+        scenario.validate()?;
+        // The files the scenario names, before the importer is asked to read them: a missing
+        // map is then a refusal naming `world.source.path`, not an importer I/O error.
+        if let Some(missing) = crate::scenario::validate::preflight(&scenario)
+            .into_iter()
+            .next()
+        {
+            return Err(missing.into());
+        }
+        let world = crate::wiring::build_world(&scenario)?;
+        Self::build_with_world(scenario, world, build_utc)
+    }
+
+    /// As [`Engine::build`], on a world the caller already has.
+    ///
+    /// For a driver that runs one scenario many times — the server, where every Run is a
+    /// fresh kernel — and keeps the world it imported last time. The caller vouches that
+    /// `world` is what [`crate::wiring::build_world`] returns for this scenario; the server
+    /// keys its copy by [`crate::wiring::world_cache_key`], which covers every input of the
+    /// import, so a run on a kept world is the same run as one on a fresh import.
+    ///
+    /// # Errors
+    /// As [`Engine::build`], less the world import.
+    pub fn build_with_world(scenario: Scenario, world: World, build_utc: &str) -> Result<Engine> {
+        scenario.validate()?;
+        // A scenario written for any city states its demand per kilometre of driving lane
+        // and its roadside units as a placement; this city's network decides the numbers
+        // (`crate::city`). The run, its manifest and its report see the concrete ones.
+        let asked = scenario
+            .actors
+            .rsu_placement
+            .as_ref()
+            .map_or(0, |p| p.count);
+        let listed = scenario.actors.rsus.len();
+        let scenario = crate::city::adapt_to_world(scenario, &world);
+        // A placement that stands no unit (it places only at signalised intersections,
+        // as the deployments do) would run without the roadside units the scenario asked
+        // for, and every RSU setting would act on nothing: refused by name
+        // (`rsu_placement.count: 4` on the unsignalised DSRC grid would run with none).
+        if asked > 0 && scenario.actors.rsus.len() == listed {
+            return Err(crate::EngineError::Scenario(
+                crate::ScenarioError::conflict(
+                    "actors.rsu_placement.count",
+                    format!(
+                        "asks for {asked} roadside unit(s) and this world has no signalised \
+                     intersection to stand one at (units are placed at the busiest signalised \
+                     junctions); list them in actors.rsus with a site or position_m, or run on \
+                     a world with signals"
+                    ),
+                ),
+            ));
+        }
+        // City scale: the radio's focus region follows the microscopic box.
+        let scenario = crate::scale::normalise(scenario);
+        // Signal control (`traffic.signals`): a green wave sets the plans' offsets once,
+        // before anything reads them; an actuated controller moves them as it runs.
+        let mut world = world;
+        let mut signal_control = scenario
+            .traffic
+            .as_ref()
+            .map(|t| t.signals.clone())
+            .unwrap_or_default();
+        // The NEMA controller's pedestrian timing falls back to the world's
+        // (`world.signals.pedestrian_*`), then to the MUTCD (`crate::nema::control`).
+        if signal_control.control == crate::scenario::schema::SignalControlKind::Nema {
+            let ws = &scenario.world.signals;
+            let n = signal_control.nema.get_or_insert_with(Default::default);
+            n.walk_s = n.walk_s.or(ws.pedestrian_walk_s);
+            n.ped_speed_mps = n.ped_speed_mps.or(ws.pedestrian_speed_mps);
+        }
+        crate::actuated::coordinate(&signal_control, &mut world);
+        crate::actuated::clear_short_links(&signal_control, &mut world);
+        let actuated = crate::actuated::ActuatedControllers::new(&signal_control, &world);
+        let mut registry = Registry::new();
+        crate::wiring::register_all(&mut registry)?;
+
+        let wall = WallClock::parse_rfc3339(&scenario.time.t0)
+            .map_err(|e| EngineError::Core(v2xw_core::error::CoreError::Time(e)))?;
+        let rng = RngRegistry::new(scenario.seed);
+        // SUMO, when `mobility.provider` names it, drives the traffic; otherwise the city-scale
+        // tier (`scale`) or the default microscopic model.
+        let sumo = scenario
+            .mobility
+            .as_ref()
+            .is_some_and(|m| m.provider == "sumo");
+        let scaled = if sumo {
+            None
+        } else {
+            crate::scale::build_mobility(&scenario, &world)
+        };
+        let mut mobility = match scaled {
+            Some(m) => m,
+            None => crate::wiring::build_mobility_for(&scenario, &world)?,
+        };
+        // The drivers see the weather the run starts in (FHWA speed and headway, sight
+        // distance, surface grip — v2xw_mobility::weather).
+        mobility.set_weather(crate::wiring::initial_weather(&scenario));
+        let gnss = crate::wiring::build_gnss(&scenario);
+        let (propagation, fading) = crate::wiring::build_radio(&scenario, &world);
+        // The band plan and power limits the radios transmit under (`radio.region`). The
+        // loader has refused a scenario with none, so `None` only stands for `hybrid`.
+        let regulation = crate::wiring::radio_regulation(&scenario).ok();
+        let (dsrc_channel, dsrc_freq_hz) = regulation
+            .filter(|r| r.technology == v2xw_radio::regulation::Technology::Ieee80211p)
+            .map_or((SAFETY_CHANNEL, SAFETY_FREQ_HZ), |r| {
+                (r.channel(), r.centre_hz())
+            });
+        if let Some(r) = regulation.as_ref() {
+            let card = v2xw_radio::regulation::card(r.region);
+            if !registry.contains(&card.id) {
+                registry.register(card)?;
+            }
+        }
+        let radio_env = match crate::wiring::world_env(&world) {
+            v2xw_world::model::EnvClass::Urban | v2xw_world::model::EnvClass::Suburban => {
+                v2xw_radio::NrEnvironment::Urban
+            }
+            _ => v2xw_radio::NrEnvironment::Highway,
+        };
+        crate::wiring::register_radio(
+            &mut registry,
+            propagation.as_ref(),
+            fading.as_ref(),
+            &crate::wiring::build_phy(&scenario),
+        )?;
+        // A measured vehicle antenna pattern, when the scenario supplies one. Its
+        // card is registered only then, so a run without one pins the same models.
+        let sampled_antenna = match scenario.radio.devices.obu.sampled_pattern.as_ref() {
+            Some(sp) => {
+                let p = v2xw_radio::antenna::SampledAntenna::from_csv(&sp.csv).map_err(|why| {
+                    crate::error::ScenarioError::conflict(
+                        "radio.devices.obu.sampled_pattern.csv",
+                        format!("is not an antenna pattern table: {why}"),
+                    )
+                })?;
+                let card = v2xw_radio::antenna::sampled_card();
+                if !registry.contains(&card.id) {
+                    registry.register(card)?;
+                }
+                Some(std::sync::Arc::new(p))
+            }
+            None => None,
+        };
+        let obstacles = crate::wiring::build_obstacles(&scenario, &world);
+        obstacles.register(&mut registry)?;
+        let focus = crate::wiring::build_focus(&scenario, &world);
+        if let Some(f) = focus.as_ref() {
+            crate::wiring::register_radio(
+                &mut registry,
+                f.propagation.as_ref(),
+                f.fading.as_ref(),
+                &crate::wiring::build_phy(&scenario),
+            )?;
+        }
+        let sidelink = sidelink::SidelinkAccess::for_scenario(&scenario);
+        if let Some(sl) = sidelink.as_ref() {
+            sl.register(&mut registry)?;
+        }
+        // Rain over the link, once, whatever the law — at every tier but the abstract
+        // one, which is free space by definition.
+        let rain = (scenario.radio.tiers.propagation != Tier::Abstract)
+            .then(v2xw_radio::RainAttenuation::new);
+        if let Some(r) = rain.as_ref() {
+            let card = v2xw_core::model::Model::card(r).clone();
+            if !registry.contains(&card.id) {
+                registry.register(card)?;
+            }
+        }
+        let range = crate::wiring::CandidateRangePlan::new(
+            &scenario,
+            &world,
+            &crate::wiring::build_phy(&scenario),
+            sidelink.as_ref().map_or(dsrc_freq_hz, |sl| sl.freq_hz),
+        );
+        let mut range = range;
+        let detector_range_m = {
+            let dsrc = sidelink.is_none();
+            let eirp = [
+                v2xw_radio::ActorClass::Car,
+                v2xw_radio::ActorClass::Rsu,
+                v2xw_radio::ActorClass::Pedestrian,
+            ]
+            .into_iter()
+            .map(|c| {
+                let d = crate::wiring::device_for(&scenario, c);
+                if dsrc && c == v2xw_radio::ActorClass::Car {
+                    // J2945/1's radiated-power ceiling binds an on-board unit on 802.11p.
+                    d.max_eirp_dbm().min(crate::wiring::TX_POWER_DBM)
+                } else {
+                    d.max_eirp_dbm()
+                }
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+            range.reach_m(eirp)
+        };
+        let main_law =
+            crate::wiring::propagation_choice_at(&scenario, scenario.radio.tiers.propagation);
+        let focus_law = scenario.radio.tiers.focus.as_ref().map(|f| {
+            crate::wiring::propagation_choice_at(
+                &scenario,
+                scenario.radio.tiers.propagation.max(f.tier),
+            )
+        });
+        let jammers = jamming::Jamming::for_scenario(
+            &scenario,
+            sidelink.as_ref().map_or(dsrc_channel, |sl| sl.channel),
+        );
+        for card in jammers.cards() {
+            if !registry.contains(&card.id) {
+                registry.register(card)?;
+            }
+        }
+
+        // The mobility provider reads the world through a context, so it needs one before
+        // the engine exists. Everything it can reach at this point is immutable state the
+        // engine is about to own.
+        {
+            let mut scheduler: Scheduler<Event> = Scheduler::new();
+            let mut provenance = ProvenanceLog::new();
+            let params = ParamSet::new();
+            let empty = ActorSnapshot::new(0, SNAPSHOT_CELL_M);
+            let mut recorder = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                &mut scheduler,
+                &rng,
+                &world,
+                &empty,
+                &mut provenance,
+                &params,
+                &mut recorder,
+            );
+            let demand = crate::wiring::build_demand(&scenario, &world)?;
+            crate::wiring::register_demand(&mut registry, &scenario, demand.as_ref())?;
+            mobility.init(&mut crate::adapters::mobility(&mut ctx), demand)?;
+        }
+
+        let gen_timing = crate::wiring::generation_timing(&scenario);
+        let j2945_timing = crate::wiring::j2945_schedule(&scenario);
+        crate::wiring::register_generation_timing(&mut registry, gen_timing)?;
+        let providers = crate::wiring::build_metrics_for(&scenario, Some(&world), &mut registry)?;
+        crate::backend::register_used(&scenario, &mut registry)?;
+        let manifest = crate::manifest::assemble(&scenario, &world, &registry, build_utc)?;
+        // The snapshot stream's cadence is the scenario's mobility step and, by default,
+        // a keyframe every simulated second (§3.1.1). A caller recording into a container
+        // with a different `RecordingOptions::cadence` must say so with
+        // [`Engine::configure_snapshots`], because `Reader::verify` checks the gap
+        // between keyframes against the cadence the *container* declares.
+        let snapshots = SnapshotStream::new(
+            &world.bbox,
+            crate::snapshot::snapshot_cadence(
+                scenario.time.mobility_step(),
+                crate::snapshot::DEFAULT_KEYFRAME_PERIOD,
+            ),
+            Profile::Full,
+        )
+        .with_signals(&world);
+        // The radio stack is selected from the scenario, which the struct literal below
+        // moves; the clone is one `Scenario` per run, not per anything.
+        let scenario_for_radio = scenario.clone();
+        // The run's own channel map. The loader has refused a bad one; a sidelink
+        // run keeps its single resource pool.
+        let channel_plan = if sidelink.is_some() {
+            None
+        } else {
+            channels::plan(&scenario).ok().flatten()
+        };
+        // Alternating access lives in the EDCA MAC, which a sidelink run and the
+        // abstract MAC tier do not have; there the hand-off deferral stands in for it.
+        let alternating_mac = sidelink.is_none()
+            && scenario.net.channel_access.as_deref() == Some("alternating")
+            && scenario.radio.tiers.mac != v2xw_core::card::Tier::Abstract;
+        let frag_plan = match scenario_for_radio.net.fragmenter.as_ref() {
+            None => crate::frag::FragPlan::none(),
+            Some(choice) => crate::frag::FragPlan::from_choice(choice)
+                .map_err(|why| {
+                    EngineError::Scenario(crate::error::ScenarioError::conflict(
+                        "net.fragmenter",
+                        why,
+                    ))
+                })?
+                .for_signature(
+                    &scenario_for_radio.security.signature,
+                    choice.params.get("hybrid_cert_bytes").is_some(),
+                ),
+        };
+        // The labeller reads the world's signal plans; built before the literal moves it.
+        let app_truth = if scenario_for_radio.apps.enabled.is_empty() {
+            crate::app_truth::AppTruth::default()
+        } else {
+            crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario_for_radio))
+                .with_signals(crate::app_truth::SignalIndex::build(&world))
+        };
+        let coherence = crate::wiring::fading_coherence(
+            &scenario,
+            sidelink.as_ref().map_or(dsrc_freq_hz, |sl| sl.freq_hz),
+        );
+        let ev_distance_m = scenario
+            .traffic
+            .as_ref()
+            .is_some_and(|t| t.emergency_yield.is_some())
+            .then_some(0.0);
+        let mut engine = Engine {
+            snapshot: ActorSnapshot::new(0, SNAPSHOT_CELL_M),
+            weather: crate::wiring::initial_weather(&scenario),
+            scenario,
+            world,
+            registry,
+            manifest,
+            scheduler: Scheduler::new(),
+            rng,
+            provenance: ProvenanceLog::new(),
+            params: ParamSet::new(),
+            wall,
+            mobility,
+            gnss,
+            propagation,
+            fading,
+            coherence,
+            phy: {
+                let mut phy = crate::wiring::build_phy(&scenario_for_radio);
+                if let Some(plan) = channel_plan.as_ref()
+                    && !plan.leakage.is_empty()
+                {
+                    phy.set_channel_leakage(plan.leakage.clone());
+                }
+                phy
+            },
+            // 802.11p's EDCA and J2945/1 congestion control belong to the DSRC stack; a
+            // sidelink scenario runs the SPS engine in `sidelink` instead.
+            mac: if sidelink.is_some() {
+                None
+            } else {
+                // IEEE 1609.4 alternating access gates the EDCA grants; the CCH
+                // interval is the safety channel's and the SCH interval the service
+                // channel's.
+                crate::wiring::build_mac(&scenario_for_radio).map(|m| {
+                    if alternating_mac {
+                        m.with_alternating(
+                            v2xw_radio::wave_schedule::ChannelSchedule {
+                                access: v2xw_radio::wave_schedule::ChannelAccess::Alternating,
+                            },
+                            channel_plan.as_ref().map_or(dsrc_channel, |p| p.primary),
+                            channel_plan.as_ref().and_then(|p| p.service),
+                        )
+                    } else {
+                        m
+                    }
+                })
+            },
+            j2945_per: (sidelink.is_none()
+                && crate::wiring::build_dcc(&scenario_for_radio).is_some_and(|d| d.is_j2945()))
+            .then(|| v2xw_radio::PerWindow::new(v2xw_radio::J2945Params::J2945_1)),
+            j2945_quality_at: BTreeMap::new(),
+            j2945_nav: BTreeMap::new(),
+            j2945_sampled: BTreeMap::new(),
+            // On a sidelink `build_dcc` returns only SAE J3161/1's rate control, which
+            // never gates: the sidelink's CR limits are its MAC's.
+            dcc: crate::wiring::build_dcc(&scenario_for_radio),
+            dcc_service: channel_plan
+                .as_ref()
+                .and_then(|p| p.service)
+                .and_then(|_| crate::wiring::build_dcc(&scenario_for_radio))
+                .filter(crate::wiring::EngineDcc::gates),
+            actors: BTreeMap::new(),
+            node_actor: BTreeMap::new(),
+            deferred_records: Vec::new(),
+            dataset: crate::dataset_records::dataset_requested(&scenario_for_radio)
+                .then(Box::default),
+            app_truth,
+            glosa: GlosaDrivers {
+                compliance: if scenario_for_radio.apps.runs("glosa") {
+                    scenario_for_radio.apps.glosa_compliance
+                } else {
+                    0.0
+                },
+                seed: scenario_for_radio.seed,
+                decided: BTreeMap::new(),
+                capped: BTreeMap::new(),
+                missing: BTreeMap::new(),
+                seen_s: BTreeMap::new(),
+            },
+            priority: {
+                let mut p = crate::priority::PriorityControllers::new(
+                    crate::priority::PriorityParams::default(),
+                );
+                // NEMA dual-ring junctions serve priority through their rings.
+                p.serve_through_rings(actuated.nema_plans());
+                p.set_enabled(scenario_for_radio.messages.sets.iter().any(|m| m == "srm"));
+                p
+            },
+            actuated,
+            traffic_log: None,
+            perception: scenario_for_radio
+                .messages
+                .sets
+                .iter()
+                .any(|s| s == "cpm")
+                .then(|| {
+                    scenario_for_radio.perception.as_ref().map_or_else(
+                        crate::perception::Perception::new,
+                        crate::perception::Perception::from_spec,
+                    )
+                }),
+            retired: Vec::new(),
+            departed_crypto: Vec::new(),
+            retired_actors: std::collections::BTreeSet::new(),
+            ended_trips: std::collections::BTreeSet::new(),
+            trip_streams: None,
+            departed_credentials: Vec::new(),
+            lifecycle: Vec::new(),
+            departed_rx: ReceiverValidationReport::default(),
+            departed_srm_no_ident: 0,
+            priority_heard: BTreeMap::new(),
+            forge_srm: false,
+            ev_distance_m,
+            bodies: link::BodyIndex::default(),
+            radios: radios::RadioIndex::default(),
+            nodes: BTreeMap::new(),
+            inboxes: BTreeMap::new(),
+            // `validate` refuses any other name, so the fallback is unreachable from a
+            // loaded scenario; it is WSMP because that is the schema's default.
+            net: v2xw_net::NetStack::from_name(&scenario_for_radio.net.layer)
+                .unwrap_or(v2xw_net::NetStack::Wsmp(v2xw_net::WsmpNetLayer::default())),
+            rx_pending: BTreeMap::new(),
+            next_rx_token: 0,
+            frag_plan,
+            reassemblers: BTreeMap::new(),
+            frag_groups: BTreeMap::new(),
+            frag_resolved: BTreeMap::new(),
+            cert_cycles: BTreeMap::new(),
+            mac_window: BTreeMap::new(),
+            retired_mac_timers: 0,
+            air_burst: AirBurst::default(),
+            cbr_mark: BTreeMap::new(),
+            channel_plan: channel_plan.clone(),
+            wave: alternating_mac.then_some(v2xw_radio::wave_schedule::ChannelSchedule {
+                access: v2xw_radio::wave_schedule::ChannelAccess::Alternating,
+            }),
+            chan_mark: BTreeMap::new(),
+            orphaned_rx: Vec::new(),
+            frames: BTreeMap::new(),
+            live_at_rx: BTreeMap::new(),
+            on_air_tx: BTreeMap::new(),
+            mac_timers_queued: BTreeSet::new(),
+            pending_tx: BTreeMap::new(),
+            phase2: None,
+            credential_factory: crate::credentials::CredentialFactory::fallback(),
+            pseudonym_policy: None,
+            bsm_timing: None,
+            policy_odometer: BTreeMap::new(),
+            rsus: BTreeMap::new(),
+            transfers: BTreeMap::new(),
+            next_sdu: 0,
+            next_backend_bytes: 0,
+            crl_timer_armed: false,
+            rsu_crl_fetch: BTreeMap::new(),
+            rsu_crl_held: BTreeMap::new(),
+            crl_carousel_pending: false,
+            rsu_crl_landing: BTreeMap::new(),
+            next_node: 0,
+            next_frame: 0,
+            snapshots,
+            snapshots_enabled: true,
+            transmitted_since_step: std::collections::BTreeSet::new(),
+            lamps: BTreeMap::new(),
+            at_kerb: BTreeSet::new(),
+            providers,
+            metric_period: scenario_for_radio.time.metric_period(),
+            metric_window_start: 0,
+            metric_warmup_ns: scenario_for_radio.time.warmup_ns(),
+            reverse_node_walk: false,
+            link_sweep: true,
+            gen_timing,
+            j2945_timing,
+            node_phase: BTreeMap::new(),
+            node_first_step: BTreeMap::new(),
+            node_class: BTreeMap::new(),
+            obstacles,
+            range,
+            main_law,
+            focus_law,
+            sampled_antenna,
+            radio_env,
+            regulation,
+            dsrc_channel,
+            safety_mcs: crate::wiring::safety_mcs(&scenario_for_radio),
+            periodic_ac: crate::wiring::access_category(
+                scenario_for_radio
+                    .radio
+                    .mac
+                    .periodic_access_category
+                    .as_deref(),
+            ),
+            event_ac: crate::wiring::access_category(
+                scenario_for_radio
+                    .radio
+                    .mac
+                    .event_access_category
+                    .as_deref(),
+            ),
+            bsm_by_flags: crate::wiring::bsm_queue_by_flags(&scenario_for_radio),
+            dsrc_freq_hz,
+            rain,
+            detector_range_m,
+            sidelink,
+            focus,
+            jamming: jammers,
+            timeline: TimelineState::default(),
+            pending_handoff: 0,
+            gn_air: None,
+            gcbr: None,
+            cpm_meter: None,
+            prr_bins: v2xw_metrics::comms::prr_bins(),
+            node_wake: BTreeMap::new(),
+            infra_feeds: BTreeMap::new(),
+            wsa_routers: BTreeMap::new(),
+            sch_template: None,
+            radio_gate: None,
+            deferred_nodes: BTreeSet::new(),
+            report: RunReport::default(),
+            in_fast_forward: false,
+            ff_frozen_at: 0,
+            ended: false,
+        };
+        engine.radio_gate = crate::scale::RadioGate::for_scenario(
+            &engine.scenario,
+            &engine.world,
+            engine
+                .range
+                .reach_m(crate::wiring::CandidateRangePlan::REFERENCE_EIRP_DBM),
+        );
+        engine.timeline = TimelineState {
+            closures: resolve_closures(&engine.scenario, &engine.world)?,
+            closed: BTreeMap::new(),
+            multipliers: BTreeMap::new(),
+            rate_ratio: 1.0,
+            base_rate: crate::timeline::base_rate_veh_per_h(&engine.scenario),
+            broken_down: BTreeMap::new(),
+            hazard_lights: BTreeSet::new(),
+            waiting_safety: BTreeMap::new(),
+            trigger_fires: BTreeMap::new(),
+            bindings: BTreeMap::new(),
+        };
+        let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
+        engine.phase2 = phase2;
+        // The calendar label every output carries.
+        if let Some(p) = engine.phase2.as_ref() {
+            engine.report.calendar = if p.params().scms.calendar_epoch_unix_s.is_some() {
+                "real"
+            } else {
+                "compressed"
+            }
+            .to_string();
+        }
+        let (roots, chain_file) = engine
+            .phase2
+            .as_ref()
+            .map(crate::phase2::Phase2::trust_bundle)
+            .unwrap_or_default();
+        engine.credential_factory = std::sync::Arc::new(
+            crate::credentials::CredentialFactory::for_run(
+                engine.scenario.seed,
+                engine.wall,
+                engine
+                    .phase2
+                    .as_ref()
+                    .and_then(crate::phase2::Phase2::aca_issuer),
+            )
+            .with_trust(roots, chain_file)
+            .with_receiver_limits(crate::credentials::ReceiverLimits::of(&engine.scenario))
+            .with_home_chain_files(if crate::phase2::home_chain_file_of(&engine.scenario)? {
+                engine
+                    .phase2
+                    .as_ref()
+                    .map(crate::phase2::Phase2::provider_chain_files)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            })
+            .with_providers(
+                engine
+                    .phase2
+                    .as_ref()
+                    .map(crate::phase2::Phase2::provider_issuers)
+                    .unwrap_or_default(),
+                engine
+                    .phase2
+                    .as_ref()
+                    .map(|p| p.deployment().clone())
+                    .unwrap_or_else(|| {
+                        v2xw_proto::scms::deployment::Deployment::preset(
+                            v2xw_proto::scms::deployment::Preset::CampReference,
+                        )
+                    }),
+                engine.scenario.seed,
+            ),
+        );
+        let policy = crate::pseudonym_policy::PseudonymPolicy::from_scenario(
+            &engine.scenario,
+            &engine.world,
+        )?;
+        if policy.acts() || policy.sniffer_sites().is_some() {
+            engine.pseudonym_policy = Some(policy);
+        }
+        if let Some(t) = engine
+            .scenario
+            .actors
+            .vehicles
+            .bsm_timing
+            .as_ref()
+            .filter(|t| t.is_on())
+        {
+            let cal = t.calibration().map_err(|(path, why)| {
+                EngineError::Scenario(crate::ScenarioError::conflict(path, why))
+            })?;
+            engine.bsm_timing = Some(std::sync::Arc::new(cal));
+        }
+        engine.gcbr = gcbr::GlobalCbr::for_scenario(&engine.scenario);
+        engine.cpm_meter = cpm_metrics::CpmMeter::for_scenario(&engine.scenario);
+        engine.gn_air = gn_air::GnOnAir::for_scenario(
+            &engine.scenario,
+            engine.mac.is_some() && engine.sidelink.is_none(),
+        );
+        engine.create_rsus();
+        engine.attach_intersection_feeds()?;
+        engine.attach_wsa_providers();
+        engine.seed_timeline();
+        Ok(engine)
+    }
+
+    /// The SCMS's PDU PKI followed a published root rollover: the credentials no
+    /// protocol flow issues, and the trust a node installs when it joins, follow it
+    /// (Provider Req. §3.5.4).
+    fn follow_pki_changeover(&mut self) {
+        let Some(p) = self.phase2.as_ref() else {
+            return;
+        };
+        let (roots, chain_file) = p.trust_bundle();
+        let next = self.credential_factory.after_changeover(
+            p.aca_issuer(),
+            roots,
+            chain_file,
+            p.provider_chain_files(),
+            p.provider_issuers(),
+        );
+        self.credential_factory = std::sync::Arc::new(next);
+    }
+
+    /// The manifest this run will be recorded under.
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    /// Hands the deployment's MA decisions to a rule the host program supplies
+    /// ([`crate::ma_hook`]), before [`Engine::run`], and
+    /// pins it in the manifest.
+    ///
+    /// # Errors
+    /// As [`crate::ma_hook`] says: no SCMS MA, or a scenario that already chooses the rule.
+    pub fn attach_ma_policy(
+        &mut self,
+        hook: Box<dyn crate::ma_hook::MaPolicyHook>,
+    ) -> Result<crate::ma_hook::MaHookStatus> {
+        crate::ma_hook::attach(
+            &self.scenario,
+            self.phase2.as_mut(),
+            &mut self.manifest,
+            hook,
+        )
+    }
+
+    /// Sets the cadence and profile the binary snapshot stream is produced at.
+    ///
+    /// **A caller recording into a container must call this with the same
+    /// [`v2xw_record::Cadence`] it gave [`v2xw_record::RecordingOptions`].**
+    /// `Reader::verify` checks the gap between two keyframes against the cadence the
+    /// *container* declares, so a producer running at a slower cadence than the container
+    /// advertises writes a recording that fails its own verification — and one running
+    /// faster writes more keyframes than §7.3's seek bound was sized for. The default is
+    /// the scenario's mobility step with a keyframe every simulated second, which is
+    /// §3.1.1's default pair.
+    ///
+    /// It resets the stream: the next frame is a keyframe opening GOP 0, with sequence
+    /// numbers from zero. Call it before [`Engine::run`].
+    pub fn configure_snapshots(&mut self, cadence: Cadence, profile: Profile) {
+        self.snapshots =
+            SnapshotStream::new(&self.world.bbox, cadence, profile).with_signals(&self.world);
+        self.report.keyframes = 0;
+        self.report.deltas = 0;
+    }
+
+    /// The cadence the binary snapshot stream is being produced at.
+    pub fn snapshot_cadence(&self) -> Cadence {
+        self.snapshots.cadence()
+    }
+
+    /// Turns the binary snapshot stream on or off.
+    ///
+    /// On by default. Off is for a run that records nothing and is measuring the
+    /// simulation's own cost; a run that writes a file and turns this off writes a file
+    /// no browser can replay, which is the state this engine has just been brought out of.
+    pub fn set_snapshots_enabled(&mut self, enabled: bool) {
+        self.snapshots_enabled = enabled;
+    }
+
+    /// The model registry, for a caller assembling a report.
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
+    /// The world.
+    pub fn world(&self) -> &World {
+        &self.world
+    }
+
+    /// The world, with the rest of the engine dropped: what a caller keeps once the run is
+    /// over and only the world is still read (the exporters), so the run's own state is
+    /// freed before an export allocates its own.
+    #[must_use]
+    pub fn into_world(self) -> World {
+        self.world
+    }
+
+    /// The scenario being run.
+    pub fn scenario(&self) -> &Scenario {
+        &self.scenario
+    }
+
+    /// The wall clock `SimTime` zero maps to — scenario data, not a clock read.
+    ///
+    /// It is what a 1609.2 `generationTime` is stamped from
+    /// ([`v2xw_sec::envelope::Envelope`] takes one), and what a UI labels its axis with.
+    pub fn wall_clock(&self) -> WallClock {
+        self.wall
+    }
+
+    /// The run report as it stands, for a caller inspecting a partial run.
+    pub fn report(&self) -> &RunReport {
+        &self.report
+    }
+
+    /// Every ACA a credential in this run can be issued under, one per provider in
+    /// deployment order: what an external verifier of the run's SPDUs needs to
+    /// reconstruct the signers' keys.
+    #[must_use]
+    pub fn credential_issuers(&self) -> Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>> {
+        self.credential_factory.provider_certificates()
+    }
+
+    /// The run's credential issuer (the home provider's ACA under an SCMS) and whether it
+    /// is an SCMS ACA. [`Engine::credential_issuers`] lists every provider's.
+    #[must_use]
+    pub fn credential_issuer(&self) -> (std::sync::Arc<v2xw_msg::sec_types::Certificate>, bool) {
+        (
+            std::sync::Arc::clone(self.credential_factory.issuer_certificate()),
+            self.credential_factory.is_scms_aca(),
+        )
+    }
+
+    /// The Phase 2 path's state, when the scenario declared one.
+    ///
+    /// Read-only. It exists so that a caller can ask a *built* engine which roadside unit
+    /// carries which role — [`crate::phase2::Phase2::rsus_with_role`] — without running a
+    /// scenario to its horizon to find out. The run loop reaches the field directly and
+    /// does not go through this.
+    #[must_use]
+    pub fn phase2(&self) -> Option<&crate::phase2::Phase2> {
+        self.phase2.as_ref()
+    }
+
+    /// **A test hook, not a model parameter.** The Phase 2 path's state, mutably, so a
+    /// test can arm one of its `*_for_test` hooks before the run.
+    #[doc(hidden)]
+    pub fn phase2_mut(&mut self) -> Option<&mut crate::phase2::Phase2> {
+        self.phase2.as_mut()
+    }
+
+    /// **A test hook, not a model parameter.** Walks the node phase in reverse id order.
+    ///
+    /// The phase reads each node's own inbox and writes only its own state, so the
+    /// published result must be identical either way; this is the determinism contract's purity
+    /// property
+    /// and the only way to check it without a second thread, which
+    /// [`v2xw_node::ObuRuntime`] not being `Send` denies us. `v2xw-mobility` carries the
+    /// same hook (`EngineParams::reverse_order`) for the same reason.
+    pub fn set_reverse_node_walk(&mut self, reverse: bool) {
+        self.reverse_node_walk = reverse;
+    }
+
+    /// **A test hook, not a model parameter.** Replaces the run's GNSS model before the
+    /// run, so a test can take the receiver's error out and read where a device's own
+    /// position truth stands. No scenario key reaches it: a run's receiver is
+    /// `actors.vehicles.gnss` ([`crate::wiring::build_gnss`]).
+    #[doc(hidden)]
+    pub fn set_gnss_for_test(&mut self, gnss: Box<dyn GnssModel>) {
+        self.gnss = gnss;
+    }
+
+    /// **A test hook, not a model parameter.** Turns the link-state sweep
+    /// ([`Engine::sweep_retired_links`]) off, so a test can show that a run with it and a
+    /// run without it record exactly the same thing.
+    #[doc(hidden)]
+    pub fn set_link_sweep(&mut self, on: bool) {
+        self.link_sweep = on;
+        if let Some(p) = self.phase2.as_mut() {
+            p.set_table_prune(on);
+        }
+    }
+
+    /// **A test hook.** How many cached streams are keyed by a custom id (a trip's, mostly),
+    /// an actor and a node.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rng_stream_kinds(&self) -> (usize, usize, usize) {
+        let count = |f: fn(&EntityRef) -> bool| self.rng.count_where(|_, e| f(e));
+        (
+            count(|e| matches!(e, EntityRef::Custom { .. })),
+            count(|e| matches!(e, EntityRef::Actor(_))),
+            count(|e| matches!(e, EntityRef::Node(_))),
+        )
+    }
+
+    /// **A test hook.** Arms the RNG registry's tripwire: from now on any stream drawn again
+    /// after the sweep forgot it is noted ([`Engine::rng_redrawn_after_forget`]).
+    #[doc(hidden)]
+    pub fn watch_forgotten_streams(&mut self) {
+        self.rng.watch_forgotten();
+    }
+
+    /// **A test hook.** The streams drawn again after being forgotten: empty when the sweep's
+    /// forgetting cannot have moved a value.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn rng_redrawn_after_forget(&self) -> Vec<String> {
+        self.rng.redrawn_after_forget()
+    }
+
+    /// Runs `f` with an engine context over this engine's state.
+    ///
+    /// The seam a caller outside the loop reaches the kernel through: a tool that wants to
+    /// emit a record, schedule an event or draw from a stream in the engine's own frame
+    /// uses this rather than rebuilding a context and getting the borrows wrong. It is
+    /// also how this crate's tests exercise [`EngineCtx`] against a real engine instead of
+    /// a fixture, which is the difference between testing the context and testing a copy
+    /// of it.
+    pub fn with_ctx<R>(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        f: impl FnOnce(&mut EngineCtx<'_>) -> R,
+    ) -> R {
+        let Engine {
+            scheduler,
+            rng,
+            world,
+            snapshot,
+            provenance,
+            params,
+            ..
+        } = self;
+        let mut ctx = EngineCtx::new(
+            scheduler, rng, world, snapshot, provenance, params, recorder,
+        );
+        f(&mut ctx)
+    }
+
+    /// The `why` service's accumulated entries.
+    pub fn provenance(&self) -> &ProvenanceLog {
+        &self.provenance
+    }
+
+    /// The position of an actor at an instant inside the current mobility step.
+    ///
+    /// The published extrapolation rule (invariant I-M4) and the
+    /// only place it is applied.
+    pub fn position_at(&self, actor: ActorId, t: SimTime) -> Option<Vec3> {
+        self.actors.get(&actor).map(|a| a.last.extrapolate(t).pos)
+    }
+
+    /// Moves a `follow` focus region onto its node's current position.
+    fn recentre_focus(&mut self, now: SimTime) {
+        let Some(node) = self.focus.as_ref().and_then(|f| f.plan.follows) else {
+            return;
+        };
+        let centre = self
+            .node_pos(node, now)
+            .unwrap_or(crate::wiring::FOCUS_NOWHERE);
+        if let Some(f) = self.focus.as_mut() {
+            f.plan.recentre(centre);
+        }
+    }
+
+    /// Draws a new node's generation phase (`v2xw_msg::GenerationTiming::phase`).
+    ///
+    /// Keyed by the node id alone, so the phase does not depend on when the node was
+    /// created or how many were created before it.
+    fn note_node_created(&mut self, id: NodeId) {
+        // Its first `mac.cbr` window starts when it does, not at the window's start.
+        let now = self.scheduler.now();
+        self.cbr_mark.insert(id, (now, 0));
+        if let Some(plan) = self.channel_plan.as_ref() {
+            for ch in [Some(plan.primary), plan.service].into_iter().flatten() {
+                self.chan_mark.insert((id, ch.0), (now, 0));
+            }
+        }
+        // The node's CRL gate reads its period off its own clock on the i-period calendar,
+        // as a device does, so it is right from its first reception even when the
+        // credential it holds is from an expired pool.
+        if let Some(p) = self.phase2.as_ref() {
+            let (origin, len) = p.params().scms.period_grid();
+            if let Some(rt) = self.nodes.get_mut(&id) {
+                rt.stores_mut().crl.set_period_grid(origin, len);
+            }
+        }
+        let phase = self.gen_timing.phase(&self.rng, id);
+        self.node_phase.insert(id, phase);
+        // A vehicle's BSM goes on SAE J2945/1's own schedule, its RandOffset keyed by
+        // the run's seed and the node.
+        if let Some(timing) = self.j2945_timing
+            && !self.rsus.contains_key(&id)
+        {
+            let seed = self.rng.master_seed();
+            if let Some(obu) = self.nodes.get_mut(&id).and_then(|n| n.as_obu_mut()) {
+                obu.schedule_mut().enable_j2945_schedule(timing, seed, id);
+            }
+        }
+        if phase >= self.scenario.time.mobility_step() {
+            let now = self.scheduler.now();
+            self.node_first_step.insert(id, now + phase.as_nanos());
+        }
+    }
+
+    /// How many credentials a node's certificate store holds (0 for an unknown node):
+    /// what a test reads to see which certificates a unit can sign with.
+    #[must_use]
+    pub fn node_cert_count(&self, node: NodeId) -> usize {
+        self.nodes
+            .get(&node)
+            .map_or(0, |n| n.stores().certs.credentials().len())
+    }
+
+    /// How many signed CRLs (one per `(crlCraca, crlSeries)`) a node's own receiver trust
+    /// has verified and installed (0 for an unknown node): what the overdue rule acts on.
+    #[must_use]
+    pub fn node_crls_held(&self, node: NodeId) -> usize {
+        self.nodes
+            .get(&node)
+            .map_or(0, |n| n.security().trust().crls_held())
+    }
+
+    /// The receivers' 1609.2 validation counters so far: the departed nodes' and every
+    /// live node's, as [`Engine::finish_run`] writes them into the report. A test reads it
+    /// between [`Engine::advance`] slices.
+    #[must_use]
+    pub fn receiver_validation_now(&self) -> ReceiverValidationReport {
+        let mut rx = self.departed_rx.clone();
+        for n in self.nodes.values() {
+            rx.add(&n.security().trust().stats);
+        }
+        rx
+    }
+
+    /// **A test hook, not a model parameter.** From now on, every ordinary vehicle that
+    /// joins carries a unit that sends SRMs as an emergency vehicle's does (a forged
+    /// priority request, acceptance test 3), while the SCMS provisions it as the
+    /// ordinary vehicle it is: pseudonyms only, no identification certificate.
+    pub fn forge_srm_for_test(&mut self) {
+        self.forge_srm = true;
+    }
+
+    /// Per requester (the SRM's signer digest): how many SRMs the roadside units handed
+    /// to a junction's controller (verified, or unverified under a policy that does not
+    /// check them), and the first and last instant one was.
+    #[must_use]
+    pub fn priority_requests_heard(&self) -> &BTreeMap<[u8; 8], (u64, SimTime, SimTime)> {
+        &self.priority_heard
+    }
+
+    /// How many messages a node had due and did not send for want of a usable
+    /// credential (0 for an unknown node).
+    #[must_use]
+    pub fn node_tx_uncredentialed(&self, node: NodeId) -> u64 {
+        self.nodes
+            .get(&node)
+            .map_or(0, crate::hosted::HostedNode::tx_uncredentialed)
+    }
+
+    /// One node's generation phase inside the mobility step, when it has one.
+    pub fn node_phase(&self, node: NodeId) -> Option<Duration> {
+        self.node_phase.get(&node).copied()
+    }
+
+    /// True if `t` falls inside a declared time-dilation window.
+    pub fn is_dilated(&self, t: SimTime) -> bool {
+        self.manifest.is_dilated(t)
+    }
+
+    /// Creates one node per roadside unit the scenario declared.
+    ///
+    /// A roadside unit is a node and **not** an actor: it does not move, it is not in the
+    /// mobility snapshot, and nothing spawns or retires it. So it is created here, at
+    /// build, and the reception phase finds it through [`Engine::rsus`] rather than through
+    /// a grid query. Its runtime is an [`ObuRuntime`] on an RSU hardware profile with no
+    /// message services; what it does here is receive, and put the CRL on the air when the
+    /// backend hands it one. The roadside runtime — roles, failure
+    /// states, store-and-forward — now ships as [`v2xw_node::RsuRuntime`] and this site
+    /// has not been moved onto it; see `crate::phase2`'s "What is not here".
+    ///
+    /// Unit `i` (in `actors.rsus` order) is node [`ROADSIDE_ID_BASE`]` + i`, apart from the
+    /// counter vehicle spawn takes its ids from. Before 2026-10-27 the units took that
+    /// counter's first values, so adding or removing a mast renumbered every vehicle and
+    /// re-keyed every draw keyed by its node (access class, timing class, clock, GNSS,
+    /// attacker arming): an RSU-count sweep was not common random numbers (P1-E6). That
+    /// numbering is published: `v2xw-server`'s live projector reconstructs the
+    /// actor→node map from it.
+    fn create_rsus(&mut self) {
+        let Some(phase2) = self.phase2.as_mut() else {
+            return;
+        };
+        let specs: Vec<crate::phase2::RsuSpec> = phase2.rsu_specs().to_vec();
+        for (i, spec) in specs.into_iter().enumerate() {
+            let id = roadside_node(i);
+            let env = crate::wiring::NodeEnv::new(&self.world, self.wall);
+            let mut runtime = crate::wiring::build_rsu(
+                &self.scenario,
+                env,
+                &self.credential_factory,
+                &spec,
+                id,
+                0,
+            );
+            // A surveyed position, not a fix: an RSU knows where its own mast is because
+            // somebody measured it, which is why this is not a GNSS estimate and why the
+            // node is not being handed ground truth it could not have (invariant I-C2).
+            let mut belief = v2xw_core::PositionEstimate::no_fix(0);
+            belief.pos = spec.position;
+            belief.semi_major_m = 0.0;
+            belief.semi_minor_m = 0.0;
+            // `FixQuality` has no "surveyed" rank, because it enumerates what a *GNSS
+            // receiver* reports. RTK is the closest honest label: centimetre class and
+            // the best rank the enum carries, which is what a surveyed mast deserves and
+            // what makes the unit's position usable by a detector's own plausibility test.
+            belief.fix = v2xw_core::belief::FixQuality::Rtk;
+            runtime.set_belief(belief.quantized());
+            self.nodes.insert(id, runtime.into());
+            self.inboxes.insert(id, Vec::new());
+            self.note_node_created(id);
+            self.rsus.insert(id, spec.position);
+            self.report.nodes_created += 1;
+            if let Some(phase2) = self.phase2.as_mut() {
+                phase2.note_rsu(
+                    id,
+                    &crate::wiring::rsu_app_psids(&self.scenario, &spec.roles),
+                );
+                phase2.arm_rsu_detector(id);
+            }
+            // Under the SCMS the unit signs only with the application certificates its
+            // provider issued before the run, not with the factory's.
+            self.install_rsu_app_certs(id, true);
+            // The unit's CRL gate is in the i-period its clock says from the start, not
+            // only from its first own step: a unit with no application certificate of its
+            // own (the post-quantum profile) otherwise judged every linked certificate it
+            // heard before that step against period 0 and refused it as `Invalid` (the 47
+            // first PSMs of the cycle runs).
+            let now = self.scheduler.now();
+            self.sync_credential_periods(Some(id), now);
+        }
+    }
+
+    /// Every roadside unit in the certificate cycle whose RA serves a newer composite CRL
+    /// fetches it over its backhaul (the bytes ride its line) and installs what it
+    /// verifies: each signed CRL chains to an installed root and passes `verify_crl`,
+    /// and only the entries a CRL signs go into the unit's gate, under that CRL's CRACA.
+    /// Its receiver validation then refuses revoked senders as a vehicle's does.
+    fn install_rsu_crls(&mut self, now: SimTime) -> Vec<crate::sec_records::ProtoRevocation> {
+        let mut records = Vec::new();
+        let due = self
+            .phase2
+            .as_ref()
+            .map(crate::phase2::Phase2::rsu_crls_due)
+            .unwrap_or_default();
+        // The backend runs once per mobility step: a download that lands inside this step
+        // is installed now, a later one at the first step it has landed by.
+        let step_end = self.scenario.time.mobility_step().after(now);
+        self.rsu_crl_landing.clear();
+        for rsu in due {
+            // A unit that is switched off fetches nothing; it fetches when it is back on.
+            if self.node_is_off(rsu) {
+                continue;
+            }
+            let Some(p) = self.phase2.as_mut() else {
+                return records;
+            };
+            // The download goes down the unit's backhaul line once, and the unit holds the
+            // list only when it has landed (latency, serialisation, retransmissions).
+            let lands = match self.rsu_crl_fetch.get(&rsu) {
+                Some((at, _)) => *at,
+                None => {
+                    // The real composite CRL's bytes (edge-case package, item 6), in the
+                    // RA's framed `200 OK`.
+                    let size =
+                        crate::phase2::Phase2::poll_answer_bytes(Some(p.crl_download_size(rsu)));
+                    // The `GET` goes up the same line first (it was never charged).
+                    let request = p.crl_poll_request_bytes(rsu);
+                    p.note_rsu_crl_request(request);
+                    let asked = p
+                        .access_mut()
+                        .rsu_send(rsu, v2xw_radio::cellular::Direction::Uplink, request, now)
+                        .unwrap_or(now);
+                    let at = p
+                        .access_mut()
+                        .rsu_send(rsu, v2xw_radio::cellular::Direction::Downlink, size, asked)
+                        .unwrap_or(asked);
+                    // The file as the RA serves it now, not as it is when the download
+                    // lands: on a slow line a list published in between came free with
+                    // it, and the unit fetched once where a fast line fetched twice
+                    // (sensitivity_security's backhaul test, 272 against 264 messages).
+                    let (version, entries, secured) = p.published_crl_for(rsu);
+                    let file = RsuCrlFile {
+                        version,
+                        serial: p.crl_serial_for(rsu),
+                        entries,
+                        secured,
+                    };
+                    self.rsu_crl_fetch.insert(rsu, (at, file));
+                    at
+                }
+            };
+            self.rsu_crl_landing.insert(rsu, lands);
+            if lands >= step_end {
+                continue;
+            }
+            let Some((_, file)) = self.rsu_crl_fetch.remove(&rsu) else {
+                continue;
+            };
+            let serial = file.serial;
+            let (version, entries, secured) = (file.version, &file.entries, &file.secured);
+            let ctl = p.take_ctl_install(rsu, true);
+            let Some(rt) = self.nodes.get_mut(&rsu) else {
+                continue;
+            };
+            // The CTL rides the same composite file (edge-case package, item 8).
+            if let Some((roots, cas)) = ctl {
+                let (_, removed) = rt.security_mut().apply_ctl(&roots, &cas);
+                p.note_anchors_removed(removed);
+            }
+            // The post-quantum profile's unit (no signed CRL bytes exist): the
+            // entries the RA serves go into its gate as a vehicle's modelled CRL does, each
+            // under its own CRACA, and it refuses a revoked sender from now on.
+            if secured.is_empty() && p.rsu_crl_is_modelled(rsu) {
+                for e in entries {
+                    rt.stores_mut().crl.add_linkage_entry(*e);
+                }
+                p.note_rsu_crl(rsu, version, serial, true);
+                self.rsu_crl_held.insert(rsu, file);
+                continue;
+            }
+            // A fetch for a newer CTL while no CRL is published carries no CRL to verify:
+            // nothing installed, nothing refused.
+            if secured.is_empty() {
+                continue;
+            }
+            // Each signed CRL in the composite file is verified on its own: one the unit
+            // cannot verify is skipped (counted), and the rest installs.
+            let mut crls = Vec::with_capacity(secured.len());
+            let mut skipped = 0usize;
+            let trusted = rt.security().trust().is_installed();
+            for bytes in secured {
+                match rt.install_secured_crl(bytes, now) {
+                    Ok(v) => crls.push(v),
+                    Err(_) => skipped += 1,
+                }
+            }
+            let ok = trusted && !crls.is_empty();
+            if skipped > 0
+                && let Some(p) = self.phase2.as_mut()
+            {
+                p.crls_skipped(skipped, 0);
+            }
+            let Some(rt) = self.nodes.get_mut(&rsu) else {
+                continue;
+            };
+            // The entries the unit installed: those a CRL it verified signs.
+            let mut held = Vec::new();
+            if ok {
+                for v in &crls {
+                    let signed: Vec<v2xw_sec::linkage::CrlLinkageEntry> = entries
+                        .iter()
+                        .filter_map(|e| v.signed_form(e).and_then(|r| r.ok()))
+                        .collect();
+                    if !signed.is_empty() {
+                        rt.stores_mut().crl.add_verified_linkage(v.craca, &signed);
+                    }
+                    held.extend(
+                        entries
+                            .iter()
+                            .filter(|e| v.signed_form(e).is_some_and(|r| r.is_ok()))
+                            .copied(),
+                    );
+                }
+            }
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_rsu_crl(rsu, version, serial, ok);
+                if ok {
+                    records.extend(p.rsu_crl_records(rsu, version, &held, now));
+                }
+            }
+            if ok {
+                self.rsu_crl_held.insert(rsu, file);
+            }
+        }
+        records
+    }
+
+    /// Hands roadside unit `rsu` the application certificates the SCMS installed since
+    /// the last call (`replace`: the first call, which drops the factory certificate).
+    fn install_rsu_app_certs(
+        &mut self,
+        rsu: NodeId,
+        replace: bool,
+    ) -> Vec<crate::phase2::RsuAppCred> {
+        let Some(phase2) = self.phase2.as_mut() else {
+            return Vec::new();
+        };
+        if !phase2.rsu_in_cert_cycle(rsu) {
+            return Vec::new();
+        }
+        let creds: Vec<crate::phase2::RsuAppCred> = phase2
+            .rsu_app_installs(Some(rsu))
+            .into_iter()
+            .flat_map(|(_, c)| c)
+            .collect();
+        if let Some(runtime) = self.nodes.get_mut(&rsu) {
+            let ok =
+                crate::wiring::install_rsu_app_certs(runtime, &self.scenario, rsu, &creds, replace);
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_rsu_app_refused((creds.len() - ok) as u64);
+            }
+        }
+        creds
+    }
+
+    /// Connects every roadside unit that broadcasts SPaT or MAP to its junction's
+    /// controller and survey ([`crate::infra`]), and installs its MAP.
+    ///
+    /// A unit with the role and no signalised junction within
+    /// [`crate::infra::SERVICE_RADIUS_M`] is refused here, by index, rather than left to
+    /// broadcast nothing: a scenario that asked for SPaT and got silence would look like a
+    /// radio problem.
+    ///
+    /// # Errors
+    /// [`EngineError::Scenario`] naming the unit and what it lacks.
+    fn attach_intersection_feeds(&mut self) -> Result<()> {
+        let Some(phase2) = self.phase2.as_ref() else {
+            return Ok(());
+        };
+        let units: Vec<(usize, NodeId, Vec3, Vec<String>)> = phase2
+            .rsu_specs()
+            .iter()
+            .zip(phase2.rsu_nodes())
+            .enumerate()
+            .map(|(i, (spec, node))| (i, *node, spec.position, spec.roles.clone()))
+            .collect();
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        for (i, node, mast, roles) in units {
+            let services = crate::wiring::rsu_services(&self.scenario, &roles);
+            if !(services.spat || services.map) {
+                continue;
+            }
+            let conflict = |why: String| {
+                EngineError::Scenario(crate::error::ScenarioError::conflict(
+                    format!("actors.rsus[{i}]"),
+                    why,
+                ))
+            };
+            // A unit signs every SPaT and MAP on its own hardware, and a profile that
+            // publishes no signing cost signs nothing (`ObuRuntime` never signs for free).
+            // Refused here by name rather than left to broadcast silence.
+            let signs = self.nodes.get(&node).is_some_and(|n| {
+                n.profile()
+                    .op_cost(
+                        v2xw_node::profile::signature_ops(crate::signature::message_signature(
+                            &self.scenario,
+                        ))
+                        .0,
+                    )
+                    .is_some()
+            });
+            if !signs {
+                let profile = self
+                    .nodes
+                    .get(&node)
+                    .map_or_else(String::new, |n| n.profile().id.clone());
+                return Err(conflict(format!(
+                    "broadcasts SPaT or MAP, and its hardware profile '{profile}' publishes no \
+                     ECDSA signing cost, so it cannot sign what it would broadcast; choose a \
+                     roadside profile with one, such as rsu/commsignia-its-rs4"
+                )));
+            }
+            let plan = crate::infra::IntersectionFeed::nearest_plan(&self.world, mast).ok_or_else(
+                || {
+                    conflict(format!(
+                        "broadcasts SPaT or MAP, and no signalised junction stands within {} m of \
+                     its mast: a roadside unit is wired to the controller of the junction it \
+                     stands at. Move it onto a junction or drop the role",
+                        crate::infra::SERVICE_RADIUS_M
+                    ))
+                },
+            )?;
+            let feed = crate::infra::IntersectionFeed::build(&self.world, plan, origin)
+                .map_err(|why| conflict(format!("cannot describe its junction: {why}")))?;
+            if services.map {
+                let framing = self.infra_framing(node);
+                let bytes = feed
+                    .map_bytes(framing)
+                    .map_err(|why| conflict(format!("its MAP does not encode: {why}")))?;
+                if let Some(runtime) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) {
+                    runtime.set_infra_payload(v2xw_msg::MsgType::Map, bytes);
+                }
+            }
+            self.infra_feeds.insert(node, feed);
+        }
+        Ok(())
+    }
+
+    /// Under `net.rsu_ip.air: sch`, makes every relaying roadside unit a
+    /// WSA provider: it signs and sends an IEEE 1609.3 WSA every `wsa_interval_ms`
+    /// advertising the SCMS service (PSID 0x23, an ASSUMPTION; `v2xw_msg::wsa`) and IPv6
+    /// Routing, with a WAVE Routing Advertisement of its own /64 prefix
+    /// (`2001:db8:0:<unit index>::/64`, documentation space, RFC 3849) and its mast as
+    /// its location. Nothing happens under an explicit `constant`.
+    fn attach_wsa_providers(&mut self) {
+        if !crate::wiring::rsu_ip_sch(&self.scenario) {
+            return;
+        }
+        let Some(phase2) = self.phase2.as_ref() else {
+            return;
+        };
+        let units: Vec<(usize, NodeId, Vec3)> = phase2
+            .rsu_specs()
+            .iter()
+            .zip(phase2.rsu_nodes())
+            .enumerate()
+            .filter(|(_, (spec, _))| crate::wiring::is_relay(&spec.roles))
+            .map(|(i, (spec, node))| (i, *node, spec.position))
+            .collect();
+        let interval_ms = self
+            .scenario
+            .net
+            .rsu_ip
+            .as_ref()
+            .map_or(100, |r| r.wsa_interval_ms)
+            .max(1);
+        // The service channel the scenario's channel plan names, else 174 (the
+        // plan's example; the encoded length does not depend on it).
+        let service_channel = self
+            .channel_plan
+            .as_ref()
+            .and_then(|p| p.service)
+            .map_or(174, |c| u8::try_from(c.0).unwrap_or(174));
+        // The service-channel hop's loss curve: the PER of a 1 500-octet IP
+        // packet in its 802.11 frame at the safety MCS, against the mean line-of-sight SNR
+        // of the unit's radiated power, every 5 m to 1 km; the range is the farthest point
+        // below 99 % PER.
+        let mcs = crate::wiring::safety_mcs(&self.scenario);
+        let phy = crate::wiring::build_phy(&self.scenario);
+        let eirp =
+            crate::wiring::device_for(&self.scenario, v2xw_radio::ActorClass::Rsu).max_eirp_dbm();
+        let frame = 1_500 + v2xw_radio::rsu_sch::SCH_FRAMING_BYTES;
+        let curve: Vec<(f64, f64)> = (1..=200)
+            .map(|k| {
+                let d = f64::from(k) * 5.0;
+                (
+                    d,
+                    phy.per_model()
+                        .per(frame, mcs, self.range.los_snr_db(eirp, d)),
+                )
+            })
+            .collect();
+        let range_m = curve
+            .iter()
+            .filter(|(_, p)| *p < 0.99)
+            .map(|(d, _)| *d)
+            .fold(5.0, f64::max);
+        let mut template = v2xw_radio::rsu_sch::RsuSchPath::new(
+            0,
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            range_m,
+            self.scenario.seed,
+        );
+        template.per_curve = curve;
+        template.per_ref_bytes = frame;
+        template.mcs = mcs;
+        self.sch_template = Some(template);
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        for (i, node, mast) in units {
+            let (lat, lon, alt) = origin.to_geodetic(mast);
+            let mut wsa = v2xw_msg::wsa::scms_service_wsa(
+                (5_000 / interval_ms).clamp(1, 255) as u8,
+                v2xw_msg::wsa::Location {
+                    lat: (lat * 1e7).round() as i32,
+                    lon: (lon * 1e7).round() as i32,
+                },
+                ((alt * 10.0).round() as i32).clamp(-4_096, 61_439),
+                service_channel,
+                20,
+            );
+            let index = u16::try_from(i).unwrap_or(u16::MAX).to_be_bytes();
+            let mut prefix8 = [0u8; 8];
+            if let Some(ra) = wsa.routing.as_mut() {
+                for a in [&mut ra.prefix, &mut ra.default_gateway] {
+                    a[4] = 0;
+                    a[5] = 0;
+                    a[6] = index[0];
+                    a[7] = index[1];
+                }
+                prefix8.copy_from_slice(&ra.prefix[..8]);
+            }
+            let Ok(bytes) = v2xw_msg::wsa::encode_wsa(&wsa) else {
+                continue;
+            };
+            if let Some(runtime) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) {
+                runtime.enable_wsa(Duration::from_millis(u64::from(interval_ms)), bytes);
+                self.wsa_routers.insert(prefix8, node);
+            }
+        }
+    }
+
+    /// A new service-channel session of vehicle `node` with unit `rsu` at `now`, under
+    /// `net.rsu_ip.air: sch`: the vehicle's position and velocity now (a
+    /// physical law: the contact window is the vehicle's real motion), the unit's mast, the
+    /// busy ratio the unit measures on the service channel, and alternating access for a
+    /// one-radio unit.
+    fn sch_session(
+        &self,
+        node: NodeId,
+        rsu: NodeId,
+        now: SimTime,
+    ) -> Option<v2xw_radio::rsu_sch::RsuSchPath> {
+        let mut s = self.sch_template.clone()?;
+        let k = self.actor_of(node)?.last;
+        let mast = self.rsus.get(&rsu).copied()?;
+        let ch = self
+            .channel_plan
+            .as_ref()
+            .and_then(|p| p.service)
+            .unwrap_or(self.dsrc_channel);
+        s.start = now;
+        s.vehicle_m = [k.pos.x, k.pos.y];
+        s.velocity_mps = [k.vel.x, k.vel.y];
+        s.rsu_m = [mast.x, mast.y];
+        s.cbr = self
+            .mac
+            .as_ref()
+            .map_or(0.0, |m| Mac::<EngineCtx<'_>>::cbr(m, rsu, ch, now));
+        if self.alternates(node) {
+            s.schedule = v2xw_radio::wave_schedule::ChannelSchedule {
+                access: v2xw_radio::wave_schedule::ChannelAccess::Alternating,
+            };
+        }
+        Some(s)
+    }
+
+    /// Under `net.rsu_ip.air: sch`, the relaying units `node` may use now: those whose
+    /// SCMS-service WSA it verified within [`WSA_SERVICE_FRESH_NS`] of its own clock
+    /// (IEEE 1609.3 §8.2.3: the WSA user decides). `None` under `constant`,
+    /// where any unit in range serves.
+    fn wsa_units(&self, node: NodeId, now: SimTime) -> Option<Vec<NodeId>> {
+        if !crate::wiring::rsu_ip_sch(&self.scenario) {
+            return None;
+        }
+        let Some(obu) = self.nodes.get(&node).and_then(|n| n.as_obu()) else {
+            return Some(Vec::new());
+        };
+        let believed = obu.clock().believed_time(now);
+        Some(
+            obu.scms_routers()
+                .iter()
+                .filter(|(_, t)| believed.saturating_sub(**t) <= WSA_SERVICE_FRESH_NS)
+                .filter_map(|(p, _)| self.wsa_routers.get(p).copied())
+                .collect(),
+        )
+    }
+
+    /// How `node`'s intersection messages are framed: J2735 on the WSMP stack, ETSI on the
+    /// GeoNetworking one, with the station id its active pseudonym gives it.
+    fn infra_framing(&self, node: NodeId) -> crate::infra::InfraFraming {
+        if !crate::wiring::etsi_facilities(&self.scenario) {
+            return crate::infra::InfraFraming::J2735;
+        }
+        let station_id = self
+            .nodes
+            .get(&node)
+            .and_then(|n| n.stores().certs.active())
+            .map_or(0, |c| {
+                u32::from_be_bytes([c.digest.0[0], c.digest.0[1], c.digest.0[2], c.digest.0[3]])
+            });
+        crate::infra::InfraFraming::Etsi { station_id }
+    }
+
+    /// Hands each selected roadside unit its controller's state at `now`: the SPaT its
+    /// schedule signs if a broadcast is due at this step.
+    fn feed_controllers(&mut self, only: Option<NodeId>, now: SimTime) {
+        let units: Vec<NodeId> = self
+            .infra_feeds
+            .keys()
+            .copied()
+            .filter(|n| only.is_none_or(|o| o == *n))
+            .collect();
+        let now_s = v2xw_core::time::ns_to_secs(now);
+        for node in units {
+            let framing = self.infra_framing(node);
+            let Some(feed) = self.infra_feeds.get_mut(&node) else {
+                continue;
+            };
+            // The controller's timing as it now runs (a priority service moves it), and
+            // what its service may still do (`crate::priority`).
+            let plan = feed.plan();
+            if let Some(p) = self.world.signals.get(plan) {
+                feed.sync(p);
+            }
+            let outlook = self.priority.outlook(&self.world, plan, now_s);
+            feed.set_actuation(self.actuated.outlook(&self.world, plan, now_s));
+            feed.set_priority_window(self.priority.window(&self.world, plan, now_s));
+            // A SPaT that does not encode is a defect in the encoder, not in the run; the
+            // unit keeps the last good one rather than sending a truncated message, and the
+            // count is in the run report.
+            match feed.spat_bytes_with(now, self.wall, framing, outlook) {
+                Ok(bytes) => {
+                    if let Some(runtime) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) {
+                        runtime.set_infra_payload(v2xw_msg::MsgType::Spat, bytes);
+                    }
+                }
+                Err(_) => self.report.infra_encode_failures += 1,
+            }
+        }
+    }
+
+    /// What one signature costs this node, on its own hardware.
+    ///
+    /// The engine needs this for the two application messages it puts on the air itself —
+    /// the misbehaviour report and the CRL broadcast — because a frame that reached the
+    /// air the instant the application decided to send it would be a frame that was never
+    /// signed, and because a `MacTimer` scheduled at the instant a priority-6 node phase
+    /// is being dispatched is a zero-delay event at an earlier priority, which the kernel
+    /// refuses.
+    ///
+    /// It is the profile's own cost for the signing primitive, read from the same table
+    /// `ObuRuntime::generate` reads. **It is not queued**: the node's own signer submits
+    /// to a `ServerBank` and waits behind whatever else that bank is doing, and this does
+    /// not, so a report costs its service time and not its sojourn time. For one report
+    /// per detection and one CRL per revocation that is the difference between a right
+    /// answer and a slightly better one; for a per-frame cost it would not be.
+    fn signing_cost(&self, node: NodeId) -> Duration {
+        self.nodes
+            .get(&node)
+            .and_then(|n| {
+                n.profile()
+                    .op_cost(v2xw_node::profile::signature_ops(&self.scenario.security.signature).0)
+                    .map(|(d, _)| d)
+            })
+            // A profile that publishes no signing rate: one microsecond, which is not a
+            // claim about the hardware but the smallest interval that keeps the frame's
+            // `MacTimer` strictly after the phase that produced it.
+            .unwrap_or(Duration::from_micros(1))
+    }
+
+    /// Whether `node` is switched off (a timeline `outage`).
+    fn node_is_off(&self, node: NodeId) -> bool {
+        self.nodes
+            .get(&node)
+            .is_some_and(|n| n.state() == v2xw_node::NodeState::Off)
+    }
+
+    /// One node's ground-truth position at an instant, whether it rides an actor or stands
+    /// on a mast.
+    fn node_pos(&self, node: NodeId, at: SimTime) -> Option<Vec3> {
+        if let Some(pos) = self.rsus.get(&node) {
+            return Some(*pos);
+        }
+        self.actor_of(node).map(|a| a.last.extrapolate(at).pos)
+    }
+
+    /// The actor record of the vehicle or VRU a node rides, if it rides one.
+    fn actor_of(&self, node: NodeId) -> Option<&ActorRecord> {
+        self.node_actor.get(&node).and_then(|a| self.actors.get(a))
+    }
+
+    /// Puts the scheduled events that exist before the first dispatch on the heap.
+    fn seed_timeline(&mut self) {
+        let horizon = self.scenario.time.horizon_ns();
+        self.scheduler
+            .schedule(0, EventClass::MobilityStep, Event::MobilityStep);
+        for (i, item) in self.scenario.events.iter().enumerate() {
+            // A `when` item is armed at `t` and fired by `evaluate_triggers`, which
+            // also schedules its end; nothing is put on the calendar for it here.
+            if item.when.is_some() {
+                continue;
+            }
+            let at = (item.t * 1e9).round().max(0.0) as u64;
+            if at <= horizon {
+                self.scheduler.schedule(
+                    at,
+                    EventClass::Control,
+                    Event::Control {
+                        item: i as u32,
+                        end: false,
+                    },
+                );
+            }
+            if let Some(until) = item.until {
+                let end = (until * 1e9).round().max(0.0) as u64;
+                if end <= horizon {
+                    self.scheduler.schedule(
+                        end,
+                        EventClass::Control,
+                        Event::Control {
+                            item: i as u32,
+                            end: true,
+                        },
+                    );
+                }
+            }
+        }
+        // The dataset exporter reads each receiver's channel busy ratio (`mac.cbr`, written
+        // at every metric flush), so a dataset run flushes even with no metric provider.
+        if !self.providers.is_empty() || self.dataset.is_some() {
+            let first = self.next_metric_flush(0);
+            if first <= horizon {
+                self.scheduler.schedule(
+                    first,
+                    EventClass::Observe,
+                    Event::Observe {
+                        what: Observe::MetricFlush,
+                    },
+                );
+            }
+        }
+        // The end-of-run sentinel is an `Observe`, so it is the last thing that happens at
+        // the horizon: every metric flush and every keyframe at that instant runs first.
+        self.scheduler.schedule(
+            horizon,
+            EventClass::Observe,
+            Event::Observe {
+                what: Observe::EndOfRun,
+            },
+        );
+    }
+
+    /// Runs to the horizon, writing into `recorder`.
+    ///
+    /// # Errors
+    /// Whatever a phase returns: a mobility failure, a recorder failure.
+    pub fn run(&mut self, recorder: &mut dyn RunRecorder) -> Result<RunReport> {
+        let horizon = self.scenario.time.horizon_ns();
+        self.advance(horizon, recorder)?;
+        Ok(self.finish_run(recorder))
+    }
+
+    /// Runs every event at or before `until` (clamped to the horizon) and returns whether
+    /// the run has reached its end: the end-of-run sentinel, the horizon, an empty heap
+    /// or a cancellation.
+    ///
+    /// [`Engine::run`] is `advance(horizon)` then [`Engine::finish_run`]; splitting it is
+    /// what lets a long run be driven in slices — a progress line per simulated hour, a
+    /// checkpoint at an interval — without a second loop. The slices change nothing the
+    /// run computes: an event is dispatched exactly when the single loop would dispatch
+    /// it, because the slice boundary only stops the loop *between* two events, and only
+    /// at a time no event before it has reached.
+    ///
+    /// # Errors
+    /// Whatever a phase returns: a mobility failure, a recorder failure.
+    pub fn advance(&mut self, until: SimTime, recorder: &mut dyn RunRecorder) -> Result<bool> {
+        if self.ended {
+            return Ok(true);
+        }
+        let horizon = self.scenario.time.horizon_ns();
+        let until = until.min(horizon);
+        let step = self.scenario.time.mobility_step();
+
+        loop {
+            let Some(next) = self.scheduler.peek_key() else {
+                self.ended = true;
+                break;
+            };
+            if next.time > horizon {
+                self.ended = true;
+                break;
+            }
+            if next.time > until {
+                return Ok(false);
+            }
+            // The one cancellation point (see `RunRecorder::cancelled`): between two
+            // events, never inside a phase. Asked before the event is counted, so a
+            // cancelled run's report does not claim an event it did not run.
+            if recorder.cancelled() {
+                self.ended = true;
+                break;
+            }
+            let Some((key, event)) = self.scheduler.pop() else {
+                self.ended = true;
+                break;
+            };
+            self.report.count(event.class());
+            match event {
+                Event::Control { item, end } => self.on_control(recorder, item as usize, end),
+                Event::MobilityStep => {
+                    self.on_mobility_step(recorder, step, horizon)?;
+                }
+                Event::NodePhase => self.on_node_phase(recorder, horizon, None),
+                Event::NodeTask {
+                    node,
+                    task: crate::event::NodeTask::Step,
+                } => self.on_node_phase(recorder, horizon, Some(node)),
+                Event::NodeTask {
+                    node,
+                    task: crate::event::NodeTask::Deliver,
+                } => self.on_node_wake(recorder, horizon, node),
+                Event::NodeTask {
+                    node,
+                    task: crate::event::NodeTask::Reassembly,
+                } => self.on_reassembly_timer(recorder, node),
+                Event::NodeTask {
+                    node,
+                    task: crate::event::NodeTask::J2945Decision,
+                } => self.on_j2945_decision(node),
+                Event::MacTimer { node, channel } => {
+                    self.mac_timers_queued.remove(&(key.time, node, channel));
+                    self.on_mac_timer(node, ChannelId(channel), horizon);
+                    if self
+                        .sidelink
+                        .as_ref()
+                        .is_some_and(|sl| !sl.finalize.is_empty())
+                    {
+                        self.sidelink_finalize(recorder);
+                    }
+                }
+                Event::PhyStart { frame, .. } => self.on_phy_start(frame, horizon),
+                Event::PhyEnd { frame } => self.on_phy_end(recorder, frame),
+                Event::Observe {
+                    what: Observe::MetricFlush,
+                } => self.on_metric_flush(recorder, horizon),
+                Event::Observe {
+                    what: Observe::EndOfRun,
+                } => {
+                    // The sentinel is scheduled once, at build, so its sequence number is
+                    // older than every metric flush scheduled during the run: a flush due at
+                    // the horizon tied with it on time and class and lost, and every run
+                    // longer than one metric period ended without its last window (a 3 s
+                    // run reported metrics at 1 s and 2 s only). Whatever else is still due
+                    // at this instant runs first; the sentinel goes to the back of it.
+                    if self
+                        .scheduler
+                        .peek_key()
+                        .is_some_and(|k| k.time == key.time)
+                    {
+                        self.scheduler.schedule(
+                            key.time,
+                            EventClass::Observe,
+                            Event::Observe {
+                                what: Observe::EndOfRun,
+                            },
+                        );
+                        continue;
+                    }
+                    self.report.end_ns = key.time;
+                    self.resolve_in_flight(recorder, key.time);
+                    self.ended = true;
+                    break;
+                }
+                // The remaining classes have no model scheduling them in this build; see
+                // the module documentation's list of what is a missing model rather than a
+                // missing seam. Counting them is what makes their absence visible in the
+                // run report instead of silent.
+                Event::NetDeliver { sdu, to } => self.on_net_deliver(recorder, sdu, to, horizon),
+                Event::FlowTimer { .. } => self.on_flow_timer(horizon),
+                Event::SignalPhase { .. } | Event::NodeTask { .. } | Event::Observe { .. } => {}
+            }
+            self.report.end_ns = key.time;
+        }
+        Ok(true)
+    }
+
+    /// The sizes of the collections the engine keeps, by name: what a long run watches
+    /// for growth that does not follow the live fleet. A diagnostic: nothing reads it
+    /// back, and it reaches no record or digest.
+    #[must_use]
+    pub fn census(&self) -> Vec<(&'static str, u64)> {
+        let n = |v: usize| v as u64;
+        let mut out = vec![
+            ("scheduler.live", n(self.scheduler.len())),
+            ("scheduler.heap", n(self.scheduler.pending_entries())),
+            ("actors", n(self.actors.len())),
+            ("nodes", n(self.nodes.len())),
+            ("rng.streams", n(self.rng.len())),
+            ("phy.node_entries", n(self.phy.node_entries())),
+            ("gnss.states", n(self.gnss.node_states())),
+            (
+                "crypto.directory",
+                n(v2xw_sec::crypto::modeled_directory_len()),
+            ),
+            (
+                "mac.node_states",
+                n(self.mac.as_ref().map_or(0, |m| m.node_states())),
+            ),
+            (
+                "mac.ue_states",
+                n(self.sidelink.as_ref().map_or(0, |s| s.mac.ue_states())),
+            ),
+            ("inboxes", n(self.inboxes.len())),
+            ("inbox_frames", n(self.inboxes.values().map(Vec::len).sum())),
+            ("rx_pending", n(self.rx_pending.len())),
+            ("reassemblers", n(self.reassemblers.len())),
+            ("frag_groups", n(self.frag_groups.len())),
+            ("frag_resolved", n(self.frag_resolved.len())),
+            ("cert_cycles", n(self.cert_cycles.len())),
+            ("mac_window", n(self.mac_window.len())),
+            ("orphaned_rx", n(self.orphaned_rx.len())),
+            ("frames", n(self.frames.len())),
+            ("live_at_rx", n(self.live_at_rx.len())),
+            ("on_air_tx", n(self.on_air_tx.len())),
+            ("pending_tx", n(self.pending_tx.len())),
+            ("policy_odometer", n(self.policy_odometer.len())),
+            ("transfers", n(self.transfers.len())),
+            ("lamps", n(self.lamps.len())),
+            ("node_phase", n(self.node_phase.len())),
+            ("node_class", n(self.node_class.len())),
+            ("node_actor", n(self.node_actor.len())),
+            ("node_wake", n(self.node_wake.len())),
+            ("retired", n(self.retired.len())),
+            ("j2945_quality_at", n(self.j2945_quality_at.len())),
+            ("metrics.held", n(self.providers.held_entries())),
+            (
+                "j2945.per_rings",
+                n(self
+                    .j2945_per
+                    .as_ref()
+                    .map_or(0, v2xw_radio::PerWindow::rings)),
+            ),
+            ("provenance", n(self.provenance.len())),
+            (
+                "transmitted_since_step",
+                n(self.transmitted_since_step.len()),
+            ),
+        ];
+        if let Some(p2) = self.phase2.as_ref() {
+            p2.census(&mut out);
+        }
+        out
+    }
+
+    /// Whether the run has reached its end ([`Engine::advance`] returned `true`).
+    #[must_use]
+    pub fn ended(&self) -> bool {
+        self.ended
+    }
+
+    /// The simulated instant the run has reached: the last dispatched event's time.
+    #[must_use]
+    pub fn now(&self) -> SimTime {
+        self.scheduler.now()
+    }
+
+    /// Closes the run's books after [`Engine::advance`] has reached the end, and returns
+    /// the report. Called once; [`Engine::run`] calls it for a run driven in one piece.
+    pub fn finish_run(&mut self, recorder: &mut dyn RunRecorder) -> RunReport {
+        self.gn_finish();
+        self.cpm_finish();
+        if let Some((dropped, unroutable)) = self.mobility.trip_losses() {
+            self.report.trips_dropped = dropped;
+            self.report.trips_unroutable = unroutable;
+        }
+        self.report.gcbr = self.gcbr.as_ref().map(|g| g.tally);
+        if let Some(d) = self.ev_distance_m {
+            self.report.emergency_distance_m = d.round() as u64;
+        }
+        // The 1609.4 gate's holds; zero (and not serialised) without it.
+        if self.wave.is_some()
+            && let Some(mac) = self.mac.as_ref()
+        {
+            let (gate, guard) = mac.total_gate_deferrals();
+            self.report.mac_gate_deferrals = gate;
+            self.report.mac_guard_deferrals = guard;
+        }
+        let refusals: u64 = self
+            .nodes
+            .values()
+            .map(|n| u64::from(n.stores().crl.refusals()))
+            .sum();
+        if let Some(phase2) = self.phase2.as_mut() {
+            phase2.report_mut().crl_period_refusals = refusals;
+        }
+        self.report.receiver_validation = self.receiver_validation_now();
+        if let (Some(phase2), Some(policy)) = (self.phase2.as_mut(), self.pseudonym_policy.as_ref())
+        {
+            phase2.note_policy_totals(policy.silenced_frames, policy.requested_changes);
+        }
+        // The PKI view's last interval (the view publishes on its cadence), so the
+        // recording carries every SPDU the run put on a link.
+        let now = self.now();
+        if let Some(pki) = self.phase2.as_mut().and_then(|p| p.final_pki(now)) {
+            if let Some(state) = pki.state {
+                self.emit(recorder, &crate::sec_records::PkiStateRecord(state));
+            }
+            for f in pki.flows {
+                self.emit(recorder, &crate::sec_records::PkiFlowRecord(f));
+            }
+            for c in pki.cases {
+                self.emit(recorder, &crate::sec_records::PkiCaseRecord(c));
+            }
+            for k in pki.knowledge {
+                self.emit(recorder, &crate::sec_records::PkiKnowledgeRecord(k));
+            }
+        }
+        if let Some((fates, received, exposure)) =
+            self.phase2.as_mut().map(|p| p.final_report_records(now))
+        {
+            for f in &fates {
+                self.emit(recorder, f);
+            }
+            for r in &received {
+                self.emit(recorder, r);
+            }
+            for e in &exposure {
+                self.emit(recorder, e);
+            }
+        }
+        let built = self
+            .phase2
+            .as_mut()
+            .map(crate::phase2::Phase2::take_built_reports)
+            .unwrap_or_default();
+        for b in &built {
+            self.emit(recorder, b);
+        }
+        if let Some(phase2) = self.phase2.as_mut() {
+            phase2.finish();
+            self.report.phase2 = phase2.report();
+            self.report.phase2.srm_unsigned_no_ident = self.departed_srm_no_ident
+                + self
+                    .nodes
+                    .values()
+                    .filter_map(|n| n.as_obu())
+                    .map(v2xw_node::ObuRuntime::srm_no_identification)
+                    .sum::<u64>();
+        }
+        self.report.sidelink = self.sidelink_report();
+        self.report.scale = self.radio_gate.as_ref().map(|g| ScaleTally {
+            margin_m: g.margin_m().round() as u64,
+            dormant_node_steps: g.dormant_node_steps,
+            peak_awake_nodes: g.peak_awake,
+            peak_dormant_nodes: g.peak_dormant,
+            peak_deferred_nodes: g.peak_deferred,
+        });
+        // What the *recorder* says it kept, asked once at the end and never inferred from
+        // what the engine handed over. The two numbers sitting side by side is the point:
+        // a run report that quoted only the emitted count could contradict the artefact
+        // beside it and nothing would say which was right.
+        self.report.records_written = recorder.records_written();
+        self.report.frames_written = recorder.frames_written();
+        // Records the backend refused are reported, whatever the reason it refused them.
+        self.report.records_refused += recorder.refused();
+        self.report.keyframes = self.snapshots.keyframes();
+        self.report.deltas = self.snapshots.deltas();
+        self.report.clone()
+    }
+
+    /// A scenario timeline item takes effect, or stops taking effect.
+    ///
+    /// Dispatched at control priority (`EventClass::Control`, priority 0), so every other
+    /// event at this instant — the mobility step, the node phase, a frame ending — sees the
+    /// change. Each item writes one `scenario.event` record saying what it did, which is how
+    /// the page shows a timeline marker as fired and a test checks the effect.
+    fn on_control(&mut self, recorder: &mut dyn RunRecorder, index: usize, end: bool) {
+        let Some(item) = self.scenario.events.get(index).cloned() else {
+            return;
+        };
+        use crate::scenario::TimelineKind;
+        let now = self.scheduler.now();
+        let mut note = crate::records::ScenarioEventView::new(now, index, item.kind, end);
+        // A `when` item's record says what its clause bound, and which firing.
+        if item.when.is_some() && !end {
+            if let Some(b) = self.timeline.bindings.get(&index) {
+                note.actor = b.actor.map(|a| a.index());
+                note.leader = b.leader.map(|a| a.index());
+                note.follower = b.follower.map(|a| a.index());
+            }
+            note.firing = self.timeline.trigger_fires.get(&index).map(|(n, _)| *n);
+        }
+        match item.kind {
+            TimelineKind::WeatherFront => {
+                if end {
+                    // The front has passed: back to the scenario's own weather, rather than
+                    // leaving the storm in force for the rest of the run.
+                    self.weather = crate::wiring::initial_weather(&self.scenario);
+                } else if let Some(v) = item.params.get("value")
+                    && let Ok(kind) = serde_json::from_value(v.clone())
+                {
+                    let intensity = item
+                        .params
+                        .get("intensity")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(1.0);
+                    let visibility = item
+                        .params
+                        .get("visibility_m")
+                        .and_then(serde_json::Value::as_f64);
+                    let surface = item
+                        .params
+                        .get("surface")
+                        .and_then(|s| serde_json::from_value(s.clone()).ok());
+                    self.weather = crate::wiring::weather_of(kind, intensity, visibility, surface);
+                }
+                // And the drivers feel it, from the next mobility step.
+                self.mobility.set_weather(self.weather);
+                note.effect = format!(
+                    "the weather is now {:?} at intensity {}",
+                    self.weather.kind, self.weather.intensity
+                );
+            }
+            TimelineKind::Outage => {
+                // `target` names a node by index. An outage turns the node off, which is
+                // the state `ObuRuntime::step` returns from immediately, so it stops both
+                // transmitting and receiving without being removed.
+                let node = item
+                    .params
+                    .get("target")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|n| NodeId::new(n as u32));
+                match node.and_then(|n| self.nodes.get_mut(&n).map(|r| (n, r))) {
+                    Some((node, runtime)) => {
+                        runtime.set_state(if end {
+                            v2xw_node::NodeState::Active
+                        } else {
+                            v2xw_node::NodeState::Off
+                        });
+                        // A device switched off reaches the SCMS no more than the air: no
+                        // CRL poll, top-up or re-enrolment until it is back on (stress
+                        // package: a car parked for weeks comes back with an overdue CRL
+                        // and an empty pool).
+                        let scms = self
+                            .phase2
+                            .as_mut()
+                            .is_some_and(|p| p.set_powered(node, end));
+                        note.effect = format!(
+                            "node {} is {}{}",
+                            node.index(),
+                            if end { "back on" } else { "off" },
+                            if scms {
+                                ", and so is its SCMS client"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                    None => {
+                        note.effect = "the target node is not in the run at this instant, so \
+                                       nothing was switched"
+                            .to_string();
+                    }
+                }
+            }
+            TimelineKind::DemandMultiplier => {
+                if end {
+                    self.timeline.multipliers.remove(&index);
+                } else {
+                    let value = item
+                        .params
+                        .get("value")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(1.0);
+                    self.timeline.multipliers.insert(index, value);
+                }
+                let m = self.timeline.demand_multiplier();
+                let honoured = self.mobility.set_demand_multiplier(m);
+                note.multiplier = Some(v2xw_core::math::q3(m));
+                note.effect = if honoured {
+                    format!("vehicle demand is now {m} times the scenario's rate")
+                } else {
+                    "the demand model has no arrival process to scale; nothing changed".to_string()
+                };
+            }
+            TimelineKind::Closure => {
+                let lanes = self
+                    .timeline
+                    .closures
+                    .get(&index)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut changed = Vec::new();
+                for lane in &lanes {
+                    let count = self.timeline.closed.entry(*lane).or_insert(0);
+                    let was_closed = *count > 0;
+                    if end {
+                        *count = count.saturating_sub(1);
+                    } else {
+                        *count += 1;
+                    }
+                    let is_closed = *count > 0;
+                    if !is_closed {
+                        self.timeline.closed.remove(lane);
+                    }
+                    if was_closed != is_closed {
+                        changed.push(v2xw_mobility::MobilityCommand::Closure {
+                            lane: *lane,
+                            closed: is_closed,
+                        });
+                    }
+                }
+                let on_them = self
+                    .actors
+                    .values()
+                    .filter(|a| a.last.lane.is_some_and(|l| lanes.contains(&l.lane)))
+                    .count();
+                self.command_mobility(changed);
+                note.lanes = lanes.iter().map(|l| l.index()).collect();
+                note.effect = if end {
+                    format!("{} lanes reopened", lanes.len())
+                } else {
+                    format!(
+                        "{} lanes closed; the {on_them} vehicles on them finish their lane, and \
+                         every other vehicle re-plans around them",
+                        lanes.len()
+                    )
+                };
+            }
+            TimelineKind::ParamChange => {
+                let path = item
+                    .params
+                    .get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let value = item
+                    .params
+                    .get("value")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                note.path = Some(path.clone());
+                note.value = Some(value.to_string());
+                // `validate` refused any path not in the table and any value that does not
+                // fit, so the error branch is unreachable from a loaded scenario; it is
+                // reported rather than unwrapped.
+                match crate::timeline::with_param(&self.scenario, &path, &value) {
+                    Err(why) => note.effect = format!("not applied: {why}"),
+                    Ok(next) => {
+                        self.scenario = next;
+                        note.effect = self.apply_live_param(&path);
+                    }
+                }
+            }
+            TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn => {
+                let applied = self.on_safety_event(&item, index, end, now, &mut note);
+                if !applied && !end && se_waits(&item) {
+                    let within = crate::safety_events::positive(
+                        item.params.get("within_s"),
+                        crate::safety_events::AUTO_WAIT_DEFAULT_S,
+                    )
+                    .unwrap_or(crate::safety_events::AUTO_WAIT_DEFAULT_S);
+                    let deadline = now.saturating_add(Duration::from_secs_f64(within).as_nanos());
+                    self.timeline.waiting_safety.insert(index, deadline);
+                    note.phase = "waiting".to_string();
+                    note.effect = format!(
+                        "no vehicle fits this event yet; it fires on the first mobility step \
+                         within {within} s at which one does"
+                    );
+                }
+            }
+            TimelineKind::AttackWave => {
+                // The wave's window is each named population's schedule (see
+                // `crate::timeline::attack_windows`, applied where Phase 2 arms attackers),
+                // so the threat models gate on it themselves; this records the instant.
+                let populations =
+                    crate::timeline::wave_populations(&self.scenario, item.params.get("ids"))
+                        .unwrap_or_default();
+                note.populations = populations.iter().map(|p| *p as u32).collect();
+                let armed = self.phase2.as_ref().map_or(0, |p| p.report().attackers);
+                note.effect = format!(
+                    "attacker populations {populations:?} {} ({armed} vehicles armed as \
+                     attackers so far)",
+                    if end { "stop acting" } else { "start acting" }
+                );
+            }
+        }
+        self.emit(recorder, &crate::records::ScenarioEvent(note));
+    }
+
+    /// A scripted safety event (`safety.hard-brake`, `safety.breakdown`, `safety.cut-in`):
+    /// picks its vehicle and tells the traffic model what the driver does. See
+    /// [`crate::safety_events`].
+    ///
+    /// Returns whether it acted on a vehicle (an end always counts as acted).
+    fn on_safety_event(
+        &mut self,
+        item: &crate::scenario::schema::TimelineItem,
+        index: usize,
+        end: bool,
+        now: SimTime,
+        note: &mut crate::records::ScenarioEventView,
+    ) -> bool {
+        use crate::safety_events as se;
+        use crate::scenario::TimelineKind;
+        if end {
+            // Only a breakdown has an end: the vehicle is cleared away, i.e. its hold lifts
+            // and its hazard lights go out.
+            if let Some((actor, node)) = self.timeline.broken_down.remove(&index) {
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Stop {
+                    actor,
+                    until: Some(now),
+                }]);
+                if let Some(n) = node {
+                    self.timeline.hazard_lights.remove(&n);
+                    if let Some(obu) = self.nodes.get_mut(&n).and_then(|r| r.as_obu_mut()) {
+                        obu.set_hazard_lights(false);
+                    }
+                    note.node = Some(n.index());
+                }
+                note.effect = "the broken-down vehicle is cleared and drives on".to_string();
+            } else {
+                // A breakdown still waiting for a vehicle stops waiting at its end.
+                self.timeline.waiting_safety.remove(&index);
+                note.effect = "no vehicle had broken down, so nothing was cleared".to_string();
+            }
+            return true;
+        }
+        let target = match se::Pick::parse(item.params.get("target")) {
+            Ok(t) => t,
+            Err(why) => {
+                note.effect = format!("not applied: {why}");
+                return true;
+            }
+        };
+        let purpose = match item.kind {
+            TimelineKind::HardBrake => se::Purpose::HardBrake,
+            TimelineKind::Breakdown => se::Purpose::Breakdown,
+            _ => match se::parse_side(item.params.get("side")) {
+                Ok(side) => se::Purpose::CutIn(side),
+                Err(why) => {
+                    note.effect = format!("not applied: {why}");
+                    return true;
+                }
+            },
+        };
+        let candidates: BTreeMap<ActorId, se::Candidate> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .map(|(id, a)| {
+                (
+                    *id,
+                    se::Candidate {
+                        actor: *id,
+                        node: a.node,
+                        state: a.last,
+                    },
+                )
+            })
+            .collect();
+        // A target the item's `when` clause bound is that vehicle, as it fired.
+        let chosen = match target {
+            se::Pick::Bound(role) => self
+                .timeline
+                .bindings
+                .get(&index)
+                .and_then(|b| b.get(role))
+                .and_then(|a| candidates.get(&a).copied()),
+            _ => se::pick(&self.world, &candidates, target, purpose),
+        };
+        let Some(chosen) = chosen else {
+            note.effect = "no vehicle in the run fits this event at this instant, so nothing \
+                           happened"
+                .to_string();
+            return false;
+        };
+        note.node = chosen.node.map(|n| n.index());
+        let who = match chosen.node {
+            Some(n) => format!("vehicle {} (node {})", chosen.actor.index(), n.index()),
+            None => format!("vehicle {} (no on-board unit)", chosen.actor.index()),
+        };
+        let speed = v2xw_core::math::hypot(chosen.state.vel.x, chosen.state.vel.y);
+        match purpose {
+            se::Purpose::HardBrake => {
+                let decel = se::positive(
+                    item.params.get("decel_mps2"),
+                    se::HARD_BRAKE_DEFAULT_DECEL_MPS2,
+                )
+                .unwrap_or(se::HARD_BRAKE_DEFAULT_DECEL_MPS2);
+                let hold = se::positive(item.params.get("hold_s"), se::HARD_BRAKE_DEFAULT_HOLD_S)
+                    .unwrap_or(se::HARD_BRAKE_DEFAULT_HOLD_S);
+                // The hold runs from when it stands; a stop from `speed` at `decel` takes
+                // `speed / decel` plus the onset, so the release is placed after that.
+                let stop_s = speed / decel + decel / v2xw_mobility::EMERGENCY_BRAKE_ONSET_JERK_MPS3;
+                let release = now.saturating_add(Duration::from_secs_f64(stop_s + hold).as_nanos());
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Brake {
+                    actor: chosen.actor,
+                    decel_mps2: decel,
+                    hold_until: Some(release),
+                }]);
+                note.effect = format!(
+                    "{who} brakes hard at {decel:.2} m/s² from {speed:.1} m/s and stands \
+                     {hold} s"
+                );
+            }
+            se::Purpose::Breakdown => {
+                let decel = se::positive(
+                    item.params.get("decel_mps2"),
+                    se::BREAKDOWN_DEFAULT_DECEL_MPS2,
+                )
+                .unwrap_or(se::BREAKDOWN_DEFAULT_DECEL_MPS2);
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Brake {
+                    actor: chosen.actor,
+                    decel_mps2: decel,
+                    hold_until: None,
+                }]);
+                self.timeline
+                    .broken_down
+                    .insert(index, (chosen.actor, chosen.node));
+                if let Some(n) = chosen.node {
+                    self.timeline.hazard_lights.insert(n);
+                    let repetition = self
+                        .scenario
+                        .net
+                        .geonet
+                        .as_ref()
+                        .filter(|g| self.scenario.net.layer == "gn-btp" && g.forwarding == "on-air")
+                        .map(gn_air::on_air_repetition);
+                    if let Some(obu) = self.nodes.get_mut(&n).and_then(|r| r.as_obu_mut()) {
+                        if let Some((interval, duration)) = repetition {
+                            obu.set_stationary_repetition(interval, duration);
+                        }
+                        obu.set_hazard_lights(true);
+                    }
+                }
+                note.effect = format!(
+                    "{who} breaks down: it stops at {decel:.2} m/s² from {speed:.1} m/s with \
+                     its hazard lights on"
+                );
+            }
+            se::Purpose::CutIn(side) => {
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::CutIn {
+                    actor: chosen.actor,
+                    side,
+                    until: now.saturating_add(Duration::from_secs(5).as_nanos()),
+                }]);
+                note.effect = format!(
+                    "{who} cuts in to the {} lane at {speed:.1} m/s",
+                    side.label()
+                );
+            }
+        }
+        if !matches!(purpose, se::Purpose::CutIn(_)) {
+            if let Some(more) = self.geonet_warning(index, chosen.actor, chosen.node, now) {
+                note.effect.push_str(&more);
+            }
+        }
+        true
+    }
+
+    /// Tries again each `safety.*` item still waiting for a vehicle that fits, at the
+    /// state this mobility step publishes; one that fires, or whose wait runs out, writes
+    /// its `scenario.event`.
+    /// Evaluates every armed `when` item on the ground truth of this instant and
+    /// fires those whose clause holds, through [`Engine::on_control`] as a timed item fires.
+    ///
+    /// An item is armed from its `t`, fires at most `max_fires` times (1) and at least
+    /// `cooldown_s` apart (0); an `until` ends each firing `until − t` after it. Items are
+    /// visited in list order and vehicles in actor-id order, so a replay fires the same
+    /// items at the same steps on the same vehicles. The scenario director reads ground
+    /// truth by design: it is not a detector (invariants I-T1 to I-T3 do not apply).
+    fn evaluate_triggers(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        now: SimTime,
+        horizon: SimTime,
+    ) {
+        use crate::timeline::trigger::{TriggerActor, TriggerView};
+        let due: Vec<usize> = self
+            .scenario
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(i, item)| {
+                item.when.is_some() && {
+                    let armed_at = (item.t * 1e9).round().max(0.0) as u64;
+                    let (fires, last) = self
+                        .timeline
+                        .trigger_fires
+                        .get(i)
+                        .copied()
+                        .unwrap_or((0, 0));
+                    let cooldown =
+                        Duration::from_secs_f64(item.cooldown_s.unwrap_or(0.0).max(0.0)).as_nanos();
+                    now >= armed_at
+                        && fires < item.max_fires.unwrap_or(1)
+                        && (fires == 0 || now >= last.saturating_add(cooldown))
+                }
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        let actors: Vec<TriggerActor> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .map(|(id, a)| TriggerActor {
+                actor: *id,
+                node: a.node,
+                x_m: a.last.pos.x,
+                y_m: a.last.pos.y,
+                speed_mps: v2xw_core::math::hypot(a.last.vel.x, a.last.vel.y),
+                heading_rad: a.last.heading_rad,
+                length_m: a.last.dims.length_m,
+                width_m: a.last.dims.width_m,
+                lane: a.last.lane.map(|l| (l.lane.index(), l.s_m)),
+            })
+            .collect();
+        let step = self.report.mobility_steps;
+        for index in due {
+            let Some(item) = self.scenario.events.get(index).cloned() else {
+                continue;
+            };
+            let Some(when) = &item.when else { continue };
+            let view = TriggerView {
+                actors: &actors,
+                seed: self.scenario.seed,
+                item: index,
+                step,
+            };
+            let Some(binding) = when.eval(&view) else {
+                continue;
+            };
+            let fires = self
+                .timeline
+                .trigger_fires
+                .get(&index)
+                .map_or(0, |(n, _)| *n)
+                + 1;
+            self.timeline.trigger_fires.insert(index, (fires, now));
+            self.timeline.bindings.insert(index, binding);
+            self.on_control(recorder, index, false);
+            if let Some(until) = item.until {
+                let end = now
+                    .saturating_add(Duration::from_secs_f64((until - item.t).max(0.0)).as_nanos());
+                if end <= horizon {
+                    self.scheduler.schedule(
+                        end,
+                        EventClass::Control,
+                        Event::Control {
+                            item: index as u32,
+                            end: true,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn retry_waiting_safety(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        if self.timeline.waiting_safety.is_empty() {
+            return;
+        }
+        let waiting: Vec<(usize, SimTime)> = self
+            .timeline
+            .waiting_safety
+            .iter()
+            .map(|(i, d)| (*i, *d))
+            .collect();
+        for (index, deadline) in waiting {
+            let Some(item) = self.scenario.events.get(index).cloned() else {
+                self.timeline.waiting_safety.remove(&index);
+                continue;
+            };
+            let mut note = crate::records::ScenarioEventView::new(now, index, item.kind, false);
+            if self.on_safety_event(&item, index, false, now, &mut note) {
+                self.timeline.waiting_safety.remove(&index);
+                self.emit(recorder, &crate::records::ScenarioEvent(note));
+            } else if now >= deadline {
+                self.timeline.waiting_safety.remove(&index);
+                note.phase = "expired".to_string();
+                note.effect = "no vehicle fit this event before its wait ran out, so nothing \
+                               happened"
+                    .to_string();
+                self.emit(recorder, &crate::records::ScenarioEvent(note));
+            }
+        }
+    }
+
+    /// Applies a parameter a `param.change` has just written into `self.scenario`.
+    ///
+    /// What each path reaches is [`crate::timeline::LIVE_PARAMS`]'s `reach`. The
+    /// new-arrivals paths need nothing here: the spawn path reads them from the scenario
+    /// each time a vehicle or a device enters.
+    fn apply_live_param(&mut self, path: &str) -> String {
+        let reach = crate::timeline::live_param(path).map_or("new-arrivals", |p| p.reach.label());
+        if path.starts_with("weather.") {
+            self.weather = crate::wiring::initial_weather(&self.scenario);
+            self.mobility.set_weather(self.weather);
+            return format!(
+                "the weather is now {:?} at intensity {} ({reach})",
+                self.weather.kind, self.weather.intensity
+            );
+        }
+        if path == "actors.vehicles.demand.rate_veh_per_h" {
+            let rate = self.scenario.actors.vehicles.demand.rate_veh_per_h;
+            return match (rate, self.timeline.base_rate) {
+                (Some(rate), Some(base)) if base > 0.0 => {
+                    self.timeline.rate_ratio = rate / base;
+                    let m = self.timeline.demand_multiplier();
+                    if self.mobility.set_demand_multiplier(m) {
+                        format!("vehicle demand is now {rate} veh/h ({reach})")
+                    } else {
+                        "the demand model has no arrival process to scale; nothing changed"
+                            .to_string()
+                    }
+                }
+                _ => {
+                    "the scenario's demand model has no rate to scale; nothing changed".to_string()
+                }
+            };
+        }
+        format!("{path} set; it applies to what enters the run from now on ({reach})")
+    }
+
+    /// Hands commands to the mobility model, which applies them at its next step.
+    fn command_mobility(&mut self, commands: Vec<v2xw_mobility::MobilityCommand>) {
+        if commands.is_empty() {
+            return;
+        }
+        let Engine {
+            scheduler,
+            rng,
+            world,
+            snapshot,
+            provenance,
+            params,
+            mobility,
+            ..
+        } = self;
+        let mut null = crate::ctx::NullRecorder::new();
+        let mut ctx = EngineCtx::new(
+            scheduler, rng, world, snapshot, provenance, params, &mut null,
+        );
+        let mut adapter = crate::adapters::mobility(&mut ctx);
+        for command in commands {
+            mobility.command(&mut adapter, command);
+        }
+    }
+
+    /// The mobility phase: map over actors, merge by [`ActorId`], publish, reindex.
+    fn on_mobility_step(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        step: Duration,
+        horizon: SimTime,
+    ) -> Result<()> {
+        let now = self.scheduler.now();
+
+        // `time.fast_forward`: inside a window the world is frozen and only the
+        // credential backend runs, from one of its events to the next.
+        if let Some(end) = self.scenario.time.fast_forward_end(now) {
+            self.fast_forward_tick(recorder, now, end, step, horizon);
+            return Ok(());
+        }
+        if self.in_fast_forward && now >= horizon {
+            self.end_frozen(recorder, now, horizon);
+            return Ok(());
+        }
+        if self.in_fast_forward {
+            self.resume_after_fast_forward(now);
+        }
+        self.in_fast_forward = false;
+
+        // Actuated control reads its detectors at the start of the step and moves its
+        // plans before the drivers look at the lamps, as the priority service does; and
+        // before this instant's frame is written, so the lamps it records are the ones the
+        // drivers and the SPaT read from this instant on (a frame written first showed a
+        // gap-out one step after the SPaT announced it).
+        if self.actuated.is_active() {
+            let positions = || {
+                self.actors
+                    .values()
+                    .filter(|a| !crate::wiring::is_vru_class(a.class))
+                    .filter_map(|a| a.last.lane.map(|p| (p.lane, p.s_m)))
+            };
+            let calls = self.actuated.calls(&self.world, positions());
+            let extend = self.actuated.extension_calls(&self.world, positions());
+            // A NEMA junction serves its standing priority requests through its rings:
+            // the priority service keeps and lapses them.
+            if self.actuated.has_nema() {
+                let params = self.priority.params();
+                let plans: Vec<usize> = self.actuated.nema_plans().collect();
+                for idx in plans {
+                    let requests = self.priority.requests(idx);
+                    self.actuated.set_nema_priority(idx, &requests, &params);
+                }
+            }
+            // The NEMA dual ring also takes the pedestrians standing at its crosswalks'
+            // push buttons; the single ring does not read them.
+            let peds = if self.actuated.has_nema() {
+                crate::nema::control::PedestrianIndex::new(
+                    self.actors
+                        .values()
+                        .filter(|a| a.class == v2xw_mobility::VehicleClass::Pedestrian)
+                        .map(|a| (a.last.pos, a.last.vel)),
+                )
+            } else {
+                crate::nema::control::PedestrianIndex::default()
+            };
+            self.actuated.step_with_pedestrians(
+                &mut self.world,
+                &extend,
+                &calls,
+                &peds,
+                v2xw_core::time::ns_to_secs(now),
+                step.as_secs_f64(),
+            );
+        }
+
+        // The controllers serve their priority requests before the drivers look at the
+        // lamps, so an extension or an early green takes effect this step.
+        let served = self.priority.step(
+            &mut self.world,
+            v2xw_core::time::ns_to_secs(now),
+            step.as_secs_f64(),
+        );
+        for rec in &served {
+            self.emit(recorder, rec);
+        }
+
+        // The published state of *this* instant goes out before the world advances past
+        // it. A mobility step dispatched at `now` produces states for `now + step`, so
+        // publishing the step's own result here would file every record one step early
+        // against its own `t` field — which is the defect this ordering closes. What is
+        // published instead is what the previous step left in `self.actors`, every entry
+        // of which carries `k.t == now`.
+        self.publish_state_at(recorder);
+        self.emit_snapshot(recorder, now)?;
+        self.retry_waiting_safety(recorder, now);
+        // Condition-triggered items read the states of this instant, the ones just
+        // published, and fire here, before the drivers move.
+        self.evaluate_triggers(recorder, now, horizon);
+        // The transmit bit is "since the last mobility step", so the window closes with
+        // the frame that reports it.
+        self.transmitted_since_step.clear();
+
+        let update = {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                mobility,
+                ..
+            } = self;
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, recorder,
+            );
+            let mut mob = crate::adapters::mobility(&mut ctx);
+            let update = mobility.step(&mut mob, step).quantized();
+            // The lamps the step's new state shows. Read-only for the traffic: nothing in a
+            // step reads them back.
+            let lamps = mobility.exterior_lamps(&mut mob);
+            let at_kerb = mobility.at_kerb_stop();
+            (update, lamps, at_kerb)
+        };
+        let (update, lamps, at_kerb) = update;
+        self.at_kerb.clear();
+        self.at_kerb.extend(at_kerb);
+
+        self.absorb(&update, now);
+        for c in core::mem::take(&mut self.departed_credentials) {
+            self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
+        }
+        for (at, rec) in core::mem::take(&mut self.lifecycle) {
+            match rec {
+                Lifecycle::Spawn(r) => self.emit_at(recorder, at, &r),
+                Lifecycle::Despawn(r) => self.emit_at(recorder, at, &r),
+            }
+        }
+        self.update_radio_gate(now);
+        self.log_traffic_control(recorder, now);
+        self.set_lamps(lamps, step.after(now));
+        self.sweep_retired_links(now);
+        self.recentre_focus(now);
+        for orphan in core::mem::take(&mut self.orphaned_rx) {
+            self.emit(recorder, &orphan);
+        }
+        self.rebuild_snapshot(&update);
+        self.declare_jamming(now, step);
+        self.update_beliefs(recorder, now);
+        self.update_roadside_dcc(now);
+        self.step_perception(now);
+        self.cpm_sample(now);
+        self.step_app_truth(recorder, now);
+        self.on_backend_step(recorder, now, horizon);
+
+        self.report.mobility_steps += 1;
+
+        // The node phase. With a synchronised generation timing every node steps at this
+        // instant, at priority 6 — after any PhyEnd at this instant (priority 3), which is
+        // the engine's fixed event order. Otherwise each node steps at its own
+        // phase inside the step (`v2xw_msg::GenerationTiming`): no standard puts two
+        // stations' generators on a common grid, and stepping them all at once made every
+        // vehicle contend for the channel in the same few hundred microseconds.
+        if self.gen_timing.is_synchronised() {
+            self.scheduler
+                .schedule(now, EventClass::NodeTask, Event::NodePhase);
+        } else {
+            let step_ns = step.as_nanos().max(1);
+            let due: Vec<(NodeId, SimTime)> = self
+                .nodes
+                .keys()
+                .filter(|n| !self.is_dormant(**n))
+                .map(|n| {
+                    let phase = self.node_phase.get(n).map_or(0, |d| d.as_nanos() % step_ns);
+                    (*n, now + phase)
+                })
+                .filter(|(n, at)| self.node_first_step.get(n).is_none_or(|first| at >= first))
+                .collect();
+            self.node_first_step.retain(|_, first| *first > now);
+            for (node, at) in due {
+                if at <= horizon {
+                    self.scheduler.schedule(
+                        at,
+                        EventClass::NodeTask,
+                        Event::NodeTask {
+                            node,
+                            task: crate::event::NodeTask::Step,
+                        },
+                    );
+                }
+            }
+        }
+
+        let next = step.after(now);
+        if next <= horizon {
+            self.scheduler
+                .schedule(next, EventClass::MobilityStep, Event::MobilityStep);
+        }
+        Ok(())
+    }
+
+    /// One stop inside a `time.fast_forward` window: the backend step
+    /// a full run takes at this instant — the same `on_backend_step`, with the vehicles
+    /// where the window froze them — and then the next stop: the first mobility-step
+    /// instant at or after the credential system's next event
+    /// ([`crate::phase2::Phase2::next_wake`]), at most [`FAST_FORWARD_MAX_JUMP`] ahead,
+    /// and no later than the window's end. A backend event therefore lands on exactly the
+    /// step a full run would have handled it on; between two stops no mobility, no node
+    /// step and no radio event is simulated.
+    fn fast_forward_tick(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        now: SimTime,
+        end: SimTime,
+        step: Duration,
+        horizon: SimTime,
+    ) {
+        if !self.in_fast_forward {
+            self.in_fast_forward = true;
+            self.ff_frozen_at = now;
+            self.report.fast_forward.windows += 1;
+        }
+        self.report.fast_forward.backend_ticks += 1;
+        self.transmitted_since_step.clear();
+        self.on_backend_step(recorder, now, horizon);
+        let step_ns = step.as_nanos().max(1);
+        let (wake, cause) = self
+            .phase2
+            .as_ref()
+            .and_then(|p| p.next_wake_cause(now))
+            .unwrap_or((SimTime::MAX, "none"));
+        let jump = now.saturating_add(FAST_FORWARD_MAX_JUMP.as_nanos());
+        let target = wake.min(end).min(jump);
+        let cause = if target == wake {
+            if cause == "kernel" {
+                let label = self.phase2.as_ref().map_or_else(
+                    String::new,
+                    crate::phase2::Phase2::next_kernel_delivery_label,
+                );
+                format!("kernel:{label}")
+            } else {
+                cause.to_string()
+            }
+        } else if target == end {
+            "window-end".to_string()
+        } else {
+            "max-jump".to_string()
+        };
+        *self
+            .report
+            .fast_forward
+            .stops_by_cause
+            .entry(cause)
+            .or_insert(0) += 1;
+        // Up to the mobility grid (`k · step` from zero), and at least one step on.
+        let next = target
+            .div_ceil(step_ns)
+            .saturating_mul(step_ns)
+            .max(now.saturating_add(step_ns));
+        let until = next.min(horizon);
+        self.report.fast_forward.skipped_ns += until.saturating_sub(now);
+        self.report.fast_forward.skipped_steps += (until.saturating_sub(now) / step_ns).max(1) - 1;
+        if next <= horizon {
+            self.scheduler
+                .schedule(next, EventClass::MobilityStep, Event::MobilityStep);
+        }
+    }
+
+    /// The run's last instant, when a `time.fast_forward` window reaches it: the run ends
+    /// frozen. The window is a pause of the road and the radio, and nothing follows it, so
+    /// there is no live step to resume into: the credential backend takes its step at this
+    /// instant, as at every stop inside the window, and the metric providers are told the
+    /// window was a pause (as [`Engine::resume_after_fast_forward`] tells them), but no
+    /// vehicle moves, no node steps and nothing goes on the air.
+    ///
+    /// Before this the end instant was a live step after the window. A unit due to send
+    /// there (one braking hard when the window began has its critical-event BSM due at the
+    /// first live instant) stepped, replaced the pseudonym certificate that had expired
+    /// inside the window and signed a BSM past the end: on the full-fleet benchmark 107
+    /// pseudonym changes, all at the run's end instant, which no frame carried.
+    fn end_frozen(&mut self, recorder: &mut dyn RunRecorder, now: SimTime, horizon: SimTime) {
+        let from = self.ff_frozen_at.min(now);
+        self.report.fast_forward.traffic_paused_ns += now - from;
+        self.providers.pause(from, now);
+        self.transmitted_since_step.clear();
+        self.on_backend_step(recorder, now, horizon);
+    }
+
+    /// The first live step after a `time.fast_forward` window: the traffic
+    /// stood still from [`Engine::ff_frozen_at`] to `now`, so it resumes as if no time had
+    /// passed on the road. The mobility model's own clocks of elapsed traffic time move on
+    /// by the window ([`v2xw_mobility::Mobility::resume_after_pause`]), every actor's state
+    /// is the frozen one re-dated to `now` (the world held it all along), and the metric
+    /// providers are told the window was a pause and not time spent (`ped_wait`,
+    /// pseudonym changes per vehicle-hour).
+    ///
+    /// Before this, the first step after a window read the hours as traffic time: every
+    /// vehicle standing when the window began had stood for hours, the gridlock resolution
+    /// teleported or removed it, and each teleport was a position jump honest receivers
+    /// reported (the full-scale benchmark: 1,833 → 1,281 nodes and 4,876 honest reports in
+    /// the 10 s after the resume). The calendar itself is not paused: signal plans, the
+    /// credential backend, certificates and clocks keep the real time.
+    fn resume_after_fast_forward(&mut self, now: SimTime) {
+        let from = self.ff_frozen_at.min(now);
+        let paused = Duration::from_nanos(now - from);
+        self.report.fast_forward.traffic_paused_ns += paused.as_nanos();
+        self.mobility.resume_after_pause(paused);
+        self.gnss.resume_after_pause(paused);
+        for rec in self.actors.values_mut() {
+            rec.last.t = now;
+        }
+        // Each unit's J2945/1 BSM schedule resumes at the phase it froze in, on its own
+        // clock: left in the past, every BSM was overdue and the whole fleet sent at the
+        // first live step together (`BsmGenerator::resume_after_pause`).
+        for node in self.nodes.values_mut() {
+            let Some(obu) = node.as_obu_mut() else {
+                continue;
+            };
+            let clock = obu.clock();
+            let on_clock = clock
+                .believed_time(now)
+                .saturating_sub(clock.believed_time(from));
+            obu.schedule_mut()
+                .resume_after_pause(Duration::from_nanos(on_clock));
+        }
+        // And what each unit's neighbours believe of it (its last BSM, coasted by the
+        // tracking step) is the window older too: coasted over the window, every unit that
+        // was moving when the traffic froze, with `Max_ITT` above 100 ms, drew a
+        // tracking-error BSM at the first live instant. The tracking step dates its states
+        // in simulated time.
+        if let Some(dcc) = self.dcc.as_mut() {
+            dcc.resume_after_pause(paused);
+        }
+        self.providers.pause(from, now);
+    }
+
+    /// Recomputes which nodes are dormant ([`crate::scale::RadioGate`]).
+    fn update_radio_gate(&mut self, now: SimTime) {
+        let Some(gate) = self.radio_gate.as_ref() else {
+            return;
+        };
+        // A deferred node is created the step its vehicle comes within the margin, in
+        // actor order.
+        let waking: Vec<(ActorId, VehicleClass, v2xw_core::geom::Dims)> = self
+            .deferred_nodes
+            .iter()
+            .filter_map(|a| {
+                let rec = self.actors.get(a)?;
+                (!gate.would_be_dormant(rec.last.pos, self.mobility.tier_of(*a))).then_some((
+                    *a,
+                    rec.class,
+                    rec.last.dims,
+                ))
+            })
+            .collect();
+        for (actor, class, dims) in waking {
+            self.deferred_nodes.remove(&actor);
+            let id = self.create_node(actor, class, dims, now);
+            if let Some(rec) = self.actors.get_mut(&actor) {
+                rec.node = Some(id);
+            }
+        }
+        let Some(gate) = self.radio_gate.as_mut() else {
+            return;
+        };
+        gate.deferred = self.deferred_nodes.len() as u64;
+        let mobility = &self.mobility;
+        gate.update(self.actors.iter().filter_map(|(actor, rec)| {
+            rec.node
+                .map(|n| (n, rec.last.pos, mobility.tier_of(*actor)))
+        }));
+    }
+
+    /// Whether `node` is dormant this step: its vehicle is queued far from the city-scale
+    /// box, and its radio is off.
+    fn is_dormant(&self, node: NodeId) -> bool {
+        self.radio_gate.as_ref().is_some_and(|g| g.is_dormant(node))
+    }
+
+    /// Whether `node` is a candidate receiver this step (`crate::scale`): always, outside a
+    /// city-scale run.
+    fn receives(&self, node: NodeId) -> bool {
+        self.radio_gate.as_ref().is_none_or(|g| g.receives(node))
+    }
+
+    /// Drops the radio state kept per directed link — the cached shadowing RNG streams and
+    /// the propagation models' shadowing processes and link-state chains — for every link
+    /// with an end that despawned at least [`LINK_STATE_GRACE`] ago.
+    ///
+    /// That state is one entry per pair of nodes that ever heard each other, and nothing
+    /// else ever dropped it, so over a run with traffic coming and going it grew with the
+    /// number of vehicles the run had *ever* carried, not the number on the map: memory
+    /// without bound, and every lookup into the per-link maps paid for the dead pairs. Node
+    /// ids are never reused, and a despawned node neither transmits (`start_frame` finds no
+    /// position for it) nor is a candidate receiver (it is not in the snapshot), so a link
+    /// with a despawned end is never priced again and dropping its state changes no value
+    /// any surviving link draws. The grace covers anything in flight at the despawn.
+    ///
+    /// Swept in batches, because finding a node's links is a walk of every cached one: the
+    /// walk runs once at least an eighth as many nodes as are alive (and at least 4) are
+    /// ready, so its cost stays in proportion to the despawns it serves.
+    fn sweep_retired_links(&mut self, now: SimTime) {
+        let cutoff = now.saturating_sub(LINK_STATE_GRACE.as_nanos());
+        let ready = self.retired.partition_point(|&(t, _)| t <= cutoff);
+        // A departure brings a node, an actor and a trip: three to one, so the walk's cost stays
+        // in proportion to the departures it serves as it did for the links alone.
+        let work = ready + self.retired_actors.len() + self.ended_trips.len();
+        if !self.link_sweep || work == 0 || work < 3 * (self.nodes.len() / 8).max(4) {
+            return;
+        }
+        let gone: std::collections::BTreeSet<NodeId> =
+            self.retired.drain(..ready).map(|(_, n)| n).collect();
+        let actors = core::mem::take(&mut self.retired_actors);
+        let trips = core::mem::take(&mut self.ended_trips);
+        let mobility = &self.mobility;
+        let streams = self.trip_streams.get_or_insert_with(|| {
+            v2xw_mobility::TripStreams::new(mobility.demand_trip_stream_id().as_deref())
+        });
+        let dead = |tx: NodeId, rx: NodeId| gone.contains(&tx) || gone.contains(&rx);
+        self.rng.forget_where(|domain, entity| match entity {
+            v2xw_core::rng::EntityRef::Link(l) => dead(l.tx(), l.rx()),
+            // An actor's streams are drawn while it is on the map, and its id is never reused.
+            v2xw_core::rng::EntityRef::Actor(a) => actors.contains(a),
+            // A node's radio, sensor and application streams. Not the device's credential
+            // and backend ones: `Phase2` and the cellular model go on drawing those for a
+            // device whose vehicle has left (its batch, its reports, its CRL fetches).
+            v2xw_core::rng::EntityRef::Node(n) => {
+                gone.contains(n)
+                    && !matches!(
+                        domain,
+                        RngDomain::Crypto
+                            | RngDomain::Backend
+                            | RngDomain::ServiceTime
+                            | RngDomain::Report
+                            | RngDomain::Attack
+                            | RngDomain::Collusion
+                    )
+            }
+            v2xw_core::rng::EntityRef::Custom { .. } => streams.selects(domain, entity, &trips),
+            _ => false,
+        });
+        self.propagation.forget_links(&dead);
+        if let Some(focus) = self.focus.as_mut() {
+            focus.propagation.forget_links(&dead);
+        }
+        // The backend's entries of a holder long gone from the air.
+        let ready_crypto = self.departed_crypto.partition_point(|(t, _)| *t <= cutoff);
+        for (_, entries) in self.departed_crypto.drain(..ready_crypto) {
+            v2xw_sec::crypto::forget_modeled_entries(&entries);
+        }
+        // The metric providers' per-link and per-node state of the departed.
+        self.providers.retire(&gone);
+        for node in &gone {
+            // Its transmit intervals and its ledger entry, and its GNSS receiver's state:
+            // each read only for a node on the map.
+            self.phy.forget_node(*node);
+            self.gnss.forget_node(*node);
+            // Its own frames on the air: pruned only at its next MAC poll, which a departed
+            // node no longer has, so its last frame stayed for good. The grace has seen every
+            // one of them off the air, and no frame starts for a node without a position.
+            self.on_air_tx.remove(node);
+            if let Some(dcc) = self.dcc.as_mut() {
+                dcc.forget_node(*node);
+            }
+            if let Some(per) = self.j2945_per.as_mut() {
+                per.forget_node(*node);
+            }
+            if let Some(mac) = self.mac.as_mut() {
+                mac.forget_node(*node);
+            }
+            if let Some(sl) = self.sidelink.as_mut() {
+                sl.mac.forget_ue(*node);
+                sl.phy.forget_node(*node);
+            }
+        }
+    }
+
+    /// For tests: how many MAC timers ran for a node already retired, and how many MAC
+    /// windows a retired node holds (none: only a node on the map reports one).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn retired_mac_state(&self) -> (u64, usize) {
+        let windows = self
+            .mac_window
+            .keys()
+            .filter(|n| !self.nodes.contains_key(n))
+            .count();
+        (self.retired_mac_timers, windows)
+    }
+
+    /// For tests: the most frames that started on the air in one nanosecond, and the most
+    /// interferer entries ([`InterferenceSource`]s) one frame's start declared at its
+    /// receivers. Both are a few under carrier sense; frames released together make the
+    /// first the size of the release and the second its square.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn air_burst_peaks(&self) -> (u64, usize) {
+        (
+            self.air_burst.peak_same_instant,
+            self.air_burst.peak_overlaps,
+        )
+    }
+
+    /// What the link-state sweep has left, for tests: the despawned nodes still waiting
+    /// for a sweep; the cached per-link RNG streams with a despawned end that is *not*
+    /// among them — state the sweep should have dropped and did not; and the cached
+    /// per-link streams with any despawned end at all, waiting or not.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn link_sweep_backlog(&self) -> (usize, usize, usize) {
+        let pending: std::collections::BTreeSet<NodeId> =
+            self.retired.iter().map(|&(_, n)| n).collect();
+        let gone = |n: NodeId| {
+            !self.nodes.contains_key(&n)
+                && !self.rsus.contains_key(&n)
+                && n.index() < jamming::JAMMER_ID_BASE
+        };
+        let leaked_end = |n: NodeId| gone(n) && !pending.contains(&n);
+        let leaked = self.rng.count_where(|_, entity| {
+            matches!(entity, v2xw_core::rng::EntityRef::Link(l) if leaked_end(l.tx()) || leaked_end(l.rx()))
+        });
+        let held = self.rng.count_where(|_, entity| {
+            matches!(entity, v2xw_core::rng::EntityRef::Link(l) if gone(l.tx()) || gone(l.rx()))
+        });
+        (self.retired.len(), leaked, held)
+    }
+
+    /// Creates the node an equipped actor carries: its runtime, its credentials and, for
+    /// an attacker, its arming. Called at the spawn, or — for a vehicle spawned dormant in
+    /// a city-scale run (`crate::scale`) — when it first comes within the radio margin.
+    fn create_node(
+        &mut self,
+        actor: ActorId,
+        class: VehicleClass,
+        dims: v2xw_core::geom::Dims,
+        now: SimTime,
+    ) -> NodeId {
+        let id = NodeId::new(self.next_node);
+        self.next_node += 1;
+        let env = crate::wiring::NodeEnv::new(&self.world, self.wall);
+        // A pedestrian or a cyclist carries a VRU device (PSM / VAM), a vehicle an
+        // OBU; both are hosted the same way from here on.
+        let mut runtime: crate::hosted::HostedNode = if crate::wiring::is_vru_class(class) {
+            self.report.vru_devices_created += 1;
+            crate::hosted::build_vru_device(
+                &self.scenario,
+                env,
+                &self.credential_factory,
+                id,
+                now,
+                class,
+                dims,
+            )
+            .into()
+        } else {
+            // The forged-SRM test hook builds an ordinary vehicle's unit as an emergency
+            // vehicle's (it sends SRMs); its credentials stay an ordinary vehicle's.
+            let unit_class = if self.forge_srm
+                && class != VehicleClass::Emergency
+                && !crate::wiring::is_vru_class(class)
+            {
+                VehicleClass::Emergency
+            } else {
+                class
+            };
+            let mut obu = crate::wiring::build_node(
+                &self.scenario,
+                env,
+                &self.credential_factory,
+                id,
+                now,
+                unit_class,
+                dims,
+            );
+            if let Some(cal) = &self.bsm_timing {
+                obu.set_bsm_timing(std::sync::Arc::clone(cal));
+            }
+            obu.into()
+        };
+        // Phase 2: the backend enrols and provisions the device, and the device is
+        // handed the implicit certificates the ACA issued with the keys it derived
+        // (`crate::phase2`, joint 1): the identity on the air is the protocol's. The
+        // digest → pseudonym map is still filled in `hand_down_app`, at the instant
+        // a frame carries one, so it holds exactly the digests that were on the air.
+        if let Some(phase2) = self.phase2.as_mut() {
+            let creds = phase2.provision(id, now, &self.rng, crate::wiring::is_vru_class(class));
+            phase2.phase_crl_poll(id, &self.rng, now);
+            // A vehicle whose clock stands off the truth (`clock_skew_s`; edge-case
+            // package, item 2): it signs, rotates and judges on its own clock.
+            if let Some(skew) = phase2.clock_skew_for(id)
+                && let Some(obu) = runtime.as_obu_mut()
+            {
+                obu.clock_mut().step_offset(skew);
+                let offset = obu.clock().offset_ns();
+                obu.security_mut().set_clock_offset(offset);
+            }
+            // Under a credential system what it issued is all the device holds: a vehicle
+            // whose provisioning failed or returned nothing (`vehicles_unprovisioned`)
+            // gets an empty store and cannot sign (1609.2: an unprovisioned device has no
+            // signing credential), its due messages counted in `tx_uncredentialed`.
+            // It kept the bootstrap stand-in before, which carries no linkage
+            // value. Only a run without an SCMS keeps that pool, its only source.
+            let factory = std::sync::Arc::clone(&self.credential_factory);
+            let installed = match runtime.as_obu_mut() {
+                Some(obu) => {
+                    crate::wiring::install_provisioned(obu, &self.scenario, &factory, id, &creds)
+                }
+                None => crate::hosted::install_credentials(
+                    &mut runtime,
+                    &self.scenario,
+                    &factory,
+                    id,
+                    &creds,
+                ),
+            };
+            self.report.credentials_refused += (creds.len() - installed) as u64;
+            // An emergency vehicle also holds its OBU identification
+            // certificates, issued with the enrolment certificate it was just given, in
+            // its identification slot beside the pseudonym pool; its SRMs are signed
+            // under them.
+            if class == VehicleClass::Emergency {
+                phase2.provision_identification(id, now);
+                let creds: Vec<crate::wiring::IdentificationCred> = phase2
+                    .identification_installs(Some(id))
+                    .into_iter()
+                    .flat_map(|(_, c)| c)
+                    .collect();
+                if !creds.is_empty() {
+                    let ok = crate::wiring::install_identification_certs(&mut runtime, id, &creds);
+                    phase2.note_ident_refused((creds.len() - ok) as u64);
+                }
+            }
+        }
+        self.nodes.insert(id, runtime);
+        self.inboxes.insert(id, Vec::new());
+        self.note_node_created(id);
+        self.node_class.insert(id, radio_class(class));
+        self.report.nodes_created += 1;
+        // A device joins holding the newest list each provider had published:
+        // every `t0` CRL for a device on the road from the start, which it
+        // fetched within the week before the run. Installed as a download would
+        // be, verified by the node itself; the fetch is logged as a pre-run PDU (OF-3).
+        if let Some((version, entries, secured)) =
+            self.phase2.as_mut().and_then(|p| p.prerun_crl(id, now))
+        {
+            let before = self.phase2.as_ref().map_or(0, |p| p.crls_installed());
+            let mut null = crate::ctx::NullRecorder::new();
+            self.install_crl_at(&mut null, id, version, &entries, &secured, now, false);
+            if let Some(p) = self.phase2.as_mut() {
+                let r = p.report_mut();
+                r.crls_installed_at_join += r.crls_installed - before;
+            }
+        }
+        if self.phase2.is_some() {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                phase2,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            if let Some(p) = phase2.as_mut() {
+                p.arm_attacker(&mut ctx, id, actor);
+            }
+        }
+        self.node_actor.insert(id, actor);
+        id
+    }
+
+    /// Takes the spawns and despawns out of an update, creating and retiring nodes.
+    fn absorb(&mut self, update: &MobilityUpdate, now: SimTime) {
+        let lifecycle = crate::export::records_lifecycle(&self.scenario.exporters);
+        self.ended_trips.extend(self.mobility.take_finished_trips());
+        for spawn in &update.spawned {
+            self.report.actors_spawned += 1;
+            if lifecycle {
+                use v2xw_core::math::q3;
+                let view = v2xw_record::dataset::views::GtSpawnView {
+                    t: spawn.t,
+                    actor: spawn.actor,
+                    is_attacker: false,
+                    attacker_role: None,
+                    colluding_group_id: None,
+                    is_faulty: false,
+                    class: Some(spawn.class.as_str().to_string()),
+                    is_rsu: false,
+                    length_m: Some(q3(spawn.kinematics.dims.length_m)),
+                    desired_speed_mps: Some(q3(spawn.driver.desired_speed_mps)),
+                    route_length_m: Some(q3(spawn.route.length_m)),
+                    requested_t: spawn.requested,
+                };
+                self.lifecycle
+                    .push((spawn.t, Lifecycle::Spawn(crate::records::GtSpawn(view))));
+            }
+            // The equipped draw is keyed by the actor, so whether a vehicle carries an OBU
+            // does not depend on how many vehicles spawned before it.
+            let fraction = if crate::wiring::is_vru_class(spawn.class) {
+                self.scenario.actors.vru.device_fraction
+            } else {
+                self.scenario.actors.vehicles.equipped_fraction
+            };
+            let equipped = self
+                .rng
+                .checkout(RngDomain::Spawn, EntityRef::Actor(spawn.actor))
+                .bool(fraction);
+            // In a city-scale run a vehicle spawned in the queue network beyond the radio
+            // margin carries its node only from when it first comes within it
+            // (`crate::scale`): until then it would neither transmit nor receive, and a
+            // city of idle radios is memory the run cannot afford.
+            let defer = equipped
+                && self.radio_gate.as_ref().is_some_and(|g| {
+                    g.would_be_dormant(spawn.kinematics.pos, self.mobility.tier_of(spawn.actor))
+                });
+            if defer {
+                self.deferred_nodes.insert(spawn.actor);
+            }
+            let node = (equipped && !defer)
+                .then(|| self.create_node(spawn.actor, spawn.class, spawn.kinematics.dims, now));
+            self.actors.insert(
+                spawn.actor,
+                ActorRecord {
+                    class: spawn.class,
+                    driver: spawn.driver,
+                    node,
+                    last: spawn.kinematics,
+                    activity: 0,
+                },
+            );
+        }
+        for (actor, cause) in &update.despawned {
+            if lifecycle {
+                let cause = serde_json::to_value(cause)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_else(|| format!("{cause:?}"));
+                let view = v2xw_record::dataset::views::GtDespawnView {
+                    t: update.t,
+                    actor: *actor,
+                    cause,
+                };
+                self.lifecycle.push((
+                    update.t,
+                    Lifecycle::Despawn(crate::records::GtDespawn(view)),
+                ));
+            }
+            *self
+                .report
+                .despawn_causes
+                .entry(format!("{cause:?}"))
+                .or_default() += 1;
+            // The wire slot goes into its cooling-off period here, one step before the
+            // frame whose row set no longer holds it. §3.3.1 forbids reusing a slot for
+            // one keyframe period after a despawn, so a delta that arrives late cannot be
+            // applied to whichever actor inherited the row.
+            self.snapshots.retire(*actor, now);
+            self.deferred_nodes.remove(actor);
+            self.glosa.forget(*actor);
+            self.retired_actors.insert(*actor);
+            if let Some(rec) = self.actors.remove(actor)
+                && let Some(node) = rec.node
+            {
+                self.node_actor.remove(&node);
+                self.retired.push((now, node));
+                if let Some(phase2) = self.phase2.as_mut() {
+                    // Its last pool record, marked departed (edge-case package, item 1).
+                    if let Some(rt) = self.nodes.get(&node) {
+                        let believed = rt.clock().believed_time(now);
+                        if let Some(mut c) =
+                            phase2.node_credentials_departed(node, believed, &rt.stores().certs)
+                        {
+                            c.t = now;
+                            self.departed_credentials.push(c);
+                        }
+                    }
+                    phase2.retire(node, now);
+                }
+                if let Some(policy) = self.pseudonym_policy.as_mut() {
+                    policy.on_retire(node);
+                }
+                self.policy_odometer.remove(&node);
+                if let Some(mut rt) = self.nodes.remove(&node) {
+                    // Not while an SCMS runs: its Misbehavior Authority verifies a report's
+                    // evidence BSMs through these entries (`verify_modelled`), and a
+                    // report about a departed sender can reach it long after the grace (the
+                    // report interval, the RA's shuffle). Forgotten, valid evidence of a
+                    // vehicle that had left would fail to verify.
+                    if self.link_sweep
+                        && self.phase2.is_none()
+                        && let Some(entries) = rt.security_mut().take_directory_entries()
+                    {
+                        self.departed_crypto.push((now, entries));
+                    }
+                    self.departed_rx.add(&rt.security().trust().stats);
+                    self.departed_srm_no_ident += rt
+                        .as_obu()
+                        .map_or(0, v2xw_node::ObuRuntime::srm_no_identification);
+                }
+                self.inboxes.remove(&node);
+                self.node_phase.remove(&node);
+                self.node_first_step.remove(&node);
+                self.node_class.remove(&node);
+                self.mac_window.remove(&node);
+                self.cbr_mark.remove(&node);
+                if let Some(plan) = self.channel_plan.as_ref() {
+                    for ch in [Some(plan.primary), plan.service].into_iter().flatten() {
+                        self.chan_mark.remove(&(node, ch.0));
+                    }
+                }
+                self.node_wake.remove(&node);
+                // Node ids are never reused, so a retired node's J2945/1 sub-interval is
+                // read by nothing again; kept, it grew with every vehicle of a run of days.
+                self.j2945_quality_at.remove(&node);
+                self.j2945_nav.remove(&node);
+                // Frames the retired node had been handed and not yet processed never
+                // reach an application: each attempt is settled here rather than left
+                // without a fate.
+                let pending: Vec<(NodeId, u64)> = self
+                    .rx_pending
+                    .range((node, 0)..=(node, u64::MAX))
+                    .map(|(k, _)| *k)
+                    .collect();
+                for key in pending {
+                    if let Some(attempt) = self.rx_pending.remove(&key) {
+                        self.orphaned_rx
+                            .push(attempt.lost(now, rx_cause::RECEIVER_OFF));
+                    }
+                }
+            }
+        }
+        let step_s = self.scenario.time.mobility_step().as_secs_f64();
+        for (actor, k) in &update.states {
+            if let Some(rec) = self.actors.get_mut(actor) {
+                rec.last = *k;
+                if rec.class == v2xw_mobility::VehicleClass::Emergency
+                    && let Some(d) = self.ev_distance_m.as_mut()
+                {
+                    *d += k.vel.norm_2d() * step_s;
+                }
+            }
+        }
+        for (actor, code) in &update.activities {
+            if let Some(rec) = self.actors.get_mut(actor) {
+                rec.activity = *code;
+            }
+        }
+    }
+
+    /// Rebuilds the spatial index from the published states.
+    fn rebuild_snapshot(&mut self, update: &MobilityUpdate) {
+        let mut entries: Vec<(VehicleView, Kinematics)> = Vec::with_capacity(update.states.len());
+        for (actor, k) in &update.states {
+            let Some(rec) = self.actors.get(actor) else {
+                continue;
+            };
+            // A queued vehicle beyond a city-scale run's radio margin (`crate::scale`) is in
+            // no radio query, no link's path and no sensor's view: the snapshot leaves it
+            // out rather than index a city of vehicles nothing will look up.
+            if let Some(gate) = self.radio_gate.as_ref()
+                && gate.would_be_dormant(k.pos, self.mobility.tier_of(*actor))
+            {
+                continue;
+            }
+            let lane = k.lane.unwrap_or(v2xw_core::geom::LanePos::new(
+                v2xw_core::ids::LaneId::new(0),
+                0.0,
+                0.0,
+            ));
+            entries.push((
+                VehicleView {
+                    actor: *actor,
+                    class: rec.class,
+                    lane: lane.lane,
+                    lane_index: self
+                        .world
+                        .roads
+                        .lanes()
+                        .get(lane.lane.0 as usize)
+                        .map_or(0, |l| l.index),
+                    // The view's `s_m` is the front bumper; `Kinematics` references the
+                    // rear axle, and the conversion happens once.
+                    s_m: lane.s_m + k.dims.length_m,
+                    lateral_m: lane.d_m,
+                    speed_mps: k.ground_speed_mps(),
+                    accel_mps2: k.acc.x,
+                    heading_rad: k.heading_rad,
+                    dims: k.dims,
+                    driver: rec.driver,
+                },
+                *k,
+            ));
+        }
+        self.snapshot = ActorSnapshot::build(update.t, SNAPSHOT_CELL_M, entries);
+        if self.obstacles.vehicles.is_some() {
+            self.bodies = link::BodyIndex::build(&self.snapshot);
+        }
+        // Nodes are mounted and retired in `absorb`, before this, and nowhere else, so the
+        // equipped set is fixed until the next rebuild.
+        let actors = &self.actors;
+        self.radios = radios::RadioIndex::build(
+            self.snapshot
+                .iter()
+                .filter_map(|e| {
+                    let node = actors.get(&e.view.actor)?.node?;
+                    Some((e.view.actor, node, e.kinematics.pos))
+                })
+                .collect(),
+        );
+    }
+
+    /// Emits `gt.kinematics` for every live actor's current state, in actor order.
+    ///
+    /// The record is stamped at **the instant the state describes** — `k.t`, not the
+    /// scheduler's instant — which is the correction the vertical-slice audit asked for.
+    /// The two coincide for every actor the previous mobility step published, and `k.t`
+    /// is used rather than the scheduler's instant so that an actor whose state is older
+    /// than the step — a spawn the provider did not include in its own state list — is
+    /// filed at the time it is actually about, rather than at a time the engine asserted
+    /// for it.
+    #[allow(
+        clippy::type_complexity,
+        reason = "a one-off tuple read where it is built; an alias would hide its fields"
+    )]
+    fn publish_state_at(&mut self, recorder: &mut dyn RunRecorder) {
+        // A vehicle in a city-scale run's queue network (`crate::scale`) has a queue
+        // placement, not a trajectory: its ground truth is recorded once a simulated
+        // second rather than every step. Every other actor's is recorded every step.
+        let per_second =
+            (1_000_000_000 / self.scenario.time.mobility_step().as_nanos().max(1)).max(1);
+        let whole_second = self.report.mobility_steps % per_second == 0;
+        let mobility = &self.mobility;
+        type State = (ActorId, Kinematics, &'static str, Option<NodeId>, u8, u8);
+        let states: Vec<State> = self
+            .actors
+            .iter()
+            .filter(|(actor, _)| whole_second || mobility.tier_of(**actor) != Some(Tier::Abstract))
+            .map(|(actor, rec)| {
+                let lamps = self.lamps.get(actor).copied().unwrap_or(0);
+                (
+                    *actor,
+                    rec.last,
+                    rec.class.as_str(),
+                    rec.node,
+                    rec.activity,
+                    lamps,
+                )
+            })
+            .collect();
+        for (actor, k, class, node, activity, lamps) in states {
+            let rec = GtKinematics::new(actor, &k, class)
+                .with_node(node)
+                .with_activity(activity)
+                .with_lamps(lamps);
+            self.emit_at(recorder, k.t, &rec);
+        }
+    }
+
+    /// Takes the mobility model's lamps for the state at `at` and adds the headlamps
+    /// (vwp-v1 §3.3.5, [`crate::daylight`]).
+    fn set_lamps(&mut self, lamps: Vec<(ActorId, u8)>, at: SimTime) {
+        let origin = self.world.origin;
+        let unix_s = self.wall.unix_nanos_at(at) as f64 / 1e9;
+        let sun = crate::daylight::solar_elevation_deg(unix_s, origin.lat_deg, origin.lon_deg);
+        let headlamps = crate::daylight::headlamps_on(
+            sun,
+            &self.weather,
+            &crate::daylight::HeadlampParams::default(),
+        );
+        self.lamps.clear();
+        for (actor, mut bits) in lamps {
+            let class = self.actors.get(&actor).map(|r| r.class);
+            if headlamps && class.is_some_and(v2xw_mobility::lamps::has_lamps) {
+                bits |= v2xw_mobility::lamps::LAMP_LOW_BEAM;
+            }
+            self.lamps.insert(actor, bits);
+        }
+    }
+
+    /// Encodes and stores this instant's `Keyframe` or `Delta` (vwp-v1 §3.3, §3.4).
+    ///
+    /// One frame per mobility step; which of the two it is, is the encoder's decision
+    /// from the cadence. This is the *only* producer of the binary snapshot stream in the
+    /// engine, and the frame it hands the recorder is stored verbatim, which is what
+    /// makes §7.2's byte-identity guarantee between a live stream and a replay hold by
+    /// construction rather than by care.
+    ///
+    /// # Errors
+    /// [`EngineError::Record`] if the encoder refuses the step. Each of its refusals is
+    /// an engine bug — time that did not advance, a slot used twice — and a run that
+    /// carried on after one would be a run whose recording silently stopped being
+    /// replayable.
+    fn emit_snapshot(&mut self, recorder: &mut dyn RunRecorder, at: SimTime) -> Result<()> {
+        if !self.snapshots_enabled {
+            return Ok(());
+        }
+        let mut states: Vec<ActorState> = Vec::with_capacity(self.actors.len());
+        for (actor, rec) in &self.actors {
+            let verified_neighbors = rec
+                .node
+                .and_then(|n| self.nodes.get(&n))
+                .map_or(0, |runtime| runtime.stores().neighbors.counts().1 as u32);
+            let attacker = rec
+                .node
+                .is_some_and(|n| self.phase2.as_ref().is_some_and(|p| p.is_attacker(n)));
+            let transmitting = rec
+                .node
+                .is_some_and(|n| self.transmitted_since_step.contains(&n));
+            states.push(ActorState {
+                actor: *actor,
+                node: rec.node,
+                kinematics: rec.last,
+                class: rec.class,
+                attacker,
+                transmitting,
+                verified_neighbors,
+                activity: rec.activity,
+                lamps: self.lamps.get(actor).copied().unwrap_or(0),
+                parked: self.at_kerb.contains(actor),
+            });
+        }
+        self.snapshots.follow_plans(&self.world);
+        let frame = self.snapshots.encode(at, &states)?;
+        recorder.write_wire_frame(&frame);
+        self.report.keyframes = self.snapshots.keyframes();
+        self.report.deltas = self.snapshots.deltas();
+        Ok(())
+    }
+
+    /// Advances every node's belief from its ground truth through the GNSS model.
+    ///
+    /// Sequential and in node order, because the GNSS model is stateful per node and the
+    /// state is advanced here; the draws are keyed by node, so the *values* would be the
+    /// same in any order, and the ordering is about the model's `&mut self` rather than
+    /// about determinism.
+    fn update_beliefs(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        // Each device's GNSS truth is at its message's position reference
+        // ([`own_position_truth`]), not at the point mobility publishes.
+        let pairs: Vec<(NodeId, Kinematics)> = self
+            .actors
+            .values()
+            .filter_map(|a| a.node.map(|n| (n, own_position_truth(a.class, &a.last))))
+            .filter(|(n, _)| !self.is_dormant(*n))
+            .collect();
+        // Each equipped vehicle's own bus: its dynamics, lights and next turn
+        // (`crate::vehicle_bus`). The vehicle's own sensors, like its GNSS fix. Every actor
+        // that carries an OBU has one: every class but a pedestrian and a cyclist, who
+        // carry a VRU device (`wiring::is_vru_class`, the rule `create_node` builds by).
+        // Gated on the mobility's wider `is_vru` (which also counts a moped and a
+        // scooter), a moped's OBU sent J2945/1 BSMs with no accelSet, brake status or
+        // event flags while its J2945/1 schedule still sent a critical event's BSM at once
+        // (the DCC reads the truth's deceleration): two BSMs a few ms apart, and a
+        // receiver's SM-MBR MaxAcceleration, with no accelSet to read, took the speed
+        // difference over those ms (0.5 m/s in 3.9 ms, 130 m/s²).
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        let night = crate::vehicle_bus::is_night(self.wall, now, origin);
+        let buses: Vec<(NodeId, v2xw_node::vehicle::VehicleBus)> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| !crate::wiring::is_vru_class(a.class))
+            .filter_map(|(id, a)| {
+                let node = a.node.filter(|n| !self.is_dormant(*n))?;
+                Some((
+                    node,
+                    crate::vehicle_bus::bus_of(
+                        &self.world,
+                        &a.last,
+                        a.class,
+                        self.mobility.intent(&self.world, *id),
+                        self.timeline.hazard_lights.contains(&node),
+                        night,
+                        self.weather.visibility_m,
+                        v2xw_mobility::weather::surface_friction(self.weather.surface),
+                        now,
+                    ),
+                ))
+            })
+            .collect();
+        for (node, bus) in buses {
+            if let Some(obu) = self.nodes.get_mut(&node).and_then(|r| r.as_obu_mut()) {
+                obu.set_vehicle_bus(bus);
+            }
+        }
+        let env = GnssEnv {
+            weather: self.weather,
+            ..GnssEnv::OPEN_SKY
+        };
+        for (node, truth) in pairs {
+            let belief = {
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    gnss,
+                    ..
+                } = self;
+                let mut ctx = EngineCtx::new(
+                    scheduler, rng, world, snapshot, provenance, params, recorder,
+                );
+                let mut mob = crate::adapters::mobility(&mut ctx);
+                gnss.estimate(&mut mob, node, &truth, &env)
+            };
+            // `pos_error_m` is one of the two ground-truth values vwp-v1 §3.5.2 marks GT
+            // and that a node cannot compute for itself. It enters through the one door
+            // the firewall leaves open, from the engine, which knows both numbers.
+            let error =
+                v2xw_core::math::hypot(belief.pos.x - truth.pos.x, belief.pos.y - truth.pos.y);
+            // The vehicle's own accelerometer: its longitudinal acceleration along its
+            // heading, which is what a hard-braking trigger reads (`v2xw_node::events`).
+            // The vehicle's own sensor about itself, like the position fix — no view of
+            // anyone else — and without a noise model: a MEMS accelerometer's error is
+            // hundredths of a m/s² against a 3.92 m/s² threshold.
+            // The same quantity, to the bit, that `gt.kinematics` records as `acc_mps2`.
+            let q = truth.quantized();
+            let a_long = v2xw_core::math::q3(crate::records::longitudinal(
+                q.acc.x,
+                q.acc.y,
+                q.heading_rad,
+            ));
+            if let Some(runtime) = self.nodes.get_mut(&node) {
+                runtime.set_belief(belief.quantized());
+                runtime.observe_truth(error as f32);
+                // A VRU device sends no hard-braking DENM, so only an OBU reads it.
+                if let Some(obu) = runtime.as_obu_mut() {
+                    obu.set_own_acceleration(a_long);
+                }
+            }
+            if self.j2945_per.is_some() {
+                self.j2945_nav.insert(
+                    node,
+                    v2xw_radio::HostState {
+                        x: truth.pos.x,
+                        y: truth.pos.y,
+                        speed_mps: v2xw_core::math::hypot(truth.vel.x, truth.vel.y),
+                        heading_rad: truth.heading_rad,
+                        at: now,
+                    },
+                );
+            }
+            self.update_dcc(node, now, a_long);
+        }
+    }
+
+    /// Each CPM-sending vehicle's sensors scan the road users around it
+    /// (`crate::perception`), and the vehicle is handed what they perceive — its own
+    /// sensors' output, as the GNSS model hands it its fix.
+    fn step_perception(&mut self, now: SimTime) {
+        let Engine {
+            perception,
+            rng,
+            world,
+            actors,
+            snapshot,
+            nodes,
+            rsus,
+            ..
+        } = self;
+        let Some(perception) = perception.as_mut() else {
+            return;
+        };
+        let class_of = |c: VehicleClass| match c {
+            VehicleClass::Pedestrian => crate::perception::ObjectClass::Pedestrian,
+            VehicleClass::Bicycle | VehicleClass::Scooter => {
+                crate::perception::ObjectClass::Cyclist
+            }
+            _ => crate::perception::ObjectClass::Vehicle,
+        };
+        let mut observers: Vec<crate::perception::Observer> = actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .filter_map(|(id, a)| {
+                let node = a.node?;
+                let runs = nodes.get(&node).and_then(|n| n.as_obu()).is_some_and(|o| {
+                    // The CPM's objects, and the traffic-condition trigger's
+                    // sensor conditions, read the vehicle's own perception.
+                    o.schedule().services().cpm
+                        || (o.schedule().services().denm && o.denm_triggers().traffic_condition)
+                });
+                runs.then_some(crate::perception::Observer {
+                    node,
+                    actor: Some(*id),
+                    k: a.last,
+                    frame: crate::perception::Frame::Vehicle,
+                    suite: perception.suite_for(a.class.as_str()),
+                })
+            })
+            .collect();
+        // Roadside units with the `cpm` role: their mast-mounted suite, in the
+        // east-north-up frame (an infrastructure CPM, TS 103 324 §7.1.3).
+        if let Some(suite) = perception.rsu_suite() {
+            for (node, pos) in rsus.iter() {
+                let runs = nodes
+                    .get(node)
+                    .and_then(|n| n.as_obu())
+                    .is_some_and(|o| o.schedule().services().cpm);
+                if runs {
+                    let mut k = v2xw_core::kinematics::Kinematics::at_rest(now, *pos);
+                    k.dims = v2xw_core::geom::Dims::new(0.0, 0.0, 0.0);
+                    observers.push(crate::perception::Observer {
+                        node: *node,
+                        actor: None,
+                        k,
+                        frame: crate::perception::Frame::Fixed,
+                        suite,
+                    });
+                }
+            }
+        }
+        for o in observers {
+            let sensors = perception.sensor_info(o.suite, o.frame, o.k.dims);
+            let reach = perception.reach(o.suite, o.frame, o.k.dims);
+            let mut near: Vec<ActorId> = snapshot.actors_within(o.k.pos, reach);
+            near.sort_unstable();
+            near.dedup();
+            let candidates: Vec<crate::perception::Subject> = near
+                .into_iter()
+                .filter_map(|id| {
+                    let a = actors.get(&id)?;
+                    Some(crate::perception::Subject {
+                        actor: id,
+                        k: a.last,
+                        class: class_of(a.class),
+                    })
+                })
+                .collect();
+            let seen = perception.scan(world, rng, now, &o, &candidates);
+            let objects: Vec<v2xw_node::cpm::ObjectIn> = seen
+                .iter()
+                .map(|p| v2xw_node::cpm::ObjectIn {
+                    id: p.id,
+                    pos: p.pos,
+                    vel: p.vel,
+                    heading_rad: p.heading_rad,
+                    length_m: p.dims.length_m,
+                    width_m: p.dims.width_m,
+                    kind: match p.class {
+                        crate::perception::ObjectClass::Vehicle => {
+                            v2xw_node::cpm::ObjectKind::Vehicle
+                        }
+                        crate::perception::ObjectClass::Pedestrian => {
+                            v2xw_node::cpm::ObjectKind::Pedestrian
+                        }
+                        crate::perception::ObjectClass::Cyclist => {
+                            v2xw_node::cpm::ObjectKind::Cyclist
+                        }
+                    },
+                    sigma_m: p.sigma_m,
+                    measured_at: p.measured_at,
+                    first_seen: p.first_seen,
+                    sensors: p.sensors,
+                    detection_confidence: p.detection_confidence,
+                })
+                .collect();
+            if let Some(obu) = nodes.get_mut(&o.node).and_then(|n| n.as_obu_mut()) {
+                obu.set_perception(objects, sensors);
+            }
+        }
+    }
+
+    /// Every equipped vehicle's true state, for the application labeller.
+    fn truth_states(&self, now: SimTime) -> BTreeMap<NodeId, crate::app_truth::TruthState> {
+        let now_s = v2xw_core::time::ns_to_secs(now);
+        self.actors
+            .iter()
+            .filter_map(|(id, a)| {
+                let node = a.node?;
+                let intent = if a.class.is_vru() {
+                    None
+                } else {
+                    self.mobility.intent(&self.world, *id)
+                };
+                let left_turn = intent.and_then(|i| {
+                    let left = matches!(
+                        i.turn,
+                        v2xw_world::TurnDirection::Left
+                            | v2xw_world::TurnDirection::SlightLeft
+                            | v2xw_world::TurnDirection::UTurn
+                    );
+                    let j = self.world.roads.try_junction(i.junction)?;
+                    left.then_some((j.position, i.distance_m))
+                });
+                // The signal its approach truly shows, while it is still short of the line.
+                let signal = intent.filter(|i| i.distance_m > 0.0).and_then(|i| {
+                    let (state, left_s) =
+                        self.app_truth
+                            .signals()
+                            .at(&self.world, i.connector, now_s)?;
+                    Some((crate::infra::movement_phase(state), left_s, i.distance_m))
+                });
+                Some((
+                    node,
+                    crate::app_truth::TruthState {
+                        k: a.last,
+                        length_m: a.last.dims.length_m,
+                        width_m: a.last.dims.width_m,
+                        vru: a.class.is_vru(),
+                        heavy: crate::vehicle_bus::is_heavy(a.class),
+                        left_turn,
+                        signal,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// The application labeller's step: truth episodes over every equipped pair within
+    /// its range, and the outcomes it settled, on `app.outcome`.
+    fn step_app_truth(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        if !self.app_truth.enabled() {
+            return;
+        }
+        let states = self.truth_states(now);
+        let mut near: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        for (node, s) in &states {
+            if s.vru {
+                continue;
+            }
+            let mut subjects: Vec<NodeId> = self
+                .snapshot
+                .actors_within(s.k.pos, crate::app_truth::TRUTH_RANGE_M)
+                .into_iter()
+                .filter_map(|a| self.actors.get(&a).and_then(|r| r.node))
+                .filter(|n| n != node && states.contains_key(n))
+                .collect();
+            subjects.sort_unstable();
+            subjects.dedup();
+            near.insert(*node, subjects);
+        }
+        self.app_truth.step(now, &states, &near);
+        for outcome in self.app_truth.drain() {
+            self.emit(recorder, &outcome);
+        }
+        self.report.apps = self.app_truth.tallies().clone();
+    }
+
+    /// Closes the congestion-control loop for one node.
+    ///
+    /// Two measurements go in and one state comes out. The channel busy ratio is the
+    /// MAC's, measured over its own window ending at `now`; the neighbour count is the
+    /// node's **own** — taken from its neighbour table against its own position estimate,
+    /// never from the actor snapshot, so a node's transmit rate is a function of what it
+    /// has heard and not of a density only the engine knows (invariant I-C2).
+    ///
+    /// The state that comes out is handed to the node's message generator, which is where
+    /// J2945/1 rate control belongs: `MessageSchedule::due` already refuses to generate
+    /// inside `t_off`. Under J2945/1 the engine does **not** also call [`Dcc::gate`],
+    /// because that would apply the same inter-transmission time twice; what it does read
+    /// from the model is the transmit power, in [`Engine::tx_power_dbm`]. The ETSI
+    /// algorithms are gatekeepers between the network and the access layer (TS 102 687
+    /// §5.4, Annex A), so the engine asks their gate for every frame in
+    /// [`Engine::on_mac_timer`] and hands their `T_off` to the CAM generator as
+    /// `T_GenCam_Dcc` (EN 302 637-2 §6.1.3).
+    ///
+    /// Under J2945/1 the same 100 ms step is the tracking step: the unit compares its own
+    /// state with where its neighbours are believed to put it, and hard braking beyond
+    /// 0.4 g (`a_long`, its own accelerometer) or the tracking-error draw sends the next
+    /// BSM now and at `vRPMax` (Ahmad 2019 §IV). The draw is keyed by node and instant.
+    /// The ETSI gatekeeper's channel load at every roadside unit.
+    ///
+    /// A roadside unit is an ITS station like a vehicle: TS 102 687 §5.4 puts the gate
+    /// between its network layer and its access layer and Annex A drives `delta` from the
+    /// CBR its own radio measures, per channel. [`Engine::update_dcc`] runs only for the
+    /// actors' nodes, so before this a unit's gates never received a CBR: `delta` stayed
+    /// at `delta_max` and the EN 302 571 floor at CBR 0, whatever its channel's load, and
+    /// the per-channel gate (`dcc_service`) could not be told from a shared one.
+    /// Only the gates are fed: SAE J2945/1's rate and power control
+    /// is the BSM's, and a roadside unit's SPaT and MAP periods are their standards'
+    /// (SAE J2735 / ISO TS 19091), so no generator `T_off` is handed to the unit.
+    fn update_roadside_dcc(&mut self, now: SimTime) {
+        if !self
+            .dcc
+            .as_ref()
+            .is_some_and(crate::wiring::EngineDcc::gates)
+        {
+            return;
+        }
+        let units: Vec<NodeId> = self.rsus.keys().copied().collect();
+        for node in units {
+            let Some(mac) = self.mac.as_ref() else {
+                return;
+            };
+            let cbr = Mac::<EngineCtx<'_>>::cbr(mac, node, self.dsrc_channel, now);
+            let cbr = match self.gcbr.as_mut() {
+                Some(g) => g.global(node, cbr, now),
+                None => cbr,
+            };
+            let service_cbr = match (self.dcc_service.as_ref(), self.channel_plan.as_ref()) {
+                (Some(_), Some(plan)) => plan
+                    .service
+                    .filter(|&sc| self.uses_channel(node, sc))
+                    .and_then(|sc| {
+                        self.mac
+                            .as_ref()
+                            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
+                    }),
+                _ => None,
+            };
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                dcc,
+                dcc_service,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            if let (Some(ds), Some(c)) = (dcc_service.as_mut(), service_cbr) {
+                ds.on_cbr(&mut ctx, node, c);
+            }
+            if let Some(d) = dcc.as_mut() {
+                d.on_cbr(&mut ctx, node, cbr);
+            }
+        }
+    }
+
+    fn update_dcc(&mut self, node: NodeId, now: SimTime, a_long: f64) {
+        if self.dcc.is_none() {
+            return;
+        }
+        let cbr = self
+            .mac
+            .as_ref()
+            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, self.dsrc_channel, now))
+            .map(|local| match self.gcbr.as_mut() {
+                Some(g) => g.global(node, local, now),
+                None => local,
+            });
+        // The service channel's own busy ratio, for its own gate, at a unit tuned to it.
+        let service_cbr = match (self.dcc_service.as_ref(), self.channel_plan.as_ref()) {
+            (Some(_), Some(plan)) => plan
+                .service
+                .filter(|&sc| self.uses_channel(node, sc))
+                .and_then(|sc| {
+                    self.mac
+                        .as_ref()
+                        .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, sc, now))
+                }),
+            _ => None,
+        };
+        // The unit's own state as its position estimate has it: the J2945/1 local
+        // estimator. Only an on-board unit tracks itself; a roadside unit does not move.
+        let own = (!self.rsus.contains_key(&node))
+            .then(|| self.nodes.get(&node))
+            .flatten()
+            .map(|runtime| host_state(v2xw_core::NodeView::position(runtime), now));
+        // Once per vPERSubInterval, J2945/1's channel-quality indicator: the average PER
+        // of the RVs within vPERRange of the unit's own position, each at the position
+        // it broadcasts.
+        let quality = match (own, self.j2945_per.as_mut()) {
+            (Some(me), Some(window)) => {
+                let k = window.sub_interval(now);
+                if self.j2945_quality_at.get(&node) == Some(&k) {
+                    None
+                } else {
+                    self.j2945_quality_at.insert(node, k);
+                    let nodes = &self.nodes;
+                    window.average_per(node, now, |tx| {
+                        nodes.get(&tx).is_some_and(|rv| {
+                            let p = v2xw_core::NodeView::position(rv).pos;
+                            v2xw_core::math::hypot(p.x - me.x, p.y - me.y) <= J2945_DENSITY_RADIUS_M
+                        })
+                    })
+                }
+            }
+            _ => None,
+        };
+        if let (Some(avg), Some(d)) = (quality, self.dcc.as_mut()) {
+            d.on_channel_quality(node, avg);
+        }
+        // SAE J3161/1 counts the unique neighbours heard at least once in the previous
+        // 1000 ms (Fouda 2023 §II-C); J2945/1 the RVs "in range currently". Both count
+        // the stations *received*, from the temporary IDs of the decoded BSMs, not the
+        // ones whose signature checks have finished: the FMVSS 150 NPRM's preamble (82 FR
+        // 3890) says the density count needs the device to "decode the message enough to
+        // expose the various temporary IDs of the received BSMs", and S5.5.1 (82 FR 4014)
+        // names N(k) "the Vehicle Density within 100 m". The node's `HeardTable` is
+        // filled at the parse; the neighbour table, filled when a check finishes, let a
+        // slow or overflowing verifier thin the density (node 57 at 243.5 s:
+        // 30 RVs against 31).
+        let heard_since = self
+            .dcc
+            .as_ref()
+            .filter(|d| d.is_sae() && !d.is_j2945())
+            .map_or(0, |_| now.saturating_sub(J3161_DENSITY_WINDOW_NS));
+        let neighbours = self.nodes.get(&node).map_or(0, |runtime| {
+            let own = v2xw_core::NodeView::position(runtime).pos;
+            runtime
+                .stores()
+                .heard
+                .count_within(own, J2945_DENSITY_RADIUS_M, heard_since)
+        });
+        let nav = self.j2945_nav.get(&node).copied();
+        // J2945/1's transmission decision (6.3.8.5) is made at the end of each
+        // `vTxRateCntrlInt` of the unit's own, at its own phase in the step
+        // ([`Engine::j2945_decision_phase`]), and at once when a critical event condition
+        // initially occurs. What it reads is this step's: the unit's measurements and its
+        // own state as its sensors give it at the step.
+        let decides = self.j2945_timing.is_some() && !self.rsus.contains_key(&node);
+        let phase = if decides {
+            self.j2945_decision_phase(node)
+        } else {
+            0
+        };
+        let in_critical = self
+            .nodes
+            .get(&node)
+            .and_then(|n| n.as_obu())
+            .is_some_and(|rt| rt.schedule().j2945_in_critical_event());
+        // The critical event condition is the event a critical event flag stands for
+        // (J2945/1 3.1.2-3.1.3): an on-board unit that reads its own vehicle's bus raises it
+        // exactly when its BSM carries one of those flags (hard braking at 0.4 g, 0.2 g for
+        // a heavy vehicle; ABS while it regulates). Read off the deceleration at 0.4 g
+        // alone, a truck braking at 0.3 g and a car whose ABS regulated on snow set the
+        // flag, so their BSMs carried the certificate, but the schedule saw no critical
+        // event and sent no BSM early. A unit without a bus keeps the deceleration rule.
+        let flagged = self
+            .nodes
+            .get(&node)
+            .and_then(|n| n.as_obu())
+            .filter(|rt| rt.own_vehicle().bus().is_some())
+            .map(|rt| rt.critical_event(rt.clock().believed_time(now)));
+        let mut decide_now = decides && phase == 0;
+        let mut deferred = None;
+        let mut raised = None;
+        let state = {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                dcc,
+                dcc_service,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            if let (Some(ds), Some(cbr)) = (dcc_service.as_mut(), service_cbr) {
+                ds.on_cbr(&mut ctx, node, cbr);
+            }
+            let dcc = dcc.as_mut().expect("checked above");
+            if let Some(cbr) = cbr {
+                dcc.on_cbr(&mut ctx, node, cbr);
+            }
+            dcc.on_density(&mut ctx, node, neighbours);
+            // J2945/1's local estimator is the unit's navigation solution, not the raw
+            // fix: a GNSS receiver's 10 Hz output is filtered with the vehicle's wheel
+            // speed and yaw rate, so its sample-to-sample error is centimetres while its
+            // absolute error is metres. The tracking error is a difference of two states of
+            // that one solution (now, and extrapolated from the last BSM), so the slowly
+            // varying absolute error cancels and what is left is the extrapolation error
+            // of the vehicle's own motion. The fix itself carries 1.6 m of white noise per
+            // axis per sample (`gnss/error/gauss-markov`), and comparing two fixes put the
+            // tracking error at 1-5 m on every step: above vTrackingErrMax (0.5 m), so a
+            // tracking-error BSM was pending every 100 ms and J2945/1 never stretched the
+            // interval, whatever the density. The
+            // motion is the vehicle's own sensors' about itself, like the accelerometer
+            // above; the 802.11p J2945/1 run keeps it, J3161/1 has no tracking trigger.
+            let own = nav.or(own);
+            let critical = flagged.unwrap_or_else(|| dcc.is_critical_decel(-a_long));
+            // A new critical event is decided now; anything else waits for the unit's own
+            // decision instant, unless that is this one.
+            decide_now |= decides && critical && !in_critical;
+            if dcc.is_sae()
+                && (!decides || decide_now)
+                && let Some(own) = own
+            {
+                raised = dcc.on_tracking(node, own, critical, j2945_tracking_draw(rng, node, now));
+            }
+            if decides && phase > 0 {
+                deferred = Some(J2945Sample { own, critical });
+            }
+            dcc.state::<EngineCtx<'_>>(node)
+        };
+        if decide_now {
+            self.j2945_decide(node, now, raised, true);
+        }
+        if let Some(sample) = deferred {
+            let at = now + phase;
+            if at <= self.scenario.time.horizon_ns() {
+                self.j2945_sampled.insert(node, sample);
+                self.scheduler.schedule(
+                    at,
+                    EventClass::NodeTask,
+                    Event::NodeTask {
+                        node,
+                        task: crate::event::NodeTask::J2945Decision,
+                    },
+                );
+            }
+        }
+        let (t_off, cbr) = state.generator_view();
+        if let Some(runtime) = self.nodes.get_mut(&node) {
+            // `state_code` is the reactive algorithm's numbered state, and J2945/1 has no
+            // such ladder: it controls rate and power continuously. Zero is "no numbered
+            // state", which is what the telemetry field means when the algorithm has none.
+            runtime.set_dcc(DccState { t_off, cbr }, 0);
+        }
+    }
+
+    /// The node phase: a map over nodes, merged by [`NodeId`].
+    ///
+    /// Each node is handed its own inbox and its own context, steps, and returns what it
+    /// produced. Nothing in the map touches the heap, the recorder or another node, so it
+    /// is a **pure map in the determinism contract's sense** and its result does not depend on the
+    /// order
+    /// the nodes are walked in — which `the_node_phase_result_does_not_depend_on_walk_order`
+    /// checks by walking them backwards.
+    ///
+    /// It is nevertheless **executed sequentially**, and the reason is a type and not a
+    /// choice: [`v2xw_node::ObuRuntime`] is not `Send`, because it holds a
+    /// `Box<dyn VerificationPolicy>` and [`v2xw_core::model::Model`] — the supertrait every
+    /// family extends — has no `Send + Sync` bound. `rayon` therefore cannot take `&mut`
+    /// to two runtimes at once, whatever the map's purity. Adding `Send + Sync` to `Model`
+    /// (or to the policy box) makes this one call `par_iter_mut`, and nothing else in this
+    /// function changes; that is reported rather than worked around, because working
+    /// around it would mean `unsafe`, which this crate forbids. The reception phase in
+    /// [`Engine::on_phy_end`] *is* executed in parallel, so the structure is exercised by
+    /// the run rather than only described by it.
+    ///
+    /// `only` restricts the phase to one node: the per-node step of a desynchronised
+    /// generation timing, where each node is woken at its own phase. `None` walks them all.
+    fn on_node_phase(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        horizon: SimTime,
+        only: Option<NodeId>,
+    ) {
+        self.run_nodes(recorder, horizon, only, false);
+        // A BSM that went in this step scheduled the next one; the node is woken
+        // at that instant.
+        if let (Some(node), Some(_)) = (only, self.j2945_timing) {
+            let now = self.scheduler.now();
+            self.place_j2945_bsm(node, now, horizon, false);
+        }
+    }
+
+    /// SAE J2945/1's transmission decision (6.3.8.5-6.3.8.6) at the end of this
+    /// `vTxRateCntrlInt`, on the unit's own clock, from the exception the tracking step
+    /// raised: the critical event, or the tracking-error draw. The schedule decides what
+    /// the flags are (`TxDecision_Dynamics` also needs the next BSM `vRescheduleTh` away)
+    /// and the model holds them for the BSM's power (6.3.8.7). Then the node is woken at
+    /// the BSM's instant, which may now be this one: a new critical event goes at once.
+    fn j2945_decide(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+        raised: Option<v2xw_radio::J2945Trigger>,
+        window_pending: bool,
+    ) {
+        let Some(max_itt) = self.dcc.as_ref().and_then(|d| d.max_itt(node)) else {
+            return;
+        };
+        let Some(rt) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) else {
+            return;
+        };
+        let believed = rt.clock().believed_time(now);
+        let d = rt.schedule_mut().j2945_decide(
+            believed,
+            max_itt,
+            raised == Some(v2xw_radio::J2945Trigger::CriticalEvent),
+            raised == Some(v2xw_radio::J2945Trigger::TrackingError),
+        );
+        let flags = if d.critical {
+            Some(v2xw_radio::J2945Trigger::CriticalEvent)
+        } else if d.dynamics {
+            Some(v2xw_radio::J2945Trigger::TrackingError)
+        } else {
+            None
+        };
+        if let Some(dcc) = self.dcc.as_mut() {
+            dcc.hold_decision(node, flags);
+        }
+        let horizon = self.scenario.time.horizon_ns();
+        self.place_j2945_bsm(node, now, horizon, window_pending);
+    }
+
+    /// Where in each `vTxRateCntrlInt` one unit makes its J2945/1 transmission decision,
+    /// ns into the mobility step: `U[0, step)` in whole microseconds, drawn once per unit
+    /// from `(plugin(dcc/sae/j2945-1-rate-power/decision-phase), LinkFrame((n, n), 0))`.
+    ///
+    /// J2945/1 makes the decision "at the end of the kth instance of vTxRateCntrlInt"
+    /// (6.3.8.5) and ties no instance to UTC: each unit runs its 100 ms intervals on its own
+    /// timer, from when it started. Made for the whole fleet at the mobility step, every
+    /// decision that moved a BSM moved it to one shared instant: units whose `Max_ITT` fell
+    /// together (`TxDecision_Max_ITT`, the next BSM at `max(now, LastTx + Max_ITT)`) all
+    /// generated at that step's own nanosecond and contended for the channel together.
+    fn j2945_decision_phase(&self, node: NodeId) -> u64 {
+        let step_us = self.scenario.time.mobility_step().as_nanos() / 1_000;
+        if step_us <= 1 {
+            return 0;
+        }
+        let us = self
+            .rng
+            .checkout(
+                v2xw_core::rng::RngDomain::plugin(J2945_DECISION_PHASE_STREAM),
+                v2xw_core::rng::EntityRef::LinkFrame {
+                    link: v2xw_core::ids::LinkKey::new(node, node),
+                    frame: 0,
+                },
+            )
+            .below(step_us);
+        us * 1_000
+    }
+
+    /// One unit's J2945/1 transmission decision at its own instant in the step
+    /// ([`Engine::j2945_decision_phase`]): the tracking step on what the unit sampled at the
+    /// mobility step, against the BSM its neighbours last had (which may be one it sent
+    /// since), then the decision. Its BSM, if moved to now, goes at this instant.
+    fn on_j2945_decision(&mut self, node: NodeId) {
+        let now = self.scheduler.now();
+        let Some(sample) = self.j2945_sampled.remove(&node) else {
+            return;
+        };
+        if self.is_dormant(node) || !self.nodes.contains_key(&node) {
+            return;
+        }
+        let Engine { rng, dcc, .. } = self;
+        let Some(dcc) = dcc.as_mut() else {
+            return;
+        };
+        let raised = match sample.own {
+            Some(own) if dcc.is_sae() => dcc.on_tracking(
+                node,
+                own,
+                sample.critical,
+                j2945_tracking_draw(rng, node, now),
+            ),
+            _ => None,
+        };
+        self.j2945_decide(node, now, raised, false);
+    }
+
+    /// Wakes a unit at its next J2945/1 BSM, aligned: the node steps at its
+    /// phase in every mobility step, and the phase is moved to the BSM's instant, so the
+    /// step of the window the BSM falls in is the one that sends it. `window_pending` is
+    /// true before this mobility step has scheduled its node steps (a decision in
+    /// `update_dcc`), which then puts the step at the new phase itself; otherwise, when
+    /// the instant falls later in a window whose step has gone, or is this one (a decision
+    /// at the unit's own phase moved the BSM to now), the node is also stepped at the
+    /// instant itself.
+    fn place_j2945_bsm(
+        &mut self,
+        node: NodeId,
+        now: SimTime,
+        horizon: SimTime,
+        window_pending: bool,
+    ) {
+        let Some(rt) = self.nodes.get(&node).and_then(|n| n.as_obu()) else {
+            return;
+        };
+        let Some(due_believed) = rt.schedule().next_bsm_due() else {
+            return;
+        };
+        let believed = rt.clock().believed_time(now);
+        // An overdue BSM (a unit that was off or dormant) goes at its next step.
+        let due = now.saturating_add(due_believed.saturating_sub(believed));
+        let step_ns = self.scenario.time.mobility_step().as_nanos().max(1);
+        let phase = due % step_ns;
+        let old = self
+            .node_phase
+            .get(&node)
+            .map_or(0, |d| d.as_nanos() % step_ns);
+        self.node_phase.insert(node, Duration::from_nanos(phase));
+        let window_end = now - now % step_ns + step_ns;
+        if !window_pending && phase != old && due >= now && due < window_end && due <= horizon {
+            self.scheduler.schedule(
+                due,
+                EventClass::NodeTask,
+                Event::NodeTask {
+                    node,
+                    task: crate::event::NodeTask::Step,
+                },
+            );
+        }
+    }
+
+    /// One node is woken because a signature check it started has finished: it receives
+    /// what has arrived and hands every finished check to its applications, and nothing
+    /// else — no generation, which is the periodic step's (`ObuRuntime::wake_timed`).
+    fn on_node_wake(&mut self, recorder: &mut dyn RunRecorder, horizon: SimTime, node: NodeId) {
+        let now = self.scheduler.now();
+        if self.node_wake.get(&node) == Some(&now) {
+            self.node_wake.remove(&node);
+        }
+        if !self.nodes.contains_key(&node) {
+            return;
+        }
+        self.run_nodes(recorder, horizon, Some(node), true);
+    }
+
+    /// Schedules a node's wake for the instant its next signature check finishes, unless
+    /// one is already scheduled at or before it.
+    ///
+    /// One pending wake per node, at the earliest instant anything finishes: a wake hands
+    /// over everything finished by then and schedules the next, so the heap holds one
+    /// entry per node with a check running, not one per check.
+    fn schedule_wake(&mut self, node: NodeId, now: SimTime, horizon: SimTime) {
+        let Some(at) = self
+            .nodes
+            .get(&node)
+            .and_then(|n| n.next_completion_after(now))
+        else {
+            return;
+        };
+        // Strictly after `now`: a wake at this instant would dispatch again before the
+        // loop advances, and anything finished by `now` has been handed over already.
+        self.request_wake(node, at.max(now + 1), horizon);
+    }
+
+    /// Wakes `node` at `at` unless a wake is already pending at or before it.
+    ///
+    /// Called for a signature check's finish ([`Engine::schedule_wake`]) and for a decoded
+    /// frame's arrival, so a receiver takes each frame into its verifier the instant it
+    /// arrives and hands it to its applications the instant the check finishes — rather
+    /// than at its next periodic step, up to a mobility step later.
+    fn request_wake(&mut self, node: NodeId, at: SimTime, horizon: SimTime) {
+        if at > horizon {
+            return;
+        }
+        if self.node_wake.get(&node).is_some_and(|&t| t <= at) {
+            return;
+        }
+        self.node_wake.insert(node, at);
+        self.scheduler.schedule(
+            at,
+            EventClass::NodeTask,
+            Event::NodeTask {
+                node,
+                task: crate::event::NodeTask::Deliver,
+            },
+        );
+    }
+
+    /// The node phase's map and merge, over one node or all of them, as a periodic step or
+    /// as a wake.
+    /// Before a node step: tells every node's revocation gate which i-period the
+    /// credential system is in, from the node's own clock.
+    ///
+    /// A node's revocation gate refuses a peer's certificate claiming a period more than
+    /// one away from its own (`v2xw_node::stores::PLAUSIBLE_PERIOD_SKEW`), and it learned
+    /// its own period only from its active certificate. Two kinds of node have none that
+    /// says: a vehicle left without a valid certificate (its top-up refused or late) and a
+    /// roadside unit, whose application certificate is the bootstrap stand-in stamped
+    /// period 0 for the whole run. Both went on refusing every newer certificate as
+    /// `Invalid`, and their detectors reported each as a signature failure: 22,336 of the
+    /// 22,997 verdicts an honest fleet drew at 6,000 veh/h on `credential-lifecycle`
+    /// (60 s i-periods). A real device computes the i-period from its clock (CAMP-EE
+    /// §2.1.5.3.2: periods are fixed calendar intervals from the SCMS epoch), which is what
+    /// this does; a unit's certificate is also moved to the period, as a unit's
+    /// application certificate belongs to the period the system is in.
+    fn sync_credential_periods(&mut self, only: Option<NodeId>, now: SimTime) {
+        let Some(phase2) = self.phase2.as_ref() else {
+            return;
+        };
+        let ids: Vec<NodeId> = match only {
+            Some(id) => vec![id],
+            None => self.nodes.keys().copied().collect(),
+        };
+        for id in ids {
+            let Some(runtime) = self.nodes.get_mut(&id) else {
+                continue;
+            };
+            if runtime.is_vru() {
+                continue;
+            }
+            let believed = runtime.clock().believed_time(now);
+            let period = phase2.params().period_at(believed);
+            let stores = runtime.stores_mut();
+            if stores.crl.current_period() != period {
+                stores.crl.set_period(period);
+            }
+            // A unit's application certificate, and the bootstrap stand-in a vehicle the
+            // credential system left without pseudonyms signs with, carry no linkage value
+            // and no period of their own: they belong to the period the system is in.
+            let issued = phase2.creds(id);
+            // A unit in the certificate cycle holds real weekly certificates, each of its own
+            // period: moving the active one took over the slot of the certificate issued for
+            // that period (`move_signer`), so the unit went on signing with the week it was
+            // preloaded with past its expiry, and its store named a week it could not sign
+            // with (conformance oracle: 240 WSAs outside the signer's validity).
+            if let Some(cred) = stores.certs.active_mut()
+                && cred.i_period != period
+                && ((self.rsus.contains_key(&id) && !phase2.rsu_in_cert_cycle(id))
+                    || !self.rsus.contains_key(&id)
+                        && !issued
+                            .iter()
+                            .any(|c| c.i == cred.i_period && c.j == cred.j_index))
+            {
+                let from = (cred.i_period, cred.j_index);
+                cred.i_period = period;
+                // The security stack files the installed key by the same slot, and signs
+                // only from a slot it holds (`NodeSecurity::set_active`): moving the
+                // handle alone left every unit unable to sign, and no SPaT or MAP went
+                // on the air once the real calendar put the system past period 0.
+                let to = (cred.i_period, cred.j_index);
+                runtime.security_mut().move_signer(from, to);
+            }
+        }
+    }
+
+    /// Before a node step: asks each vehicle's store for the change its pseudonym strategy
+    /// makes due now (`crate::pseudonym_policy`). The store then changes every identifier
+    /// together at its own step, exactly as for a scheduled change.
+    fn apply_pseudonym_policy(&mut self, only: Option<NodeId>, now: SimTime) {
+        let Some(policy) = self.pseudonym_policy.as_mut() else {
+            return;
+        };
+        if !policy.acts() {
+            return;
+        }
+        let ids: Vec<NodeId> = match only {
+            Some(id) => vec![id],
+            None => self.nodes.keys().copied().collect(),
+        };
+        for id in ids {
+            if self.rsus.contains_key(&id) {
+                continue;
+            }
+            let Some(runtime) = self.nodes.get_mut(&id) else {
+                continue;
+            };
+            if runtime.is_vru() || !runtime.state().transmits() {
+                continue;
+            }
+            let (odometer, changes) = match self.policy_odometer.get(&id) {
+                Some(v) => *v,
+                None => {
+                    let changes = runtime.stores().certs.changes();
+                    policy.on_spawn(&self.rng, id, now, 0.0);
+                    self.policy_odometer.insert(id, (0.0, changes));
+                    (0.0, changes)
+                }
+            };
+            let _ = changes;
+            let pos = v2xw_core::NodeView::position(runtime).pos;
+            if policy.change_due(id, now, odometer, pos) {
+                let store = runtime.stores_mut();
+                let certs = core::mem::take(&mut store.certs);
+                store.certs = certs.with_policy(v2xw_node::stores::RotationPolicy {
+                    min_age: Duration::ZERO,
+                    min_distance_m: f64::INFINITY,
+                    require_both: false,
+                });
+            }
+        }
+    }
+
+    /// After a node step: each vehicle's odometry, and the changes its store made, for the
+    /// pseudonym policy (the next stage's draw, a silent period) — and the store's own rule
+    /// put back once an asked-for change is made.
+    fn note_policy_changes(&mut self, travelled: &[(NodeId, f64)], now: SimTime) {
+        let Some(policy) = self.pseudonym_policy.as_mut() else {
+            return;
+        };
+        let own_rule = crate::wiring::rotation_policy(&self.scenario);
+        for (id, d) in travelled {
+            if self.rsus.contains_key(id) {
+                continue;
+            }
+            let Some(runtime) = self.nodes.get_mut(id) else {
+                continue;
+            };
+            if runtime.is_vru() {
+                continue;
+            }
+            let changes = runtime.stores().certs.changes();
+            let entry = self.policy_odometer.entry(*id).or_insert_with(|| {
+                policy.on_spawn(&self.rng, *id, now, 0.0);
+                (0.0, changes)
+            });
+            entry.0 += d;
+            if changes > entry.1 {
+                entry.1 = changes;
+                policy.on_changed(&self.rng, *id, now, entry.0);
+                if policy.acts() {
+                    let store = runtime.stores_mut();
+                    let certs = core::mem::take(&mut store.certs);
+                    store.certs = certs.with_policy(own_rule);
+                }
+            }
+        }
+    }
+
+    fn run_nodes(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        horizon: SimTime,
+        only: Option<NodeId>,
+        wake: bool,
+    ) {
+        let now = self.scheduler.now();
+        let step_s = self.scenario.time.mobility_step().as_secs_f64();
+        // A node stepping at its own phase generates between two GNSS epochs. Its belief
+        // is the fix of the last mobility step, so the node dead-reckons it forward to the
+        // instant it is about to stamp on the message, from its *own* velocity estimate —
+        // never from ground truth (invariant I-C2). Without this every message would carry
+        // a position `v·φ` older than its generation time, which plausibility detectors
+        // read, correctly, as an inconsistent sender. An OBU does the same: the BSM's
+        // position is meant to be the position at `secMark`, and the J2735 message model records
+        // J2945/1's latency-compensation requirement as secondary-sourced.
+        if let Some(node) = only
+            && !wake
+        {
+            self.dead_reckon_belief(node, now);
+        }
+        if !wake {
+            self.feed_controllers(only, now);
+        }
+        if !wake {
+            self.apply_pseudonym_policy(only, now);
+            self.sync_credential_periods(only, now);
+        }
+        let mut inboxes = core::mem::take(&mut self.inboxes);
+        let rng = &self.rng;
+
+        let reverse = self.reverse_node_walk;
+        // One node — the per-node step of a desynchronised timing, and every wake — is a
+        // range of one key, not a filter over every node: there are as many of those
+        // events as nodes (and more), so the filter made each step quadratic in the fleet.
+        let walk: Box<dyn Iterator<Item = (&NodeId, &mut crate::hosted::HostedNode)>> =
+            match (only, reverse) {
+                (Some(id), _) => Box::new(self.nodes.range_mut(id..=id)),
+                (None, true) => Box::new(self.nodes.iter_mut().rev()),
+                (None, false) => Box::new(self.nodes.iter_mut()),
+            };
+        // A dormant node (`crate::scale`) takes no step: its radio is off.
+        let gate = self.radio_gate.as_ref();
+        let walk = walk.filter(|(id, _)| !gate.is_some_and(|g| g.is_dormant(**id)));
+        let mut suppressed_by_vru = 0u64;
+        let mut results: Vec<(NodeId, StepOutcome, Vec<v2xw_core::ctx::OwnedRecord>, f64)> = walk
+            .map(|(id, runtime)| {
+                // What has finished arriving by now is handed over; a frame whose last
+                // symbol (plus its propagation delay) lands after this instant waits for
+                // the next step, so a node never processes a frame before it arrived.
+                let inbox: Vec<(RxFrame, RxStamp)> = match inboxes.get_mut(id) {
+                    Some(q) if !(wake && runtime.is_vru()) => {
+                        let (ready, later): (Vec<_>, Vec<_>) = core::mem::take(q)
+                            .into_iter()
+                            .partition(|(_, st)| st.arrived_at.is_none_or(|t| t <= now));
+                        *q = later;
+                        ready
+                    }
+                    _ => Vec::new(),
+                };
+                let mut local = v2xw_node::NodeRuntimeCtx::new(now, rng);
+                // Distance travelled since the last step drives distance-based pseudonym
+                // rotation. It is the node's own odometry, not a ground-truth read: a
+                // fielded receiver integrates its own speed the same way.
+                let travelled = runtime
+                    .state()
+                    .transmits()
+                    .then(|| v2xw_core::NodeView::position(runtime).ground_speed_mps() * step_s);
+                // A periodic step, or a wake that hands over finished signature checks. A
+                // VRU device has no deferred checks, so it is never woken for one
+                // (`HostedNode::next_completion_after`); on a frame-arrival wake its inbox
+                // waits for its periodic step, as the device takes frames there.
+                let (outcome, suppressed) = if wake {
+                    (runtime.wake_timed(&mut local, inbox), 0)
+                } else {
+                    runtime.step_timed(&mut local, inbox, travelled.unwrap_or(0.0))
+                };
+                suppressed_by_vru += suppressed;
+                // A VRU device's suppression records ride `node.tx` in the device's own
+                // shape, which is not the `NodeTx` a recording's `node.tx` holds; they are
+                // counted in the run report instead (`crate::hosted`).
+                let mut emitted = local.take_emitted();
+                if runtime.is_vru() {
+                    emitted.retain(|r| r.channel != "node.tx");
+                }
+                (*id, outcome, emitted, travelled.unwrap_or(0.0))
+            })
+            .collect();
+        self.report.vru_suppressed += suppressed_by_vru;
+
+        // The merge. `par_iter_mut` over a `BTreeMap` yields in
+        // key order but `collect` into a `Vec` does not promise to preserve it for an
+        // unindexed parallel iterator, so the order is *re-established* here rather than
+        // assumed. That is the difference between a run that is deterministic and one that
+        // happens to be.
+        results.sort_by_key(|(id, ..)| *id);
+        // What each cooperative vehicle heard, for its CACC or platoon law (`run/coop.rs`).
+        self.feed_cooperative(&results, now);
+
+        // The metric views of the node records, decoded from their JSON in parallel over
+        // the nodes (a pure function of each record) and handed over in the same order, so
+        // the providers see exactly what `on_event` would have decoded on this thread.
+        let (want_tx, want_rx) = (
+            self.providers.wants("node.tx"),
+            self.providers.wants("node.rx"),
+        );
+        let mut views: Vec<Vec<Option<v2xw_metrics::Predecoded>>> = results
+            .par_iter()
+            .map(|(_, _, records, _)| {
+                records
+                    .iter()
+                    .map(|rec| match rec.channel {
+                        "node.tx" if want_tx => {
+                            v2xw_metrics::Predecoded::of::<v2xw_metrics::channels::NodeTxView>(rec)
+                        }
+                        "node.rx" if want_rx => {
+                            v2xw_metrics::Predecoded::of::<v2xw_metrics::channels::NodeRxView>(rec)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect();
+        for ((_, _, records, _), node_views) in results.iter().zip(views.iter_mut()) {
+            for (rec, view) in records.iter().zip(node_views.drain(..)) {
+                self.providers.on_event_predecoded(rec, view);
+                recorder.write(now, rec);
+                self.report.records += 1;
+            }
+        }
+
+        // Each warning issued, handed to the ground-truth labeller (`crate::app_truth`).
+        if self.app_truth.enabled()
+            && results
+                .iter()
+                .any(|(_, _, recs, _)| recs.iter().any(|r| r.channel == "app.warning"))
+        {
+            let states = self.truth_states(now);
+            for (_, _, records, _) in &results {
+                for rec in records.iter().filter(|r| r.channel == "app.warning") {
+                    self.app_truth.on_warning(&rec.json, &states);
+                }
+            }
+        }
+
+        // A signal request a roadside unit heard goes to its junction's controller
+        // (NTCIP 1211's priority request server). The request names the approach the
+        // vehicle is on: the unit matches the requester's position and heading, which the
+        // SRM's `requestor.position` carries, to the junction's approach heads.
+        let requests: Vec<(usize, [u8; 8], u16, f64)> = results
+            .iter()
+            .filter_map(|(id, outcome, _, _)| {
+                let feed = self.infra_feeds.get(id)?;
+                Some((id, feed.plan(), outcome))
+            })
+            .flat_map(|(_id, plan, outcome)| {
+                outcome
+                    .delivered
+                    .iter()
+                    .filter(|m| {
+                        m.msg_type == v2xw_msg::MsgType::Srm
+                            && matches!(
+                                m.verification,
+                                v2xw_node::stores::VerificationState::Verified
+                                    | v2xw_node::stores::VerificationState::Unverified
+                            )
+                    })
+                    .filter_map(|m| {
+                        let requester = v2xw_node::safety::digest_key(m.signer.as_ref()?);
+                        let (group, eta) = crate::infra::requested_group(
+                            &self.world,
+                            plan,
+                            m.claimed_pos?,
+                            m.claimed_heading_rad,
+                            m.claimed_speed_mps,
+                        )?;
+                        Some((plan, requester, group, eta))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let now_s = v2xw_core::time::ns_to_secs(now);
+        for (plan, requester, group, eta) in requests {
+            let heard = self
+                .priority_heard
+                .entry(requester)
+                .or_insert((0, now, now));
+            heard.0 += 1;
+            heard.2 = now;
+            if let Some(rec) =
+                self.priority
+                    .request(&self.world, plan, requester, group, eta, now_s)
+            {
+                self.emit(recorder, &rec);
+            }
+        }
+
+        // The V2X re-routing source (`traffic.reroute_source: v2x`): each lane-blocking
+        // DENM a vehicle's own unit delivered to its applications, verified, tells that
+        // driver — and only that driver — the lane at the event is blocked
+        // (`crate::reroute_info`). Delivered at a wake as at a periodic step.
+        let v2x_reroute = self
+            .scenario
+            .traffic
+            .as_ref()
+            .and_then(|t| t.reroute_source)
+            == Some(v2xw_mobility::routing::dynamic::RerouteSource::V2x);
+        if v2x_reroute {
+            let mut commands = Vec::new();
+            for (id, outcome, _, _) in &results {
+                let Some(actor) = self.node_actor.get(id).copied() else {
+                    continue;
+                };
+                for m in &outcome.delivered {
+                    if m.msg_type != v2xw_msg::MsgType::Denm
+                        || !matches!(
+                            m.verification,
+                            v2xw_node::stores::VerificationState::Verified
+                        )
+                    {
+                        continue;
+                    }
+                    let Some(payload) = m.payload.as_deref() else {
+                        continue;
+                    };
+                    if let Some(lane) =
+                        crate::reroute_info::blocking_event_lane(&self.world, payload)
+                    {
+                        commands.push(v2xw_mobility::MobilityCommand::HazardHeard { actor, lane });
+                    }
+                }
+            }
+            if !commands.is_empty() {
+                self.command_mobility(commands);
+            }
+        }
+
+        // A forward-collision or emergency-brake-light warning a vehicle's own unit issued
+        // to its driver (`actors.vehicles.drivers.distraction`): a driver looking
+        // away from the road looks back (`v2xw_mobility::drivers` §6). The warning is the
+        // unit's own, from what it heard (belief, not ground truth).
+        if self.scenario.actors.vehicles.drivers.distraction == Some(true) {
+            let mut commands = Vec::new();
+            for (id, _, records, _) in &results {
+                let Some(actor) = self.node_actor.get(id).copied() else {
+                    continue;
+                };
+                let alerted = records.iter().any(|r| {
+                    r.channel == "app.warning"
+                        && serde_json::from_slice::<serde_json::Value>(&r.json).is_ok_and(|v| {
+                            // Issued, or refreshed while the condition lasts.
+                            matches!(v["kind"].as_str(), Some("issue" | "update"))
+                                && matches!(v["app"].as_str(), Some("fcw" | "eebl"))
+                        })
+                });
+                if alerted {
+                    commands.push(v2xw_mobility::MobilityCommand::DriverAlerted { actor });
+                }
+            }
+            if !commands.is_empty() {
+                self.command_mobility(commands);
+            }
+        }
+
+        // GLOSA's advice, followed by the drivers who follow it. Only a periodic step
+        // runs the applications; a wake hands over finished checks and advises nothing.
+        if !wake && self.glosa.compliance > 0.0 {
+            let mut commands = Vec::new();
+            for (id, outcome, _, _) in &results {
+                let Some(actor) = self.node_actor.get(id).copied() else {
+                    continue;
+                };
+                let speed = self
+                    .actors
+                    .get(&actor)
+                    .map_or(0.0, |a| v2xw_core::math::hypot(a.last.vel.x, a.last.vel.y));
+                if let Some(c) = self
+                    .glosa
+                    .apply(actor, outcome.advice, speed, now_s, step_s)
+                {
+                    commands.push(c);
+                }
+            }
+            if !commands.is_empty() {
+                self.command_mobility(commands);
+            }
+        }
+
+        // Each node's own telemetry window, when one closed at this step: its queues, its
+        // compute load and its stores. The node has always produced it (`StepOutcome::
+        // telemetry`) and nothing published it, so the page's HUD and inspector showed
+        // "n/a" for every queue and for the CPU of the vehicle being followed.
+        let windows: Vec<crate::records::NodeTelemetry> = results
+            .iter()
+            .filter_map(|(id, outcome, _, _)| {
+                outcome
+                    .telemetry
+                    .as_ref()
+                    .map(|t| telemetry_record(now, *id, t))
+            })
+            .collect();
+        for record in &windows {
+            self.emit(recorder, record);
+        }
+        if self.phase2.is_some() {
+            let closed: Vec<NodeId> = results
+                .iter()
+                .filter(|(_, outcome, ..)| outcome.telemetry.is_some())
+                .map(|(id, ..)| *id)
+                .collect();
+            for id in closed {
+                self.emit_node_security(recorder, id, now);
+            }
+        }
+
+        // Every received frame whose fate the node settled, joined back to its attempt and
+        // recorded on `node.rx`, in (node, report) order.
+        let mut fates: Vec<NodeRx> = Vec::new();
+        let mut secs: Vec<crate::dataset_records::RxSec> = Vec::new();
+        for (id, outcome, _, _) in &results {
+            for report in &outcome.rx_reports {
+                if let Some(attempt) = self.rx_pending.remove(&(*id, report.token)) {
+                    if let Some(ds) = self.dataset.as_deref()
+                        && let Some(sec) = rx_sec_of(ds, *id, &attempt, report, now)
+                    {
+                        secs.push(sec);
+                    }
+                    fates.push(resolve_rx(attempt, report, now));
+                }
+            }
+        }
+        for fate in fates {
+            self.emit(recorder, &fate);
+        }
+        // The receivers' security verdicts (`node.rx_sec`), only under the dataset gate.
+        for sec in &secs {
+            self.emit(recorder, sec);
+        }
+
+        if self.pseudonym_policy.is_some() {
+            let travelled: Vec<(NodeId, f64)> =
+                results.iter().map(|(id, _, _, d)| (*id, *d)).collect();
+            self.note_policy_changes(&travelled, now);
+        }
+
+        // What each node dropped with no frame to record it on — a message it could not
+        // build, sign or queue, a CRL backlog shed — on `node.drop`, in node order.
+        let drops: Vec<crate::records::NodeDrop> = results
+            .iter()
+            .flat_map(|(id, outcome, _, _)| {
+                crate::records::NodeDrop::from_step(now, *id, &outcome.drops)
+            })
+            .collect();
+        for record in &drops {
+            self.emit(recorder, record);
+        }
+
+        for (id, outcome, _, _) in &results {
+            for tx in &outcome.transmissions {
+                self.hand_down(*id, tx, now, horizon);
+            }
+            self.hand_down_p2pcd(*id, now, horizon);
+        }
+        self.flush_deferred_records(recorder);
+
+        // Pseudonym changes, credential starvation and self-revocation, from each node's
+        // own store after its step.
+        if self.phase2.is_some() {
+            let ids: Vec<NodeId> = results.iter().map(|(id, ..)| *id).collect();
+            self.note_security(recorder, &ids, now);
+        }
+
+        // The local detector suite, over what each node's own runtime delivered to its
+        // applications. It runs here and not inside the node phase's map because a report
+        // is a *transmission*, and the map may not touch the heap.
+        if self.cpm_meter.is_some() {
+            for (id, outcome, _, _) in &results {
+                self.cpm_on_verified(*id, &outcome.delivered);
+            }
+        }
+        if self.phase2.is_some() {
+            for (id, outcome, _, _) in &results {
+                // What the installed CRL cost the liar: every delivered message whose
+                // signer the node's own revocation check refused. It is counted here,
+                // from the node's own conclusion, and not from the engine knowing who the
+                // attacker is.
+                let revoked = outcome
+                    .delivered
+                    .iter()
+                    .filter(|m| m.verification == v2xw_node::stores::VerificationState::Revoked)
+                    .count() as u64;
+                let roadside = self.rsus.contains_key(id);
+                if revoked > 0
+                    && let Some(phase2) = self.phase2.as_mut()
+                {
+                    for _ in 0..revoked {
+                        phase2.note_revoked_reception(*id, roadside);
+                    }
+                }
+                if let Some(phase2) = self.phase2.as_mut() {
+                    phase2.note_provider_receptions(*id, &outcome.delivered);
+                }
+                self.run_detectors(*id, &outcome.delivered, now, horizon);
+            }
+        }
+
+        self.inboxes = inboxes;
+
+        // A check still running hands its message over when it finishes, not at the next
+        // periodic step: each node that has one is woken then — and so is a node with a
+        // frame still on its way, at the instant the frame arrives.
+        for (id, ..) in &results {
+            self.schedule_wake(*id, now, horizon);
+            let next_arrival = self.inboxes.get(id).and_then(|q| {
+                q.iter()
+                    .filter_map(|(_, st)| st.arrived_at)
+                    .filter(|t| *t > now)
+                    .min()
+            });
+            if let Some(at) = next_arrival {
+                self.request_wake(*id, at, horizon);
+            }
+            // A running P2PCD response process wakes the node the instant its random
+            // back-off expires (IEEE 1609.2a-2017 §8.2.1, `p2pcd_maxResponseBackoff`),
+            // not at its next periodic step: the back-off is a quarter of a second at the
+            // Annex C values, shorter than a 100 ms step's quantisation can resolve.
+            let p2pcd_due = self.nodes.get(id).and_then(|n| n.next_p2pcd_due_after(now));
+            if let Some(at) = p2pcd_due {
+                self.request_wake(*id, at.max(now + 1), horizon);
+            }
+        }
+    }
+
+    /// Puts the out-of-band P2PCD learning responses `node`'s P2P entity produced at this
+    /// step on the air: each an unsecured `Ieee1609dot2Peer2PeerPDU` in a frame of its own
+    /// under PSID 136, through the same MAC, PHY and congestion control as every frame,
+    /// and recorded on `node.tx` and the frame tap with its real bytes. A receiver's node
+    /// runtime hands it to its P2PCD Entity (`ObuRuntime`'s receive path).
+    fn hand_down_p2pcd(&mut self, node: NodeId, now: SimTime, horizon: SimTime) {
+        let Some(responses) = self
+            .nodes
+            .get_mut(&node)
+            .map(crate::hosted::HostedNode::take_p2pcd_responses)
+        else {
+            return;
+        };
+        for (due, pdu) in responses {
+            let bytes = u32::try_from(pdu.len()).unwrap_or(u32::MAX);
+            let mut tx = Transmission::sized(
+                v2xw_msg::MsgType::P2pcd,
+                bytes,
+                // No signer: the PDU is unsecured. The frame's signer field is never put
+                // in front of a receiver (`rx_frame`).
+                v2xw_msg::sec_types::HashedId8(Default::default()),
+                false,
+                // The MAC takes it one nanosecond after the node event that produced it:
+                // a MAC timer cannot be scheduled at the instant of a node task, which
+                // the dispatch order runs after the MAC's. An
+                // unsecured PDU costs no signature, so nothing else stands in between.
+                due.saturating_add(1),
+                due,
+            );
+            tx.signed = Some(v2xw_node::SignedFrame {
+                payload: pdu.clone(),
+                spdu: pdu,
+                cert_bytes: 0,
+            });
+            self.report.p2pcd_responses_on_air += 1;
+            self.hand_down_app(node, &tx, now, horizon, None);
+        }
+    }
+
+    /// Advances one node's position belief to `now` along its own believed velocity.
+    ///
+    /// Only the node's own estimate is read: position, velocity and the instant the
+    /// estimate is valid at. A belief with no fix, or one already at or past `now`, is
+    /// left alone.
+    ///
+    /// The interval is the time the node's own oscillator counted since the fix, and a
+    /// clock *offset* cancels out of it: `belief.time_ns` is on the simulation's timeline
+    /// (the node converts it with `clock.believed_time`, `NodeView::believed_time`), so
+    /// the interval is `now - time_ns`. Taking `clock.believed_time(now) - time_ns`
+    /// mixed the two timelines: a vehicle whose clock was 5,000 s ahead dead-reckoned its
+    /// position 5,000 s along its velocity, kilometres off the road, and then wrote the
+    /// believed instant back into `time_ns`, so its next stamp carried the offset twice.
+    /// Detectors then reported the honest vehicle (acceptance range, map, position jump)
+    /// and the MA revoked it.
+    fn dead_reckon_belief(&mut self, node: NodeId, now: SimTime) {
+        let Some(runtime) = self.nodes.get_mut(&node) else {
+            return;
+        };
+        let mut belief = *v2xw_core::NodeView::position(runtime);
+        if !belief.fix.has_position() || now <= belief.time_ns {
+            return;
+        }
+        let dt = (now - belief.time_ns) as f64 * 1e-9;
+        belief.pos = Vec3::new(
+            belief.pos.x + belief.vel.x * dt,
+            belief.pos.y + belief.vel.y * dt,
+            belief.pos.z + belief.vel.z * dt,
+        );
+        belief.time_ns = now;
+        runtime.set_belief(belief.quantized());
+    }
+
+    /// Runs one node's detector suite and puts any report it filed on the air.
+    fn run_detectors(
+        &mut self,
+        node: NodeId,
+        delivered: &[v2xw_node::VerifiedMessage],
+        now: SimTime,
+        horizon: SimTime,
+    ) {
+        if delivered.is_empty() {
+            return;
+        }
+        let believed = self
+            .nodes
+            .get(&node)
+            .map_or(now, |n| n.clock().believed_time(now));
+        let belief = self.nodes.get(&node).map(v2xw_core::NodeView::position);
+        let me = v2xw_threat::SelfBelief {
+            node,
+            believed_time: believed,
+            x_m: belief.map_or(0.0, |b| b.pos.x),
+            y_m: belief.map_or(0.0, |b| b.pos.y),
+            radio_range_m: self.detector_range_m,
+        };
+        // The local detectors' `det.observation` records reach the recording only when the
+        // per-message detection scores are asked for (`v2xw_metrics::detection::SCORES_GROUP`),
+        // which join them to each reception; every other run records what it did before.
+        let record_observations = self.scenario.metrics.iter().any(|m| {
+            m == v2xw_metrics::detection::SCORES_GROUP
+                || v2xw_metrics::detection::DetectionScoresProvider::metric_names()
+                    .contains(&m.as_str())
+        });
+        // An insider report poisoner's forgeries are ground truth (`gt.attack.action`,
+        // `ForgeReport`), logged where it files them.
+        let insider = self.phase2.as_ref().is_some_and(|p| p.is_insider(node));
+        // The receiver's own footprint, from its own belief and its own body (the node's
+        // class dimensions, which its BSM's VehicleSize carries): the TS 103 759 box check
+        // tests every claim against it. A roadside unit has none.
+        let own = belief
+            .zip(self.actor_of(node).map(|a| a.last.dims))
+            .filter(|(_, d)| d.length_m > 0.0 && d.width_m > 0.0)
+            .map(|(b, d)| v2xw_threat::OwnFootprint {
+                heading_rad: b.heading_rad,
+                length_m: d.length_m,
+                width_m: d.width_m,
+                reference: v2xw_threat::consistency::ReferencePoint::Centre,
+            });
+        let reports = {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                phase2,
+                nodes,
+                deferred_records,
+                ..
+            } = self;
+            let mut buffer = crate::ctx::MemoryRecorder::new();
+            let mut null = crate::ctx::NullRecorder::new();
+            let sink: &mut dyn crate::ctx::RunRecorder = if record_observations || insider {
+                &mut buffer
+            } else {
+                &mut null
+            };
+            let mut ctx = EngineCtx::new(scheduler, rng, world, snapshot, provenance, params, sink);
+            let reporter = nodes
+                .get(&node)
+                .and_then(|n| n.stores().certs.active())
+                .map(|c| v2xw_core::hash::hex_encode(&c.digest.0[..]));
+            let reports = phase2
+                .as_mut()
+                .map(|p| p.detect(&mut ctx, world, node, &me, reporter, delivered, own))
+                .unwrap_or_default();
+            deferred_records.extend(
+                buffer
+                    .records()
+                    .iter()
+                    .filter(|(_, r)| {
+                        (record_observations && r.channel == "det.observation")
+                            || (insider && r.channel == "gt.attack.action")
+                    })
+                    .cloned(),
+            );
+            reports
+        };
+        // The node's counters are cumulative, so take the running total rather than
+        // adding it: accumulating a cumulative counter once per step multiplies it by the
+        // step count, which is how this diagnostic first reported 49 million failures out
+        // of 70,925 messages.
+        if let (Some(rt), Some(p2)) = (self.nodes.get(&node), self.phase2.as_mut()) {
+            let (parse, sig) = (rt.spdu_parse_failures(), rt.spdu_signature_failures());
+            let r = p2.report_mut();
+            r.spdu_parse_failures = r.spdu_parse_failures.max(parse);
+            r.spdu_signature_failures = r.spdu_signature_failures.max(sig);
+        }
+        for report in reports {
+            self.route_report(node, report, now, now, horizon);
+        }
+    }
+
+    /// Hands one transmission down to the MAC.
+    ///
+    /// The node does not put a frame on the air: it finishes a signature, and the frame
+    /// then waits for channel access. This schedules the [`Event::MacTimer`] at the
+    /// instant the signature completes, which is where [`Engine::on_mac_timer`] picks it
+    /// up. At the abstract tier there is no MAC, and the frame is scheduled straight to
+    /// the air one AIFS later.
+    ///
+    /// A message the node's own generator produced also waits its hand-off jitter
+    /// (`v2xw_msg::GenerationTiming::jitter`) between the signature and the access layer:
+    /// host and stack latency, and what keeps two stations whose phases coincide from
+    /// colliding on every period. The engine's own application frames (a misbehaviour
+    /// report, a CRL broadcast) go through [`Engine::hand_down_app`] directly and do not.
+    fn hand_down(&mut self, node: NodeId, tx: &Transmission, now: SimTime, horizon: SimTime) {
+        // A silent period after a pseudonym change: no safety message at all.
+        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && let Some(policy) = self.pseudonym_policy.as_mut()
+            && policy.is_silent(node, now)
+        {
+            policy.silenced_frames += 1;
+            // The frame was signed but never sent, so its certificate reached no one.
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.security_mut().withdraw_certificate(tx.msg_type);
+            }
+            return;
+        }
+        let mut jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
+        // IEEE 1609.4 alternating access without an EDCA MAC to gate (the abstract MAC
+        // tier, a sidelink run): wait for the control-channel interval at the hand-off.
+        // With the MAC, the gate holds the frame there instead.
+        if self.wave.is_none()
+            && self.mac.is_none()
+            && self.scenario.net.channel_access.as_deref() == Some("alternating")
+        {
+            let sched = v2xw_net::stack::wave::ChannelSchedule {
+                access: v2xw_net::stack::wave::ChannelAccess::Alternating,
+            };
+            let at = jitter.after(tx.ready_at);
+            jitter = Duration::from_nanos(jitter.as_nanos() + sched.access_delay_ns(at, true));
+        }
+        // USDOT RSU Spec v4.1 Req_587-588: a WSA goes out on the control channel in
+        // the CCH interval (time slot 0), where every unit that alternates listens. The
+        // MAC's 1609.4 gate holds only a one-radio unit's frames, so a two-radio provider's
+        // WSA waits for the CCH interval here.
+        if tx.msg_type == v2xw_msg::MsgType::Wsa
+            && let Some(w) = self.wave
+            && !self.alternates(node)
+            && self
+                .channel_plan
+                .as_ref()
+                .is_none_or(|p| p.channel_for(tx.msg_type) == p.primary)
+        {
+            let at = jitter.after(tx.ready_at);
+            jitter = Duration::from_nanos(jitter.as_nanos() + w.access_delay_ns(at, true));
+        }
+        if jitter.as_nanos() == 0 {
+            self.hand_down_app(node, tx, now, horizon, None);
+            return;
+        }
+        let mut delayed = tx.clone();
+        delayed.ready_at = jitter.after(tx.ready_at);
+        // The jitter is the hand-off, not the signature: it is recorded apart
+        // (`t_handoff`) so the `sign` stage is the signer's own time.
+        self.pending_handoff = jitter.as_nanos();
+        self.hand_down_app(node, &delayed, now, horizon, None);
+        self.pending_handoff = 0;
+    }
+
+    /// [`Engine::hand_down`] with an application payload attached, saying what became
+    /// of it.
+    fn hand_down_app(
+        &mut self,
+        node: NodeId,
+        tx: &Transmission,
+        now: SimTime,
+        horizon: SimTime,
+        app: Option<AppPayload>,
+    ) -> HandDown {
+        // Which node signs under which pseudonym, for the application labeller: the
+        // engine's own knowledge, never handed to a node.
+        if matches!(
+            tx.msg_type,
+            v2xw_msg::MsgType::Bsm
+                | v2xw_msg::MsgType::Cam
+                | v2xw_msg::MsgType::Psm
+                | v2xw_msg::MsgType::Vam
+                | v2xw_msg::MsgType::Denm
+                | v2xw_msg::MsgType::Spat
+        ) {
+            self.app_truth.note_signer(&tx.signer.0[..], node);
+        }
+        // The signing latency is a *duration* on the node's own clock, so it is
+        // independent of the node's clock offset: `ready_at` and the believed instant are
+        // both on that clock and the difference between them is a real interval.
+        let believed = self
+            .nodes
+            .get(&node)
+            .map_or(now, |n| n.clock().believed_time(now));
+        let signing = Duration::between(believed, tx.ready_at);
+        let ready = signing.after(now);
+        // The node's clock stamps, moved onto the simulation's timeline by their distance
+        // from the node's own "now": an offset clock shifts every stamp alike and leaves
+        // the durations between them exact.
+        let on_timeline = |x: SimTime| -> SimTime {
+            if x <= believed {
+                now.saturating_sub(believed - x)
+            } else {
+                now.saturating_add(x - believed)
+            }
+        };
+        let t_generated = on_timeline(tx.generation_time);
+        let t_sign_start = on_timeline(tx.sign_start).max(t_generated);
+        // The signature's end, before the hand-off [`Engine::hand_down`] added.
+        let t_signed = ready.saturating_sub(self.pending_handoff).max(t_sign_start);
+        if ready > horizon {
+            self.report.signed_past_end += 1;
+            return HandDown::NotSent;
+        }
+        if self.is_dilated(ready) {
+            self.report.suppressed_frames += 1;
+            return HandDown::NotSent;
+        }
+        // A message the channel map puts on a channel this unit has no radio for
+        // is not sent; its certificate reached no one.
+        if let Some(ch) = self
+            .channel_plan
+            .as_ref()
+            .map(|p| p.channel_for(tx.msg_type))
+            && !self.uses_channel(node, ch)
+        {
+            self.report.untuned_tx_drops += 1;
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.security_mut().withdraw_certificate(tx.msg_type);
+            }
+            return HandDown::NotSent;
+        }
+        // `security.signature`: a scheme other than P-256 changes the octets on the air
+        // (`crate::signature`); the SPDU the node built is the P-256 one. Everything below
+        // — padding, fragmentation, the MTU check — sees the resized SPDU.
+        // Under the NDSS 2024 certificate cycle the post-quantum certificate travels in the
+        // cycle's fragments (`cert_cycle_piece` below), so an SPDU that attaches the
+        // classical certificate does not attach the post-quantum growth as well: counting
+        // it twice made every once-a-second certificate SPDU exceed the MTU.
+        //
+        // In the Partially-Hybrid mode a node's own message is signed with the
+        // hybrid's classical half (`crate::signature::message_signature`), as NDSS 2024
+        // designs it: frames 2-5 of the cycle are 204 B ECDSA BSMs. The engine's own
+        // application frames keep the full scheme: a CRL is the CRL Generator's signed
+        // object and a relayed misbehaviour report is bound for the MA, and the credential
+        // system's messages carry the post-quantum signature in every mode.
+        let pq_cert_attached = tx.full_certificate && self.frag_plan.cert_cycle().is_none();
+        let scheme = if app.is_none() && tx.msg_type != v2xw_msg::MsgType::P2pcd {
+            crate::signature::message_signature(&self.scenario)
+        } else {
+            &self.scenario.security.signature
+        };
+        let (tx_bytes, tx_envelope, tx_cert) = crate::signature::resize(
+            scheme,
+            tx.bytes,
+            tx.envelope_bytes(),
+            tx.cert_bytes(),
+            pq_cert_attached,
+        );
+        // Neither WSMP nor GeoNetworking can split an SDU, so everything that splits one
+        // happens here, above the network layer (`crate::frag`). The
+        // SDU the fragmenter sees is the signed message plus the scenario's padding, which
+        // stands in for a post-quantum signature or certificate and counts as payload.
+        //
+        // The engine's own application frames (a misbehaviour report, a CRL broadcast) are
+        // sized from a protocol table and acted on per frame at the receiver, so they are
+        // neither padded nor split: they keep `fragmenter/none`'s rule.
+        // An out-of-band P2PCD learning response is a node's frame but carries no
+        // signature, no application payload and no credential: it is neither padded for a
+        // post-quantum signature nor split, it registers no pseudonym and an attacker's
+        // falsification (which edits a signed claim) does not touch it.
+        let p2pcd = tx.msg_type == v2xw_msg::MsgType::P2pcd;
+        let node_message = app.is_none() && !p2pcd;
+        let padding = if node_message {
+            self.frag_plan.padding
+        } else {
+            0
+        };
+        let sdu_bytes = tx_bytes.saturating_add(padding);
+        let mtu = self.net.sdu_mtu();
+        // Named by the frame index its first frame will take, so an SDU's id and its first
+        // frame's are the same number, as they always were for a whole frame.
+        let sdu = v2xw_core::ids::SduId::new(self.next_frame);
+        // An engine application frame too large for one frame (a relayed report or a
+        // roadside CRL under a post-quantum signature) goes through the scenario's
+        // fragmenter as any SDU does, when that fragmenter carries whole SDUs in pieces
+        // (`fragmenter/generic-sdu`): the receiver acts on it once it is reassembled
+        // ([`Engine::resolve_group`]). One that fits is never split, so a P-256 run's
+        // application frames are unchanged. Facilities segmentation (CAM/CPM containers)
+        // and the certificate cycle cannot carry one, and `fragmenter/none` is WSMP's own
+        // rule (IEEE 1609.3 has no fragmentation): there it is refused below and counted.
+        let app_split = app.is_some()
+            && sdu_bytes > mtu
+            && self.frag_plan.kind() == Some(crate::frag::GroupKind::Message);
+        let split_plan = if node_message || app_split {
+            self.frag_plan.split(sdu, sdu_bytes, mtu)
+        } else {
+            None
+        };
+        let pieces = match split_plan {
+            Some(Ok(p)) if p.len() > 1 => Some(p),
+            Some(Ok(_)) => None,
+            Some(Err(_)) => {
+                self.report.net_mtu_refusals += 1;
+                return HandDown::MtuRefused;
+            }
+            None => None,
+        };
+        // The certificate cycle's fragment, if this SPDU carries one: credential octets
+        // inside the envelope, in addition to the signer field the node chose. The model's
+        // budget is the MTU less its fixed base frame (204 B, an ECDSA-signed BSM), which
+        // is what a message in the Partially-Hybrid mode is, so the cycle's fragments are
+        // equal for a whole cycle.
+        let cert_piece = if node_message {
+            self.cert_cycle_piece(node, sdu, mtu)
+        } else {
+            None
+        };
+        let cert_extra = cert_piece.map_or(0, |d| d.payload_bytes);
+        let whole_bytes = sdu_bytes.saturating_add(cert_extra);
+        // `fragmenter/none`: a signed message above the network layer's MTU is refused
+        // here, before the MAC, and counted, rather than handed down to be refused by the
+        // PHY's MSDU cap with its headers already counted as offered load.
+        if pieces.is_none() && whole_bytes > mtu {
+            self.report.net_mtu_refusals += 1;
+            return HandDown::MtuRefused;
+        }
+        let belief = self.nodes.get(&node).map(v2xw_core::NodeView::position);
+        let frame = FrameSeq::new(self.next_frame);
+        self.next_frame += 1;
+        // The credential the node signs with. A receiver learns its linkage value only
+        // from the certificate itself (`linkageData`), never from the engine.
+        let credential = self
+            .nodes
+            .get(&node)
+            .and_then(|n| n.stores().certs.active().cloned());
+        // Joint 2's map, filled here and not at spawn: this is the first instant the
+        // digest a receiver will see is the digest the sender's store holds, because the
+        // node rewrote it when it issued the certificate it is about to sign with. A
+        // subject a report names is a subject that was on the air, so registering here
+        // registers exactly the digests that can be reported — and nothing else.
+        if let (Some(cred), Some(phase2), false) =
+            (credential.as_ref(), self.phase2.as_mut(), p2pcd)
+            && phase2.note_digest(node, &cred.digest, cred.i_period, cred.j_index)
+            && let Some(actor) = self.node_actor.get(&node).copied()
+        {
+            let record = crate::records::GtSubject(v2xw_metrics::channels::GtSubjectView {
+                t: now,
+                subject: v2xw_core::hash::hex_encode(&cred.digest.0[..]),
+                actor,
+            });
+            if let Ok(owned) = v2xw_core::ctx::ErasedRecord::to_owned_record(&record) {
+                self.deferred_records.push((now, owned));
+            }
+        }
+        // The attacker's edit, immediately before the frame is built: everything after it
+        // — the signing cost already paid, the MAC, DCC, the PHY — is the ordinary path.
+        // The position the payload reports: the belief, unless the sender's per-device
+        // BSM timing model (`v2xw_node::bsm_timing`) reported another fix's.
+        let mut claim = (
+            tx.claimed_pos
+                .or_else(|| belief.map(|b| b.pos))
+                .unwrap_or(Vec3::ZERO),
+            tx.bsm.speed_mps.unwrap_or_else(|| {
+                belief.map_or(0.0, v2xw_core::PositionEstimate::ground_speed_mps)
+            }),
+            tx.bsm
+                .heading_rad
+                .unwrap_or_else(|| belief.map_or(0.0, |b| b.heading_rad)),
+        );
+        let mut signature_valid = true;
+        let mut signer_validity: Option<(SimTime, SimTime)> = None;
+        let mut claimed_generation = tx.generation_time;
+        let mut bsm = tx.bsm;
+        let mut ghosts: Vec<v2xw_threat::attack::Emission> = Vec::new();
+        // The generation time the attacker's own emission claimed, which a ghost's own
+        // claim is measured from (a flood's copies are stamped after the beacon).
+        let mut ghost_parent_gen: SimTime = 0;
+        // The 95 % radius an evasion attacker states in place of its own estimate
+        // (`v2xw_threat::attack_evasion`).
+        let mut stated_accuracy: Option<f64> = None;
+        if !p2pcd && self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
+            let actor = self
+                .node_actor
+                .get(&node)
+                .copied()
+                .unwrap_or(ActorId::new(0));
+            let believed = self
+                .nodes
+                .get(&node)
+                .map_or(now, |n| n.clock().believed_time(now));
+            let honest = v2xw_threat::HonestClaim {
+                x_m: claim.0.x,
+                y_m: claim.0.y,
+                speed_mps: claim.1,
+                heading_rad: claim.2,
+            };
+            let me = v2xw_threat::SelfBelief {
+                node,
+                believed_time: believed,
+                x_m: claim.0.x,
+                y_m: claim.0.y,
+                radio_range_m: self.detector_range_m,
+            };
+            let signer = credential
+                .as_ref()
+                .map_or([0u8; 8], |c| crate::phase2::digest_bytes(&c.digest));
+            let cert = credential
+                .as_ref()
+                .map_or((0, SimTime::MAX), |c| (c.valid_from, c.valid_until));
+            // The concurrent pseudonyms this node holds (an SCMS issues `certs_per_period`
+            // valid at once): what a Sybil attacker's ghosts sign with.
+            let held: Vec<[u8; 8]> = self
+                .nodes
+                .get(&node)
+                .map(|n| {
+                    n.stores()
+                        .certs
+                        .credentials()
+                        .iter()
+                        .filter(|c| c.is_valid_at(believed))
+                        .map(|c| crate::phase2::digest_bytes(&c.digest))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let emission = {
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    phase2,
+                    deferred_records,
+                    ..
+                } = self;
+                let mut buffer = crate::ctx::MemoryRecorder::new();
+                let mut ctx = EngineCtx::new(
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    &mut buffer,
+                );
+                let e = phase2.as_mut().and_then(|p| {
+                    p.falsify(
+                        &mut ctx,
+                        node,
+                        actor,
+                        believed,
+                        signer,
+                        honest,
+                        me,
+                        cert,
+                        u64::from(frame.index()),
+                        &held,
+                        bsm.accel_long_mps2,
+                    )
+                });
+                deferred_records.extend(buffer.records().iter().cloned());
+                e
+            };
+            if let Some(mut e) = emission {
+                ghosts = std::mem::take(&mut e.ghosts);
+                ghost_parent_gen = e.generation_time;
+                claim = (
+                    Vec3::new(e.x_m, e.y_m, claim.0.z),
+                    e.speed_mps,
+                    e.heading_rad,
+                );
+                // What the attacker's edit does to the envelope, rendered on the air: a
+                // forged signature, a certificate outside its validity window, and the
+                // generation time the message claims (a delayed, replayed or
+                // out-of-order message).
+                //
+                // A certificate outside its window is a genuine certificate used out of
+                // time, so its signature verifies: what refuses the frame is the
+                // receiver's IEEE 1609.2 §5.2 generation-time-in-validity rule, and the
+                // receiver knows that is why. Rendering it as a corrupted signature made
+                // every receiver report a bad signature (`signatureVerification`, 613
+                // reports about one ExpiredCert attacker in a 300 s run) and left
+                // `certValidity` unreachable.
+                let window_forged = (e.cert_valid_from, e.cert_valid_to) != cert
+                    && !(e.cert_valid_from..=e.cert_valid_to).contains(&believed);
+                signature_valid = e.signature_valid;
+                if window_forged {
+                    signer_validity = Some((e.cert_valid_from, e.cert_valid_to));
+                }
+                // The model edits the time it was handed (`believed`); its edit moves the
+                // message's own stamp by the same amount, so an attack that leaves the
+                // time alone leaves the frame's generation time exactly as it was.
+                claimed_generation = if e.generation_time >= believed {
+                    tx.generation_time
+                        .saturating_add(e.generation_time - believed)
+                } else {
+                    tx.generation_time
+                        .saturating_sub(believed - e.generation_time)
+                };
+                // The same edit moves the BSM's secMark: an attacker that delays or replays
+                // a message re-stamps both of its times.
+                if let Some(sm) = bsm.sec_mark_ms
+                    && e.generation_time != believed
+                {
+                    let shift_ms = (i128::from(e.generation_time) - i128::from(believed))
+                        .div_euclid(1_000_000);
+                    bsm.sec_mark_ms = Some((i128::from(sm) + shift_ms).rem_euclid(60_000) as u16);
+                }
+                // The device-class disguise (P1-E8): a constant secMark shift off the fix
+                // epoch, and the accuracy the message states.
+                if let (Some(sm), Some(shift)) = (bsm.sec_mark_ms, e.sec_mark_shift_ms) {
+                    bsm.sec_mark_ms = Some(((u32::from(sm) + u32::from(shift)) % 60_000) as u16);
+                }
+                stated_accuracy = e.stated_accuracy_m;
+                // The stated acceleration (`accelSet.long`): the encoder's own unless the
+                // attacker edited it (`v2xw_threat::attack_f2md`).
+                bsm.accel_long_mps2 = e.accel_long_mps2;
+            }
+        }
+        // The passive privacy observer hears the safety frame when it goes on the air
+        // ([`Engine::start_frame`]): what it will read is taken here, with the claim the
+        // frame carries. Only what a sniffer hears, when the scenario limits the
+        // eavesdropper's coverage: where the transmitter physically is decides that, as it
+        // decides reception.
+        let mut privacy_obs: Option<PrivacyObs> = None;
+        let heard_by_eavesdropper = self.pseudonym_policy.as_ref().is_none_or(|p| {
+            let at = self
+                .actor_of(node)
+                .map_or_else(|| belief.map_or(Vec3::ZERO, |b| b.pos), |a| a.last.pos);
+            p.eavesdropper_reads(at)
+        });
+        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && heard_by_eavesdropper
+            && let Some(signer) = credential
+                .as_ref()
+                .map(|c| crate::phase2::digest_bytes(&c.digest))
+            && self.phase2.is_some()
+        {
+            let confidence = belief.map_or(5.0, |b| b.semi_major_m.max(0.0));
+            // A BSM's `msgCnt` is on the air in the clear, and the eavesdropper reads it.
+            let seq = (tx.msg_type == v2xw_msg::MsgType::Bsm)
+                .then_some(tx.signed.as_ref())
+                .flatten()
+                .and_then(|f| v2xw_msg::j2735::bsm::decode_message_frame(&f.payload).ok())
+                .map(|m| m.core.msg_cnt);
+            privacy_obs = Some(PrivacyObs {
+                signer,
+                generated: t_generated,
+                claim,
+                confidence,
+                seq,
+            });
+        }
+        // The positional accuracy the safety message states on the air, for the receivers'
+        // detectors: they judge a claim against the sender's own stated accuracy (a BSM's
+        // PositionalAccuracy, a CAM's confidence ellipse), not against a constant. A PSM
+        // states its accuracy as a BSM does (J2735 PositionalAccuracy) and a VAM as a CAM.
+        if matches!(
+            tx.msg_type,
+            v2xw_msg::MsgType::Bsm
+                | v2xw_msg::MsgType::Cam
+                | v2xw_msg::MsgType::Psm
+                | v2xw_msg::MsgType::Vam
+        ) && let Some(p) = self.phase2.as_mut()
+            && p.detection_on()
+            && let (Some(cred), Some(b)) = (credential.as_ref(), belief)
+        {
+            p.note_broadcast_accuracy(
+                crate::phase2::digest_bytes(&cred.digest),
+                claimed_generation,
+                crate::phase2::stated_accuracy_95_m(
+                    tx.msg_type,
+                    stated_accuracy.unwrap_or(b.semi_major_m),
+                ),
+            );
+        }
+        // The frame fields the TS 103 759 suite reads (its box-intersection check): the
+        // vehicle size the frame carries, through the encoders' own quantisers, and the
+        // point its standard puts the position at. J2735/J2945/1 report the BSM position
+        // at the centre of the vehicle's ground rectangle; ETSI EN 302 637-2 a CAM's
+        // ReferencePosition at the centre of the front edge. A PSM and a VAM carry no size.
+        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && self
+                .phase2
+                .as_ref()
+                .is_some_and(crate::phase2::Phase2::wants_frame_extras)
+            && let Some(cred) = credential.as_ref()
+        {
+            let dims = self.actor_of(node).map(|a| a.last.dims);
+            let frame = dims.map_or_else(v2xw_threat::FrameExtras::default, |d| {
+                frame_extras(tx.msg_type, d)
+            });
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_broadcast_frame(
+                    crate::phase2::digest_bytes(&cred.digest),
+                    claimed_generation,
+                    frame,
+                );
+            }
+        }
+        // The transmit power is congestion control's, not the scenario's: J2945/1 controls
+        // power as well as rate, and the SUPRA filter's output is what the link budget has
+        // to be evaluated at. With no DCC model (the abstract tier) it is the profile's.
+        let channel = match self.sidelink.as_ref() {
+            Some(sl) => sl.channel,
+            None => self
+                .channel_plan
+                .as_ref()
+                .map_or(self.dsrc_channel, |p| p.channel_for(tx.msg_type)),
+        };
+        // J2945/1 6.3.8.7: the radiated power takes its SUPRA step once per BSM the
+        // unit generates, before this BSM's power is read; a critical-event or
+        // tracking-error BSM takes vRPMax and no step.
+        if tx.msg_type == v2xw_msg::MsgType::Bsm
+            && !self.rsus.contains_key(&node)
+            && let Some(d) = self.dcc.as_mut()
+        {
+            d.on_generated(node);
+        }
+        let tx_power_dbm = self.tx_power_dbm(node);
+        // J2945/1: a BSM is on its way, carrying the unit's own state. Whether the
+        // neighbours are taken to have it is a Bernoulli trial on the channel quality,
+        // and an exception that sent it (a critical event, a tracking error) is spent.
+        // The power above was read first, so such a BSM goes out at vRPMax. J3161/1 has
+        // the critical event alone, and it is spent the same way.
+        let mut dcc_event = None;
+        if tx.msg_type == v2xw_msg::MsgType::Bsm
+            && !self.rsus.contains_key(&node)
+            && let Some(b) = belief
+            && self
+                .dcc
+                .as_ref()
+                .is_some_and(crate::wiring::EngineDcc::is_sae)
+        {
+            // The state the BSM is taken to carry, from the same navigation solution
+            // the tracking step reads (see `Engine::update_dcc`).
+            let sent = self
+                .j2945_nav
+                .get(&node)
+                .copied()
+                .unwrap_or_else(|| host_state(b, t_generated));
+            let u = self
+                .rng
+                .checkout(
+                    v2xw_core::rng::RngDomain::plugin(J2945_INFERENCE_STREAM),
+                    v2xw_core::rng::EntityRef::LinkFrame {
+                        link: v2xw_core::ids::LinkKey::new(node, node),
+                        frame: t_generated,
+                    },
+                )
+                .uniform(0.0, 1.0);
+            if let Some(d) = self.dcc.as_mut() {
+                dcc_event = d.on_transmitted(node, sent, u);
+            }
+            if let Some(window) = self.j2945_per.as_mut() {
+                window.note_sent(node, t_generated);
+            }
+        }
+        // The frame on the air is the SPDU inside a network and transport header, LLC/SNAP,
+        // the 802.11 MAC header and the FCS (`v2xw_net::frame`); the PHY's air time and the
+        // MSDU cap are over all of it, not over the SPDU alone.
+        // A SPaT or a MAP claims the junction it describes, not the mast that sends it:
+        // that is the position its payload carries (the MAP's reference point), and the one
+        // a receiver files the junction under.
+        if matches!(
+            tx.msg_type,
+            v2xw_msg::MsgType::Spat | v2xw_msg::MsgType::Map
+        ) && let Some(feed) = self.infra_feeds.get(&node)
+        {
+            claim = (feed.position, 0.0, 0.0);
+        }
+        // The payload/envelope split the node's security stack produced, with the padding
+        // on the payload side and a certificate-cycle fragment on the envelope side.
+        let split = tx
+            .payload_bytes()
+            .zip(tx_envelope)
+            .map(|(p, e)| (p.saturating_add(padding), e.saturating_add(cert_extra)));
+        let sidelink = self.sidelink.is_some();
+        let frame_layers = |layers: &mut v2xw_net::FrameLayers| {
+            if sidelink {
+                // A PC5 transport block carries the network PDU with no LLC/SNAP, no
+                // 802.11 MAC header and no FCS. Its own layer-2 headers (PDCP, RLC, MAC)
+                // and the CRC are not modelled, so the link layer's share is zero rather
+                // than borrowed from 802.11, and the overhead metrics say so by counting
+                // none.
+                layers.llc_snap = 0;
+                layers.mac_header = 0;
+                layers.fcs = 0;
+            }
+        };
+        let mut layers = v2xw_net::FrameLayers::compose(
+            &self.net,
+            frame_msg(tx.msg_type, sidelink),
+            split,
+            whole_bytes,
+        );
+        frame_layers(&mut layers);
+        let psdu = layers.psdu_bytes();
+        let descriptor = FrameDescriptor {
+            bytes: psdu,
+            mcs: self.safety_mcs,
+            tx_power_dbm,
+            channel,
+            ac: self.frame_access_category(node, tx.msg_type, now),
+            kind: FrameKind::Broadcast,
+            // A whole SDU: its id and the frame number are the same counter seen from two
+            // layers. A split one's fragments share the SDU id below.
+            sdu_ref: SduRef::new(sdu, frame),
+        };
+        // A sidelink transport block occupies one slot whatever it carries; its size
+        // decides how many sub-channels it takes instead (§5.2).
+        let slot = self.sidelink.as_ref().map(|sl| sl.slot());
+        let mcs = self.safety_mcs;
+        let air_of = move |psdu: u32| slot.unwrap_or_else(|| v2xw_radio::air_time(psdu, mcs));
+        let air = air_of(psdu);
+        let sdu_payload = split.map_or(sdu_bytes, |(p, _)| p);
+        let cert_frag = cert_piece.map(|desc| crate::frag::FragMeta {
+            desc,
+            kind: crate::frag::GroupKind::Certificate,
+            sdu_msg: u64::from(desc.sdu.index()),
+            sdu_bytes: self
+                .frag_plan
+                .cert_cycle()
+                .map_or(0, |c| c.params().hybrid_cert_bytes),
+            sdu_payload: self
+                .frag_plan
+                .cert_cycle()
+                .map_or(0, |c| c.params().hybrid_cert_bytes),
+            psdu_total: psdu,
+            air_total_us: air.as_nanos() / 1_000,
+        });
+        // A sized frame (no SPDU) attaches its signer's certificate, which the receiver
+        // validates to its own roots. A P2PCD response carries its bytes.
+        let signer_certificate = if tx.signed.is_none() {
+            self.nodes
+                .get(&node)
+                .and_then(|n| n.security().signer_by_digest(&tx.signer))
+                .map(|s| std::sync::Arc::clone(&s.certificate))
+        } else {
+            None
+        };
+        let base = FrameState {
+            privacy_obs,
+            signer_certificate,
+            tx: node,
+            // Filled in when the grant fixes the transmit instant; a frame that is
+            // still queued has no position on the air yet.
+            tx_pos: Vec3::ZERO,
+            bytes: whole_bytes,
+            msg_type: tx.msg_type,
+            signer: tx.signer.clone(),
+            full_certificate: tx.full_certificate,
+            generation_time: claimed_generation,
+            claimed_pos: claim.0,
+            claimed_speed_mps: claim.1,
+            claimed_heading_rad: claim.2,
+            bsm,
+            ready_at: ready,
+            start: ready,
+            end: air.after(ready),
+            air,
+            descriptor,
+            tx_handle: None,
+            arrivals: BTreeMap::new(),
+            faint: BTreeMap::new(),
+            tx_heading: None,
+            app,
+            signature_valid,
+            signer_validity,
+            spdu: tx.signed.as_ref().map(|f| {
+                let mut spdu = f.spdu.clone();
+                // The signature is the SPDU's last field (IEEE 1609.2 SignedData), so
+                // flipping its final octet leaves the frame parseable and the signature
+                // wrong.
+                if !signature_valid && let Some(last) = spdu.last_mut() {
+                    *last ^= 0x01;
+                }
+                spdu
+            }),
+            // Read from the node's own `SignedFrame`, not recomputed here: the split
+            // between payload and envelope is the security stack's answer and the
+            // engine has no business having a second one.
+            payload_bytes: split.map(|(p, _)| p),
+            envelope_bytes: split.map(|(_, e)| e),
+            sl_resource: None,
+            dcc_event,
+            sl_interferers: BTreeMap::new(),
+            focus_high: std::collections::BTreeSet::new(),
+            focus_placement: BTreeMap::new(),
+            sl: sidelink::SlFrame::default(),
+            layers,
+            cert_bytes: tx_cert
+                .map(|c| c.saturating_add(cert_extra))
+                .or((cert_extra > 0).then_some(cert_extra)),
+            t_generated,
+            t_sign_start,
+            t_signed,
+            // The abstract tier's frame waits exactly one AIFS and counts no backoff;
+            // the MAC's grant overwrites both at the medium and high tiers.
+            mac_aifs_ns: AIFS.as_nanos(),
+            mac_backoff_ns: 0,
+            content: Some(message_content(
+                tx.msg_type,
+                tx.signed.as_ref().map(|f| f.payload.as_slice()),
+                &tx.signer,
+                claim,
+                crate::export::records_broadcast_accuracy(&self.scenario.exporters),
+                self.dataset.is_some(),
+            )),
+            census: BTreeMap::new(),
+            frag: None,
+            cert_frag,
+            gn: None,
+        };
+        let mut base = base;
+        if pieces.is_none() && !sidelink {
+            base.gn = self.gn_originate(node, tx.msg_type, whole_bytes, now);
+        }
+        if tx.msg_type == v2xw_msg::MsgType::Cpm {
+            self.cpm_on_send(
+                node,
+                frame,
+                tx.signed.as_ref().map(|f| f.payload.as_slice()),
+                split.map_or(whole_bytes, |(p, _)| p),
+            );
+        }
+        // The frames that go down: the whole SDU, or one per fragment, each with its own
+        // frame number and the SDU's id, its own layers and its own air time.
+        let mut frames: Vec<(FrameSeq, FrameState)> = Vec::new();
+        match pieces {
+            None => frames.push((frame, base)),
+            Some(pieces) => {
+                let kind = self
+                    .frag_plan
+                    .kind()
+                    .unwrap_or(crate::frag::GroupKind::Message);
+                let layered: Vec<v2xw_net::FrameLayers> = pieces
+                    .iter()
+                    .map(|d| {
+                        let mut l = v2xw_net::FrameLayers::fragment(
+                            &self.net,
+                            frame_msg(tx.msg_type, sidelink),
+                            split,
+                            sdu_bytes,
+                            d.payload_bytes,
+                            d.header_bytes,
+                        );
+                        frame_layers(&mut l);
+                        l
+                    })
+                    .collect();
+                let psdu_total: u32 = layered.iter().map(v2xw_net::FrameLayers::psdu_bytes).sum();
+                let air_total_us: u64 = layered
+                    .iter()
+                    .map(|l| air_of(l.psdu_bytes()).as_nanos() / 1_000)
+                    .sum();
+                self.report.sdus_fragmented += 1;
+                // The SDU's attached certificate is counted once across its pieces, each
+                // carrying its share as it carries its share of the envelope.
+                let whole_cert = base.cert_bytes;
+                let mut carried_before = 0_u32;
+                for (k, (desc, layers)) in pieces.into_iter().zip(layered).enumerate() {
+                    let seq = if k == 0 {
+                        frame
+                    } else {
+                        let f = FrameSeq::new(self.next_frame);
+                        self.next_frame += 1;
+                        f
+                    };
+                    let psdu = layers.psdu_bytes();
+                    let air = air_of(psdu);
+                    let mut state = base.clone();
+                    // The observer reads the SDU once, from its first piece on the air.
+                    if k > 0 {
+                        state.privacy_obs = None;
+                    }
+                    state.bytes = desc.total_bytes();
+                    state.descriptor.bytes = psdu;
+                    state.descriptor.sdu_ref = SduRef::new(sdu, seq);
+                    state.air = air;
+                    state.end = air.after(ready);
+                    state.payload_bytes = split.map(|_| layers.payload);
+                    state.envelope_bytes = split.map(|_| layers.security);
+                    state.cert_bytes = whole_cert.map(|c| {
+                        crate::frag::fragment_cert_share(
+                            c,
+                            sdu_bytes,
+                            carried_before,
+                            desc.payload_bytes,
+                        )
+                    });
+                    carried_before = carried_before.saturating_add(desc.payload_bytes);
+                    state.layers = layers;
+                    state.frag = Some(crate::frag::FragMeta {
+                        desc,
+                        kind,
+                        sdu_msg: u64::from(sdu.index()),
+                        sdu_bytes,
+                        sdu_payload,
+                        psdu_total,
+                        air_total_us,
+                    });
+                    self.report.fragments_sent += 1;
+                    frames.push((seq, state));
+                }
+            }
+        }
+        // A Sybil attacker's ghosts: one more whole frame per ghost, after its own.
+        if !ghosts.is_empty() && node_message && frames.len() == 1 {
+            let parent = GhostParent {
+                tx,
+                frame: &frames[0].1,
+                generated: ghost_parent_gen,
+                padding,
+            };
+            let extra = self.ghost_frames(node, parent, &ghosts, now);
+            frames.extend(extra);
+        }
+        // At the abstract tier there is no MAC to queue the fragments of one SDU behind
+        // each other, so each one waits for the one before it to leave the air.
+        let mut on_air_until = ready;
+        let queued = self.mac.is_some() || self.sidelink.is_some();
+        if queued {
+            self.schedule_mac_timer(ready, node, channel.0);
+        }
+        for (seq, state) in frames {
+            let air = state.air;
+            self.frames.insert(seq, state);
+            if queued {
+                self.pending_tx.entry(node).or_default().push((ready, seq));
+            } else {
+                let at = AIFS.after(on_air_until);
+                if at > horizon {
+                    self.frames.remove(&seq);
+                    return HandDown::NotSent;
+                }
+                if let Some(state) = self.frames.get_mut(&seq) {
+                    state.start = at;
+                    state.end = state.air.after(at);
+                }
+                on_air_until = air.after(at);
+                self.scheduler.schedule(
+                    at,
+                    EventClass::PhyStart,
+                    Event::PhyStart {
+                        frame: seq,
+                        tx: node,
+                    },
+                );
+            }
+        }
+        HandDown::Sent
+    }
+
+    /// A Sybil attacker's ghost frames, one per ghost claim (the ghost-vehicle attack).
+    ///
+    /// Each is the attacker's own payload signed again under one of its *concurrent*
+    /// pseudonyms, with the full certificate attached (no receiver has heard that
+    /// pseudonym before, so a digest would leave it unverifiable), claiming the ghost's
+    /// position. The frame is otherwise the attacker's own: same message type, MCS, power
+    /// and access category, queued behind it at the MAC. The extra signatures are not
+    /// charged to the attacker's signer: an attacker running its own software signs off
+    /// the critical path, and charging it would only delay its own frame.
+    fn ghost_frames(
+        &mut self,
+        node: NodeId,
+        parent: GhostParent<'_>,
+        ghosts: &[v2xw_threat::attack::Emission],
+        now: SimTime,
+    ) -> Vec<(FrameSeq, FrameState)> {
+        let GhostParent {
+            tx,
+            frame: base,
+            generated: parent_gen,
+            padding,
+        } = parent;
+        let mut out = Vec::new();
+        if !matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam) {
+            return out;
+        }
+        let Some(payload) = tx.signed.as_ref().map(|f| f.payload.clone()) else {
+            return out;
+        };
+        let held: Vec<(u32, u32, v2xw_msg::sec_types::HashedId8)> = self
+            .nodes
+            .get(&node)
+            .map(|n| {
+                n.stores()
+                    .certs
+                    .credentials()
+                    .iter()
+                    .map(|c| (c.i_period, c.j_index, c.digest.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let belief = self
+            .nodes
+            .get(&node)
+            .map(|n| *v2xw_core::NodeView::position(n));
+        let sidelink = self.sidelink.is_some();
+        let mtu = self.net.sdu_mtu();
+        let slot = self.sidelink.as_ref().map(|sl| sl.slot());
+        // An F2MD copy or ghost goes on the air as what it claims (`threat/attacker/f2md`):
+        // its own secMark and 1609.2 generationTime (a flood's copy stamped at the
+        // multiplied rate) and the position, speed, heading and acceleration it states.
+        // Before, every copy re-signed its beacon's payload, so on the air it carried the
+        // beacon's secMark, position and generationTime, and its own stamp was only in
+        // `node.tx.t_generated`.
+        let f2md = self
+            .phase2
+            .as_ref()
+            .and_then(|p| p.attacker_id(node))
+            .is_some_and(|id| id.starts_with(v2xw_threat::attack_f2md::ID_PREFIX));
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        // The beacon's own generationTime on the air (Time64 µs), and the signer's clock
+        // at `now` on the same scale: a copy's header is the beacon's plus the copy's shift.
+        let beacon_us = tx
+            .signed
+            .as_ref()
+            .and_then(|f| crate::dataset_records::spdu_header(&f.spdu))
+            .and_then(|(_, t)| t);
+        let now_us = self.wall.time64(now).ok();
+        for g in ghosts {
+            let Some((i, j, digest)) = held
+                .iter()
+                .find(|c| crate::phase2::digest_bytes(&c.2) == g.signer)
+                .cloned()
+            else {
+                continue;
+            };
+            let shift_ns = i128::from(g.generation_time) - i128::from(parent_gen);
+            let restated = if f2md {
+                ghost_bsm_payload(
+                    &payload,
+                    origin,
+                    Vec3::new(g.x_m, g.y_m, base.claimed_pos.z),
+                    g.speed_mps,
+                    g.heading_rad,
+                    shift_ns,
+                    g.accel_long_mps2,
+                )
+            } else {
+                None
+            };
+            let own_payload = restated.as_deref().unwrap_or(payload.as_slice());
+            // The signer's clock offset that stamps the copy's header at the beacon's
+            // generationTime plus its shift (`sign_as` stamps `now` shifted by the offset).
+            let stamp_offset: Option<i64> = match (f2md, beacon_us, now_us) {
+                (false, _, _) => None,
+                (true, Some(b), Some(n)) => {
+                    i64::try_from((i128::from(b) - i128::from(n)) * 1_000 + shift_ns).ok()
+                }
+                (true, _, _) => None,
+            };
+            let signed = {
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    nodes,
+                    ..
+                } = self;
+                let mut null = crate::ctx::NullRecorder::new();
+                let mut ctx = EngineCtx::new(
+                    scheduler, rng, world, snapshot, provenance, params, &mut null,
+                );
+                let mut nctx = crate::adapters::node(&mut ctx);
+                nodes.get_mut(&node).and_then(|n| {
+                    let sec = n.security_mut();
+                    let keep = sec.clock_offset_ns();
+                    if let Some(o) = stamp_offset {
+                        sec.set_clock_offset(o);
+                    }
+                    let out = sec.sign_as(&mut nctx, i, j, tx.msg_type, own_payload);
+                    sec.set_clock_offset(keep);
+                    out
+                })
+            };
+            let Some((signed, _)) = signed else {
+                continue;
+            };
+            let (spdu_bytes, envelope, cert) = crate::signature::resize(
+                crate::signature::message_signature(&self.scenario),
+                signed.bytes_on_wire(),
+                Some(signed.envelope_bytes()),
+                Some(signed.cert_bytes),
+                self.frag_plan.cert_cycle().is_none(),
+            );
+            let sdu_bytes = spdu_bytes.saturating_add(padding);
+            if sdu_bytes > mtu {
+                self.report.net_mtu_refusals += 1;
+                continue;
+            }
+            let split = envelope.map(|e| (signed.payload_bytes().saturating_add(padding), e));
+            let mut layers = v2xw_net::FrameLayers::compose(
+                &self.net,
+                frame_msg(tx.msg_type, sidelink),
+                split,
+                sdu_bytes,
+            );
+            if sidelink {
+                layers.llc_snap = 0;
+                layers.mac_header = 0;
+                layers.fcs = 0;
+            }
+            let psdu = layers.psdu_bytes();
+            let air = slot.unwrap_or_else(|| v2xw_radio::air_time(psdu, base.descriptor.mcs));
+            let seq = FrameSeq::new(self.next_frame);
+            self.next_frame += 1;
+            let sdu = v2xw_core::ids::SduId::new(seq.index());
+            let claim = (
+                Vec3::new(g.x_m, g.y_m, base.claimed_pos.z),
+                g.speed_mps,
+                g.heading_rad,
+            );
+            let mut st = base.clone();
+            st.privacy_obs = None;
+            st.bytes = sdu_bytes;
+            st.descriptor.bytes = psdu;
+            st.descriptor.sdu_ref = SduRef::new(sdu, seq);
+            st.air = air;
+            st.end = air.after(st.ready_at);
+            st.signer = digest.clone();
+            st.full_certificate = true;
+            st.claimed_pos = claim.0;
+            st.claimed_speed_mps = claim.1;
+            st.claimed_heading_rad = claim.2;
+            st.signature_valid = true;
+            st.signer_validity = None;
+            // A copy stamped after the beacon (a flood at a multiplied rate) carries its
+            // own generation time and secMark; a Sybil ghost's equals the beacon's.
+            if shift_ns != 0 {
+                st.generation_time = if shift_ns > 0 {
+                    st.generation_time.saturating_add(shift_ns as u64)
+                } else {
+                    st.generation_time
+                        .saturating_sub(shift_ns.unsigned_abs() as u64)
+                };
+                if let Some(sm) = st.bsm.sec_mark_ms {
+                    let ms = shift_ns.div_euclid(1_000_000);
+                    st.bsm.sec_mark_ms = Some((i128::from(sm) + ms).rem_euclid(60_000) as u16);
+                }
+            }
+            if g.accel_long_mps2.is_some() {
+                st.bsm.accel_long_mps2 = g.accel_long_mps2;
+            }
+            st.spdu = Some(signed.spdu.clone());
+            st.payload_bytes = split.map(|(p, _)| p);
+            st.envelope_bytes = split.map(|(_, e)| e);
+            st.layers = layers;
+            st.cert_bytes = cert;
+            st.dcc_event = None;
+            st.cert_frag = None;
+            st.frag = None;
+            st.content = Some(message_content(
+                tx.msg_type,
+                Some(own_payload),
+                &digest,
+                claim,
+                crate::export::records_broadcast_accuracy(&self.scenario.exporters),
+                self.dataset.is_some(),
+            ));
+            st.gn = if sidelink {
+                None
+            } else {
+                self.gn_originate(node, tx.msg_type, sdu_bytes, now)
+            };
+            // The engine's own knowledge of who signs under what, and the receivers'
+            // view of the ghost's stated accuracy, exactly as for the attacker's own frame.
+            self.app_truth.note_signer(&digest.0[..], node);
+            let ghost_dims = self.actor_of(node).map(|a| a.last.dims);
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_ghost_frame(node, now);
+                // A ghost BSM carries its attacker's own encoder's VehicleSize.
+                if p.wants_frame_extras()
+                    && matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+                {
+                    p.note_broadcast_frame(
+                        g.signer,
+                        st.generation_time,
+                        ghost_dims.map_or_else(v2xw_threat::FrameExtras::default, |d| {
+                            frame_extras(tx.msg_type, d)
+                        }),
+                    );
+                }
+                if p.note_digest(node, &digest, i, j)
+                    && let Some(actor) = self.node_actor.get(&node).copied()
+                {
+                    let record = crate::records::GtSubject(v2xw_metrics::channels::GtSubjectView {
+                        t: now,
+                        subject: v2xw_core::hash::hex_encode(&digest.0[..]),
+                        actor,
+                    });
+                    if let Ok(owned) = v2xw_core::ctx::ErasedRecord::to_owned_record(&record) {
+                        self.deferred_records.push((now, owned));
+                    }
+                }
+                if p.detection_on()
+                    && let Some(b) = belief
+                {
+                    p.note_broadcast_accuracy(
+                        g.signer,
+                        st.generation_time,
+                        crate::phase2::broadcast_accuracy_95_m(tx.msg_type, &b),
+                    );
+                }
+            }
+            // The ghost frame's own ground truth (invariant I-T3: every action that puts
+            // bytes on the air is logged, with its message id), so the dataset's message
+            // labels name it: a copy under the attacker's own pseudonym is a flood's
+            // repetition, a frame under another pseudonym a Sybil ghost. Without it the
+            // copies of a DoS or Sybil attacker were labelled benign. Recorded when the
+            // dataset exporter runs, as its other records are: the run's own counts take
+            // ghost frames from `note_ghost_frame`.
+            if self.dataset.is_some()
+                && let Some(actor) = self.node_actor.get(&node).copied()
+                && let Some(attacker) = self
+                    .phase2
+                    .as_ref()
+                    .and_then(|p| p.attacker_id(node))
+                    .map(str::to_string)
+            {
+                let own = crate::phase2::digest_bytes(&base.signer) == g.signer;
+                // What the frame states beyond its beacon: a copy restated as another
+                // vehicle (DoSDisruptive's random neighbour, a Sybil ghost's position)
+                // falsifies those fields too.
+                let mut fields = vec![if own { "repetitions" } else { "signer" }.to_string()];
+                let moved = v2xw_core::math::hypot(
+                    claim.0.x - base.claimed_pos.x,
+                    claim.0.y - base.claimed_pos.y,
+                );
+                if moved > 1e-3 {
+                    fields.push("position".to_string());
+                }
+                if (claim.1 - base.claimed_speed_mps).abs() > 1e-3 {
+                    fields.push("speed".to_string());
+                }
+                if v2xw_threat::capability::angle_diff_rad(claim.2, base.claimed_heading_rad) > 1e-6
+                {
+                    fields.push("heading".to_string());
+                }
+                fields.sort_unstable();
+                let record = v2xw_threat::records::GtAttackAction {
+                    t: now,
+                    actor,
+                    attacker,
+                    action: if own { "FalsifyOutgoing" } else { "Ghost" }.to_string(),
+                    fields,
+                    changed_bytes_on_air: true,
+                    msg: Some(u64::from(seq.index())),
+                    magnitude: None,
+                };
+                if let Ok(owned) = v2xw_core::ctx::ErasedRecord::to_owned_record(&record) {
+                    self.deferred_records.push((now, owned));
+                }
+            }
+            out.push((seq, st));
+        }
+        out
+    }
+
+    /// The certificate-cycle fragment this node's next SPDU carries, if any, advancing its
+    /// cycle (`fragmenter/cert-cycle-partial-hybrid`, NDSS 2024 §IV): the first α SPDUs of
+    /// each τ-SPDU cycle carry one fragment each of the hybrid certificate, the rest its
+    /// digest. `sdu` names a new cycle's certificate.
+    fn cert_cycle_piece(
+        &mut self,
+        node: NodeId,
+        sdu: v2xw_core::ids::SduId,
+        mtu: u32,
+    ) -> Option<v2xw_net::frag::FragmentDesc> {
+        let cycle = self.frag_plan.cert_cycle()?;
+        let tau = u64::from(cycle.params().tau_spdus.max(1));
+        let entry = self.cert_cycles.entry(node).or_insert((0, sdu));
+        let position = entry.0 % tau;
+        if position == 0 {
+            entry.1 = sdu;
+        }
+        entry.0 += 1;
+        let cycle_sdu = entry.1;
+        // The fragments fill what the network layer's MTU leaves after the cycle's base
+        // frame; a certificate the cap cannot carry in τ fragments is refused by the model,
+        // and the SPDU then carries only its digest.
+        let parts = cycle
+            .split(cycle_sdu, cycle.params().hybrid_cert_bytes, mtu)
+            .ok()?;
+        parts.get(usize::try_from(position).ok()?).copied()
+    }
+
+    /// The conducted transmit power this node puts on a frame, dBm.
+    ///
+    /// Every node transmits at its class's `radio.devices` power. A vehicle's on-board
+    /// unit on 802.11p is also under SAE J2945/1 congestion control, which sets a
+    /// *radiated* power `RP` and converts it to a conducted one as
+    /// `TxPower = RP − MinSectorAntGain + CLoss` [Rostami 2018]: the
+    /// unit transmits at `min(P_max, RP − G + L)`, so its EIRP is `RP` whatever antenna and
+    /// cable it has, and never more than its hardware allows. Roadside units and VRU
+    /// devices are outside J2945/1's scope and transmit at their configured power; a
+    /// sidelink's congestion control is the access layer's (the CR limit), not a power
+    /// setting.
+    fn tx_power_dbm(&self, node: NodeId) -> f64 {
+        let device = self.device_of(node);
+        let is_obu = !self.rsus.contains_key(&node)
+            && !matches!(
+                self.node_class.get(&node),
+                Some(v2xw_radio::ActorClass::Pedestrian | v2xw_radio::ActorClass::Bicycle)
+            );
+        let rp = if is_obu {
+            self.dcc
+                .as_ref()
+                .and_then(|d| d.state::<EngineCtx<'_>>(node).power_dbm)
+        } else {
+            None
+        };
+        let configured = match rp {
+            Some(rp) => device.tx_power_dbm.min(rp - device.net_gain_db()),
+            None => device.tx_power_dbm,
+        };
+        // The region's EIRP limit for this kind of station on this channel
+        // (`radio.region`): a unit configured above it transmits at it.
+        match self.regulated_eirp_dbm(node) {
+            Some(cap) => configured.min(cap - device.net_gain_db()),
+            None => configured,
+        }
+    }
+
+    /// The most `node` may radiate on the run's channel, dBm EIRP, by the region's rules:
+    /// a roadside unit's limit at its antenna's height, an on-board unit's toward the
+    /// horizon, a pedestrian's or cyclist's device as a portable unit.
+    fn regulated_eirp_dbm(&self, node: NodeId) -> Option<f64> {
+        let reg = self.regulation.as_ref()?;
+        if let Some(&pos) = self.rsus.get(&node) {
+            let device = crate::wiring::device_for(&self.scenario, v2xw_radio::ActorClass::Rsu);
+            let h = device
+                .antenna_height_m
+                .unwrap_or_else(|| pos.z - self.world.ground_height_at(pos.x, pos.y));
+            return Some(reg.max_eirp_dbm(v2xw_radio::ActorClass::Rsu, h));
+        }
+        let class = self
+            .node_class
+            .get(&node)
+            .copied()
+            .unwrap_or(v2xw_radio::ActorClass::Car);
+        Some(reg.max_eirp_dbm(class, class.default_antenna_height_m()))
+    }
+
+    /// One node's medium-access state machine advances (invariant I-R1's access half).
+    ///
+    /// Three things happen, in this order: every frame whose signature has finished since
+    /// the last timer is queued, the access state machine is polled for as many grants as
+    /// it will give, and the next timer is scheduled from the MAC's own
+    /// [`Mac::next_poll_at`] so a transmission happens at the slot boundary the backoff
+    /// computed rather than at whatever cadence the engine polls on.
+    ///
+    /// # What the medium tier's MAC does and does not do
+    ///
+    /// It applies AIFS, a `CWmin` backoff countdown drawn from `(MacBackoff, Node)`,
+    /// deferral to a busy medium, the per-access-category queue and its overflow drops,
+    /// and it measures the channel busy ratio that congestion control reads.
+    ///
+    /// The clear-channel assessment is **sampled at poll instants**, not driven by a CCA
+    /// transition event per node per overlapping frame. That is the one divergence from a
+    /// fully event-driven CSMA/CA, and it is not a loss of fidelity in the deferral
+    /// decision, because the engine closes the gap from the other side: when the sample
+    /// says busy, [`Engine::medium_idle_at`] computes the instant the last overlapping
+    /// arrival at this node ends and the timer is rescheduled *there*. So a node defers
+    /// for exactly as long as the medium is occupied, and the events cost one per waiting
+    /// node per in-flight frame rather than one per node per frame.
+    ///
+    /// Hidden terminals are told apart from plain collisions when the frames' interference
+    /// is declared (`on_phy_start`): the frame that started later was sent by a node whose
+    /// carrier sense heard the earlier one below the CCA threshold, or not at all, and the
+    /// loss is then [`LossCause::HiddenTerminal`]. Two frames that start in the same
+    /// nanosecond (equal backoff expiry) stay a plain [`LossCause::Collision`].
+    /// Queues one node's MAC timer at `at`, unless one for the same node and channel is
+    /// already queued at that instant (see [`Engine::mac_timers_queued`]).
+    pub(crate) fn schedule_mac_timer(&mut self, at: SimTime, node: NodeId, channel: u16) {
+        if self.mac_timers_queued.insert((at, node, channel)) {
+            self.scheduler
+                .schedule(at, EventClass::MacTimer, Event::MacTimer { node, channel });
+        }
+    }
+
+    fn on_mac_timer(&mut self, node: NodeId, channel: ChannelId, horizon: SimTime) {
+        // A node's window is read only while it has a node (`emit_mac_reports`). A frame it
+        // handed over before it left still runs its MAC afterwards, and must not bring the
+        // window back: a window per vehicle that ever ran (135 at 21 live radios on the churn soak).
+        let live = self.nodes.contains_key(&node);
+        if self.sidelink.is_some() {
+            self.on_sidelink_timer(node, horizon);
+            return;
+        }
+        if self.mac.is_none() {
+            return;
+        }
+        if !self.nodes.contains_key(&node) {
+            self.retired_mac_timers += 1;
+        }
+        let now = self.scheduler.now();
+        // Forget this node's frames that have left the air (or the table): no carrier-sense
+        // question at `now` or later can count them again.
+        if let Some(own) = self.on_air_tx.get_mut(&node) {
+            let frames = &self.frames;
+            own.retain(|seq| {
+                frames
+                    .get(seq)
+                    .is_some_and(|s| s.tx_handle.is_some() && s.end > now)
+            });
+            if own.is_empty() {
+                self.on_air_tx.remove(&node);
+            }
+        }
+
+        // 1. The medium as this node's own energy detector sees it. Sampled here rather
+        //    than delivered as a transition event; see the note above on what that costs.
+        let cca = {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                phy,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            Phy::cca(phy, &ctx, node, channel)
+        };
+        let busy = matches!(cca, v2xw_radio::CcaState::Busy { .. });
+        // The medium is sampled here, at this node's own timer, which can be slots after
+        // another frame began. The backoff must stop counting when the medium went busy,
+        // not now (EN 302 663 Annex C.4.2), so the MAC is told that instant first.
+        let busy_since = busy.then(|| self.medium_busy_since(node, channel, now));
+        // A unit with two radios is not held by the 1609.4 gate.
+        let two_radios = self.wave.is_some() && !self.alternates(node);
+        {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                mac,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            let mac = mac.as_mut().expect("checked above");
+            if two_radios {
+                mac.set_two_radios(node);
+            }
+            if let Some(since) = busy_since {
+                mac.freeze_at(node, channel, since);
+            }
+            Mac::on_cca(mac, &mut ctx, node, channel, cca);
+        }
+
+        // 2. Everything whose signature has finished. The list is sorted by ready instant
+        //    and then by frame number, so two frames that became ready in the same
+        //    nanosecond are queued in generation order. It happens *after* the CCA report,
+        //    because `Mac::enqueue` arms the backoff against the medium state and would
+        //    otherwise arm it against the state at the previous timer.
+        let mut ready: Vec<(SimTime, FrameSeq)> = Vec::new();
+        let multi = self.channel_plan.is_some();
+        let frames = &self.frames;
+        if let Some(pending) = self.pending_tx.get_mut(&node) {
+            pending.sort_unstable();
+            let split = pending.partition_point(|(t, _)| *t <= now);
+            if multi {
+                // This timer is this channel's MAC; a frame for the unit's other
+                // radio waits for that radio's timer, which its hand-off scheduled.
+                let due: Vec<(SimTime, FrameSeq)> = pending.drain(..split).collect();
+                let mut kept: Vec<(SimTime, FrameSeq)> = Vec::new();
+                for (t, f) in due {
+                    if frames
+                        .get(&f)
+                        .is_none_or(|st| st.descriptor.channel == channel)
+                    {
+                        ready.push((t, f));
+                    } else {
+                        kept.push((t, f));
+                    }
+                }
+                kept.append(pending);
+                *pending = kept;
+            } else {
+                ready.extend(pending.drain(..split));
+            }
+            if pending.is_empty() {
+                self.pending_tx.remove(&node);
+            }
+        }
+        for (_, frame) in ready {
+            // A GeoNetworking CBF candidate whose contention timer is due: its router
+            // decides now whether it still forwards.
+            if !self.gn_cbf_fires(node, frame, now) {
+                continue;
+            }
+            let Some((descriptor, air)) = self.frames.get(&frame).map(|f| (f.descriptor, f.air))
+            else {
+                continue;
+            };
+            // The ETSI gatekeeper (TS 102 687 §5.4, Annex A): a frame that arrives inside
+            // the unit's T_off waits for the gate to open, and one the EN 302 571 floor
+            // refuses outright (T_on above 4 ms) is dropped. J2945/1 has no gatekeeper; its
+            // rate control is the generator's inter-transmit time.
+            if self
+                .dcc
+                .as_ref()
+                .is_some_and(crate::wiring::EngineDcc::gates)
+            {
+                let req = v2xw_radio::TxRequest {
+                    bytes: descriptor.bytes,
+                    mcs: descriptor.mcs,
+                    power_dbm: descriptor.tx_power_dbm,
+                    ac: descriptor.ac,
+                    channel,
+                    air_time: air,
+                    at: now,
+                };
+                let decision = {
+                    let Engine {
+                        scheduler,
+                        rng,
+                        world,
+                        snapshot,
+                        provenance,
+                        params,
+                        dcc,
+                        dcc_service,
+                        channel_plan,
+                        ..
+                    } = self;
+                    let mut null = crate::ctx::NullRecorder::new();
+                    let mut ctx = EngineCtx::new(
+                        scheduler, rng, world, snapshot, provenance, params, &mut null,
+                    );
+                    // A frame on the service channel passes that channel's own gate.
+                    let on_service = channel_plan
+                        .as_ref()
+                        .is_some_and(|p| p.service == Some(channel));
+                    match dcc_service.as_mut().filter(|_| on_service) {
+                        Some(ds) => ds.gate(&mut ctx, node, &req),
+                        None => dcc
+                            .as_mut()
+                            .expect("checked above")
+                            .gate(&mut ctx, node, &req),
+                    }
+                };
+                match decision {
+                    v2xw_radio::GateDecision::Now { .. } => {}
+                    v2xw_radio::GateDecision::DelayUntil(t) => {
+                        if t <= horizon {
+                            self.pending_tx.entry(node).or_default().push((t, frame));
+                            self.schedule_mac_timer(t, node, channel.0);
+                        } else {
+                            // The gate opens after the run: the frame never goes on air.
+                            self.frames.remove(&frame);
+                        }
+                        continue;
+                    }
+                    v2xw_radio::GateDecision::Drop => {
+                        self.frames.remove(&frame);
+                        self.report.mac_drops += 1;
+                        if live {
+                            self.mac_window.entry(node).or_default().drops += 1;
+                        }
+                        continue;
+                    }
+                }
+            }
+            if live {
+                let window = self.mac_window.entry(node).or_default();
+                window.frames += 1;
+                window.bytes += u64::from(descriptor.bytes);
+                window.airtime_us += air.as_nanos() / 1_000;
+            }
+            let refused = {
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    mac,
+                    ..
+                } = self;
+                let mut null = crate::ctx::NullRecorder::new();
+                let mut ctx = EngineCtx::new(
+                    scheduler, rng, world, snapshot, provenance, params, &mut null,
+                );
+                let mac = mac.as_mut().expect("checked above");
+                Mac::enqueue(
+                    mac,
+                    &mut ctx,
+                    node,
+                    MacSdu {
+                        frame: descriptor,
+                        enqueued_at: now,
+                    },
+                    descriptor.ac,
+                )
+                .err()
+            };
+            if refused.is_some() {
+                // The frame never reaches the air, so its state is dropped here rather
+                // than left in the map to be swept later: nothing else can resolve it.
+                self.frames.remove(&frame);
+                self.report.mac_drops += 1;
+                if live {
+                    self.mac_window.entry(node).or_default().drops += 1;
+                }
+            }
+        }
+
+        // 3. As many grants as the state machine will give. A busy medium gives none, and
+        //    `Mac::poll` says so itself; the loop is bounded so a node with a backlog
+        //    cannot spin here.
+        for _ in 0..MAX_GRANTS_PER_TIMER {
+            let grant = {
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    mac,
+                    ..
+                } = self;
+                let mut null = crate::ctx::NullRecorder::new();
+                let mut ctx = EngineCtx::new(
+                    scheduler, rng, world, snapshot, provenance, params, &mut null,
+                );
+                let mac = mac.as_mut().expect("checked above");
+                Mac::poll(mac, &mut ctx, node, channel)
+            };
+            let Some(grant) = grant else { break };
+            let frame = grant.sdu.frame.sdu_ref.seq;
+            // `TxGrant::at` is the slot boundary the backoff computed, which may be in the
+            // past when the poll is coarser than the slot; the frame cannot go on the air
+            // before now, and the difference is the access delay the engine owes the MAC.
+            let at = grant.at.max(now);
+            if at > horizon {
+                self.frames.remove(&frame);
+                continue;
+            }
+            self.report.mac_grants += 1;
+            // Invariant: under alternating access no single-radio unit's frame
+            // crosses its interval's end or starts in a guard (`straddling_frames` = 0).
+            let gated = self.wave.filter(|_| self.alternates(node));
+            let primary = self.primary_channel();
+            if let Some(state) = self.frames.get_mut(&frame) {
+                state.start = at;
+                state.end = state.air.after(at);
+                if let Some(w) = gated
+                    && w.fits(at, state.air.as_nanos(), channel == primary)
+                        .is_err()
+                {
+                    self.report.straddling_frames += 1;
+                }
+                self.report.mac_access_delay_ns += at.saturating_sub(state.ready_at);
+                // The split of the access delay the latency decomposition reports: one
+                // AIFS of the frame's category and the slots the MAC counted down; the
+                // rest is deferral to a busy medium.
+                //
+                // The AIFS is the MAC's own account of what this frame waited: none when
+                // it found the medium idle for a full AIFS and went out at once. It used to
+                // be a whole AIFS on every frame, so a frame sent the instant it was ready
+                // reported 58 µs of AIFS inside a zero access delay.
+                state.mac_aifs_ns = grant.aifs_ns;
+                state.mac_backoff_ns = u64::from(grant.backoff_slots)
+                    * v2xw_radio::types::timing::SLOT_TIME.as_nanos();
+            } else {
+                continue;
+            }
+            if at == now {
+                // Access won *at this instant*: the frame goes on the air here, inside the
+                // MAC handler, rather than through a `PhyStart` event at the same instant.
+                //
+                // The difference is carrier sense. `MacTimer` is priority 4 and `PhyStart`
+                // is priority 5, so every node's MAC decision at
+                // an instant is dispatched before any transmission at that instant. Going
+                // through the event meant that a node polling in the same nanosecond as
+                // another could not sense it: every node saw an idle medium, every node
+                // was granted immediately with a zero backoff, and every frame collided
+                // with every other. Measured on a three-node run, 95 % of all reception
+                // attempts were lost to `half-duplex` — the receiver was transmitting its
+                // own frame over the same window — and the packet delivery ratio was 0.11
+                // at every distance, which is not a propagation result at all.
+                //
+                // Registering the transmission here closes that: the next node's poll at
+                // this instant reads a busy medium from the PHY's own arrival set, defers
+                // to the end of the frame, and then contends with a real contention-window
+                // draw, because `on_cca(Idle)` has set `idle_since` and the AIFS test no
+                // longer passes trivially. That is CSMA/CA, and it is what the medium tier
+                // claims to model.
+                self.start_frame(frame, horizon);
+            } else {
+                self.scheduler.schedule(
+                    at,
+                    EventClass::PhyStart,
+                    Event::PhyStart { frame, tx: node },
+                );
+            }
+        }
+
+        // 4. A deferring node has to be woken when the medium clears, or its frame waits
+        //    until the next one becomes ready — which at 10 Hz is a tenth of a second of
+        //    access delay invented by the poll cadence.
+        if busy {
+            let clear = self.medium_idle_at(node, channel, now);
+            if clear > now && clear <= horizon {
+                self.schedule_mac_timer(clear, node, channel.0);
+            }
+        }
+
+        // 5. The next timer, from the MAC's own timing.
+        let next = self
+            .mac
+            .as_ref()
+            .and_then(|m| Mac::<EngineCtx<'_>>::next_poll_at(m, node, channel));
+        if let Some(next) = next {
+            // Strictly in the future: a timer at `now` would dispatch again at this
+            // instant and the loop would not advance.
+            let at = next.max(now + 1);
+            if at <= horizon {
+                self.schedule_mac_timer(at, node, channel.0);
+            }
+        }
+    }
+
+    /// The instant the medium went busy at one node, by its own energy detector: the
+    /// counterpart of [`Engine::medium_idle_at`], and `now` when nothing is in flight.
+    ///
+    /// The MAC's countdown has to stop at this instant rather than at the timer that
+    /// sampled the medium ([`EdcaOcbMac::freeze_at`]).
+    /// This node's own frames on the air, from [`Engine::on_air_tx`]: exactly the frames
+    /// of the table with `tx == node` and a `tx_handle`, in seq order.
+    fn own_on_air(&self, node: NodeId) -> impl Iterator<Item = &FrameState> + '_ {
+        self.on_air_tx
+            .get(&node)
+            .into_iter()
+            .flatten()
+            .filter_map(|seq| self.frames.get(seq))
+            .filter(move |state| state.tx == node && state.tx_handle.is_some())
+    }
+
+    fn medium_busy_since(&self, node: NodeId, channel: ChannelId, now: SimTime) -> SimTime {
+        // The earliest start among the transmissions holding this node's medium busy now:
+        // the arrivals at or above the CCA threshold, this node's own frame, and a jammer
+        // above the energy-detection threshold. A busy period chained from frames that
+        // have already ended is dated from the oldest frame still on the air.
+        // Another node's frame is sensed `aCCATime` after it begins (`Phy::cca`), so that
+        // is when it froze this node's countdown.
+        let jam_level = self.jam_sense_level();
+        let cca_time = v2xw_radio::types::timing::CCA_TIME.as_nanos();
+        let mut since = now;
+        for frame in self.live_at_rx.get(&node).into_iter().flatten() {
+            let Some(state) = self.frames.get(frame) else {
+                continue;
+            };
+            let sensed = state.start.saturating_add(cca_time);
+            if sensed <= now
+                && state.end > now
+                && self
+                    .power_on(state, node, channel)
+                    .is_some_and(|p| p >= self.sense_level_dbm(state, channel))
+            {
+                since = since.min(sensed);
+            }
+        }
+        for state in self.own_on_air(node) {
+            if state.descriptor.channel != channel {
+                continue;
+            }
+            if state.start <= now && state.end > now {
+                since = since.min(state.start);
+            }
+        }
+        // Only a jammer on this radio's channel: the energy detector is behind the
+        // channel filter (the PHY's SINR and the CBR meter were
+        // already per channel).
+        for a in self.phy.jamming().at(node) {
+            if a.channel == channel
+                && a.power_dbm >= jam_level(a)
+                && a.window.from <= now
+                && a.window.to > now
+            {
+                since = since.min(a.window.from);
+            }
+        }
+        since
+    }
+
+    /// The instant the medium stops being busy at one node, by its own energy detector.
+    ///
+    /// The maximum end over every arrival registered at this node whose received power
+    /// reaches the CCA threshold, and over this node's own transmission — a transmitting
+    /// radio is not listening, and 802.11p is half duplex. `now` when nothing is in
+    /// flight, so a caller can compare it against `now` and find out that the medium is
+    /// already clear.
+    ///
+    /// It is the engine's job rather than the PHY's because the PHY is asked "is it busy
+    /// *now*" and answering "until when" needs the arrival set, the CCA configuration and
+    /// the frame table together.
+    fn medium_idle_at(&self, node: NodeId, channel: ChannelId, now: SimTime) -> SimTime {
+        let jam_level = self.jam_sense_level();
+        let mut clear = now;
+        for frame in self.live_at_rx.get(&node).into_iter().flatten() {
+            let Some(state) = self.frames.get(frame) else {
+                continue;
+            };
+            if self
+                .power_on(state, node, channel)
+                .is_some_and(|p| p >= self.sense_level_dbm(state, channel))
+            {
+                clear = clear.max(state.end);
+            }
+        }
+        for state in self.own_on_air(node) {
+            if state.descriptor.channel == channel && state.end > now {
+                clear = clear.max(state.end);
+            }
+        }
+        // A jammer above the energy-detection threshold holds the medium busy for as long
+        // as its window lasts: the denial of channel access a constant jammer causes.
+        // On this radio's channel only.
+        for a in self.phy.jamming().at(node) {
+            if a.channel == channel
+                && a.power_dbm >= jam_level(a)
+                && a.window.from <= now
+                && a.window.to > now
+            {
+                clear = clear.max(a.window.to);
+            }
+        }
+        clear
+    }
+
+    /// A frame begins: the PHY starts the transmission, and the arrival set is registered.
+    ///
+    /// The receiver set is resolved **here**, not at `PhyEnd`, and that is a change from
+    /// the Phase 1 build. The reason is interference: a frame that starts later must be
+    /// able to declare itself an interferer of every frame already in flight at each
+    /// shared receiver, and it can only do that if those arrivals exist. Resolving the set
+    /// at the end of the frame instead made every SINR a plain SNR, because there was
+    /// nothing for a concurrent frame to be added to.
+    ///
+    /// The outcome is still decided at `PhyEnd` (invariant I-R2): what happens here is the
+    /// *geometry*, and nothing about it depends on the order frames are started in.
+    fn on_phy_start(&mut self, frame: FrameSeq, horizon: SimTime) {
+        self.start_frame(frame, horizon);
+    }
+
+    /// Puts one frame on the air at the current instant: the shared body of
+    /// [`Engine::on_phy_start`] and of a grant won at the instant it is polled.
+    fn start_frame(&mut self, frame: FrameSeq, horizon: SimTime) {
+        let now = self.scheduler.now();
+        // Taken out of the map for the duration, so the interference walk below can read
+        // every *other* live frame without fighting the borrow checker over this one.
+        let Some(mut state) = self.frames.remove(&frame) else {
+            return;
+        };
+        let Some(pos) = self.node_pos(state.tx, now) else {
+            // The transmitter despawned between the grant and the air. Nothing to do: the
+            // frame is gone with it — except the receivers still waiting to combine a
+            // sidelink retransmission, whose losses are recorded.
+            if (!state.sl.held.is_empty() || !state.sl.prr_bins.is_empty())
+                && let Some(sl) = self.sidelink.as_mut()
+            {
+                sl.finalize.push(frame);
+                self.frames.insert(frame, state);
+            }
+            return;
+        };
+        state.tx_pos = pos;
+        state.start = now;
+        state.end = state.air.after(now);
+
+        // The PHY owns the air time, the transmit interval for the half-duplex test, and
+        // the transmitted half of the air-time ledger. A sidelink transport block's
+        // handle is the slot it was granted, and its half-duplex and interference
+        // bookkeeping is `sidelink`'s.
+        let handle = if self.sidelink.is_some() {
+            Ok(v2xw_radio::TxHandle {
+                id: u64::from(frame.index()) + 1,
+                tx: state.tx,
+                channel: state.descriptor.channel,
+                start: now,
+                end: state.air.after(now),
+                air_time: state.air,
+            })
+        } else {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                phy,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            Phy::begin_tx(phy, &mut ctx, state.tx, &state.descriptor)
+        };
+        let handle = match handle {
+            Ok(h) => h,
+            Err(_) => {
+                // Over the MSDU cap: the fragmenter must have
+                // acted first, and none is wired in, so the frame is refused and counted.
+                self.report.phy_refusals += 1;
+                return;
+            }
+        };
+        state.tx_handle = Some(handle);
+        state.end = handle.end;
+        self.air_burst.started(now);
+        self.on_air_tx.entry(state.tx).or_default().insert(frame);
+        self.report.frames_transmitted += 1;
+        // The passive observer hears the frame now that it is on the air.
+        if let Some(o) = state.privacy_obs.take() {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                phase2,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            if let Some(p) = phase2.as_mut() {
+                p.observe_frame(
+                    &mut ctx,
+                    o.signer,
+                    now,
+                    o.generated,
+                    o.claim.0,
+                    o.claim.1,
+                    o.claim.2,
+                    o.confidence,
+                    o.seq,
+                );
+            }
+        }
+        // §3.3.4 bit 4: "transmitted at least once in the last mobility step". Set where
+        // the preamble actually goes on the air, not where the node decided to send, so
+        // a frame the MAC dropped does not light the bit.
+        self.transmitted_since_step.insert(state.tx);
+        if state.end > horizon {
+            // The frame would finish after the run does, so its outcome is never
+            // evaluated. It still occupied the medium, which `begin_tx` has recorded.
+            return;
+        }
+
+        // Stage 1: the candidate set — every equipped actor the transmission can reach, by
+        // the grid query, whose cell is sized for exactly this. How far that is comes
+        // from the link budget (`radio.range`): the distance at which, in line of sight,
+        // a unit radiating the regulatory maximum would arrive at the noise floor less the
+        // margin. Within the full range every link gets its whole budget; between a
+        // `radio.range.max_m` cap and the reach, a receiver in line of sight still gets the
+        // frame's energy.
+        //
+        // The reach and the attempt test below are taken at that fixed reference EIRP, not
+        // at this frame's: the set of links a run attempts must not depend on the transmit
+        // power under study, or lowering the power drops the weakest links from the set
+        // and the mean received power over what is left goes *up*.
+        let tx_device = self.device_of(state.tx);
+        let eirp_dbm = state.descriptor.tx_power_dbm + tx_device.net_gain_db();
+        let reference = crate::wiring::CandidateRangePlan::REFERENCE_EIRP_DBM.max(eirp_dbm);
+        let reach_m = self.range.reach_m(reference);
+        let full_m = self.range.full_m(reference);
+        // An arrival is an attempt when it would clear `N − margin` from a transmitter at
+        // the reference EIRP: its link's loss is small enough, whatever this unit radiates.
+        let floor_dbm = self.range.floor_dbm() - (reference - eirp_dbm);
+        // Each full-range receiver with its heading — its street's direction — for the
+        // corner tracer; a roadside unit has none.
+        let mut within: Vec<(NodeId, Vec3, Option<f64>)> = Vec::new();
+        let mut beyond: Vec<(NodeId, Vec3)> = Vec::new();
+        let tx_last = self
+            .actor_of(state.tx)
+            .map(|a| (a.last.heading_rad, a.last.vel));
+        state.tx_heading = tx_last.map(|(h, _)| h);
+        let tx_vel = tx_last.map_or(Vec3::ZERO, |(_, v)| v);
+        // Each receiver's velocity, for a sidelink link-level curve indexed by relative
+        // speed; a roadside unit has none and stands still.
+        let mut velocities: BTreeMap<NodeId, Vec3> = BTreeMap::new();
+        for (actor, node) in self.equipped_within(state.tx_pos, reach_m) {
+            let Some(rec) = self.actors.get(&actor) else {
+                continue;
+            };
+            if node == state.tx || !self.receives(node) {
+                continue;
+            }
+            let pos = rec.last.extrapolate(now).pos;
+            if self.sidelink.is_some() || self.coherence.is_some() {
+                velocities.insert(node, rec.last.vel);
+            }
+            if state.tx_pos.distance_2d(pos) <= full_m {
+                within.push((node, pos, Some(rec.last.heading_rad)));
+            } else {
+                beyond.push((node, pos));
+            }
+        }
+        // The roadside units, which are nodes and not actors and so are not in the grid.
+        // The walk is over a `BTreeMap`, and there are units rather than vehicles of them,
+        // so a linear distance test is the whole cost.
+        for (&rsu, &rsu_pos) in &self.rsus {
+            if rsu == state.tx {
+                continue;
+            }
+            let d = state.tx_pos.distance_2d(rsu_pos);
+            if d <= full_m {
+                within.push((rsu, rsu_pos, None));
+            } else if d <= reach_m {
+                beyond.push((rsu, rsu_pos));
+            }
+        }
+        within.sort_by_key(|(n, _, _)| *n);
+        beyond.sort_by_key(|(n, _)| *n);
+        let candidates: Vec<(NodeId, Vec3)> = within.iter().map(|&(n, p, _)| (n, p)).collect();
+        if state.sl.total > 1 {
+            // A blind-retransmitted block is censused once, at its first copy, receiver
+            // by receiver, and reported when the block is resolved (`sidelink.rs`).
+            if state.sl.attempt <= 1 {
+                state.sl.prr_bins = self.reception_census_by_node(state.tx, state.tx_pos, now);
+                state.sl.prr_decoded.clear();
+                state.sl.prr_due = false;
+            }
+            state.census = BTreeMap::new();
+        } else {
+            state.census = self.reception_census(state.tx, state.tx_pos, now);
+        }
+
+        // Stage 2: the link budgets, sequentially, because the models carry state — a
+        // shadowing process is correlated along a trajectory, which is why it has state
+        // at all. An arrival under the noise floor less the margin is not a reception
+        // attempt: no receiver detects a frame that far under its own noise. It stays as
+        // energy, which is what it is.
+        //
+        // The geometry half of each budget — antennas, focus placement, buildings, the
+        // street corner, the vehicles on the path — is pure, and is computed first for
+        // every receiver in parallel (`link`); the stateful half then runs here in
+        // receiver order on those results.
+        self.obstacles.prepare(&self.world);
+        // The fading and shadowing draws ride the same parallel map. A fade is a
+        // single-use stream keyed by the link and the frame; a log-distance shadowing
+        // draw comes from the link's own keyed stream, which nothing else reads
+        // (`LogDistanceShadowing::shadow_draw_shared`). So each is the number the
+        // sequential budget would have drawn, and the stateful half of the shadowing —
+        // the correlation along the trajectory — runs below in receiver order.
+        let per_link: Vec<(link::LinkGeometry, Option<f64>, Option<f64>)> = {
+            let view = self.link_view();
+            let fade_main = self.fading.shared();
+            let fade_focus = self.focus.as_ref().map(|f| f.fading.shared());
+            let shadow_main = self.propagation.as_log_distance();
+            let shadow_focus = self.focus.as_ref().map(|f| f.propagation.as_log_distance());
+            let rng = &self.rng;
+            let coherence = self.coherence;
+            let velocities = &velocities;
+            let (tx, tx_pos, tx_heading) = (state.tx, state.tx_pos, state.tx_heading);
+            let one = |&(rx, rx_pos, rx_heading): &(NodeId, Vec3, Option<f64>)| {
+                use v2xw_radio::LinkPlacement;
+                let g = view.geometry(tx, tx_pos, tx_heading, rx, rx_pos, rx_heading, now);
+                let placement = g.evaluation.map(|e| e.placement);
+                let fade = match (fade_focus, placement) {
+                    (Some(f), Some(LinkPlacement::Inside)) => f,
+                    (_, Some(LinkPlacement::Inbound)) => None,
+                    _ => fade_main,
+                }
+                .map(|m| {
+                    // Doppler coherence: the draw is keyed by the start of the link's
+                    // coherence block, from both ends' speeds (a roadside unit stands still).
+                    let at = coherence.map_or(now, |c| {
+                        let speed =
+                            |v: Vec3| v2xw_core::math::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+                        let rx_vel = velocities.get(&rx).copied().unwrap_or(Vec3::ZERO);
+                        c.block_start(now, speed(tx_vel) + speed(rx_vel))
+                    });
+                    m.sample_db(rng, LinkKey::new(tx, rx), tx_pos.distance(rx_pos), at)
+                });
+                let shadow = match (shadow_focus, placement) {
+                    (Some(f), Some(LinkPlacement::Inside)) => f,
+                    _ => shadow_main,
+                }
+                .map(|m| m.shadow_draw_shared(rng, g.tx_end.node, g.rx_end.node, &g.los));
+                (g, fade, shadow)
+            };
+            if within.len() < PAR_MIN_LINKS {
+                within.iter().map(one).collect()
+            } else {
+                within.par_iter().map(one).collect()
+            }
+        };
+        for (&(rx, rx_pos), (geometry, fade, shadow)) in candidates.iter().zip(per_link) {
+            let (rssi, dist, high, placement, los_class) =
+                self.link_budget(&state, rx, rx_pos, geometry, fade, shadow);
+            if rssi < floor_dbm {
+                state.faint.insert(rx, rssi);
+                self.report.faint_arrivals += 1;
+                continue;
+            }
+            // A receiver with no radio on this frame's channel gets its energy only,
+            // which leaks into the channel it does listen on.
+            if !self.tuned_at(rx, state.descriptor.channel, state.start, state.end) {
+                state.faint.insert(rx, rssi);
+                self.report.untuned_arrivals += 1;
+                continue;
+            }
+            state.arrivals.insert(rx, (rssi, dist));
+            if self.sidelink.is_some() {
+                let rx_vel = velocities.get(&rx).copied().unwrap_or(Vec3::ZERO);
+                state
+                    .sl
+                    .note_condition(self.radio_env, rx, los_class, tx_vel, rx_vel);
+            }
+            if high {
+                state.focus_high.insert(rx);
+            }
+            if let Some(p) = placement {
+                state.focus_placement.insert(rx, p);
+            }
+        }
+        // Beyond the cap: line-of-sight energy only, from the deterministic law. A path
+        // through buildings that far out is under the margin in every NLOS law.
+        // A pure any-hit test per receiver, so in parallel too, merged in receiver order.
+        let tx_antenna = self.endpoint(state.tx, state.tx_pos, now).pos;
+        if !beyond.is_empty() {
+            self.obstacles.prepare_blocked(&self.world);
+        }
+        let beyond_power: Vec<Option<f64>> = {
+            let view = self.link_view();
+            let range = &self.range;
+            let one = |&(rx, rx_pos): &(NodeId, Vec3)| {
+                let rx_end = view.endpoint(rx, rx_pos, now);
+                if view
+                    .obstacles
+                    .blocked_shared(view.world, tx_antenna, rx_end.pos)
+                {
+                    return None;
+                }
+                let d = tx_antenna.distance(rx_end.pos);
+                Some(range.los_power_dbm(eirp_dbm, rx_end.gain_dbi, d))
+            };
+            if beyond.len() < PAR_MIN_LINKS {
+                beyond.iter().map(one).collect()
+            } else {
+                beyond.par_iter().map(one).collect()
+            }
+        };
+        for (&(rx, _), power) in beyond.iter().zip(beyond_power) {
+            if let Some(power) = power {
+                state.faint.insert(rx, power);
+                self.report.faint_arrivals += 1;
+            }
+        }
+        // A reactive jammer that hears this frame jams it at its receivers.
+        self.react_to_frame(
+            state.descriptor.channel,
+            state.tx,
+            state.tx_pos,
+            state.descriptor.tx_power_dbm,
+            state.start,
+            state.end,
+            &candidates,
+        );
+
+        if self.sidelink.is_some() {
+            self.sidelink_register(frame, &mut state);
+            for &rx in state.arrivals.keys().chain(state.faint.keys()) {
+                self.live_at_rx.entry(rx).or_default().push(frame);
+            }
+            self.scheduler
+                .schedule(state.end, EventClass::PhyEnd, Event::PhyEnd { frame });
+            self.frames.insert(frame, state);
+            return;
+        }
+
+        // Stage 3: register the arrivals, and cross-declare interference with everything
+        // already in flight at each shared receiver — both ways, and whether either frame
+        // is a reception attempt there or only energy. Gathered first and applied second,
+        // because the gather reads `self.frames` and the apply writes `self.phy`.
+        //
+        // `(receiver, interferer to add, the attempt it is added to)`.
+        let mut overlaps: Vec<(NodeId, InterferenceSource, RxHandle)> = Vec::new();
+        let tx_id = state.tx_id();
+        // Hidden or not: of two overlapping frames, the one that
+        // started later was put on the air by a node whose carrier sense should have held
+        // it. If the earlier frame reached that node below the CCA threshold — or not at
+        // all — the collision is a hidden terminal, which CSMA cannot prevent; otherwise
+        // it is a plain collision (equal backoff expiry, or the sensing-slot gap). Frames
+        // that start in the same nanosecond could not have sensed each other either way,
+        // and stay undetermined (a plain collision).
+        let cca_dbm = self.phy.cca_config().cca_threshold_dbm();
+        let ed_dbm = self.phy.cca_config().energy_detect_threshold_dbm();
+        let phy = &self.phy;
+        let power_at = |f: &FrameState, n: NodeId| -> Option<f64> {
+            f.arrivals
+                .get(&n)
+                .map(|&(p, _)| p)
+                .or_else(|| f.faint.get(&n).copied())
+        };
+        // A frame on another of the run's channels reaches a receiver tuned to
+        // `to`'s channel at its power less the ACIR between them, or not at all with
+        // ideal filters. On one channel it is the power itself.
+        let onto = |p: f64, from: &FrameState, to: &FrameState| -> Option<f64> {
+            phy.leaked_dbm(p, from.descriptor.channel, to.descriptor.channel)
+        };
+        let audible = |earlier: &FrameState, later: &FrameState| -> Option<bool> {
+            if earlier.start == later.start {
+                return None;
+            }
+            // Another channel's frame is heard through the filter only from energy detect.
+            let level = if earlier.descriptor.channel == later.descriptor.channel {
+                cca_dbm
+            } else {
+                ed_dbm
+            };
+            Some(
+                power_at(earlier, later.tx)
+                    .and_then(|p| onto(p, earlier, later))
+                    .is_some_and(|p| p >= level),
+            )
+        };
+        let receivers: std::collections::BTreeSet<NodeId> = state
+            .arrivals
+            .keys()
+            .chain(state.faint.keys())
+            .copied()
+            .collect();
+        for &rx in &receivers {
+            let mine = state
+                .arrivals
+                .get(&rx)
+                .map(|&(p, _)| (p, true))
+                .or_else(|| state.faint.get(&rx).map(|&p| (p, false)));
+            let Some((my_power, my_attempt)) = mine else {
+                continue;
+            };
+            for other in self.live_at_rx.get(&rx).into_iter().flatten() {
+                let Some(o) = self.frames.get(other) else {
+                    continue;
+                };
+                // Half-open overlap on `[start, end)`, the same convention the PHY's own
+                // window partition uses.
+                if o.start >= state.end || state.start >= o.end {
+                    continue;
+                }
+                let theirs = o
+                    .arrivals
+                    .get(&rx)
+                    .map(|&(p, _)| (p, true))
+                    .or_else(|| o.faint.get(&rx).map(|&p| (p, false)));
+                let Some((o_power, o_attempt)) = theirs else {
+                    continue;
+                };
+                let heard = if o.start <= state.start {
+                    audible(o, &state)
+                } else {
+                    audible(&state, o)
+                };
+                if my_attempt && let Some(p) = onto(o_power, o, &state) {
+                    let mut source = InterferenceSource::new(o.tx, p, o.start, o.end);
+                    source.audible_to_victim_tx = heard;
+                    overlaps.push((rx, source, RxHandle { tx: tx_id, rx }));
+                }
+                if o_attempt && let Some(p) = onto(my_power, &state, o) {
+                    let mut source = InterferenceSource::new(state.tx, p, state.start, state.end);
+                    source.audible_to_victim_tx = heard;
+                    overlaps.push((rx, source, RxHandle { tx: o.tx_id(), rx }));
+                }
+            }
+        }
+        self.air_burst.peak_overlaps = self.air_burst.peak_overlaps.max(overlaps.len());
+        for (&rx, &(power, _)) in &state.arrivals {
+            self.phy.register_arrival(Arrival {
+                tx_id,
+                tx: state.tx,
+                rx,
+                power_dbm: power,
+                start: state.start,
+                end: state.end,
+                frame: state.descriptor,
+                interferers: Vec::new(),
+            });
+            // The channel was busy at this receiver for the whole frame, as far as its
+            // energy detector is concerned. This is what congestion control reads, and it
+            // is fed from received power rather than from a CCA state machine — see
+            // `on_mac_timer` for why.
+            if power >= v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
+                && let Some(mac) = self.mac.as_mut()
+            {
+                mac.note_busy(rx, state.descriptor.channel, state.start, state.end);
+            }
+        }
+        // Own-channel leakage: the frame is energy on every other channel a
+        // receiver listens on, less the ACIR. A receiver with no radio on its channel
+        // holds it as an energy-only arrival, so that its carrier sense on its own
+        // channel reads the leak; `on_phy_end` forgets it.
+        if let Some(plan) = self.channel_plan.as_ref()
+            && !plan.leakage.is_empty()
+        {
+            let ch = state.descriptor.channel;
+            let leak_busy_dbm = self.leak_busy_dbm();
+            let mut busy: Vec<(NodeId, ChannelId)> = Vec::new();
+            let mut energy_only: Vec<(NodeId, f64)> = Vec::new();
+            for (&rx, &power) in state
+                .arrivals
+                .iter()
+                .map(|(rx, (p, _))| (rx, p))
+                .chain(state.faint.iter())
+            {
+                let class = self.class_of(rx);
+                if !self.tuned_at(rx, ch, state.start, state.end) && power >= floor_dbm {
+                    energy_only.push((rx, power));
+                }
+                for other in plan.channels_of(class) {
+                    if other != ch
+                        && self
+                            .phy
+                            .leaked_dbm(power, ch, other)
+                            .is_some_and(|p| p >= leak_busy_dbm)
+                    {
+                        busy.push((rx, other));
+                    }
+                }
+            }
+            for (rx, power) in energy_only {
+                self.phy.register_arrival(Arrival {
+                    tx_id,
+                    tx: state.tx,
+                    rx,
+                    power_dbm: power,
+                    start: state.start,
+                    end: state.end,
+                    frame: state.descriptor,
+                    interferers: Vec::new(),
+                });
+            }
+            if let Some(mac) = self.mac.as_mut() {
+                for (rx, other) in busy {
+                    mac.note_busy(rx, other, state.start, state.end);
+                }
+            }
+        }
+        for (_, source, victim) in overlaps {
+            let _ = self.phy.add_interferer(victim, source);
+        }
+        for &rx in &receivers {
+            self.live_at_rx.entry(rx).or_default().push(frame);
+        }
+
+        self.scheduler
+            .schedule(state.end, EventClass::PhyEnd, Event::PhyEnd { frame });
+        self.frames.insert(frame, state);
+    }
+
+    /// Every actor carrying a radio within `radius_m` of `p` at the last published state, in
+    /// actor-id order, with its node: the equipped subset of
+    /// [`ActorSnapshot::actors_within`], from the index of equipped actors ([`radios`]).
+    ///
+    /// A debug build answers it both ways and asserts they agree, so every engine test run in
+    /// debug checks the index against the query it replaces, on its own scenario.
+    fn equipped_within(&self, p: Vec3, radius_m: f64) -> Vec<(ActorId, NodeId)> {
+        let fast = self.radios.within(p, radius_m);
+        #[cfg(debug_assertions)]
+        {
+            let slow: Vec<(ActorId, NodeId)> = self
+                .snapshot
+                .actors_within(p, radius_m)
+                .into_iter()
+                .filter_map(|a| Some((a, self.actors.get(&a)?.node?)))
+                .collect();
+            debug_assert_eq!(fast, slow, "the radio index disagrees with the actor query");
+        }
+        fast
+    }
+
+    /// How many equipped receivers are truly within each 20 m range of a transmitter at
+    /// `now`, out to [`v2xw_metrics::channels::PRR_MAX_M`] — the `Y` of 3GPP TR 36.885
+    /// §A.2.1.4's packet reception ratio.
+    ///
+    /// A census, not the candidate set: it counts every equipped node in range from ground
+    /// truth whether or not the radio evaluates a link to it, so the delivery ratio built on
+    /// it does not move when the candidate range does. The distance is the one
+    /// [`Engine::link_budget`] reports for the same pair at the same instant (the ground
+    /// points' 3-D separation), so a decoded receiver lands in the bin it was counted in.
+    fn reception_census(&self, tx: NodeId, tx_pos: Vec3, now: SimTime) -> BTreeMap<u32, u32> {
+        let mut census: BTreeMap<u32, u32> = BTreeMap::new();
+        self.census_walk(tx, tx_pos, now, |_, bin| {
+            *census.entry(bin).or_insert(0) += 1;
+        });
+        census
+    }
+
+    /// [`Engine::reception_census`] receiver by receiver: each counted node's bin.
+    fn reception_census_by_node(
+        &self,
+        tx: NodeId,
+        tx_pos: Vec3,
+        now: SimTime,
+    ) -> BTreeMap<NodeId, u32> {
+        let mut bins: BTreeMap<NodeId, u32> = BTreeMap::new();
+        self.census_walk(tx, tx_pos, now, |node, bin| {
+            bins.insert(node, bin);
+        });
+        bins
+    }
+
+    /// Every equipped node the census counts, with its 20 m bin.
+    fn census_walk(&self, tx: NodeId, tx_pos: Vec3, now: SimTime, mut f: impl FnMut(NodeId, u32)) {
+        let max = v2xw_metrics::channels::PRR_MAX_M;
+        let mut count = |node: NodeId, d: f64| {
+            if d < max
+                && let Some(bin) = self.prr_bins.index_of(d)
+            {
+                f(node, bin as u32);
+            }
+        };
+        for (actor, node) in self.equipped_within(tx_pos, max) {
+            let Some(rec) = self.actors.get(&actor) else {
+                continue;
+            };
+            // A dormant radio (`crate::scale`) is off, and could not have received.
+            if node != tx && self.receives(node) {
+                count(node, tx_pos.distance(rec.last.extrapolate(now).pos));
+            }
+        }
+        for (&rsu, &rsu_pos) in &self.rsus {
+            if rsu != tx {
+                count(rsu, tx_pos.distance(rsu_pos));
+            }
+        }
+    }
+
+    /// The reception phase (invariant I-R2).
+    ///
+    /// The arrival set and every received power were fixed when the frame started; what
+    /// happens here is the **decision**, per receiver. For 802.11p it is
+    /// [`v2xw_radio::OfdmPhy::decide`] — the PHY's own evaluation, half duplex, then
+    /// sensitivity, then (at the high tier or inside a high focus region) preamble capture,
+    /// then the error model against the per-window SINR with the jamming counterfactual —
+    /// in parallel over receivers, each with its keyed `(link, frame)` draw. For a
+    /// sidelink it is `v2xw_radio::SidelinkPhy::evaluate` ([`sidelink`]).
+    ///
+    /// The 802.11p decision used to be re-composed here from the PHY's public primitives,
+    /// because the PHY's own was private. The re-composition had drifted: it never
+    /// attributed a loss to a jammer, so a jammed frame was reported as a collision.
+    fn on_phy_end(&mut self, recorder: &mut dyn RunRecorder, frame: FrameSeq) {
+        let Some(state) = self.frames.remove(&frame) else {
+            return;
+        };
+        let now = self.scheduler.now();
+        let frame_index = u64::from(frame.index());
+
+        let tx_id = state.tx_id();
+        if self.sidelink.is_some() {
+            self.sidelink_phy_end(recorder, frame, state, now);
+            return;
+        }
+        // The energy-only arrivals `start_frame` held for receivers with no radio
+        // on this frame's channel.
+        if self
+            .channel_plan
+            .as_ref()
+            .is_some_and(|p| !p.leakage.is_empty())
+        {
+            let untuned: Vec<NodeId> = state
+                .faint
+                .keys()
+                .copied()
+                .filter(|&rx| !self.tuned_at(rx, state.descriptor.channel, state.start, state.end))
+                .collect();
+            for rx in untuned {
+                self.phy.forget_arrival(RxHandle { tx: tx_id, rx });
+            }
+        }
+        let mut outcomes: Vec<LinkOutcome> = self.dsrc_outcomes(&state);
+
+        // The merge. `par_iter` over a `BTreeMap` is not an indexed parallel iterator, so
+        // the order the results arrive in is `rayon`'s business; the guarantee the run
+        // depends on is stated here rather than inherited from a library's iterator kind.
+        outcomes.sort_by_key(|o| o.rx);
+        self.finish_phy_end(recorder, frame, &state, now, frame_index, tx_id, outcomes);
+    }
+
+    /// The 802.11p reception decisions for one frame, per receiver, in parallel.
+    fn dsrc_outcomes(&self, state: &FrameState) -> Vec<LinkOutcome> {
+        let phy = &self.phy;
+        let rng = &self.rng;
+        let domain = OfdmPhy::frame_error_domain();
+        let high = Phy::<EngineCtx<'_>>::tier(phy) == Tier::High;
+        let tx_id = state.tx_id();
+        // A fragment's success probability is what the fragmentation model's prediction is built
+        // from; it costs one more pass over the SINR windows, so only fragments pay it.
+        let fragment = state.frag.is_some() || state.cert_frag.is_some();
+        // A roadside unit away from the safety channel hears nothing there (P1-E5).
+        let off = off_channel::OffChannel::from_scenario(&self.scenario);
+        let rsus = &self.rsus;
+        let one = |(&rx, &(power_dbm, distance_m)): (&NodeId, &(f64, f64))| {
+            let mut out = LinkOutcome {
+                rx,
+                rssi_dbm: v2xw_radio::numeric::q_db(power_dbm),
+                sinr_db: f64::NEG_INFINITY,
+                distance_m,
+                received: false,
+                cause: Some(LossCause::OutOfRange),
+                copies: None,
+                psr: fragment.then_some(0.0),
+            };
+            let Some(arrival) = phy.arrival(RxHandle { tx: tx_id, rx }) else {
+                // Nothing was registered for this receiver, which the PHY reports as
+                // out of range rather than as a reception that failed.
+                return out;
+            };
+            let windows = phy.sinr_windows(arrival);
+            // Reported, never used for the decision: the decision is per window.
+            let mean_sinr = if windows.is_empty() {
+                f64::NEG_INFINITY
+            } else {
+                v2xw_core::math::sum_ordered(windows.iter().map(|(_, _, s)| *s))
+                    / windows.len() as f64
+            };
+            out.sinr_db = v2xw_radio::numeric::q_db(mean_sinr);
+            // The draw is keyed by (link, frame), so a receiver's outcome depends on
+            // neither the thread that computed it nor how many frames the link has
+            // already carried.
+            let draw = rng.checkout(domain, OfdmPhy::frame_key(arrival)).f64();
+            let decided_high = high || state.focus_high.contains(&rx);
+            let away = off.as_ref().is_some_and(|o| {
+                rsus.contains_key(&rx) && o.away(rng, rx, arrival.start, arrival.end)
+            });
+            let decided = if away {
+                v2xw_radio::RxOutcome::Lost(LossCause::OffChannel)
+            } else {
+                phy.decide(arrival, decided_high, draw)
+            };
+            match decided {
+                v2xw_radio::RxOutcome::Received { .. } => {
+                    out.received = true;
+                    out.cause = None;
+                }
+                v2xw_radio::RxOutcome::Lost(cause) => out.cause = Some(cause),
+            }
+            if fragment {
+                // The deterministic refusals decode with probability zero; everything
+                // else is the error model's probability under the interference present.
+                out.psr = Some(match out.cause {
+                    Some(
+                        LossCause::HalfDuplex
+                        | LossCause::BelowSensitivity
+                        | LossCause::PreambleMissed
+                        | LossCause::OffChannel,
+                    ) => 0.0,
+                    _ => phy.success_probability(arrival),
+                });
+            }
+            out
+        };
+        // Below a handful of receivers the pool's hand-off costs more than the decisions;
+        // the closure and the sort after it are the same either way.
+        if state.arrivals.len() < PAR_MIN_DECISIONS {
+            state.arrivals.iter().map(one).collect()
+        } else {
+            state.arrivals.par_iter().map(one).collect()
+        }
+    }
+
+    /// Records, delivers and retires one frame whose outcomes have been decided.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_phy_end(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        frame: FrameSeq,
+        state: &FrameState,
+        now: SimTime,
+        frame_index: u64,
+        tx_id: u64,
+        outcomes: Vec<LinkOutcome>,
+    ) {
+        let _ = frame_index;
+        self.finish_rx_only(recorder, frame, state, now, tx_id, outcomes);
+        self.report.air_bytes.add(state);
+        self.report
+            .air_by_type
+            .entry(state.msg_type.as_str().to_string())
+            .or_default()
+            .add(
+                u64::from(state.layers.psdu_bytes()),
+                state.air.as_nanos() / 1_000,
+            );
+        self.emit_tx_record(recorder, frame, state);
+    }
+
+    /// Records and delivers one frame's decided receptions, and retires its arrivals.
+    fn finish_rx_only(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        frame: FrameSeq,
+        state: &FrameState,
+        now: SimTime,
+        tx_id: u64,
+        outcomes: Vec<LinkOutcome>,
+    ) {
+        let frame_index = u64::from(frame.index());
+        let mut received_any = false;
+        // Which receivers decoded a frame carrying an application payload, and when it
+        // reached them, so the payload is acted on once per receiver after every outcome
+        // has been recorded.
+        let mut delivered_app: Vec<(NodeId, SimTime)> = Vec::new();
+        let psdu = state.layers.psdu_bytes();
+        let air_us = state.air.as_nanos() / 1_000;
+        // The census's `X`: receivers in range that decoded the frame, by the bin the census
+        // counted them in.
+        let mut decoded_by_bin: BTreeMap<u32, u32> = BTreeMap::new();
+        // A blind-retransmitted sidelink block carries its census across its copies and
+        // reports it once, when it is resolved; a block sent once is censused here.
+        let tb_census = (state.sl.total > 1).then(|| {
+            let mut c: BTreeMap<u32, u32> = BTreeMap::new();
+            if state.sl.prr_due {
+                for bin in state.sl.prr_bins.values() {
+                    *c.entry(*bin).or_insert(0) += 1;
+                }
+                decoded_by_bin.clone_from(&state.sl.prr_decoded);
+            }
+            c
+        });
+        if tb_census.is_none() {
+            for outcome in &outcomes {
+                if outcome.received
+                    && outcome.distance_m < v2xw_metrics::channels::PRR_MAX_M
+                    && let Some(bin) = self.prr_bins.index_of(outcome.distance_m)
+                {
+                    *decoded_by_bin.entry(bin as u32).or_insert(0) += 1;
+                }
+            }
+        }
+        let census_map = tb_census.as_ref().unwrap_or(&state.census);
+        if !census_map.is_empty() || !decoded_by_bin.is_empty() {
+            // Over the union of both maps and not clamped: a decode the census did not count
+            // would be a producer defect, and the metric refuses such a record rather than
+            // have it hidden here.
+            let keys: std::collections::BTreeSet<u32> = census_map
+                .keys()
+                .chain(decoded_by_bin.keys())
+                .copied()
+                .collect();
+            let bins: Vec<[u32; 3]> = keys
+                .into_iter()
+                .map(|bin| {
+                    [
+                        bin,
+                        census_map.get(&bin).copied().unwrap_or(0),
+                        decoded_by_bin.get(&bin).copied().unwrap_or(0),
+                    ]
+                })
+                .collect();
+            let census = crate::records::PhyPrr(v2xw_metrics::channels::PhyPrrView {
+                t: now,
+                tx: state.tx,
+                msg: frame_index,
+                msg_type: Some(msg_type_name(state.msg_type).to_string()),
+                bins,
+            });
+            self.emit(recorder, &census);
+        }
+        // A generic piece is not a message the node can take: its fragments are one attempt
+        // at the SDU, followed on `node.rx` under the SDU's id and resolved when the SDU is
+        // reassembled or given up on (`crate::frag`).
+        let piece = state
+            .frag
+            .filter(|m| m.kind == crate::frag::GroupKind::Message);
+        // Each attempt's `phy.rx` record and its `node.rx` record — the attempt itself, and
+        // for a PHY loss its fate — built and serialised ahead, in parallel over the
+        // receivers of a busy frame ([`Prepared`]); emitted below in receiver order.
+        let decode_phy = self
+            .providers
+            .wants(<PhyRx as v2xw_core::ctx::Record>::CHANNEL);
+        let decode_node = self
+            .providers
+            .wants(<NodeRx as v2xw_core::ctx::Record>::CHANNEL);
+        let build = |outcome: &LinkOutcome| -> Built {
+            let record = PhyRx::new(
+                state.start,
+                now,
+                state.tx,
+                outcome.rx,
+                frame_index,
+                outcome.rssi_dbm,
+                outcome.sinr_db,
+                if outcome.received {
+                    RxOutcome::Ok
+                } else {
+                    RxOutcome::Lost
+                },
+                outcome.cause.map(cause_name),
+                outcome.distance_m,
+            )
+            .with_link_tags(
+                state.focus_placement.get(&outcome.rx).copied(),
+                outcome.copies,
+            )
+            .of_sdu(piece.map(|m| m.sdu_msg));
+            let phy = Prepared::of::<v2xw_metrics::channels::PhyRxView>(&record, decode_phy);
+            // The same attempt, on `node.rx`, with the sender's side of the journey. A PHY
+            // loss is its fate already; a decoded frame's fate is the receiving node's to
+            // decide, and it waits in `rx_pending` until the node reports it.
+            let arrival = v2xw_radio::phy::propagation_delay(outcome.distance_m).after(state.end);
+            let attempt = NodeRx::attempt(
+                state.tx,
+                outcome.rx,
+                frame_index,
+                msg_type_name(state.msg_type),
+                outcome.rssi_dbm,
+                outcome.sinr_db,
+                outcome.distance_m,
+                u64::from(psdu),
+                air_us,
+                state.payload_bytes.map(u64::from),
+            )
+            .journey(
+                state.t_generated,
+                state.t_sign_start,
+                state.t_signed,
+                state.ready_at,
+                state.mac_aifs_ns,
+                state.mac_backoff_ns,
+                state.start,
+                state.end,
+                arrival,
+            );
+            if piece.is_none() && !outcome.received {
+                let cause = outcome.cause.map_or("unknown", cause_name);
+                let lost = attempt.lost(now, cause);
+                let lost = Prepared::of::<v2xw_metrics::channels::NodeRxView>(&lost, decode_node);
+                (phy, arrival, None, Some(lost))
+            } else {
+                (phy, arrival, Some(attempt), None)
+            }
+        };
+        let built: Vec<Built> = if outcomes.len() < PAR_MIN_LINKS {
+            outcomes.iter().map(build).collect()
+        } else {
+            outcomes.par_iter().map(build).collect()
+        };
+        for (outcome, (phy, arrival, attempt, lost)) in outcomes.into_iter().zip(built) {
+            self.report.reception_attempts += 1;
+            if let Some(cause) = outcome.cause {
+                self.report.lost(cause);
+            }
+            // J2945/1's per-neighbour PER, as a receiver counts it from msgCnt.
+            if outcome.received
+                && state.msg_type == v2xw_msg::MsgType::Bsm
+                && let Some(window) = self.j2945_per.as_mut()
+            {
+                window.note_received(outcome.rx, state.tx, now);
+            }
+            self.emit_prepared(recorder, phy);
+            if let Some(meta) = piece {
+                if outcome.received {
+                    self.report.receptions_ok += 1;
+                    received_any = true;
+                }
+                self.on_fragment(recorder, state, meta, &outcome, arrival, attempt, now);
+                continue;
+            }
+            // A segment or a certificate-cycle SPDU is a message of its own; its group is
+            // followed beside it for the reassembly record.
+            if let Some(meta) = state.frag.or(state.cert_frag) {
+                self.on_fragment(recorder, state, meta, &outcome, arrival, None, now);
+            }
+            if let Some(lost) = lost {
+                self.emit_prepared(recorder, lost);
+            } else if let Some(attempt) = attempt {
+                self.report.receptions_ok += 1;
+                received_any = true;
+                let token = self.next_rx_token;
+                self.next_rx_token += 1;
+                let handed = self.inboxes.contains_key(&outcome.rx);
+                if handed {
+                    self.rx_pending.insert((outcome.rx, token), attempt);
+                } else {
+                    // Decoded by a radio whose node no longer exists.
+                    self.emit(recorder, &attempt.lost(now, rx_cause::RECEIVER_OFF));
+                }
+                if let Some(inbox) = self.inboxes.get_mut(&outcome.rx) {
+                    inbox.push((
+                        rx_frame(state, state.bytes),
+                        RxStamp {
+                            token,
+                            arrived_at: Some(arrival),
+                        },
+                    ));
+                }
+                // The receiver takes the frame into its verifier the instant it arrives.
+                if handed {
+                    self.request_wake(outcome.rx, arrival, self.scenario.time.horizon_ns());
+                }
+                if state.app.is_some() {
+                    delivered_app.push((outcome.rx, arrival));
+                }
+                self.gn_on_receive(outcome.rx, state, now);
+                if let Some(g) = self.gcbr.as_mut() {
+                    g.on_receive(outcome.rx, state.tx, now);
+                }
+                self.cpm_on_receive(outcome.rx, frame, state, now);
+            }
+        }
+        if received_any {
+            self.report.frames_received += 1;
+        }
+        if let Some(app) = state.app.clone() {
+            for (rx, arrival) in delivered_app {
+                let journey = ReportJourney {
+                    msg: frame_index,
+                    t_generated: state.t_generated,
+                    t_sign_start: state.t_sign_start,
+                    t_signed: state.t_signed,
+                    t_tx_start: state.start,
+                    t_tx_end: state.end,
+                    t_arrival: arrival,
+                };
+                self.on_app_message(
+                    recorder,
+                    rx,
+                    state.tx,
+                    &app,
+                    now,
+                    self.scenario.time.horizon_ns(),
+                    journey,
+                );
+            }
+        }
+
+        // The bookkeeping, after every decision has been taken: nothing an evaluation read
+        // may depend on how many other arrivals have already been retired (invariant
+        // I-R2), which is why the forgetting is a second pass and not part of the map.
+        let dsrc = self.sidelink.is_none();
+        for &rx in state.arrivals.keys() {
+            if dsrc {
+                self.phy.forget_arrival(RxHandle { tx: tx_id, rx });
+            }
+        }
+        for &rx in state.arrivals.keys().chain(state.faint.keys()) {
+            if let Some(live) = self.live_at_rx.get_mut(&rx) {
+                live.retain(|f| *f != frame);
+                if live.is_empty() {
+                    self.live_at_rx.remove(&rx);
+                }
+            }
+        }
+        if let Some(handle) = state.tx_handle
+            && dsrc
+        {
+            self.phy.end_tx(handle);
+        }
+        self.cpm_forget(frame);
+    }
+
+    /// The `node.tx` record of one transmission, with the access layer's own view of it.
+    fn emit_tx_record(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        frame: FrameSeq,
+        state: &FrameState,
+    ) {
+        let frame_index = u64::from(frame.index());
+        let psdu = state.layers.psdu_bytes();
+        let (mcs_index, radio) = match self.sidelink.as_ref() {
+            Some(sl) => {
+                let (i, v) = sl.radio_view(state.sl.grant.as_ref());
+                (i, v)
+            }
+            None => (
+                Mcs::ALL
+                    .iter()
+                    .position(|m| *m == state.descriptor.mcs)
+                    .and_then(|i| u8::try_from(i).ok()),
+                v2xw_metrics::channels::TxRadioView {
+                    rat: "dsrc-80211p".to_string(),
+                    mcs: dsrc_mcs_label(state.descriptor.mcs),
+                    qm: Some(match state.descriptor.mcs.modulation() {
+                        v2xw_radio::types::Modulation::Bpsk => 1,
+                        v2xw_radio::types::Modulation::Qpsk => 2,
+                        v2xw_radio::types::Modulation::Qam16 => 4,
+                        v2xw_radio::types::Modulation::Qam64 => 6,
+                    }),
+                    ..Default::default()
+                },
+            ),
+        };
+        let tx_record = NodeTx::new(
+            state.start,
+            state.tx,
+            frame_index,
+            msg_type_name(state.msg_type),
+            u64::from(psdu),
+            state.air.as_nanos() / 1000,
+            state.descriptor.tx_power_dbm,
+            state.descriptor.channel.0,
+            if state.full_certificate {
+                SignerId::Certificate
+            } else {
+                SignerId::Digest
+            },
+            state.generation_time,
+        )
+        .with_sizes(state.payload_bytes, state.envelope_bytes)
+        .with_journey(
+            state.t_sign_start,
+            state.t_signed,
+            state.ready_at,
+            state.mac_aifs_ns,
+            state.mac_backoff_ns,
+        )
+        .with_layers(&state.layers, state.cert_bytes)
+        .with_ac((self.mac.is_some() && self.sidelink.is_none()).then_some(state.descriptor.ac))
+        .with_content(
+            Some(hex_digest(&state.signer.0[..])),
+            self.dataset_content(frame_index, state),
+        )
+        .with_radio(mcs_index, Some(radio))
+        .with_report_id(match &state.app {
+            Some(AppPayload::Report(r)) => Some(r.report_id.clone()),
+            _ => None,
+        })
+        .with_dcc(
+            self.dcc
+                .as_ref()
+                .filter(|_| {
+                    !self.rsus.contains_key(&state.tx)
+                        && !matches!(
+                            self.node_class.get(&state.tx),
+                            Some(
+                                v2xw_radio::ActorClass::Pedestrian
+                                    | v2xw_radio::ActorClass::Bicycle
+                            )
+                        )
+                })
+                .map(|d| d.label::<EngineCtx<'_>>(state.tx, state.dcc_event)),
+        );
+        // The frame's own octets, for a viewer that decodes them (`RunRecorder::tap_frame`).
+        // Not a record: nothing recorded, counted or digested changes.
+        if let Some(spdu) = state.spdu.as_deref() {
+            recorder.tap_frame(self.scheduler.now(), state.tx, frame_index, spdu);
+            // A signed BSM is what a misbehaviour report about its certificate attaches.
+            if state.msg_type == v2xw_msg::MsgType::Bsm
+                && let Some(p) = self.phase2.as_mut()
+                && let Ok(signer) = <[u8; 8]>::try_from(&state.signer.0[..])
+            {
+                p.note_signed_bsm(signer, state.generation_time, spdu);
+            }
+        }
+        self.emit(recorder, &tx_record);
+        if self.dataset.is_some() {
+            self.emit_dataset_tx_truth(recorder, frame_index, state);
+        }
+    }
+
+    /// `node.tx.content` with the dataset fields filled in (`crate::dataset_records`):
+    /// the SPDU's digest, psid and Time64 `generationTime`, read from the octets that go on
+    /// the air, and the message id's digest and signer kept for the receivers'
+    /// `node.rx_sec`. Unchanged when the scenario does not name the dataset exporter.
+    fn dataset_content(
+        &mut self,
+        frame_index: u64,
+        state: &FrameState,
+    ) -> Option<v2xw_metrics::channels::MsgContentView> {
+        let mut content = state.content.clone();
+        let wall = Some(self.wall_clock());
+        let Some(ds) = self.dataset.as_mut() else {
+            return content;
+        };
+        // A frame with no decoded content (a relayed report, a CRL broadcast) keeps none:
+        // the dataset's tables are about the messages a receiver decodes.
+        let Some(c) = content.as_mut() else {
+            return content;
+        };
+        let cert = hex_digest(&state.signer.0[..]);
+        if let Some(spdu) = state.spdu.as_deref() {
+            c.spdu_digest = Some(crate::dataset_records::spdu_digest_of(spdu));
+            c.digest_basis = Some("bytes".to_string());
+            if let Some((psid, t)) = crate::dataset_records::spdu_header(spdu) {
+                c.psid = Some(psid);
+                c.generation_time_us = t;
+            }
+        } else {
+            c.generation_time_us = wall.and_then(|w| w.time64(state.generation_time).ok());
+            c.spdu_digest = Some(crate::dataset_records::fields_digest(
+                msg_type_name(state.msg_type),
+                &state.signer.0[..],
+                state.generation_time,
+                c,
+            ));
+            c.digest_basis = Some("fields".to_string());
+        }
+        if let Some(d) = c.spdu_digest.clone() {
+            ds.note_tx(frame_index, d, cert);
+        }
+        content
+    }
+
+    /// The dataset's ground truth of one transmission (`gt.tx_truth`) and, the first time
+    /// a device is on the air, its `gt.device` row.
+    fn emit_dataset_tx_truth(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        frame_index: u64,
+        state: &FrameState,
+    ) {
+        use v2xw_core::math::quantize_to;
+        let node = state.tx;
+        // A roadside unit has no actor: it stands still where it transmits from.
+        let truth = self.actor_of(node).map(|a| a.last);
+        {
+            let (speed, along, heading_deg) = truth.as_ref().map_or((0.0, 0.0, 0.0), |k| {
+                (
+                    (k.vel.x * k.vel.x + k.vel.y * k.vel.y).sqrt(),
+                    crate::records::longitudinal(k.acc.x, k.acc.y, k.heading_rad),
+                    (90.0 - k.heading_rad.to_degrees()).rem_euclid(360.0),
+                )
+            });
+            let belief = self.nodes.get(&node).map(v2xw_core::NodeView::position);
+            let gnss_error_m = belief.map(|b| {
+                let dx = b.pos.x - state.tx_pos.x;
+                let dy = b.pos.y - state.tx_pos.y;
+                quantize_to((dx * dx + dy * dy).sqrt(), 1e-3)
+            });
+            let rec = crate::dataset_records::GtTxTruth {
+                t: state.start,
+                msg: frame_index,
+                node,
+                x_m: quantize_to(state.tx_pos.x, 1e-3),
+                y_m: quantize_to(state.tx_pos.y, 1e-3),
+                speed_mps: quantize_to(speed, 1e-3),
+                heading_deg: quantize_to(heading_deg, 1e-7),
+                accel_mps2: quantize_to(along, 1e-3),
+                gnss_error_m,
+                fix_to_stamp_ms: None,
+            };
+            self.emit(recorder, &rec);
+        }
+        let first = self
+            .dataset
+            .as_mut()
+            .is_some_and(|ds| ds.devices.insert(node));
+        if first {
+            let class = if self.rsus.contains_key(&node) {
+                "rsu"
+            } else if matches!(
+                self.node_class.get(&node),
+                Some(v2xw_radio::ActorClass::Pedestrian | v2xw_radio::ActorClass::Bicycle)
+            ) {
+                "vru"
+            } else {
+                "vehicle"
+            };
+            let (provider, attacker, attack_id, scheduled_attack) =
+                self.phase2.as_ref().map_or((None, false, None, None), |p| {
+                    let rsu_attack = p.compromised_attack_of(node);
+                    (
+                        p.provider_name_of(node),
+                        p.is_attacker(node) || rsu_attack.is_some(),
+                        rsu_attack.map(str::to_string),
+                        p.attacker_id(node)
+                            .map(|id| id.rsplit('/').next().unwrap_or(id).to_string()),
+                    )
+                });
+            // The BSM timing class (`node/bsm-timing/per-device`) is the device's GNSS and
+            // stamping behaviour; a class the calibration declares out of specification
+            // (`fault_kind`) makes an honest device `faulty`.
+            let timing = self.nodes.get(&node).and_then(|n| {
+                n.as_obu()
+                    .and_then(v2xw_node::ObuRuntime::bsm_timing_class_info)
+            });
+            let fault_kind = timing
+                .as_ref()
+                .and_then(|t| t.1.clone())
+                .filter(|_| !attacker);
+            let rec = crate::dataset_records::GtDevice {
+                t: state.start,
+                node,
+                class: class.to_string(),
+                provider,
+                gnss_class: timing.map(|t| t.0),
+                faulty: fault_kind.is_some(),
+                fault_kind,
+                attacker,
+                attack_id,
+                scheduled_attack,
+            };
+            self.emit(recorder, &rec);
+        }
+    }
+
+    /// A Phase 2 application message reached a node that decoded it.
+    ///
+    /// The two messages the engine puts on the air for the security path — a report being
+    /// relayed to a roadside unit, and a roadside CRL broadcast — and what the receiver
+    /// does with each.
+    #[allow(clippy::too_many_arguments)]
+    fn on_app_message(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        rx: NodeId,
+        tx: NodeId,
+        app: &AppPayload,
+        now: SimTime,
+        horizon: SimTime,
+        journey: ReportJourney,
+    ) {
+        // A switched-off receiver acts on nothing it "decoded": the
+        // node already refuses the frame as `receiver-off`, and the payload beside it is
+        // the same frame. Before this a parked car switched off for weeks installed the
+        // roadside CRL broadcast of the first live step after a fast-forward.
+        if self.node_is_off(rx) {
+            return;
+        }
+        match app {
+            AppPayload::Report(report) => {
+                // Only a unit with the `report-forward` role and a backhaul carries a
+                // report onward; a vehicle that overhears one does nothing with it.
+                let Some(backhaul) = self
+                    .phase2
+                    .as_ref()
+                    .filter(|p| p.rsu_has_role(rx, "report-forward"))
+                    .and_then(|p| p.rsu_spec_of(rx).map(|s| s.backhaul))
+                    .filter(|b| b.connected)
+                else {
+                    return;
+                };
+                if !self
+                    .phase2
+                    .as_mut()
+                    // Per frame: two units that decode one transmission forward it once,
+                    // and a retransmission a dropping unit never confirmed can still go.
+                    .is_some_and(|p| {
+                        p.claim_forward(&format!("{}@{}", report.report_id, journey.msg))
+                    })
+                {
+                    return;
+                }
+                let relayed_id = report.report_id.clone();
+                // A retransmission of an upload a unit has already confirmed: the
+                // session discards the duplicate, and the report goes no further.
+                if !self
+                    .phase2
+                    .as_ref()
+                    .is_some_and(|p| p.relay_pending(tx, &relayed_id))
+                {
+                    if let Some(p) = self.phase2.as_mut() {
+                        p.note_relay_duplicate();
+                    }
+                    return;
+                }
+                // The unit decides what reaches the authority: an honest one forwards the
+                // report, a compromised one may drop it or forward a forgery instead
+                // (`threats.compromised_rsus`).
+                let own = self
+                    .nodes
+                    .get(&rx)
+                    .and_then(|n| {
+                        n.stores()
+                            .certs
+                            .active()
+                            .map(|c| hex_digest(&c.digest.0[..]))
+                    })
+                    .unwrap_or_default();
+                let forwarded = {
+                    let Engine {
+                        scheduler,
+                        rng,
+                        world,
+                        snapshot,
+                        provenance,
+                        params,
+                        phase2,
+                        ..
+                    } = self;
+                    let mut null = crate::ctx::NullRecorder::new();
+                    let mut ctx = EngineCtx::new(
+                        scheduler, rng, world, snapshot, provenance, params, &mut null,
+                    );
+                    phase2
+                        .as_mut()
+                        .and_then(|p| p.rsu_forward(&mut ctx, rx, &own, report, now))
+                };
+                // A compromised unit that forwards a forgery in place of the car's report
+                // still confirms the car's upload: the car's report left it as bytes.
+                let original = forwarded
+                    .as_ref()
+                    .filter(|f| f.report_id != relayed_id)
+                    .map(|_| (**report).clone());
+                let Some(report) = forwarded else {
+                    return;
+                };
+                let bytes = crate::phase2::report_bytes();
+                // The unit's backhaul line: a FIFO of its medium, shared with every other
+                // message the unit carries.
+                let at = self
+                    .phase2
+                    .as_mut()
+                    .and_then(|p| {
+                        p.access_mut().rsu_send(
+                            rx,
+                            v2xw_radio::cellular::Direction::Uplink,
+                            bytes,
+                            now,
+                        )
+                    })
+                    .unwrap_or_else(|| backhaul.delay(bytes).after(now));
+                if at > horizon {
+                    return;
+                }
+                // The unit took it onto its backhaul: the vehicle's upload is confirmed,
+                // and the report leaves its store. A report the unit replaced is built as
+                // the bytes the car sent, so its upload names them; they go no further.
+                if let Some(original) = original {
+                    let location = self.report_location(tx);
+                    if let Some(p) = self.phase2.as_mut() {
+                        p.report_intercepted(&original, tx, journey.t_tx_start, location);
+                    }
+                }
+                if let Some(p) = self.phase2.as_mut() {
+                    p.relay_delivered(tx, &relayed_id, now);
+                }
+                let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
+                self.next_sdu += 1;
+                self.transfers.insert(
+                    sdu,
+                    Transfer::Report {
+                        reporter: tx,
+                        report: Box::new(report.clone()),
+                        via: Some(rx),
+                        journey: Some(journey),
+                        detected_at: report.detection_time.min(journey.t_generated),
+                        sent_at: journey.t_tx_start,
+                        transport: v2xw_proto::Transport::RsuBackhaul,
+                    },
+                );
+                // The backhaul's bytes are booked when the backend logs the hop
+                // (`Phase2::report_at_proxy`), in the backhaul bucket.
+                self.scheduler.schedule(
+                    at,
+                    EventClass::NetDeliver,
+                    Event::NetDeliver { sdu, to: rx },
+                );
+            }
+            AppPayload::Crl(list) => {
+                let (version, entries) = (list.0, list.1.clone());
+                let secured: Vec<std::sync::Arc<[u8]>> = list.2.to_vec();
+                self.install_crl_at(recorder, rx, version, &entries, &secured, now, false);
+            }
+        }
+    }
+
+    /// A vehicle installs CRL entries it received, and enforces them.
+    ///
+    /// With the signed CRLs in hand (`secured`, relayed unchanged by the store or the
+    /// RSU: one per provider whose CRL the vehicle's RA serves) and a trust store
+    /// installed, the vehicle verifies each itself: the signer chains to its root,
+    /// `verify_crl` accepts it, and every entry the frame carries is one a CRL signs.
+    /// Otherwise the frame is refused, and the engine does not judge it.
+    #[allow(clippy::too_many_arguments)]
+    fn install_crl_at(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        node: NodeId,
+        version: u32,
+        entries: &[v2xw_sec::linkage::CrlLinkageEntry],
+        secured: &[std::sync::Arc<[u8]>],
+        now: SimTime,
+        cellular: bool,
+    ) {
+        if self.rsus.contains_key(&node) {
+            return;
+        }
+        // A download that lands on a device switched off since it asked is never received
+        // (F-OFF): the poll is open again when the device is back on.
+        if self.node_is_off(node) {
+            if cellular && let Some(p) = self.phase2.as_mut() {
+                p.crl_download_unreceived(node);
+            }
+            return;
+        }
+        // The node's own verdict on the signed CRLs, when it can form one: every CRL
+        // verifies, and every entry the frame carries is one some CRL signs (in that
+        // CRL's form: seeds at iRev) or one already exhausted before iRev.
+        //
+        // A composite CRL carries one signed CRL per provider its RA serves. One the node
+        // cannot verify (its provider's root left the CTL, a bad signature) is skipped,
+        // not the whole download (1609.2.1 §6.3.5: each `SecuredCrl` is verified on its
+        // own): the entries only that CRL carries are dropped, never installed, and the
+        // rest installs. An entry no CRL in the download carries still refuses it.
+        let mut skipped: Option<(usize, usize)> = None;
+        let mut kept_entries: Option<Vec<v2xw_sec::linkage::CrlLinkageEntry>> = None;
+        let verified = match self.nodes.get_mut(&node) {
+            Some(rt) if !secured.is_empty() && rt.security().trust().is_installed() => {
+                let mut crls = Vec::with_capacity(secured.len());
+                let mut unverified = Vec::new();
+                let mut undecodable = 0usize;
+                for bytes in secured {
+                    match rt.install_secured_crl(bytes, now) {
+                        Ok(v) => crls.push(v),
+                        Err(_) => match v2xw_node::rxval::VerifiedCrl::claimed(bytes) {
+                            Some(c) => unverified.push(c),
+                            None => undecodable += 1,
+                        },
+                    }
+                }
+                let sorted = sort_composite_entries(&crls, &unverified, entries);
+                let n_skipped = unverified.len() + undecodable;
+                if n_skipped > 0 {
+                    skipped = Some((n_skipped, sorted.as_ref().map_or(0, |(_, d)| *d)));
+                }
+                match sorted {
+                    Some((kept, _)) if !crls.is_empty() => {
+                        kept_entries = Some(kept);
+                        Some(Some(crls))
+                    }
+                    // Nothing in the download verifies, or it carries an entry no CRL
+                    // in it does: refused by the node.
+                    _ => Some(None),
+                }
+            }
+            _ => None,
+        };
+        let Some(phase2) = self.phase2.as_mut() else {
+            return;
+        };
+        if let Some((crls, dropped)) = skipped {
+            phase2.crls_skipped(crls, dropped);
+        }
+        if let Some(None) = verified {
+            phase2.crl_frame_refused(node, cellular);
+            return;
+        }
+        let entries: &[v2xw_sec::linkage::CrlLinkageEntry] =
+            kept_entries.as_deref().unwrap_or(entries);
+        // The composite CRL file carries the home CTL (edge-case package, item 8): a
+        // newer one is installed with it, and a root it no longer approves stops being a
+        // trust anchor.
+        if cellular
+            && let Some((roots, cas)) = phase2.take_ctl_install(node, false)
+            && let Some(rt) = self.nodes.get_mut(&node)
+        {
+            let (_, removed) = rt.security_mut().apply_ctl(&roots, &cas);
+            phase2.note_anchors_removed(removed);
+        }
+        let node_verified = matches!(verified, Some(Some(_)));
+        let (fresh, records) =
+            phase2.install_crl(node, version, entries, now, cellular, node_verified);
+        if fresh.is_empty() && records.is_empty() {
+            return;
+        }
+        let own = {
+            let Some(runtime) = self.nodes.get_mut(&node) else {
+                return;
+            };
+            match verified.as_ref().and_then(|v| v.as_ref()) {
+                // What the node installs is what the CRLs it verified sign, each entry
+                // under the CRACA of the CRL that signs it.
+                Some(crls) => {
+                    for v in crls {
+                        let signed: Vec<v2xw_sec::linkage::CrlLinkageEntry> = fresh
+                            .iter()
+                            .filter_map(|e| v.signed_form(e).and_then(|r| r.ok()))
+                            .collect();
+                        if !signed.is_empty() {
+                            runtime
+                                .stores_mut()
+                                .crl
+                                .add_verified_linkage(v.craca, &signed);
+                        }
+                    }
+                }
+                None => {
+                    for e in &fresh {
+                        runtime.stores_mut().crl.add_linkage_entry(*e);
+                    }
+                }
+            }
+            // A node that finds one of its *own* certificates on the CRL stops
+            // transmitting [CAMP-EE §2.2.10.2]; `CertStore::sweep` does that on the node's
+            // next step, from the gate this has just written.
+            //
+            // A compromised device does not: the rule binds a conforming implementation
+            // that malfunctioned, and an attacker running its own software ignores it. What
+            // protects the fleet from a revoked attacker is every *receiver's* CRL check,
+            // which is why an armed attacker keeps transmitting here and the refused
+            // receptions are counted.
+            let attacker = self.phase2.as_ref().is_some_and(|p| p.is_attacker(node));
+            let revoked: Vec<(u32, u32)> = if attacker {
+                Vec::new()
+            } else {
+                self.phase2
+                    .as_ref()
+                    .map(|p| p.own_revoked(node, &runtime.stores().crl))
+                    .unwrap_or_default()
+            };
+            let digests: Vec<v2xw_msg::sec_types::HashedId8> = runtime
+                .stores()
+                .certs
+                .credentials()
+                .iter()
+                .filter(|c| revoked.contains(&(c.i_period, c.j_index)))
+                .map(|c| c.digest.clone())
+                .collect();
+            for d in &digests {
+                runtime.stores_mut().crl.revoke_own(d);
+            }
+            digests
+        };
+        if !own.is_empty() {
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_self_revoked(node);
+            }
+            for d in own {
+                let rec = crate::sec_records::SecCert::new(
+                    now,
+                    node,
+                    "revoked",
+                    Some(hex_digest(&d.0[..])),
+                    None,
+                );
+                self.emit(recorder, &rec);
+            }
+        }
+        for r in records {
+            self.emit(recorder, &r);
+        }
+    }
+
+    /// Something reached its end of the backend: a report at the privacy proxy, or a CRL
+    /// download at a vehicle.
+    fn on_net_deliver(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        sdu: v2xw_core::ids::SduId,
+        _to: NodeId,
+        _horizon: SimTime,
+    ) {
+        let now = self.scheduler.now();
+        let Some(transfer) = self.transfers.remove(&sdu) else {
+            return;
+        };
+        match transfer {
+            Transfer::Report {
+                reporter,
+                report,
+                via,
+                journey,
+                detected_at,
+                sent_at,
+                transport,
+            } => {
+                // The report's whole journey to the proxy as one decomposed trace on
+                // `msg.latency`.
+                let trace = match journey {
+                    Some(journey) => {
+                        let mut trace = v2xw_metrics::latency::TraceBuilder::new(
+                            "mbr",
+                            Some("mbr".to_string()),
+                            Some(journey.msg),
+                            journey.t_generated,
+                        );
+                        trace
+                            .endpoints(Some(reporter), via)
+                            .to("sign_queue", journey.t_sign_start)
+                            .to("sign", journey.t_signed)
+                            .to("mac_access", journey.t_tx_start)
+                            .to("airtime", journey.t_tx_end)
+                            .to("propagation", journey.t_arrival)
+                            .hop(1)
+                            .to("backhaul", now.max(journey.t_arrival));
+                        trace.finish()
+                    }
+                    None => {
+                        let mut trace = v2xw_metrics::latency::TraceBuilder::new(
+                            "mbr",
+                            Some("mbr".to_string()),
+                            None,
+                            detected_at,
+                        );
+                        trace
+                            .endpoints(Some(reporter), None)
+                            .to("sign", sent_at.max(detected_at))
+                            .to("uu", now.max(sent_at));
+                        trace.finish()
+                    }
+                };
+                self.emit(recorder, &trace);
+                let location = self.report_location(reporter);
+                if let Some(phase2) = self.phase2.as_mut() {
+                    phase2.report_at_proxy(
+                        *report,
+                        reporter,
+                        detected_at,
+                        sent_at,
+                        now,
+                        transport,
+                        location,
+                    );
+                }
+            }
+            Transfer::Crl {
+                node,
+                version,
+                entries,
+                requested_at,
+                mbms,
+                secured,
+            } => {
+                let mut trace = v2xw_metrics::latency::TraceBuilder::new(
+                    "crl-download",
+                    Some("crl".to_string()),
+                    None,
+                    requested_at,
+                );
+                trace.endpoints(None, Some(node)).to("uu", now);
+                let trace = trace.finish();
+                self.emit(recorder, &trace);
+                if let Some(p) = self.phase2.as_mut() {
+                    let kind = if mbms { "crl-mbms" } else { "crl-fetch" };
+                    p.access_mut().note_exchange(kind, requested_at, now);
+                }
+                // The vehicle's RA serves every provider's signed CRL it holds, unchanged;
+                // the eMBMS bearer carries every provider's.
+                let secured = secured.unwrap_or_else(|| {
+                    self.phase2
+                        .as_ref()
+                        .map(|p| p.published_crl_for(node).2)
+                        .unwrap_or_default()
+                });
+                self.install_crl_at(recorder, node, version, &entries, &secured, now, true);
+            }
+        }
+    }
+
+    /// The roadside units with the `crl` role put the list they hold on the air, and the
+    /// timer re-arms itself for the next repetition.
+    fn on_flow_timer(&mut self, horizon: SimTime) {
+        let now = self.scheduler.now();
+        self.crl_timer_armed = false;
+        // No roadside broadcast inside a fast-forward window (no radio): the carousel
+        // resumes on its first turn after the window.
+        if let Some(end) = self.scenario.time.fast_forward_end(now) {
+            let interval = self
+                .phase2
+                .as_ref()
+                .map_or(1, |p| p.params().crl_broadcast_interval.as_nanos().max(1));
+            let at = now.saturating_add(end.saturating_sub(now).div_ceil(interval) * interval);
+            if at <= horizon {
+                self.crl_timer_armed = true;
+                self.scheduler.schedule(
+                    at,
+                    EventClass::FlowTimer,
+                    Event::FlowTimer { flow: 0, step: 0 },
+                );
+            }
+            return;
+        }
+        let Some(phase2) = self.phase2.as_ref() else {
+            return;
+        };
+        let (version, entries) = phase2.broadcast_crl();
+        if version == 0 {
+            return;
+        }
+        let interval = phase2.params().crl_broadcast_interval;
+        // The signed CRL the unit relays unchanged (pass-through, [PRIMER] p.5): the
+        // receiver verifies it, so a unit that alters it is refused by the vehicle.
+        let secured = phase2.broadcast_secured_crls();
+        // Each unit asked about itself, and only a unit whose backhaul brought it the
+        // list broadcasts it.
+        // A unit that is switched off transmits nothing, and a unit whose download of the
+        // list is still on its backhaul does not hold it yet.
+        let broadcasters: Vec<NodeId> = phase2
+            .rsus_with_role("crl")
+            .into_iter()
+            .filter(|n| phase2.rsu_spec_of(*n).is_some_and(|s| s.backhaul.connected))
+            .filter(|n| !self.node_is_off(*n) && !self.rsu_crl_fetch.contains_key(n))
+            .collect();
+        // One list, one SDU. A 1609.2 `SecuredCrl` is one signed structure, verified whole
+        // (1609.2 §6.3; the unit relays it unchanged, [PRIMER] p.5), so it cannot go out as
+        // frames of entries, and Store and Repeat (USDOT RSU Spec v4.1) repeats a message
+        // in one WSM. A list over the network layer's MTU is refused there (counted,
+        // `crl_frames_refused_mtu`) under `fragmenter/none`, as a real unit could not air
+        // it, and devices fetch it over IP (decided 2026-11-02). Until then a 33 kB
+        // list went out as 25 frames a broadcast, 11 % of the air.
+        // The SDU carries the signed CRLs the unit relays (`AppPayload::Crl`), so its size is
+        // theirs; the size model (40 B an entry) only when the run signs none. Sized by the
+        // model, a frame would read 252 octets against the 328-octet SecuredCrl it carried.
+        type Chunks = Vec<Vec<v2xw_sec::linkage::CrlLinkageEntry>>;
+        let split = |list: &[v2xw_sec::linkage::CrlLinkageEntry],
+                     secured: &[std::sync::Arc<[u8]>]|
+         -> (Chunks, Vec<u32>) {
+            if list.is_empty() {
+                return (Vec::new(), Vec::new());
+            }
+            (
+                vec![list.to_vec()],
+                vec![crl_sdu_bytes(secured, phase2.crl_size(list.len() as u32))],
+            )
+        };
+        // What each unit relays: a unit in the certificate cycle fetched its RA's composite
+        // CRL over its own line and relays the one it installed, unchanged ([PRIMER] p.5),
+        // and nothing before its first install. Until 2026-10-27 every unit aired the latest
+        // published list, so a unit whose own fetch was not due aired a list it had never
+        // downloaded. A unit outside the cycle has the list sent down its
+        // line when the broadcast starts (step 4 of the backend step) and relays that.
+        let global = split(&entries, &secured);
+        type Content = (NodeId, u32, Chunks, Vec<u32>, Vec<std::sync::Arc<[u8]>>);
+        let contents: Vec<Content> = broadcasters
+            .into_iter()
+            .filter_map(|rsu| {
+                if phase2.rsu_in_cert_cycle(rsu) || phase2.rsu_crl_is_modelled(rsu) {
+                    let f = self.rsu_crl_held.get(&rsu)?;
+                    let (c, z) = split(&f.entries, &f.secured);
+                    Some((rsu, f.version, c, z, f.secured.clone()))
+                } else {
+                    Some((
+                        rsu,
+                        version,
+                        global.0.clone(),
+                        global.1.clone(),
+                        secured.clone(),
+                    ))
+                }
+            })
+            .collect();
+        for (rsu, version, chunks, sizes, secured) in contents {
+            let Some(signer) = self
+                .nodes
+                .get(&rsu)
+                .and_then(|n| n.stores().certs.active().map(|c| c.digest.clone()))
+            else {
+                // No valid certificate (a starving unit): it cannot sign the frame.
+                if let Some(p) = self.phase2.as_mut() {
+                    p.note_rsu_withheld(chunks.len() as u64);
+                }
+                continue;
+            };
+            let believed = self
+                .nodes
+                .get(&rsu)
+                .map_or(now, |n| n.clock().believed_time(now));
+            for (chunk, bytes) in chunks.iter().zip(&sizes) {
+                let mut frame = chunk.clone();
+                let mut bytes = *bytes;
+                // A compromised unit may add entries of its own before it signs the frame
+                // with its roadside credentials; it cannot re-sign the list as the CRL
+                // Generator, so every receiver's check refuses it.
+                if self.phase2.as_ref().is_some_and(|p| p.is_compromised(rsu)) {
+                    let own = hex_digest(&signer.0[..]);
+                    let forged = {
+                        let Engine {
+                            scheduler,
+                            rng,
+                            world,
+                            snapshot,
+                            provenance,
+                            params,
+                            phase2,
+                            ..
+                        } = self;
+                        let mut null = crate::ctx::NullRecorder::new();
+                        let mut ctx = EngineCtx::new(
+                            scheduler, rng, world, snapshot, provenance, params, &mut null,
+                        );
+                        phase2.as_mut().is_some_and(|p| {
+                            p.forge_crl_frame(&mut ctx, rsu, &own, now, &mut frame)
+                        })
+                    };
+                    if forged {
+                        bytes = self
+                            .phase2
+                            .as_ref()
+                            .map_or(bytes, |p| p.crl_size(frame.len() as u32));
+                    }
+                }
+                let ready_at = self.signing_cost(rsu).after(believed);
+                let tx = Transmission::sized(
+                    v2xw_msg::MsgType::Crl,
+                    bytes,
+                    signer.clone(),
+                    true,
+                    ready_at,
+                    believed,
+                );
+                let handed = self.hand_down_app(
+                    rsu,
+                    &tx,
+                    now,
+                    horizon,
+                    Some(AppPayload::Crl(Box::new((version, frame, secured.clone())))),
+                );
+                if let Some(phase2) = self.phase2.as_mut() {
+                    match handed {
+                        HandDown::Sent => phase2.note_crl_broadcast(),
+                        HandDown::MtuRefused => phase2.note_crl_frame_refused_mtu(),
+                        HandDown::NotSent => {}
+                    }
+                }
+            }
+        }
+        let next = interval.after(now);
+        if next <= horizon {
+            self.crl_timer_armed = true;
+            self.scheduler.schedule(
+                next,
+                EventClass::FlowTimer,
+                Event::FlowTimer { flow: 0, step: 0 },
+            );
+        }
+    }
+
+    /// The backend's share of a mobility step.
+    ///
+    /// Retries held reports, runs the backend in lockstep to `now`, writes what it did,
+    /// installs completed top-ups, starts the roadside CRL broadcast when a list is first
+    /// published, polls the CRL Store for cellular vehicles, starts top-ups for pools
+    /// running low, and moves each vehicle's CRL gate to the current i-period.
+    #[allow(clippy::too_many_lines)]
+    fn on_backend_step(&mut self, recorder: &mut dyn RunRecorder, now: SimTime, horizon: SimTime) {
+        if self.phase2.is_none() {
+            return;
+        }
+        // Where each vehicle is: the modem's coverage and a relay's reach are physics,
+        // so they are evaluated at the true position.
+        let positions: BTreeMap<NodeId, Vec3> = self
+            .actors
+            .values()
+            .filter_map(|a| a.node.map(|n| (n, a.last.pos)))
+            .collect();
+
+        // 0. A multi-message flow (a top-up's request, acknowledgement and polls) runs for
+        // seconds over `packet-pf`, and the vehicle keeps driving: its modem sees each
+        // step's position, so a cell change mid-flow starts a handover the flow's later
+        // segments wait out, rather than the whole flow staying in the cell it began in.
+        // Only `packet-pf` carries a flow segment by segment; `packet_link` is `None`
+        // (and observes nothing) for every other Uu model.
+        let flows = self
+            .phase2
+            .as_ref()
+            .map(crate::phase2::Phase2::cellular_flows_in_flight)
+            .unwrap_or_default();
+        for node in flows {
+            if let Some(&pos) = positions.get(&node) {
+                let _ = self.packet_link(node, pos);
+            }
+        }
+
+        // 1. Reports held for want of connectivity.
+        let held = self
+            .phase2
+            .as_ref()
+            .map(crate::phase2::Phase2::nodes_with_outbox)
+            .unwrap_or_default();
+        for node in held {
+            let reports = self
+                .phase2
+                .as_mut()
+                .map(|p| p.take_outbox(node, now))
+                .unwrap_or_default();
+            for (report, detected) in reports {
+                self.route_report(node, report, detected, now, horizon);
+            }
+        }
+
+        // 2. The backend, to now.
+        let tick = match self.phase2.as_mut() {
+            Some(p) => p.advance(now),
+            None => return,
+        };
+        if self
+            .phase2
+            .as_mut()
+            .is_some_and(crate::phase2::Phase2::take_pki_changeover)
+        {
+            self.follow_pki_changeover();
+        }
+        for r in &tick.stages {
+            self.emit(recorder, r);
+        }
+        for r in &tick.ma_reports {
+            self.emit(recorder, r);
+        }
+        for r in &tick.ma_decisions {
+            self.emit(recorder, r);
+        }
+        let claims = self
+            .phase2
+            .as_mut()
+            .map(crate::phase2::Phase2::take_link_claims)
+            .unwrap_or_default();
+        for c in &claims {
+            self.emit(recorder, c);
+        }
+        let (fates, received) = self
+            .phase2
+            .as_mut()
+            .map(crate::phase2::Phase2::take_report_records)
+            .unwrap_or_default();
+        for f in &fates {
+            self.emit(recorder, f);
+        }
+        for r in &received {
+            self.emit(recorder, r);
+        }
+        let crl_entries = self
+            .phase2
+            .as_mut()
+            .map(crate::phase2::Phase2::take_crl_entries)
+            .unwrap_or_default();
+        for e in &crl_entries {
+            self.emit(recorder, e);
+        }
+        let built = self
+            .phase2
+            .as_mut()
+            .map(crate::phase2::Phase2::take_built_reports)
+            .unwrap_or_default();
+        for b in &built {
+            self.emit(recorder, b);
+        }
+        for (t, bucket, bytes, node) in &tick.bytes {
+            self.emit_backend_bytes(recorder, *t, *bucket, *bytes, *node);
+        }
+        // On the packet-level Uu, the transport's own bytes: TCP, IP, TLS (without
+        // them, 100,490 B of handshakes would be missing from the buckets, at least 9.5 % of the cellular
+        // octets).
+        let transport = self
+            .phase2
+            .as_ref()
+            .map_or((0, 0, 0), |p| p.access().take_transport_bytes());
+        for (bucket, bytes) in [
+            (ByteBucket::CellularUl, transport.0),
+            (ByteBucket::CellularDl, transport.1),
+            (ByteBucket::Backhaul, transport.2),
+        ] {
+            if bytes > 0 {
+                self.emit_backend_bytes(recorder, now, bucket, bytes, None);
+            }
+        }
+
+        // 3. Completed top-ups.
+        for (node, creds, bytes) in &tick.installs {
+            if let Some(runtime) = self.nodes.get_mut(node) {
+                let installed =
+                    crate::wiring::add_provisioned(runtime, &self.credential_factory, *node, creds);
+                self.report.credentials_refused += (creds.len() - installed) as u64;
+            }
+            let rec = crate::sec_records::SecCert::new(now, *node, "top-up", None, Some(*bytes));
+            self.emit(recorder, &rec);
+        }
+        // Emergency vehicles' monthly identification certificates, renewed over their
+        // cellular link.
+        let renewed = self
+            .phase2
+            .as_mut()
+            .map(|p| p.identification_installs(None))
+            .unwrap_or_default();
+        for (node, creds) in renewed {
+            if let Some(runtime) = self.nodes.get_mut(&node) {
+                let ok = crate::wiring::install_identification_certs(runtime, node, &creds);
+                if let Some(p) = self.phase2.as_mut() {
+                    p.note_ident_refused((creds.len() - ok) as u64);
+                }
+            }
+        }
+        // Roadside units' weekly application certificates, renewed over their backhaul.
+        let renewing: Vec<NodeId> = self.rsus.keys().copied().collect();
+        for rsu in renewing {
+            for c in self.install_rsu_app_certs(rsu, false) {
+                let id8 = v2xw_sec::sig1609::cert_hashed_id8(c.key.certificate())
+                    .ok()
+                    .map(|d| v2xw_core::hash::hex_encode(&d));
+                let rec = crate::sec_records::SecCert::new(now, rsu, "rsu-app-cert", id8, None);
+                self.emit(recorder, &rec);
+            }
+            // The unit's application certificates, with their bytes: the
+            // preloaded ones on the first tick, then each change.
+            if let Some(c) = self
+                .phase2
+                .as_mut()
+                .and_then(|p| p.rsu_credentials(rsu, now))
+            {
+                self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
+            }
+        }
+        // Refused top-ups and successor enrolments, as credential events.
+        for (node, event) in &tick.events {
+            let rec = crate::sec_records::SecCert::new(now, *node, event, None, None);
+            self.emit(recorder, &rec);
+        }
+        // The backend's state, for the Backend view.
+        if let Some(view) = tick.view {
+            self.emit(recorder, &crate::sec_records::BackendState(view));
+        }
+        // The PKI view.
+        if let Some(state) = tick.pki.state {
+            self.emit(recorder, &crate::sec_records::PkiStateRecord(state));
+        }
+        for f in tick.pki.flows {
+            self.emit(recorder, &crate::sec_records::PkiFlowRecord(f));
+        }
+        for c in tick.pki.cases {
+            self.emit(recorder, &crate::sec_records::PkiCaseRecord(c));
+        }
+        for k in tick.pki.knowledge {
+            self.emit(recorder, &crate::sec_records::PkiKnowledgeRecord(k));
+        }
+
+        // 3b. Roadside units fetch their RA's composite CRL over the backhaul, and each
+        // install of a case's entry is recorded.
+        for r in self.install_rsu_crls(now) {
+            self.emit(recorder, &r);
+        }
+
+        // 4. A newly published list starts the roadside broadcast.
+        if (tick.published.is_some() || self.crl_carousel_pending) && !self.crl_timer_armed {
+            // The broadcast starts when the first broadcasting unit has the list. A unit in
+            // the certificate cycle fetched it over its own line in step 3b, and its timing
+            // is that fetch's: the list rides the line once (the double booking
+            // fixed 2026-10-26: each publication went down every unit's line a second time,
+            // 30 extra messages per list on the Midtown base). A unit outside the cycle has
+            // no fetch, and the list goes down its line here, queued with whatever else the
+            // line carries. A unit that is switched off has nothing on the air to start.
+            // A unit in the cycle whose own fetch was not due this step (its RA does not
+            // serve the new list yet: another provider's list, before the inter-provider
+            // hop) gets nothing down its line here either: it fetches the list itself when
+            // its RA serves it, and relays what it installed (the 16 extra
+            // line messages of the Midtown base). When no unit has a
+            // fetch landing yet, the start waits for the first step one does.
+            let landing = std::mem::take(&mut self.rsu_crl_landing);
+            let units: Vec<NodeId> = self
+                .phase2
+                .as_ref()
+                .map(|p| {
+                    p.rsus_with_role("crl")
+                        .into_iter()
+                        .filter(|n| p.rsu_spec_of(*n).is_some_and(|s| s.backhaul.connected))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let units: Vec<NodeId> = units
+                .into_iter()
+                .filter(|n| !self.node_is_off(*n))
+                .collect();
+            let any_units = !units.is_empty();
+            let first = self.phase2.as_mut().and_then(|p| {
+                let size = p.crl_size(p.published_crl().0);
+                units
+                    .into_iter()
+                    .filter_map(|n| match landing.get(&n) {
+                        Some(&lands) => Some(lands),
+                        None if p.rsu_in_cert_cycle(n) || p.rsu_crl_is_modelled(n) => None,
+                        None => p.access_mut().rsu_send(
+                            n,
+                            v2xw_radio::cellular::Direction::Downlink,
+                            size,
+                            now,
+                        ),
+                    })
+                    .min()
+            });
+            self.crl_carousel_pending = any_units && first.is_none();
+            let at = first.unwrap_or(now).max(now + 1);
+            if !self.crl_carousel_pending && at <= horizon {
+                self.crl_timer_armed = true;
+                self.scheduler.schedule(
+                    at,
+                    EventClass::FlowTimer,
+                    Event::FlowTimer { flow: 0, step: 0 },
+                );
+            }
+        }
+
+        // 5a. eMBMS: a new list, and each carousel turn, is broadcast once per MBSFN area
+        // to every cellular vehicle in coverage that lacks it — no uplink request.
+        let mbms = self
+            .phase2
+            .as_mut()
+            .and_then(|p| p.mbms_due(now, tick.published.is_some()))
+            .unwrap_or_default();
+        if !mbms.is_empty() {
+            let mut areas = std::collections::BTreeSet::new();
+            let mbms_secured: Vec<std::sync::Arc<[u8]>>;
+            let mut covered = Vec::new();
+            let mut lost = Vec::new();
+            let (version, entries, size, at) = {
+                let Some(p) = self.phase2.as_mut() else {
+                    return;
+                };
+                // Every provider's signed CRL rides the bearer.
+                let (v, e, secured) = p.mbms_crl();
+                // The carousel carries every provider's signed CRL; charged as their
+                // composite under the home CTL (edge-case package, item 6).
+                let size = p.composite_size(0, v, &secured);
+                mbms_secured = secured;
+                let a = p.access_mut();
+                let at = a.mbms().delivered(now, a.mbms_core(), size);
+                for node in mbms {
+                    let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+                    if a.uu_coverage(pos, now) {
+                        areas.insert(a.mbms_area(pos));
+                        covered.push(node);
+                    } else {
+                        lost.push(node);
+                    }
+                }
+                (v, e, size, at)
+            };
+            if let Some(p) = self.phase2.as_mut() {
+                for node in &lost {
+                    p.crl_poll_failed(*node);
+                }
+                let r = &mut p.access_mut().report;
+                r.mbms_broadcasts += areas.len() as u64;
+                r.mbms_bytes += u64::from(size) * areas.len() as u64;
+            }
+            if !areas.is_empty() {
+                self.emit_backend_bytes(
+                    recorder,
+                    now,
+                    ByteBucket::CellularDl,
+                    u64::from(size) * areas.len() as u64,
+                    None,
+                );
+            }
+            for node in covered {
+                if at > horizon {
+                    if let Some(p) = self.phase2.as_mut() {
+                        p.crl_poll_failed(node);
+                    }
+                    continue;
+                }
+                if let Some(p) = self.phase2.as_mut() {
+                    p.access_mut().report.mbms_receptions += 1;
+                }
+                let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
+                self.next_sdu += 1;
+                self.transfers.insert(
+                    sdu,
+                    Transfer::Crl {
+                        node,
+                        version,
+                        entries: entries.clone(),
+                        requested_at: now,
+                        mbms: true,
+                        secured: Some(mbms_secured.clone()),
+                    },
+                );
+                self.scheduler.schedule(
+                    at.max(now + 1),
+                    EventClass::NetDeliver,
+                    Event::NetDeliver { sdu, to: node },
+                );
+            }
+        }
+
+        // 5. Cellular CRL polls (unicast delivery only).
+        let polls = self
+            .phase2
+            .as_mut()
+            .filter(|p| p.access().crl_delivery() == crate::backend::CrlDelivery::Unicast)
+            .map(|p| p.crl_polls_due(now))
+            .unwrap_or_default();
+        for (node, _have, changed) in polls {
+            let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            // Under `crl_poll: info-status` the RA's information status comes first,
+            // and only a vehicle holding an older list goes on to the composite.
+            let mut status_ns = 0u64;
+            if self
+                .phase2
+                .as_ref()
+                .is_some_and(|p| p.params().info_status_poll)
+            {
+                match self.info_status_exchange(recorder, node, pos, now, changed) {
+                    Some(d) => status_ns = d,
+                    None => continue,
+                }
+            }
+            let (version, entries, req, size) = {
+                let Some(p) = self.phase2.as_mut() else { break };
+                let (v, e, _) = p.published_crl_for(node);
+                // What the RA really serves: the encoded composite CRL, not 40 B an
+                // entry (edge-case package, item 6); or 412 when the copy is current.
+                // Proto B9b: the conditional GET and the RA's answer, framed (HTTP/1.1
+                // request line and headers, status line and headers).
+                let size = crate::phase2::Phase2::poll_answer_bytes(
+                    changed.then(|| p.crl_download_size(node)),
+                );
+                (v, e, p.crl_poll_request_bytes(node), size)
+            };
+            let (ul, dl) = {
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    phase2,
+                    ..
+                } = self;
+                let mut null = crate::ctx::NullRecorder::new();
+                let mut ctx = EngineCtx::new(
+                    scheduler, rng, world, snapshot, provenance, params, &mut null,
+                );
+                let access = phase2.as_mut().map(crate::phase2::Phase2::access_mut);
+                match access {
+                    None => break,
+                    Some(a) => {
+                        let ul = a.uu_send(
+                            &mut ctx,
+                            node,
+                            pos,
+                            v2xw_radio::cellular::Direction::Uplink,
+                            req,
+                        );
+                        let dl = if matches!(ul, crate::backend::AccessOutcome::Arrives(_)) {
+                            a.uu_send(
+                                &mut ctx,
+                                node,
+                                pos,
+                                v2xw_radio::cellular::Direction::Downlink,
+                                size,
+                            )
+                        } else {
+                            ul
+                        };
+                        (ul, dl)
+                    }
+                }
+            };
+            match (ul, dl) {
+                (
+                    crate::backend::AccessOutcome::Arrives(t1),
+                    crate::backend::AccessOutcome::Arrives(t2),
+                ) => {
+                    // The request reaches the store at `t1`; the store answers after a
+                    // backend service time, and the list comes back over the downlink,
+                    // whose own delay was drawn with the request (the M/M/1 state at the
+                    // instant of the exchange).
+                    let service = self
+                        .phase2
+                        .as_ref()
+                        .map_or(Duration::ZERO, |p| p.params().scms.backend_overhead);
+                    let wan = self
+                        .phase2
+                        .as_ref()
+                        .map_or(0, |p| p.internet_round_trip_ns(node));
+                    let at = service
+                        .after(t1)
+                        .saturating_add(t2.saturating_sub(now))
+                        .saturating_add(status_ns)
+                        .saturating_add(wan);
+                    for (bucket, bytes) in [
+                        (ByteBucket::CellularUl, u64::from(req)),
+                        (ByteBucket::CellularDl, u64::from(size)),
+                    ] {
+                        self.emit_backend_bytes(recorder, now, bucket, bytes, Some(node));
+                    }
+                    if let Some(p) = self.phase2.as_mut() {
+                        p.note_crl_poll_bytes(req, size);
+                    }
+                    if !changed {
+                        // 412: nothing to install.
+                        if let Some(p) = self.phase2.as_mut() {
+                            p.note_crl_not_modified();
+                        }
+                    } else if at <= horizon {
+                        let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
+                        self.next_sdu += 1;
+                        self.transfers.insert(
+                            sdu,
+                            Transfer::Crl {
+                                node,
+                                version,
+                                entries,
+                                requested_at: now,
+                                mbms: false,
+                                secured: None,
+                            },
+                        );
+                        self.scheduler.schedule(
+                            at.max(now + 1),
+                            EventClass::NetDeliver,
+                            Event::NetDeliver { sdu, to: node },
+                        );
+                    } else if let Some(p) = self.phase2.as_mut() {
+                        p.crl_poll_failed(node);
+                    }
+                }
+                _ => {
+                    if let Some(p) = self.phase2.as_mut() {
+                        p.crl_poll_failed(node);
+                    }
+                }
+            }
+        }
+
+        // 6. Top-ups for pools running low. Under `net.rsu_ip.air: sch` a relayed flow
+        // whose service-channel transfer gave up is dropped first, so it starts again
+        // at the vehicle's next contact.
+        if let Some(p) = self.phase2.as_mut() {
+            p.abort_cut_off_flows();
+        }
+        let due = self
+            .phase2
+            .as_mut()
+            .map(|p| p.topups_due(now))
+            .unwrap_or_default();
+        for (node, kind, i) in due {
+            let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            let packet = if kind == crate::backend::AccessKind::Cellular {
+                self.packet_link(node, pos)
+            } else {
+                None
+            };
+            let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
+            let Some(p) = self.phase2.as_mut() else { break };
+            let link = match kind {
+                crate::backend::AccessKind::Cellular => {
+                    if p.access_mut().uu_coverage(pos, now) {
+                        packet.or_else(|| p.access_mut().nominal_link(kind, None))
+                    } else {
+                        None
+                    }
+                }
+                crate::backend::AccessKind::RsuRelay => {
+                    let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
+                    let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
+                    if let Some(u) = unit {
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
+                    }
+                    p.access_mut().nominal_link(kind, backhaul)
+                }
+                crate::backend::AccessKind::Offline => None,
+            };
+            if let Some(link) = link {
+                p.start_topup(node, link, i, now);
+            }
+        }
+
+        // 6b. Successor enrolments for certificates about to expire, over the same access.
+        let due = self
+            .phase2
+            .as_mut()
+            .map(|p| p.reenrolments_due(now))
+            .unwrap_or_default();
+        for (node, kind) in due {
+            let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            let packet = if kind == crate::backend::AccessKind::Cellular {
+                self.packet_link(node, pos)
+            } else {
+                None
+            };
+            let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
+            let Some(p) = self.phase2.as_mut() else { break };
+            let link = match kind {
+                crate::backend::AccessKind::Cellular => {
+                    if p.access_mut().uu_coverage(pos, now) {
+                        packet.or_else(|| p.access_mut().nominal_link(kind, None))
+                    } else {
+                        None
+                    }
+                }
+                crate::backend::AccessKind::RsuRelay => {
+                    let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
+                    let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
+                    if let Some(u) = unit {
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
+                    }
+                    p.access_mut().nominal_link(kind, backhaul)
+                }
+                crate::backend::AccessKind::Offline => None,
+            };
+            if let Some(link) = link {
+                p.start_reenrol(node, link, now);
+            }
+        }
+
+        // 6c. CCMS: stations fetch the ECTL and the CA-CRL from the Distribution Centre,
+        // over the same access.
+        let due = self
+            .phase2
+            .as_mut()
+            .map(|p| p.trust_fetches_due(now))
+            .unwrap_or_default();
+        for (node, kind) in due {
+            let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            let packet = if kind == crate::backend::AccessKind::Cellular {
+                self.packet_link(node, pos)
+            } else {
+                None
+            };
+            let among = self.wsa_units(node, now);
+            let session = among
+                .as_ref()
+                .and_then(|_| {
+                    self.phase2.as_ref()?.relay_in_range_among(
+                        pos,
+                        "provisioning-proxy",
+                        among.as_deref(),
+                    )
+                })
+                .and_then(|u| Some((u, self.sch_session(node, u, now)?)));
+            let Some(p) = self.phase2.as_mut() else { break };
+            let link = match kind {
+                crate::backend::AccessKind::Cellular => {
+                    if p.access_mut().uu_coverage(pos, now) {
+                        packet.or_else(|| p.access_mut().nominal_link(kind, None))
+                    } else {
+                        None
+                    }
+                }
+                crate::backend::AccessKind::RsuRelay => {
+                    let unit = p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref());
+                    let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
+                    if let Some(u) = unit {
+                        match session {
+                            Some((su, s)) if su == u => p.access_mut().bind_relay_sch(node, u, s),
+                            _ => p.access_mut().bind_relay(node, u),
+                        }
+                    }
+                    p.access_mut().nominal_link(kind, backhaul)
+                }
+                crate::backend::AccessKind::Offline => None,
+            };
+            if let Some(link) = link {
+                p.start_trust_fetch(node, link, now);
+            }
+        }
+
+        // 7. Each vehicle's CRL gate follows its own clock across i-periods.
+        let Some(p) = self.phase2.as_ref() else {
+            return;
+        };
+        let lifecycle = *p.params();
+        for (node, runtime) in &mut self.nodes {
+            if self.rsus.contains_key(node) {
+                continue;
+            }
+            let believed = runtime.clock().believed_time(now);
+            let period = lifecycle.period_at(believed);
+            if runtime.stores().crl.current_period() != period {
+                runtime.stores_mut().crl.set_period(period);
+            }
+        }
+    }
+
+    /// Writes one backend transfer's bytes on `net.bytes` and books them to the access
+    /// counters, so the recording and the run report cannot disagree.
+    fn emit_backend_bytes(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        t: SimTime,
+        bucket: ByteBucket,
+        bytes: u64,
+        node: Option<NodeId>,
+    ) {
+        let id = BACKEND_BYTES_ID_BASE + self.next_backend_bytes;
+        self.next_backend_bytes += 1;
+        if let Some(p) = self.phase2.as_mut() {
+            p.access_mut().note_bytes(bucket, bytes);
+        }
+        let rec = NetBytes::new(t, id, bucket, bytes, node);
+        self.emit(recorder, &rec);
+    }
+
+    /// A report's `generationLocation`: the reporter's position as a 1609.2
+    /// `ThreeDLocation` (tenths of a microdegree; elevation in decimetres + 4095, the
+    /// node layer's `elevation_1609`).
+    fn report_location(&self, node: NodeId) -> v2xw_sec::envelope::GenerationLocation {
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
+        let (lat, lon, alt) = origin.to_geodetic(pos);
+        let tenth_micro = |deg: f64, lim: f64| (deg.clamp(-lim, lim) * 1e7).round() as i32;
+        v2xw_sec::envelope::GenerationLocation {
+            lat_tenth_microdeg: tenth_micro(lat, 90.0),
+            lon_tenth_microdeg: tenth_micro(lon, 180.0),
+            elevation: ((alt * 10.0).round() + 4_095.0).clamp(0.0, 65_534.0) as u16,
+        }
+    }
+
+    /// Sends one misbehaviour report over the reporter's backend access, or holds it.
+    fn route_report(
+        &mut self,
+        node: NodeId,
+        report: v2xw_threat::MisbehaviourReport,
+        detected_at: SimTime,
+        now: SimTime,
+        horizon: SimTime,
+    ) {
+        // A roadside unit's own report goes straight onto its backhaul: it is wired
+        // infrastructure with no access leg to pay.
+        if let Some(backhaul) = self
+            .phase2
+            .as_ref()
+            .and_then(|p| p.rsu_spec_of(node).map(|s| s.backhaul))
+        {
+            if !backhaul.connected {
+                return;
+            }
+            // under the US SCMS a unit's own detection has no report to file
+            // (`Phase2::files_report`); it is counted, by reason, and not sent.
+            if !self
+                .phase2
+                .as_mut()
+                .is_some_and(|p| p.files_report(node, &report))
+            {
+                return;
+            }
+            let sent_at = self.signing_cost(node).after(now);
+            let bytes = crate::phase2::report_bytes();
+            let at = self
+                .phase2
+                .as_mut()
+                .and_then(|p| {
+                    p.access_mut().rsu_send(
+                        node,
+                        v2xw_radio::cellular::Direction::Uplink,
+                        bytes,
+                        sent_at,
+                    )
+                })
+                .unwrap_or_else(|| backhaul.delay(bytes).after(sent_at));
+            if at > horizon {
+                return;
+            }
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_rsu_report();
+            }
+            let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
+            self.next_sdu += 1;
+            self.transfers.insert(
+                sdu,
+                Transfer::Report {
+                    reporter: node,
+                    report: Box::new(report),
+                    via: Some(node),
+                    journey: None,
+                    detected_at,
+                    sent_at,
+                    transport: v2xw_proto::Transport::RsuBackhaul,
+                },
+            );
+            self.scheduler.schedule(
+                at,
+                EventClass::NetDeliver,
+                Event::NetDeliver { sdu, to: node },
+            );
+            return;
+        }
+        let Some(kind) = self.phase2.as_ref().map(|p| p.access_kind(node)) else {
+            return;
+        };
+        // A report the device cannot build as a real SM-MBR upload has no bytes to send
+        // (OF-2): it never reaches the access link (`Phase2::files_report`).
+        if !self
+            .phase2
+            .as_mut()
+            .is_some_and(|p| p.files_report(node, &report))
+        {
+            return;
+        }
+        // [SM-MBR] §2.2: a new report enters the device's store first, where the quota
+        // may delete it (or an older, lighter one) before any upload.
+        if !self
+            .phase2
+            .as_mut()
+            .is_none_or(|p| p.admit_report(node, &report, detected_at, now))
+        {
+            return;
+        }
+        let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
+        let bytes = crate::phase2::report_bytes();
+        let sign = self.signing_cost(node);
+        // A report is signed with a pseudonym certificate valid when it is signed: with
+        // none (the week rollover before the top-up lands, an exhausted pool) it stays in
+        // the store until one is, instead of going out unsigned.
+        if let Some(p) = self.phase2.as_mut()
+            && p.report_waits_for_signer(node, sign.after(now))
+        {
+            p.hold_report(node, report, detected_at, now);
+            return;
+        }
+        match kind {
+            crate::backend::AccessKind::Cellular => {
+                let outcome = {
+                    let Engine {
+                        scheduler,
+                        rng,
+                        world,
+                        snapshot,
+                        provenance,
+                        params,
+                        phase2,
+                        ..
+                    } = self;
+                    let mut null = crate::ctx::NullRecorder::new();
+                    let mut ctx = EngineCtx::new(
+                        scheduler, rng, world, snapshot, provenance, params, &mut null,
+                    );
+                    let Some(p) = phase2.as_mut() else { return };
+                    p.access_mut().uu_send(
+                        &mut ctx,
+                        node,
+                        pos,
+                        v2xw_radio::cellular::Direction::Uplink,
+                        bytes,
+                    )
+                };
+                match outcome {
+                    crate::backend::AccessOutcome::Arrives(t) => {
+                        // The report is signed and encrypted to the MA before it leaves.
+                        let sent_at = sign.after(now);
+                        let at = sign.after(t).max(now + 1);
+                        if at > horizon {
+                            if let Some(p) = self.phase2.as_mut() {
+                                p.hold_report(node, report, detected_at, now);
+                            }
+                            return;
+                        }
+                        if let Some(p) = self.phase2.as_mut() {
+                            p.note_upload(node, kind);
+                            p.note_report_uploaded(node, &report, now);
+                        }
+                        let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
+                        self.next_sdu += 1;
+                        self.transfers.insert(
+                            sdu,
+                            Transfer::Report {
+                                reporter: node,
+                                report: Box::new(report),
+                                via: None,
+                                journey: None,
+                                detected_at,
+                                sent_at,
+                                transport: v2xw_proto::Transport::CellularUu,
+                            },
+                        );
+                        self.scheduler.schedule(
+                            at,
+                            EventClass::NetDeliver,
+                            Event::NetDeliver { sdu, to: node },
+                        );
+                    }
+                    crate::backend::AccessOutcome::Lost => {
+                        // The upload was never TCP-confirmed, so the report stays in the
+                        // store and goes again at the next look ([SM-MBR] §2.2: a report
+                        // is deleted only after its confirmed upload). Before this it was
+                        // dropped, so a lost attempt lost the evidence.
+                        if let Some(p) = self.phase2.as_mut() {
+                            p.note_report_lost();
+                            p.hold_report(node, report, detected_at, now);
+                        }
+                    }
+                    crate::backend::AccessOutcome::NoCoverage => {
+                        // No serving cell: a roadside unit in range relays it, or it waits.
+                        if let Some(report) = self.relay_report(node, report, pos, now, horizon)
+                            && let Some(p) = self.phase2.as_mut()
+                        {
+                            p.hold_report(node, report, detected_at, now);
+                        }
+                    }
+                }
+            }
+            crate::backend::AccessKind::RsuRelay => {
+                if let Some(report) = self.relay_report(node, report, pos, now, horizon) {
+                    if let Some(p) = self.phase2.as_mut() {
+                        p.hold_report(node, report, detected_at, now);
+                    }
+                }
+            }
+            crate::backend::AccessKind::Offline => {
+                if let Some(p) = self.phase2.as_mut() {
+                    p.hold_report(node, report, detected_at, now);
+                }
+            }
+        }
+    }
+
+    /// Puts a report on the air to a relaying roadside unit in range, and returns it for
+    /// the caller to keep in the store: it leaves the store only when a unit confirms it
+    /// ([`Phase2::relay_delivered`], on the unit's reception). Returns it untried when no
+    /// unit is in range, the vehicle cannot sign, or its retransmission timer is running
+    /// ([`Phase2::relay_may_send`]); `None` only when the network layer refuses it for ever.
+    ///
+    /// Before this a report on the air was counted as uploaded and dropped from the store
+    /// whether or not any unit decoded it: a relay-only car behind buildings 212 m from a
+    /// unit "uploaded" 4 reports no unit heard, and FB3's 268 uploads that never reached
+    /// an MA include such reports.
+    ///
+    /// A device uses whatever IP connectivity it has: a vehicle with no modem relays, and
+    /// one whose modem has no serving cell
+    /// relays when a unit is in range.
+    fn relay_report(
+        &mut self,
+        node: NodeId,
+        report: v2xw_threat::MisbehaviourReport,
+        pos: Vec3,
+        now: SimTime,
+        horizon: SimTime,
+    ) -> Option<v2xw_threat::MisbehaviourReport> {
+        let among = self.wsa_units(node, now);
+        let in_range = self
+            .phase2
+            .as_ref()
+            .and_then(|p| p.relay_in_range_among(pos, "report-forward", among.as_deref()))
+            .is_some();
+        if !in_range
+            || !self
+                .phase2
+                .as_ref()
+                .is_some_and(|p| p.relay_may_send(node, now))
+        {
+            return Some(report);
+        }
+        let Some(signer) = self
+            .nodes
+            .get(&node)
+            .and_then(|n| n.stores().certs.active().map(|c| c.digest.clone()))
+        else {
+            return Some(report);
+        };
+        let believed = self
+            .nodes
+            .get(&node)
+            .map_or(now, |n| n.clock().believed_time(now));
+        let tx = Transmission::sized(
+            v2xw_msg::MsgType::Mbr,
+            crate::phase2::report_bytes(),
+            signer,
+            true,
+            self.signing_cost(node).after(believed),
+            believed,
+        );
+        // A signed report the network layer cannot carry (a post-quantum signature over
+        // WSMP with no SDU fragmenter) never leaves the device. The stack
+        // refuses that SDU every time, so the report is not kept for another try; it is
+        // counted and lost. One on the air stays stored until a unit confirms it.
+        let kept = report.clone();
+        let handed = self.hand_down_app(
+            node,
+            &tx,
+            now,
+            horizon,
+            Some(AppPayload::Report(Box::new(report))),
+        );
+        let p = self.phase2.as_mut()?;
+        match handed {
+            HandDown::Sent => {
+                p.note_relay_sent(node, now);
+                Some(kept)
+            }
+            HandDown::MtuRefused => {
+                p.forget_taken(node, &kept.report_id);
+                p.note_report_refused_mtu(node);
+                None
+            }
+            HandDown::NotSent => Some(kept),
+        }
+    }
+
+    /// After the node phase: each vehicle's pseudonym changes (every identifier together,
+    /// on `sec.cert` and `sec.pseudonym`) and whether it is left unable to sign.
+    fn note_security(&mut self, recorder: &mut dyn RunRecorder, ids: &[NodeId], now: SimTime) {
+        let mut out: Vec<crate::sec_records::SecPseudonymView> = Vec::new();
+        let mut changes: Vec<NodeId> = Vec::new();
+        for id in ids {
+            if self.rsus.contains_key(id) {
+                // A unit in the application-certificate cycle starves when none of its
+                // certificates is valid by its own clock.
+                if let (Some(runtime), Some(p)) = (self.nodes.get(id), self.phase2.as_mut())
+                    && p.rsu_in_cert_cycle(*id)
+                {
+                    let t = runtime.clock().believed_time(now);
+                    let valid = runtime
+                        .stores()
+                        .certs
+                        .credentials()
+                        .iter()
+                        .any(|c| c.is_valid_at(t));
+                    p.note_rsu_cert(*id, now, valid, runtime.tx_uncredentialed());
+                }
+                continue;
+            }
+            let Some(runtime) = self.nodes.get(id) else {
+                continue;
+            };
+            if !runtime.state().transmits() {
+                continue;
+            }
+            let certs = &runtime.stores().certs;
+            let active = certs.active().cloned();
+            let n_changes = certs.changes();
+            let pool_valid = certs
+                .credentials()
+                .iter()
+                .filter(|c| c.is_valid_at(runtime.clock().believed_time(now)))
+                .count() as u32;
+            let digest = active
+                .as_ref()
+                .map(|c| crate::phase2::digest_bytes(&c.digest));
+            let Some(p) = self.phase2.as_mut() else {
+                return;
+            };
+            // Starved means the node cannot sign at its next periodic step: nothing in its
+            // pool is valid now. A pool installed since the node's last periodic step (a
+            // vehicle that has just joined, a top-up that has just landed) is not yet swept
+            // into `Active`, and a wake between steps (`wake_timed`) does not sweep, so
+            // `active()` alone read every newly joined vehicle as starved for up to one
+            // step: 26 of 55 vehicles on `credential-lifecycle`, none of which ever missed
+            // a signature.
+            if active.is_none() && pool_valid == 0 {
+                p.note_starved(*id, now);
+            } else {
+                p.note_signable(*id, now);
+            }
+            if let Some(old) = p.note_change(*id, n_changes, digest) {
+                let hex = |d: &[u8]| v2xw_core::hash::hex_encode(d);
+                out.push(crate::sec_records::SecPseudonymView {
+                    t: now,
+                    node: *id,
+                    reason: match (active.is_none(), certs.last_reason()) {
+                        (true, _) => "exhausted".to_string(),
+                        (false, Some(r)) => serde_json::to_value(r)
+                            .ok()
+                            .and_then(|v| v.as_str().map(str::to_string))
+                            .unwrap_or_else(|| "scheduled".to_string()),
+                        (false, None) => "scheduled".to_string(),
+                    },
+                    old_digest: old.map(|d| hex(&d)),
+                    new_digest: digest.map(|d| hex(&d)),
+                    old_temp_id: old.map(|d| hex(&d[..4])),
+                    new_temp_id: digest.map(|d| hex(&d[..4])),
+                    old_l2: old.map(|d| hex(&crate::phase2::l2_address(&d))),
+                    new_l2: digest.map(|d| hex(&crate::phase2::l2_address(&d))),
+                    i: active.as_ref().map_or(0, |c| c.i_period),
+                    j: active.as_ref().map_or(0, |c| c.j_index),
+                    pool_valid,
+                    changes: n_changes,
+                });
+                changes.push(*id);
+            }
+        }
+        for view in out {
+            let cert = crate::sec_records::SecCert::new(
+                view.t,
+                view.node,
+                "change",
+                view.new_digest.clone(),
+                None,
+            );
+            self.emit(recorder, &cert);
+            let rec = crate::sec_records::SecPseudonym(view);
+            self.emit(recorder, &rec);
+        }
+        let _ = changes;
+    }
+
+    /// One vehicle's security panel row, with its telemetry window.
+    fn emit_node_security(&mut self, recorder: &mut dyn RunRecorder, node: NodeId, now: SimTime) {
+        if self.rsus.contains_key(&node) {
+            return;
+        }
+        let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
+        let among = self.wsa_units(node, now);
+        let (Some(p), Some(runtime)) = (self.phase2.as_ref(), self.nodes.get(&node)) else {
+            return;
+        };
+        let link_up = match p.access_kind(node) {
+            crate::backend::AccessKind::Cellular => {
+                // `uu_coverage` is a read of the cell plan and takes `&self`.
+                p.uu_coverage(pos, now)
+            }
+            crate::backend::AccessKind::RsuRelay => {
+                p.relay_in_range_among(pos, "report-forward", among.as_deref())
+                    .is_some()
+                    || p.relay_in_range_among(pos, "provisioning-proxy", among.as_deref())
+                        .is_some()
+            }
+            crate::backend::AccessKind::Offline => false,
+        };
+        let believed = runtime.clock().believed_time(now);
+        let Some(view) = p.security_view(
+            node,
+            believed,
+            &runtime.stores().certs,
+            p.crl_entries_of(node),
+            link_up,
+        ) else {
+            return;
+        };
+        // The CRLs the node's own receiver verified and holds (OF-3).
+        let crls = runtime
+            .security()
+            .trust()
+            .held_crls()
+            .iter()
+            .map(crate::sec_records::HeldCrlView::of)
+            .collect();
+        let rec = crate::sec_records::NodeSecurity(crate::sec_records::NodeSecurityView {
+            t: now,
+            crls,
+            ..view
+        });
+        let events = self
+            .dataset
+            .as_deref_mut()
+            .map(|ds| crate::dataset_records::pki_events(ds, &rec.0))
+            .unwrap_or_default();
+        self.emit(recorder, &rec);
+        for e in &events {
+            self.emit(recorder, e);
+        }
+        // Its i × j pool, when it changed.
+        let creds = match (self.phase2.as_mut(), self.nodes.get(&node)) {
+            (Some(p), Some(runtime)) => p.node_credentials(node, believed, &runtime.stores().certs),
+            _ => None,
+        };
+        if let Some(mut c) = creds {
+            c.t = now;
+            self.emit(recorder, &crate::sec_records::NodeCredentialsRecord(c));
+        }
+    }
+
+    /// One link's received power and distance.
+    ///
+    /// Sequential by necessity: the shadowing process and the fading model are stateful
+    /// per link. `rx_power = P_tx − total_loss − obstacle − rain + fading_gain`, summed with
+    /// [`v2xw_core::math::sum_ordered`] so two builds cannot disagree about its last bit.
+    /// The antenna gains, net of each end's cable loss (`radio.devices`), are in
+    /// `total_loss` as the propagation model's `antenna_db`.
+    ///
+    /// The third value is whether a focus region puts this receiver under the high-tier
+    /// PHY rule. With a focus region the stack is chosen per link by
+    /// `v2xw_radio::FocusPlan::evaluate`: inside, the focus
+    /// stack; inbound, the surrounding propagation with no fading draw; otherwise the
+    /// surrounding stack.
+    fn link_budget(
+        &mut self,
+        state: &FrameState,
+        rx: NodeId,
+        rx_pos: Vec3,
+        geometry: link::LinkGeometry,
+        drawn_fade: Option<f64>,
+        drawn_shadow: Option<f64>,
+    ) -> (f64, f64, bool, Option<&'static str>, v2xw_radio::LosClass) {
+        let now = self.scheduler.now();
+        let link = LinkKey::new(state.tx, rx);
+        let distance_m = state.tx_pos.distance(rx_pos);
+        let freq_hz = self.carrier_hz();
+        let link::LinkGeometry {
+            tx_end,
+            rx_end,
+            evaluation,
+            law,
+            los,
+        } = geometry;
+        let high = evaluation.is_some_and(|e| e.phy_tier == Tier::High);
+        let placement = evaluation.map(|e| e.placement.label());
+        let los_class = los.class;
+
+        let (loss, fade, obstacle_db) = {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                propagation,
+                fading,
+                weather,
+                obstacles,
+                focus,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            use v2xw_radio::LinkPlacement;
+            let (prop, fad, draw_fading): (
+                &mut Box<dyn BoxedPropagation>,
+                &mut Box<dyn BoxedFading>,
+                bool,
+            ) = match (focus.as_mut(), evaluation.map(|e| e.placement)) {
+                (Some(f), Some(LinkPlacement::Inside)) => (&mut f.propagation, &mut f.fading, true),
+                (_, Some(LinkPlacement::Inbound)) => (propagation, fading, false),
+                _ => (propagation, fading, true),
+            };
+            // A shadowing draw taken in the parallel half is the model's own draw for
+            // this link (`LogDistanceShadowing::shadow_draw_shared`); without one the
+            // model draws here.
+            let loss = match (drawn_shadow, prop.as_log_distance_mut()) {
+                (Some(draw), Some(m)) => {
+                    // GEMV²'s σ from the surroundings, when asked for
+                    // (`radio.channel_model.density_sigma`).
+                    let sigma = obstacles
+                        .density
+                        .as_ref()
+                        .map(|d| d.sigma_db(&los, tx_end.pos, rx_end.pos, ctx.actors));
+                    m.loss_db_drawn_sigma(&tx_end, &rx_end, &los, draw, sigma)
+                }
+                _ => prop.loss_db(&mut ctx, &tx_end, &rx_end, freq_hz, &los, weather),
+            };
+            let obstacle_db = obstacles.loss_db(
+                &mut ctx,
+                &tx_end,
+                &rx_end,
+                &los,
+                freq_hz,
+                loss.path_db,
+                !law.owns_buildings(),
+            );
+            let fade = if draw_fading {
+                // Drawn ahead, in parallel, when the model allows it (`start_frame`).
+                drawn_fade.unwrap_or_else(|| fad.sample_db(&mut ctx, link, distance_m, now))
+            } else {
+                0.0
+            };
+            (loss, fade, obstacle_db)
+        };
+        // Rain over the whole link (ITU-R P.838-3 at the carrier): hundredths of a
+        // decibel at 5.9 GHz, and charged once, whatever the law.
+        let rain_db = self.rain.as_ref().map_or(0.0, |r| {
+            r.attenuation_db(&self.weather, distance_m, freq_hz)
+        });
+
+        let rssi_dbm = v2xw_core::math::sum_ordered([
+            state.descriptor.tx_power_dbm,
+            -loss.total_db,
+            -obstacle_db,
+            -rain_db,
+            fade,
+        ]);
+        (rssi_dbm, distance_m, high, placement, los_class)
+    }
+
+    /// The carrier the link budget is evaluated at, hertz.
+    fn carrier_hz(&self) -> f64 {
+        self.sidelink
+            .as_ref()
+            .map_or(self.dsrc_freq_hz, |sl| sl.freq_hz)
+    }
+
+    /// One node's radio endpoint at an instant: its antenna position and class.
+    fn endpoint(&self, node: NodeId, ground: Vec3, now: SimTime) -> RadioEndpoint {
+        self.link_view().endpoint(node, ground, now)
+    }
+
+    /// Shared borrows of what a link's geometry reads, for the parallel map in
+    /// [`Engine::start_frame`].
+    fn link_view(&self) -> link::LinkView<'_> {
+        link::LinkView {
+            scenario: &self.scenario,
+            world: &self.world,
+            actors: &self.actors,
+            rsus: &self.rsus,
+            node_class: &self.node_class,
+            obstacles: &self.obstacles,
+            bodies: &self.bodies,
+            focus: self.focus.as_ref().map(|f| &f.plan),
+            main_law: self.main_law,
+            focus_law: self.focus_law,
+            sampled_antenna: self.sampled_antenna.as_deref(),
+        }
+    }
+
+    /// The radio a node carries (`radio.devices`), by its class.
+    fn device_of(&self, node: NodeId) -> crate::wiring::DeviceRadio {
+        let class = if self.rsus.contains_key(&node) {
+            v2xw_radio::ActorClass::Rsu
+        } else {
+            self.node_class
+                .get(&node)
+                .copied()
+                .unwrap_or(v2xw_radio::ActorClass::Car)
+        };
+        crate::wiring::device_for(&self.scenario, class)
+    }
+
+    /// The kind of unit a node is, for its radio count.
+    fn class_of(&self, node: NodeId) -> v2xw_radio::ActorClass {
+        if self.rsus.contains_key(&node) {
+            v2xw_radio::ActorClass::Rsu
+        } else {
+            self.node_class
+                .get(&node)
+                .copied()
+                .unwrap_or(v2xw_radio::ActorClass::Car)
+        }
+    }
+
+    /// Whether a node has a radio on `ch`: always, in a single-channel run.
+    fn tuned(&self, node: NodeId, ch: ChannelId) -> bool {
+        self.channel_plan
+            .as_ref()
+            .is_none_or(|p| p.tuned(self.class_of(node), ch))
+    }
+
+    /// Whether `node` switches its one radio between the control and service
+    /// channels (IEEE 1609.4 alternating access). A unit with two radios keeps one on
+    /// each channel and never alternates.
+    fn alternates(&self, node: NodeId) -> bool {
+        self.wave.is_some() && channels::unit_radios(&self.scenario, self.class_of(node)) < 2
+    }
+
+    /// The run's safety channel: the CCH interval's channel under alternating access.
+    fn primary_channel(&self) -> ChannelId {
+        self.channel_plan
+            .as_ref()
+            .map_or(self.dsrc_channel, |p| p.primary)
+    }
+
+    /// Whether `node` ever sends or measures on `ch`: [`Engine::tuned`], and under
+    /// alternating access also the service channel of a single-radio unit, which
+    /// it reaches in the SCH interval.
+    fn uses_channel(&self, node: NodeId, ch: ChannelId) -> bool {
+        if self.alternates(node) {
+            return ch == self.primary_channel()
+                || self.channel_plan.as_ref().and_then(|p| p.service) == Some(ch);
+        }
+        self.tuned(node, ch)
+    }
+
+    /// Whether `node`'s radio is on `ch` for the whole of a frame on the air from `start`
+    /// to `end`. A single-radio unit under alternating access is on the safety
+    /// channel in CCH intervals, on the service channel (if the run has one) in SCH
+    /// intervals and on neither in a guard, so a frame that a switch interrupts is lost
+    /// to it. Everyone else: [`Engine::tuned`].
+    fn tuned_at(&self, node: NodeId, ch: ChannelId, start: SimTime, end: SimTime) -> bool {
+        use v2xw_radio::wave_schedule::Interval;
+        if let Some(w) = self.wave
+            && self.alternates(node)
+        {
+            let iv = w.interval(start);
+            if w.interval(end.saturating_sub(1).max(start)) != iv || w.interval_end_ns(start) < end
+            {
+                return false;
+            }
+            return match iv {
+                Interval::Cch => ch == self.primary_channel(),
+                Interval::Sch => self.channel_plan.as_ref().and_then(|p| p.service) == Some(ch),
+                Interval::Guard => false,
+            };
+        }
+        self.tuned(node, ch)
+    }
+
+    /// What a frame's power at `node` amounts to on `channel`: the attempt's power on its
+    /// own channel; on another, its power there (an attempt or energy only) less the ACIR
+    /// between the two; `None` when it puts nothing on `channel`.
+    /// The level a frame must reach at a receiver tuned to `channel` to hold its carrier
+    /// sense busy: preamble detect for a frame of that channel, energy detect for another
+    /// channel's frame through the filter (IEEE 802.11-2020 §17.3.10.6).
+    fn sense_level_dbm(&self, state: &FrameState, channel: ChannelId) -> f64 {
+        let cca = self.phy.cca_config();
+        if state.descriptor.channel == channel {
+            cca.cca_threshold_dbm()
+        } else {
+            cca.energy_detect_threshold_dbm()
+        }
+    }
+
+    /// The level at which another channel's frame through the filter counts as busy time
+    /// in this run's channel busy ratio. Under SAE J2945/1 the CBP is the share of the
+    /// measurement interval the radio's 802.11 CCA reports busy, so a leak counts from
+    /// energy detect; ETSI's CBR is the time the received signal
+    /// strength on the channel exceeds -85 dBm [EN 302 571 §4.2.10.1; TS 102 687 §4.2],
+    /// whatever the signal, so a leak counts from there in Europe.
+    /// The level a jamming arrival must reach to hold carrier sense busy: energy detect,
+    /// for a jammer and an adjacent-channel emitter alike. Neither carries an 802.11
+    /// preamble, and "the receiver shall hold the CCA signal busy for any signal 20 dB
+    /// above the minimum modulation and coding rate sensitivity" (-65 dBm in 10 MHz) is the
+    /// only clause that applies to such energy (IEEE 802.11-2020 §17.3.10.6). Before fix
+    /// round 5 a jammer was held to the preamble-detect level, -85 dBm (R4.1.JAM-ED).
+    fn jam_sense_level(&self) -> impl Fn(&v2xw_radio::JamArrival) -> f64 + use<> {
+        let ed = self.phy.cca_config().energy_detect_threshold_dbm();
+        move |_: &v2xw_radio::JamArrival| ed
+    }
+
+    pub(crate) fn leak_busy_dbm(&self) -> f64 {
+        if crate::wiring::region_of(&self.scenario).0 == v2xw_radio::regulation::Region::Eu {
+            v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
+        } else {
+            self.phy.cca_config().energy_detect_threshold_dbm()
+        }
+    }
+
+    fn power_on(&self, state: &FrameState, node: NodeId, channel: ChannelId) -> Option<f64> {
+        if state.descriptor.channel == channel {
+            return state.arrivals.get(&node).map(|&(p, _)| p);
+        }
+        let raw = state
+            .arrivals
+            .get(&node)
+            .map(|&(p, _)| p)
+            .or_else(|| state.faint.get(&node).copied())?;
+        self.phy.leaked_dbm(raw, state.descriptor.channel, channel)
+    }
+
+    /// The metric phase: every provider flushes its window, and the samples are recorded
+    /// on `metric.sample`.
+    ///
+    /// `Observe` is priority 9, so a flush sees an instant in
+    /// which everything else has already happened — which is the whole reason the class
+    /// exists and the reason a metric is not computed inside the phase that produced its
+    /// inputs.
+    fn on_metric_flush(&mut self, recorder: &mut dyn RunRecorder, horizon: SimTime) {
+        let now = self.scheduler.now();
+        self.emit_mac_reports(recorder, now);
+        let samples = self.providers.flush(now);
+        // `time.warmup_s`: a window that closes inside the warm-up is flushed, so the
+        // providers start the next one clean, and not recorded.
+        if now > self.metric_warmup_ns {
+            for sample in samples {
+                self.emit(recorder, &sample);
+            }
+        }
+        self.metric_window_start = now;
+        let next = self.next_metric_flush(now);
+        if next <= horizon {
+            self.scheduler.schedule(
+                next,
+                EventClass::Observe,
+                Event::Observe {
+                    what: Observe::MetricFlush,
+                },
+            );
+        }
+    }
+
+    /// The instant the metric window opened at `now` closes.
+    ///
+    /// A live window closes on the next period boundary, unless a `time.fast_forward`
+    /// window begins first: then it closes where the fast-forward begins, so its rates are
+    /// over its own live seconds. The frozen span is a window of its own that closes where
+    /// the fast-forward ends, and the next live window runs from there to the period
+    /// boundary after it. Before this a live window that reached a fast-forward was
+    /// flushed only at the first boundary after it, so the full-scale benchmark reported
+    /// its 230-240 s window at 43,170 s with every rate divided by the frozen hours.
+    fn next_metric_flush(&self, now: SimTime) -> SimTime {
+        let time = &self.scenario.time;
+        if let Some(end) = time.fast_forward_end(now) {
+            return end;
+        }
+        // The next boundary of the period grid (`k * period` from zero).
+        let p = self.metric_period.as_nanos().max(1);
+        let next = (now / p).saturating_add(1).saturating_mul(p);
+        time.fast_forward
+            .iter()
+            .map(|w| (w.from_s * 1e9).round().max(0.0) as SimTime)
+            .filter(|&from| from > now && from < next)
+            .min()
+            .unwrap_or(next)
+    }
+
+    /// Every node's MAC report for the window that closes at `now`, on `mac.cbr`: the
+    /// busy ratio its MAC measured, its EDCA queue depth, and what it offered and was
+    /// refused since the previous report. Only at the tiers that model a MAC.
+    ///
+    /// On a sidelink the busy ratio is the UE's sidelink CBR (TS 36.214 §5.1.30,
+    /// TS 38.215 §5.1.25: the share of the last 100 ms of sub-channels whose S-RSSI
+    /// exceeded the pool's threshold), on the sidelink's channel, and the queue is the
+    /// SPS engine's per-UE queue: the same record, measured the way the RAT measures it.
+    ///
+    /// The busy ratio is the share of the report's own window the medium was busy: the
+    /// mean of the 100 ms CBR readings that tile it (ETSI TS 102 687 §4.2: CBR is busy
+    /// time over the measurement interval), with `busy_us` and `window_us` beside it. One
+    /// 100 ms reading taken at the flush, which this replaced, aliased with every traffic
+    /// period other than 100 ms: a fleet started together at a 200 ms BSM interval read
+    /// ×0.146 of the 10 Hz busy ratio where its airtime was ×0.503.
+    /// A node created inside the window is measured from its
+    /// creation. On a sidelink the share is the S-RSSI busy share over the window, as far
+    /// back as the UE's sensing ring holds (1 s for LTE-V2X, 100 ms for NR-V2X).
+    fn emit_mac_reports(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        // The window's own length: shorter than the period where a fast-forward cuts it,
+        // longer across a frozen span.
+        let span = now.saturating_sub(self.metric_window_start).max(1);
+        let mut reports: Vec<MacCbr> = Vec::with_capacity(self.nodes.len());
+        let nodes: Vec<NodeId> = self.nodes.keys().copied().collect();
+        for node in nodes {
+            let (from, busy_then) = self
+                .cbr_mark
+                .get(&node)
+                .copied()
+                .unwrap_or((self.metric_window_start, 0));
+            let from = from.max(self.metric_window_start).min(now);
+            let (channel, busy, depth) = if let Some(mac) = self.mac.as_ref() {
+                let total = mac.busy_total_ns(node, self.dsrc_channel, now);
+                self.cbr_mark.insert(node, (now, total));
+                (
+                    self.dsrc_channel.0,
+                    BusyShare::Time {
+                        busy_ns: total.saturating_sub(busy_then),
+                        window_ns: now - from,
+                    },
+                    AccessCategory::ALL
+                        .into_iter()
+                        .map(|ac| mac.queue_len(node, self.dsrc_channel, ac) as u64)
+                        .sum::<u64>(),
+                )
+            } else if let Some(sl) = self.sidelink.as_ref() {
+                self.cbr_mark.insert(node, (now, 0));
+                let slot = sl.mac.pool().slot_of(now);
+                let slots = (now - from) / sl.mac.pool().slot().as_nanos().max(1);
+                (
+                    sl.channel.0,
+                    BusyShare::Ratio(if slots == 0 {
+                        Mac::<EngineCtx<'_>>::cbr(&sl.mac, node, sl.channel, now)
+                    } else {
+                        sl.mac.sidelink_cbr_over(node, slot, slots)
+                    }),
+                    sl.mac.queue_len(node) as u64,
+                )
+            } else {
+                return;
+            };
+            if let (Some(plan), Some(mac)) = (self.channel_plan.as_ref(), self.mac.as_ref()) {
+                for ch in plan.channels_of(self.class_of(node)) {
+                    let (from, busy_then) = self
+                        .chan_mark
+                        .get(&(node, ch.0))
+                        .copied()
+                        .unwrap_or((self.metric_window_start, 0));
+                    let total = mac.busy_total_ns(node, ch, now);
+                    let from = from.max(self.metric_window_start).min(now);
+                    *self.report.channel_busy_ns.entry(ch.0).or_insert(0) +=
+                        total.saturating_sub(busy_then);
+                    *self.report.channel_window_ns.entry(ch.0).or_insert(0) += now - from;
+                    self.chan_mark.insert((node, ch.0), (now, total));
+                }
+            }
+            let w = self.mac_window.remove(&node).unwrap_or_default();
+            reports.push(MacCbr::report(
+                now,
+                node,
+                channel,
+                busy,
+                depth,
+                w.drops,
+                w.frames,
+                w.bytes,
+                w.airtime_us,
+                span,
+            ));
+        }
+        for r in reports {
+            if let Some(ds) = self.dataset.as_mut() {
+                ds.cbr.insert(r.0.node, r.0.cbr);
+            }
+            self.emit(recorder, &r);
+        }
+    }
+
+    /// At the end of the run, every attempt still between the PHY and an application is
+    /// recorded as in flight, so each `phy.rx` attempt has exactly one `node.rx` fate.
+    fn resolve_in_flight(&mut self, recorder: &mut dyn RunRecorder, at: SimTime) {
+        self.sidelink_resolve_all(recorder);
+        for (_, attempt) in core::mem::take(&mut self.rx_pending) {
+            self.emit(recorder, &attempt.in_flight(at));
+        }
+        // A fragmented SDU still waiting at the horizon: lost already if the PHY lost one
+        // of its fragments (nothing retransmits a broadcast fragment), in flight if not.
+        let open: Vec<_> = self.frag_groups.keys().copied().collect();
+        for key in open {
+            let certain = self
+                .frag_groups
+                .get(&key)
+                .is_some_and(|g| g.first_cause.is_some());
+            if certain {
+                self.resolve_group(recorder, key, at, None);
+            } else if let Some(group) = self.frag_groups.remove(&key)
+                && let Some(attempt) = group.attempt
+            {
+                self.emit(recorder, &attempt.in_flight(at));
+            }
+        }
+    }
+
+    /// One fragment's reception outcome at one receiver, taken into its reassembly group
+    /// (`crate::frag`).
+    ///
+    /// The group is opened by the first of its fragments to reach the receiver's arrival
+    /// set, and resolved exactly once: when every fragment has decoded, when the
+    /// reassembler refuses the set, or at the strategy's timeout. `attempt` is the
+    /// `node.rx` attempt a generic piece stands for; `None` for a segment or a certificate
+    /// fragment, whose frame is a message of its own.
+    #[allow(clippy::too_many_arguments)]
+    fn on_fragment(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        state: &FrameState,
+        meta: crate::frag::FragMeta,
+        outcome: &LinkOutcome,
+        arrival: SimTime,
+        attempt: Option<NodeRx>,
+        now: SimTime,
+    ) {
+        let rx = outcome.rx;
+        let key = (rx, meta.desc.sdu);
+        let horizon = self.scenario.time.horizon_ns();
+        let timeout = self.frag_plan.group_timeout();
+        let late = self.frag_resolved.contains_key(&key);
+        if !late && !self.frag_groups.contains_key(&key) {
+            let attempt = attempt.map(|mut a| {
+                // The attempt at the SDU: its size is every fragment's, and its journey
+                // starts with this fragment's access to the medium.
+                a.0.msg = Some(meta.sdu_msg);
+                a.0.bytes_on_wire = Some(u64::from(meta.psdu_total));
+                a.0.airtime_us = Some(meta.air_total_us);
+                a.0.payload_bytes = Some(u64::from(meta.sdu_payload));
+                a
+            });
+            let deadline = timeout.after(now);
+            self.frag_groups.insert(
+                key,
+                crate::frag::FragGroup {
+                    kind: meta.kind,
+                    tx: state.tx,
+                    sdu_msg: meta.sdu_msg,
+                    msg_type: msg_type_name(state.msg_type),
+                    fragments: meta.desc.count,
+                    payload_total: meta.sdu_bytes,
+                    seen: BTreeMap::new(),
+                    first_cause: None,
+                    deadline,
+                    opened: false,
+                    attempt,
+                },
+            );
+            self.schedule_reassembly(rx, deadline, horizon);
+        }
+        if let Some(group) = self.frag_groups.get_mut(&key) {
+            let psr = outcome
+                .psr
+                .unwrap_or(if outcome.received { 1.0 } else { 0.0 });
+            group.seen.insert(
+                meta.desc.index,
+                (psr, outcome.received, meta.desc.payload_bytes),
+            );
+            if outcome.received {
+                // The receiver finishes on the last fragment it decodes.
+                if let Some(a) = group.attempt.as_mut() {
+                    // The record's own grid (`NodeRx::attempt`), not the radio's finer
+                    // internal one: an off-grid float is refused by the recording writer.
+                    a.0.rssi_dbm = Some(v2xw_core::math::quantize_to(
+                        outcome.rssi_dbm,
+                        crate::records::Q_DB,
+                    ));
+                    a.0.sinr_db = Some(v2xw_core::math::quantize_to(
+                        outcome.sinr_db,
+                        crate::records::Q_DB,
+                    ));
+                    a.0.t_tx_end = Some(state.end);
+                    a.0.t_arrival = Some(arrival);
+                }
+            } else if group.first_cause.is_none() {
+                group.first_cause = Some(outcome.cause.map_or("unknown", cause_name));
+            }
+        }
+        if !outcome.received {
+            return;
+        }
+        // The reassembler sees every decoded fragment, a late one included, so its own
+        // state (and its `net.frag` record) is the model's and not a copy of this group's.
+        let mut collected = crate::ctx::MemoryRecorder::new();
+        let (reassembled, refused) = {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                reassemblers,
+                frag_plan,
+                ..
+            } = self;
+            if !reassemblers.contains_key(&rx)
+                && let Some(model) = frag_plan.reassembler()
+            {
+                reassemblers.insert(rx, model);
+            }
+            let Some(model) = reassemblers.get_mut(&rx) else {
+                return;
+            };
+            let mut ctx = EngineCtx::new(
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                &mut collected,
+            );
+            let result = model.reassemble(&mut ctx, rx, &meta.desc, state.tx);
+            (result, ctx.refused())
+        };
+        self.report.records_refused += refused;
+        for (at, owned) in collected.records() {
+            self.write_owned(recorder, *at, owned);
+        }
+        if late {
+            return;
+        }
+        if let Some(group) = self.frag_groups.get_mut(&key)
+            && !group.opened
+        {
+            // The reassembler's timer starts at the first fragment it holds.
+            group.opened = true;
+            group.deadline = group.deadline.max(timeout.after(now));
+            let deadline = group.deadline;
+            self.schedule_reassembly(rx, deadline, horizon);
+        }
+        let done = self.frag_groups.get(&key).is_some_and(|g| g.complete());
+        match reassembled {
+            v2xw_net::frag::ReassemblyOutcome::Failed { .. } => {
+                self.resolve_group(recorder, key, now, None);
+            }
+            _ if done => self.resolve_group(recorder, key, now, Some((state, arrival))),
+            _ => {}
+        }
+    }
+
+    /// Schedules a receiver's reassembly timer.
+    fn schedule_reassembly(&mut self, rx: NodeId, at: SimTime, horizon: SimTime) {
+        if at > horizon {
+            return;
+        }
+        self.scheduler.schedule(
+            at,
+            EventClass::NodeTask,
+            Event::NodeTask {
+                node: rx,
+                task: crate::event::NodeTask::Reassembly,
+            },
+        );
+    }
+
+    /// A receiver's reassembly timer: the reassembler retires its stale sets, and every
+    /// group whose timeout has run out is resolved as it stands.
+    fn on_reassembly_timer(&mut self, recorder: &mut dyn RunRecorder, rx: NodeId) {
+        let now = self.scheduler.now();
+        let mut collected = crate::ctx::MemoryRecorder::new();
+        let refused = {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                reassemblers,
+                ..
+            } = self;
+            match reassemblers.get_mut(&rx) {
+                Some(model) => {
+                    let mut ctx = EngineCtx::new(
+                        scheduler,
+                        rng,
+                        world,
+                        snapshot,
+                        provenance,
+                        params,
+                        &mut collected,
+                    );
+                    let _ = model.expire(&mut ctx, rx, now);
+                    ctx.refused()
+                }
+                None => 0,
+            }
+        };
+        self.report.records_refused += refused;
+        for (at, owned) in collected.records() {
+            self.write_owned(recorder, *at, owned);
+        }
+        let lo = (rx, v2xw_core::ids::SduId::new(0));
+        let hi = (rx, v2xw_core::ids::SduId::new(u32::MAX));
+        let due: Vec<_> = self
+            .frag_groups
+            .range(lo..=hi)
+            .filter(|(_, g)| g.deadline <= now)
+            .map(|(k, _)| *k)
+            .collect();
+        for key in due {
+            self.resolve_group(recorder, key, now, None);
+        }
+        self.frag_resolved
+            .retain(|(r, _), until| *r != rx || *until > now);
+    }
+
+    /// Resolves one reassembly group: its `net.reassembly` record, and for a generic
+    /// SDU its `node.rx` fate — handed to the node's receive queue when every piece
+    /// decoded (`completed`: the last piece's frame and arrival), lost otherwise.
+    fn resolve_group(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        key: (NodeId, v2xw_core::ids::SduId),
+        now: SimTime,
+        completed: Option<(&FrameState, SimTime)>,
+    ) {
+        let Some(group) = self.frag_groups.remove(&key) else {
+            return;
+        };
+        let (rx, _) = key;
+        let timeout = self.frag_plan.group_timeout();
+        self.frag_resolved.insert(key, timeout.after(now));
+        let amplifies = self
+            .frag_plan
+            .strategy
+            .as_ref()
+            .is_none_or(crate::frag::Strategy::amplifies_loss);
+        let model = group.prediction(amplifies);
+        let complete = group.complete();
+        let cause = (!complete).then(|| group.first_cause.unwrap_or(rx_cause::REASSEMBLY_FAILED));
+        if complete {
+            self.report.reassembly_complete += 1;
+        } else {
+            self.report.reassembly_lost += 1;
+        }
+        let record = crate::records::NetReassembly(v2xw_metrics::channels::NetReassemblyView {
+            t: now,
+            rx,
+            tx: Some(group.tx),
+            sdu: group.sdu_msg,
+            strategy: self.frag_plan.id.clone(),
+            kind: group.kind.label().to_string(),
+            msg_type: Some(group.msg_type.to_string()),
+            fragments: u32::from(group.fragments),
+            received: u32::from(group.received()),
+            bytes: u64::from(group.payload_total),
+            bytes_received: u64::from(group.payload_received()),
+            predicted_loss: v2xw_core::math::quantize(model.p_any_fragment_lost, 6),
+            predicted_content_loss: v2xw_core::math::quantize(model.expected_content_lost, 6),
+            outcome: if complete { "complete" } else { "lost" }.to_string(),
+            cause: cause.map(str::to_string),
+        });
+        self.emit(recorder, &record);
+        let Some(attempt) = group.attempt else {
+            return;
+        };
+        match (cause, completed) {
+            (None, Some((state, arrival))) => {
+                let bytes = state.frag.map_or(state.bytes, |m| m.sdu_bytes);
+                if self.inboxes.contains_key(&rx) {
+                    let token = self.next_rx_token;
+                    self.next_rx_token += 1;
+                    self.rx_pending.insert((rx, token), attempt);
+                    if let Some(inbox) = self.inboxes.get_mut(&rx) {
+                        inbox.push((
+                            rx_frame(state, bytes),
+                            RxStamp {
+                                token,
+                                arrived_at: Some(arrival),
+                            },
+                        ));
+                    }
+                    self.request_wake(rx, arrival, self.scenario.time.horizon_ns());
+                } else {
+                    // Reassembled by a radio whose node no longer exists.
+                    self.emit(recorder, &attempt.lost(now, rx_cause::RECEIVER_OFF));
+                }
+                // An application frame the fragmenter carried in pieces: the
+                // receiver acts on it now that it is whole, as on a whole frame. Its
+                // journey's air leg is the last fragment's.
+                if let Some(app) = state.app.clone() {
+                    let journey = ReportJourney {
+                        msg: state.frag.map_or(0, |m| m.sdu_msg),
+                        t_generated: state.t_generated,
+                        t_sign_start: state.t_sign_start,
+                        t_signed: state.t_signed,
+                        t_tx_start: state.start,
+                        t_tx_end: state.end,
+                        t_arrival: arrival,
+                    };
+                    let horizon = self.scenario.time.horizon_ns();
+                    self.on_app_message(recorder, rx, state.tx, &app, now, horizon, journey);
+                }
+            }
+            (cause, _) => {
+                let cause = cause.unwrap_or(rx_cause::REASSEMBLY_FAILED);
+                self.emit(recorder, &attempt.lost(now, cause));
+            }
+        }
+    }
+
+    /// Writes a record another context already admitted (its visibility checked), and
+    /// feeds it to the metric providers, as [`Engine::emit_at`] does.
+    fn write_owned(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        at: SimTime,
+        owned: &v2xw_core::ctx::OwnedRecord,
+    ) {
+        self.providers.on_event(owned);
+        recorder.write(at, owned);
+        self.report.records += 1;
+    }
+
+    /// Emits a record through a context, so the visibility rule applies to it.
+    ///
+    /// Stamped at the scheduler's instant, which is right for every phase whose records
+    /// describe the instant they are dispatched at. Mobility is the exception, and it
+    /// uses [`Engine::emit_at`].
+    /// Writes the traffic-control log (`traffic.control`) when an actuated controller or
+    /// the gridlock resolution did something since the last record.
+    fn log_traffic_control(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        let a = self.actuated.counters();
+        let g = self.mobility.gridlock().unwrap_or_default();
+        if !self.actuated.is_active() && g == Default::default() {
+            return;
+        }
+        self.report.signal_gap_outs = a.gap_outs;
+        self.report.signal_max_outs = a.max_outs;
+        let rec = crate::actuated::TrafficControlRecord {
+            t: now,
+            gap_outs: a.gap_outs,
+            max_outs: a.max_outs,
+            extended_s: v2xw_core::math::q3(a.extended_s),
+            cut_s: v2xw_core::math::q3(a.cut_s),
+            jammed: g.jammed,
+            teleported: g.teleported,
+            removed: g.removed,
+        };
+        let changed = self.traffic_log.as_ref().is_none_or(|last| {
+            (
+                last.gap_outs,
+                last.max_outs,
+                last.jammed,
+                last.teleported,
+                last.removed,
+            ) != (
+                rec.gap_outs,
+                rec.max_outs,
+                rec.jammed,
+                rec.teleported,
+                rec.removed,
+            )
+        });
+        if changed {
+            self.emit(recorder, &rec);
+            self.traffic_log = Some(rec);
+        }
+    }
+
+    /// Writes [`Engine::deferred_records`], each at the instant it was made, through the
+    /// recorder and the metric providers exactly as [`Engine::emit_prepared`] does.
+    fn flush_deferred_records(&mut self, recorder: &mut dyn RunRecorder) {
+        for (at, owned) in std::mem::take(&mut self.deferred_records) {
+            if !crate::ctx::admitted(&owned) {
+                self.report.records_refused += 1;
+                continue;
+            }
+            self.providers.on_event(&owned);
+            recorder.write(at, &owned);
+            self.report.records += 1;
+        }
+    }
+
+    fn emit(&mut self, recorder: &mut dyn RunRecorder, record: &dyn v2xw_core::ctx::ErasedRecord) {
+        let at = self.scheduler.now();
+        self.emit_at(recorder, at, record);
+    }
+
+    /// [`Engine::emit`] for a record [`Prepared`] ahead — serialised, and decoded for the
+    /// metric providers, perhaps on another thread. What reaches the recorder, the
+    /// providers and the report is exactly what `emit` of the same record would produce;
+    /// only where the encoding was computed differs.
+    fn emit_prepared(&mut self, recorder: &mut dyn RunRecorder, prepared: Prepared) {
+        let at = self.scheduler.now();
+        let Some(owned) = prepared.owned else {
+            self.report.records_refused += 1;
+            return;
+        };
+        if !crate::ctx::admitted(&owned) {
+            self.report.records_refused += 1;
+            return;
+        }
+        self.providers.on_event_predecoded(&owned, prepared.view);
+        recorder.write(at, &owned);
+        self.report.records += 1;
+    }
+
+    /// [`Engine::emit`], stamping the record at the instant it describes.
+    ///
+    /// The correction the vertical-slice audit asked for: a ground-truth kinematics
+    /// record's time is the time of the *state*, not the time of the phase that happened
+    /// to publish it. The two differ by one mobility step, because a step dispatched at
+    /// `t` produces the world at `t + dt`.
+    fn emit_at(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        at: SimTime,
+        record: &dyn v2xw_core::ctx::ErasedRecord,
+    ) {
+        let Engine {
+            scheduler,
+            rng,
+            world,
+            snapshot,
+            provenance,
+            params,
+            providers,
+            report,
+            ..
+        } = self;
+        let mut tee = Tee {
+            inner: recorder,
+            providers,
+        };
+        let mut ctx = EngineCtx::new(
+            scheduler, rng, world, snapshot, provenance, params, &mut tee,
+        );
+        ctx.stamp_records_at(Some(at));
+        v2xw_core::ctx::Ctx::emit_erased(&mut ctx, record);
+        let refused = ctx.refused();
+        report.records_refused += refused;
+        if refused == 0 {
+            report.records += 1;
+        }
+    }
+}
+
+/// A recorder that also feeds the run's metric providers.
+///
+/// A metric provider consumes the *recorded* stream, so the split
+/// between "what is written" and "what is measured" would be a second source of truth if
+/// the engine fed providers from anywhere but the record path. Everything a provider sees
+/// is something a recording also contains, which is what makes a metric reproducible from
+/// a replay.
+struct Tee<'a> {
+    inner: &'a mut dyn RunRecorder,
+    providers: &'a mut v2xw_metrics::ProviderSet,
+}
+
+impl RunRecorder for Tee<'_> {
+    fn write(&mut self, at: SimTime, record: &v2xw_core::ctx::OwnedRecord) {
+        self.providers.on_event(record);
+        self.inner.write(at, record);
+    }
+
+    /// Forwarded, not dropped. A wrapper that forwards `write` and silently swallows the
+    /// binary stream is the defect [`RunRecorder::write_wire_frame`] documents; this is
+    /// the in-crate wrapper, and it is the one an out-of-crate wrapper is modelled on.
+    fn write_wire_frame(&mut self, frame: &v2xw_record::wire::Frame) {
+        self.inner.write_wire_frame(frame);
+    }
+
+    fn tap_frame(&mut self, at: SimTime, node: NodeId, msg: u64, spdu: &[u8]) {
+        self.inner.tap_frame(at, node, msg, spdu);
+    }
+
+    fn refused(&self) -> u64 {
+        self.inner.refused()
+    }
+
+    fn records_written(&self) -> Option<u64> {
+        self.inner.records_written()
+    }
+
+    fn frames_written(&self) -> Option<u64> {
+        self.inner.frames_written()
+    }
+}
+
+/// A node's report on one received frame, joined to the attempt it settles.
+///
+/// The node's instants are on its own clock; each is moved onto the simulation's timeline
+/// by its distance from the frame's arrival, whose true instant the attempt carries. That
+/// keeps every duration the node measured exact whatever its clock offset.
+/// What a receiving node is handed for one decoded message of `bytes` octets.
+fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
+    RxFrame {
+        // An unsecured P2PCD learning response has no signer.
+        signer: (state.msg_type != v2xw_msg::MsgType::P2pcd).then(|| state.signer.clone()),
+        msg_type: state.msg_type,
+        bytes,
+        claimed_pos: Some(state.claimed_pos),
+        claimed_speed_mps: state.claimed_speed_mps,
+        claimed_heading_rad: state.claimed_heading_rad,
+        claimed_generation_time: state.generation_time,
+        full_certificate: state.full_certificate,
+        // Modelled crypto: the engine knows whether the sender's signature is genuine (it
+        // is, unless an attacker forged it). The receiver only learns it by *spending* the
+        // verification time, which `ObuRuntime::step` charges against its servers.
+        signature_valid: state.signature_valid,
+        signer_validity: state.signer_validity,
+        spdu: state.spdu.clone(),
+        signer_certificate: state.signer_certificate.clone(),
+        bsm: state.bsm,
+    }
+}
+
+/// The receiver's `node.rx_sec` row for one settled reception: its own security stack's
+/// verdict on a message it decoded, the digest and signer it read from the SPDU, its CBR.
+/// `None` when the receiver was off or the message id is unknown.
+/// J2735 `TransmissionState` as its ASN.1 identifier (`forwardGears`, `unavailable`, ...).
+fn transmission_name(t: v2xw_msg::j2735::bsm::TransmissionState) -> &'static str {
+    use v2xw_msg::j2735::bsm::TransmissionState as T;
+    match t {
+        T::Neutral => "neutral",
+        T::Park => "park",
+        T::ForwardGears => "forwardGears",
+        T::ReverseGears => "reverseGears",
+        T::Reserved1 => "reserved1",
+        T::Reserved2 => "reserved2",
+        T::Reserved3 => "reserved3",
+        T::Unavailable => "unavailable",
+    }
+}
+
+fn rx_sec_of(
+    ds: &crate::dataset_records::DatasetState,
+    rx: NodeId,
+    attempt: &NodeRx,
+    report: &RxReport,
+    now: SimTime,
+) -> Option<crate::dataset_records::RxSec> {
+    let verify_result = crate::dataset_records::verify_result_of(&report.disposition)?;
+    let msg = attempt.0.msg?;
+    let known = ds.tx.get(&msg);
+    let verify_latency_us = match (report.verify_start, report.verify_done) {
+        (Some(a), Some(b)) => Some(b.saturating_sub(a) / 1_000),
+        _ => None,
+    };
+    Some(crate::dataset_records::RxSec {
+        t: now,
+        rx,
+        msg,
+        spdu_digest: known.map(|k| k.0.clone()),
+        cert_id: known.map(|k| k.1.clone()),
+        msg_type: attempt.0.msg_type.clone().unwrap_or_default(),
+        verify_result: verify_result.to_string(),
+        verify_latency_us,
+        cbr: ds
+            .cbr
+            .get(&rx)
+            .map(|c| v2xw_core::math::quantize_to(*c, 1e-4)),
+    })
+}
+
+fn resolve_rx(attempt: NodeRx, report: &RxReport, now: SimTime) -> NodeRx {
+    let arrival = attempt.0.t_arrival.unwrap_or(now);
+    let on_timeline = |x: SimTime| arrival.saturating_add(x.saturating_sub(report.arrived));
+    let rx_done = on_timeline(report.parsed);
+    let verify_start = report.verify_start.map(on_timeline);
+    let verify_done = report.verify_done.map(on_timeline);
+    let mut a = attempt;
+    a.0.t_rx_done = Some(rx_done);
+    a.0.t_verify_start = verify_start;
+    a.0.t_verify_done = verify_done;
+    let delivered_at = verify_done.unwrap_or(rx_done);
+    match report.disposition {
+        RxDisposition::Delivered(VerificationState::Verified) => {
+            a.delivered(now, "verified", delivered_at)
+        }
+        RxDisposition::Delivered(VerificationState::Unverified) => {
+            a.delivered(now, "unverified", delivered_at)
+        }
+        RxDisposition::Delivered(VerificationState::Invalid) => {
+            a.lost(now, rx_cause::SIGNATURE_INVALID)
+        }
+        RxDisposition::Delivered(VerificationState::Revoked) => a.lost(now, rx_cause::REVOKED),
+        // A receiver rule's refusal is named for what it is: an overdue list is not a
+        // forgery.
+        RxDisposition::Refused(v2xw_node::rxval::RxReject::CrlOverdue) => {
+            a.lost(now, rx_cause::CRL_OVERDUE)
+        }
+        RxDisposition::Refused(_) => a.lost(now, rx_cause::RECEIVER_RULE),
+        RxDisposition::Dropped(cause) => a.lost(now, drop_cause_name(cause)),
+        RxDisposition::NodeOff => a.lost(now, rx_cause::RECEIVER_OFF),
+        RxDisposition::UnknownSigner => a.lost(now, rx_cause::UNKNOWN_SIGNER),
+        // Unsecured by design (IEEE 1609.2 clause 8): handed to the P2PCD Entity.
+        RxDisposition::P2pcdResponse => a.delivered(now, "unsecured", delivered_at),
+        RxDisposition::NotRelevant(_) => a.lost(now, rx_cause::GENERATION_TIME),
+        RxDisposition::PsidNotRegistered => a.lost(now, rx_cause::PSID_NOT_REGISTERED),
+    }
+}
+
+/// The `node.rx` loss cause a node's drop counter maps to.
+const fn drop_cause_name(cause: v2xw_node::DropCause) -> &'static str {
+    match cause {
+        v2xw_node::DropCause::RxOverflow => rx_cause::RX_OVERFLOW,
+        v2xw_node::DropCause::VerifyOverflow => rx_cause::VERIFY_OVERFLOW,
+        v2xw_node::DropCause::ReassemblyTimeout => rx_cause::REASSEMBLY_FAILED,
+        // A policy's own drop, whichever counter it charged.
+        v2xw_node::DropCause::VerifyPolicySkip
+        | v2xw_node::DropCause::TxOverflow
+        | v2xw_node::DropCause::CrlBacklog => rx_cause::VERIFY_POLICY_DROP,
+    }
+}
+
+/// One reception attempt's records, built ahead ([`Prepared`]): the `phy.rx` record, the
+/// arrival instant, the `node.rx` attempt still to be decided (a decoded frame, or any
+/// piece of a fragmented SDU) and the `node.rx` fate of a PHY loss.
+type Built = (Prepared, SimTime, Option<NodeRx>, Option<Prepared>);
+
+/// A record serialised ahead of its emission ([`Engine::emit_prepared`]), with its
+/// channel's metric view decoded when a provider reads the channel.
+///
+/// A frame heard by hundreds of receivers writes a `phy.rx` and a `node.rx` record for each,
+/// and encoding each to JSON and decoding it back for the metric providers was a third of
+/// a dense run's serial time. The encoding and the decoding are pure functions of the
+/// record, so a frame's are computed in parallel over its receivers and the records are
+/// then emitted one at a time, in receiver order, exactly where they were before.
+pub(crate) struct Prepared {
+    owned: Option<v2xw_core::ctx::OwnedRecord>,
+    view: Option<v2xw_metrics::Predecoded>,
+}
+
+impl Prepared {
+    fn of<V>(record: &dyn v2xw_core::ctx::ErasedRecord, decode: bool) -> Self
+    where
+        V: v2xw_metrics::channels::ChannelView + Send + 'static,
+    {
+        let owned = record.to_owned_record().ok();
+        let view = match (&owned, decode) {
+            (Some(o), true) => v2xw_metrics::Predecoded::of::<V>(o),
+            _ => None,
+        };
+        Self { owned, view }
+    }
+}
+
+/// One receiver's evaluated outcome for one frame.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LinkOutcome {
+    rx: NodeId,
+    rssi_dbm: f64,
+    sinr_db: f64,
+    distance_m: f64,
+    received: bool,
+    /// Exactly one loss cause when the frame did not decode, and `None` when it did
+    /// (invariant I-R3).
+    cause: Option<LossCause>,
+    /// Sidelink with blind retransmissions: the copies this receiver combined.
+    copies: Option<u32>,
+    /// For a fragment, the probability the PHY would decode it (the fragmentation model's `1 −
+    /// p_i`); `None` for a whole frame, and on a sidelink, whose error model this
+    /// build does not expose per transport block.
+    psr: Option<f64>,
+}
+
+/// The 802.11p rate's name as `node.tx` reports it: data rate, modulation, code rate.
+fn dsrc_mcs_label(mcs: Mcs) -> String {
+    let m = match mcs.modulation() {
+        v2xw_radio::types::Modulation::Bpsk => "bpsk",
+        v2xw_radio::types::Modulation::Qpsk => "qpsk",
+        v2xw_radio::types::Modulation::Qam16 => "16qam",
+        v2xw_radio::types::Modulation::Qam64 => "64qam",
+    };
+    let r = match mcs.code_rate() {
+        v2xw_radio::types::CodeRate::R1_2 => "1/2",
+        v2xw_radio::types::CodeRate::R2_3 => "2/3",
+        v2xw_radio::types::CodeRate::R3_4 => "3/4",
+    };
+    format!("{}mbps-{m}-{r}", mcs.rate_mbps())
+}
+
+/// The radio actor class a vehicle class transmits as: what sets its antenna height and
+/// gain.
+fn radio_class(class: VehicleClass) -> v2xw_radio::ActorClass {
+    match class {
+        VehicleClass::Truck | VehicleClass::Trailer | VehicleClass::Bus | VehicleClass::Coach => {
+            v2xw_radio::ActorClass::Truck
+        }
+        VehicleClass::Delivery => v2xw_radio::ActorClass::Van,
+        VehicleClass::Motorcycle | VehicleClass::Moped => v2xw_radio::ActorClass::Motorcycle,
+        VehicleClass::Bicycle | VehicleClass::Scooter => v2xw_radio::ActorClass::Bicycle,
+        VehicleClass::Pedestrian => v2xw_radio::ActorClass::Pedestrian,
+        VehicleClass::Passenger | VehicleClass::Emergency => v2xw_radio::ActorClass::Car,
+    }
+}
+
+/// The lower-case name a `node.tx` record carries for a message type.
+/// A node's closed telemetry window as a `node.telemetry` record.
+///
+/// §3.5.2's "unknown" sentinels become absent fields. The two utilisations are per-mille on
+/// the wire and fractions on the channel; every float is put on its key's record grid.
+fn telemetry_record(
+    t: SimTime,
+    node: NodeId,
+    w: &v2xw_record::wire::telemetry::NodeTelemetry,
+) -> crate::records::NodeTelemetry {
+    use v2xw_record::wire::{U16_NONE, U32_NONE, U64_NONE};
+    // `cpu` and `hsm` carry no unit suffix, so their declared grid is the finest, 1e-6.
+    let frac = |pm: u16| {
+        (pm != U16_NONE).then(|| v2xw_core::math::quantize_to(f64::from(pm) / 1000.0, 1e-6))
+    };
+    let pair = |p50: u16, p95: u16| (p50 != U16_NONE || p95 != U16_NONE).then_some([p50, p95]);
+    let count = |v: u16| (v != U16_NONE).then_some(v);
+    crate::records::NodeTelemetry(v2xw_metrics::channels::NodeTelemetryView {
+        t,
+        node,
+        cpu: frac(w.cpu_util_pm),
+        hsm: frac(w.hsm_util_pm),
+        ram_bytes: (w.ram_used_kib != U32_NONE).then(|| u64::from(w.ram_used_kib) * 1024),
+        storage_bytes: (w.storage_used_b != U64_NONE).then_some(w.storage_used_b),
+        verify_queue_depth: (w.q_verify_p95 != U16_NONE).then_some(u64::from(w.q_verify_p95)),
+        q_rx: pair(w.q_rx_p50, w.q_rx_p95),
+        q_verify: pair(w.q_verify_p50, w.q_verify_p95),
+        q_app: pair(w.q_app_p50, w.q_app_p95),
+        q_tx: pair(w.q_tx_p50, w.q_tx_p95),
+        q_crl: pair(w.q_crl_p50, w.q_crl_p95),
+        verify_wait_p95_ms: w
+            .verify_wait_p95_ms
+            .is_finite()
+            .then(|| v2xw_core::math::quantize_to(f64::from(w.verify_wait_p95_ms), 1e-3)),
+        cert_active: count(w.cert_active),
+        nbr_total: count(w.nbr_total),
+        nbr_verified: count(w.nbr_verified),
+        digest_misses: (w.digest_misses != U32_NONE).then_some(w.digest_misses),
+    })
+}
+
+/// Lower-case hex of an identifier's octets.
+fn hex_digest(bytes: &[u8]) -> String {
+    use core::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
+/// What a message said, for the followed-vehicle view and the recording.
+///
+/// A BSM's Part I is decoded from the payload octets the node actually encoded (a J2735
+/// `MessageFrame`), so the fields are the ones a receiver reads, converted from their
+/// least significant bits and left out when they carry J2735's "unavailable" value. Every
+/// other type carries its temporary identifier only, which the node takes from the first
+/// four octets of the pseudonym's digest for a CAM and a BSM alike
+/// (`v2xw_node::ObuRuntime::encode_payload`). The claim is the kinematic claim the
+/// receivers' detectors are handed (an attacker's is falsified).
+/// An F2MD copy's or ghost's own BSM (`Engine::ghost_frames`): its beacon's
+/// MessageFrame with the copy's secMark (the beacon's moved by `shift_ns`) and the
+/// position, speed, heading and longitudinal acceleration it claims, re-encoded. Part I is
+/// fixed-width, so the octet count is the beacon's. `None` when the payload is no BSM that
+/// decodes, or the claim is no geodetic position.
+fn ghost_bsm_payload(
+    payload: &[u8],
+    origin: v2xw_core::geo::GeoOrigin,
+    pos: Vec3,
+    speed_mps: f64,
+    heading_rad: f64,
+    shift_ns: i128,
+    accel_long_mps2: Option<f64>,
+) -> Option<Vec<u8>> {
+    use v2xw_msg::j2735::bsm;
+    let mut m = bsm::decode_message_frame(payload).ok()?;
+    let (lat, lon, _) = origin.to_geodetic(pos);
+    m.core.lat = bsm::latitude(lat)?;
+    m.core.lon = bsm::longitude(lon)?;
+    m.core.speed = bsm::speed(speed_mps);
+    m.core.heading = bsm::heading(heading_rad);
+    if m.core.sec_mark != bsm::D_SECOND_UNAVAILABLE && shift_ns != 0 {
+        let ms = shift_ns.div_euclid(1_000_000);
+        m.core.sec_mark = (i128::from(m.core.sec_mark) + ms).rem_euclid(60_000) as u16;
+    }
+    if accel_long_mps2.is_some() {
+        m.core.accel_set.long = bsm::acceleration(accel_long_mps2);
+    }
+    bsm::encode_message_frame(&m).ok().map(|e| e.bytes)
+}
+
+fn message_content(
+    msg_type: v2xw_msg::MsgType,
+    payload: Option<&[u8]>,
+    signer: &v2xw_msg::sec_types::HashedId8,
+    claim: (Vec3, f64, f64),
+    broadcast_accuracy: bool,
+    dataset: bool,
+) -> v2xw_metrics::channels::MsgContentView {
+    use v2xw_core::math::quantize_to;
+    use v2xw_msg::j2735::bsm;
+    // Every float is put on its field's D9 grid (the recorder refuses an off-grid record):
+    // degrees 1e-7, metres and m/s 1e-3, and the heading in radians, which has no unit
+    // suffix, 1e-6.
+    const Q_DEG: f64 = 1e-7;
+    const Q_M: f64 = 1e-3;
+    const Q_RAD: f64 = 1e-6;
+    let mut c = v2xw_metrics::channels::MsgContentView {
+        temp_id: Some(hex_digest(&signer.0[..4])),
+        claimed_x_m: Some(quantize_to(claim.0.x, Q_M)),
+        claimed_y_m: Some(quantize_to(claim.0.y, Q_M)),
+        claimed_speed_mps: Some(quantize_to(claim.1, Q_M)),
+        claimed_heading_rad: Some(quantize_to(claim.2, Q_RAD)),
+        ..Default::default()
+    };
+    if msg_type == v2xw_msg::MsgType::Bsm
+        && let Some(bytes) = payload
+        && let Ok(m) = bsm::decode_message_frame(bytes)
+    {
+        let k = &m.core;
+        c.msg_count = Some(k.msg_cnt);
+        c.temp_id = Some(hex_digest(&k.id));
+        c.sec_mark_ms = (k.sec_mark != bsm::D_SECOND_UNAVAILABLE).then_some(k.sec_mark);
+        c.lat_deg = (k.lat != bsm::LATITUDE_UNAVAILABLE)
+            .then(|| quantize_to(f64::from(k.lat) * 1e-7, Q_DEG));
+        c.lon_deg = (k.lon != bsm::LONGITUDE_UNAVAILABLE)
+            .then(|| quantize_to(f64::from(k.lon) * 1e-7, Q_DEG));
+        c.elev_m =
+            (k.elev != bsm::ELEVATION_UNKNOWN).then(|| quantize_to(f64::from(k.elev) * 0.1, Q_M));
+        c.speed_mps = (k.speed != bsm::SPEED_UNAVAILABLE)
+            .then(|| quantize_to(f64::from(k.speed) * 0.02, Q_M));
+        c.heading_deg = (k.heading != bsm::HEADING_UNAVAILABLE)
+            .then(|| quantize_to(f64::from(k.heading) * 0.0125, Q_DEG));
+        c.part_ii = Some(u8::try_from(m.part_ii.len()).unwrap_or(u8::MAX));
+        // The broadcast confidence and acceleration the BSM carried (J2735
+        // `PositionalAccuracy`, `accelSet.long`), which the VeReMi exporter writes as
+        // `pos_noise` and `acl`. Only when the scenario names that exporter, so every
+        // other run's `node.tx` records, and the digests over them, are unchanged.
+        if broadcast_accuracy || dataset {
+            let semi = |v: u8| {
+                (v != bsm::SEMI_AXIS_UNAVAILABLE).then(|| quantize_to(f64::from(v) * 0.05, Q_M))
+            };
+            c.pos_semi_major_m = semi(k.accuracy.semi_major);
+            c.pos_semi_minor_m = semi(k.accuracy.semi_minor);
+            c.pos_orientation_deg = (k.accuracy.orientation != bsm::ORIENTATION_UNAVAILABLE)
+                .then(|| quantize_to(f64::from(k.accuracy.orientation) * 360.0 / 65_535.0, Q_DEG));
+            c.accel_long_mps2 = (k.accel_set.long != bsm::ACCELERATION_UNAVAILABLE)
+                .then(|| quantize_to(f64::from(k.accel_set.long) * 0.01, Q_M));
+        }
+        // The rest of Part I and the Part II event flags, as a receiver decodes them, for
+        // the dataset's `local/rx` (only when the scenario names that exporter).
+        if dataset {
+            c.accel_lat_mps2 = (k.accel_set.lat != bsm::ACCELERATION_UNAVAILABLE)
+                .then(|| quantize_to(f64::from(k.accel_set.lat) * 0.01, Q_M));
+            c.accel_vert_mps2 = (k.accel_set.vert != bsm::VERTICAL_ACCELERATION_UNAVAILABLE)
+                .then(|| quantize_to(f64::from(k.accel_set.vert) * 0.02 * 9.806_65, Q_M));
+            c.yaw_rate_dps = Some(quantize_to(f64::from(k.accel_set.yaw) * 0.01, 1e-6));
+            c.brakes = Some(k.brakes.wheel_brakes.0);
+            c.length_m = Some(quantize_to(f64::from(k.size.length) * 0.01, Q_M));
+            c.width_m = Some(quantize_to(f64::from(k.size.width) * 0.01, Q_M));
+            c.transmission = Some(transmission_name(k.transmission).to_string());
+            c.event_flags = m.part_ii.iter().find_map(|p| match &p.value {
+                bsm::PartIIValue::VehicleSafety(v) => v.events.map(|e| e.0),
+                _ => None,
+            });
+        }
+    }
+    // A DENM's cause, decoded from the octets the node encoded, as a receiver (or a
+    // sniffer) reads it: the situation container's `eventType` (the
+    // C2C-CC trigger counts were not recoverable from the records before).
+    if msg_type == v2xw_msg::MsgType::Denm
+        && let Some(bytes) = payload
+        && let Ok(d) = v2xw_msg::denm::decode_denm(bytes)
+    {
+        c.denm_cause = Some(match d.denm.situation.as_ref() {
+            Some(sit) => {
+                let name = format!("{:?}", sit.event_type.cc_and_scc);
+                name.split('(').next().unwrap_or("").to_string()
+            }
+            None => "termination".to_string(),
+        });
+    }
+    // A pedestrian's or a cyclist's PSM, decoded from the octets its device encoded: the
+    // same fields a BSM's Part I shows, from the same J2735 data elements.
+    if msg_type == v2xw_msg::MsgType::Psm
+        && let Some(bytes) = payload
+        && let Ok(m) = v2xw_msg::j2735::psm::decode_message_frame(bytes)
+    {
+        c.msg_count = Some(m.msg_cnt);
+        c.temp_id = Some(hex_digest(&m.id));
+        c.sec_mark_ms = (m.sec_mark != bsm::D_SECOND_UNAVAILABLE).then_some(m.sec_mark);
+        c.lat_deg = (m.lat != bsm::LATITUDE_UNAVAILABLE)
+            .then(|| quantize_to(f64::from(m.lat) * 1e-7, Q_DEG));
+        c.lon_deg = (m.lon != bsm::LONGITUDE_UNAVAILABLE)
+            .then(|| quantize_to(f64::from(m.lon) * 1e-7, Q_DEG));
+        c.elev_m = m
+            .elev
+            .filter(|e| *e != bsm::ELEVATION_UNKNOWN)
+            .map(|e| quantize_to(f64::from(e) * 0.1, Q_M));
+        c.speed_mps = (m.speed != bsm::SPEED_UNAVAILABLE)
+            .then(|| quantize_to(f64::from(m.speed) * 0.02, Q_M));
+        c.heading_deg = (m.heading != bsm::HEADING_UNAVAILABLE)
+            .then(|| quantize_to(f64::from(m.heading) * 0.0125, Q_DEG));
+    }
+    // A VAM (ETSI TS 103 300-3), decoded the same way: the reference position, speed and
+    // heading its device encoded, in the CDD's units, with the CDD's `unavailable` values
+    // left out.
+    if msg_type == v2xw_msg::MsgType::Vam
+        && let Some(bytes) = payload
+        && let Ok(m) = v2xw_msg::vam::decode_vam(bytes)
+    {
+        let p = &m.vam.vam_parameters;
+        let r = &p.basic_container.reference_position;
+        c.temp_id = Some(hex_digest(&m.header.0.station_id.0.to_be_bytes()));
+        c.lat_deg = (r.latitude.0 != 900_000_001)
+            .then(|| quantize_to(f64::from(r.latitude.0) * 1e-7, Q_DEG));
+        c.lon_deg = (r.longitude.0 != 1_800_000_001)
+            .then(|| quantize_to(f64::from(r.longitude.0) * 1e-7, Q_DEG));
+        c.elev_m = (r.altitude.altitude_value.0 != 800_001)
+            .then(|| quantize_to(f64::from(r.altitude.altitude_value.0) * 0.01, Q_M));
+        let hf = &p.vru_high_frequency_container;
+        c.speed_mps = (hf.speed.speed_value.0 != 16_383)
+            .then(|| quantize_to(f64::from(hf.speed.speed_value.0) * 0.01, Q_M));
+        c.heading_deg = (hf.heading.value.0 != 3_601)
+            .then(|| quantize_to(f64::from(hf.heading.value.0) * 0.1, Q_DEG));
+    }
+    c
+}
+
+/// The network layer's shape for a message type: which PSID or BTP port it goes under.
+///
+/// A BSM on 802.11p is SAE J2945/1's, whose WSM carries the transmit-power-used N-header
+/// extension (J2945/1 Table 14 row N1.3.2.6): 4 octets (count + 3) on the
+/// 5-octet header. A BSM on a sidelink is SAE J3161/1's and keeps the plain header (that
+/// standard is not modelled here).
+const fn frame_msg(t: v2xw_msg::MsgType, sidelink: bool) -> v2xw_net::FrameMsg {
+    match t {
+        v2xw_msg::MsgType::Bsm if !sidelink => v2xw_net::FrameMsg::Bsm,
+        v2xw_msg::MsgType::Denm => v2xw_net::FrameMsg::Denm,
+        v2xw_msg::MsgType::Spat => v2xw_net::FrameMsg::Spat,
+        v2xw_msg::MsgType::Map => v2xw_net::FrameMsg::Map,
+        v2xw_msg::MsgType::Srm => v2xw_net::FrameMsg::Srm,
+        v2xw_msg::MsgType::Ssm => v2xw_net::FrameMsg::Ssm,
+        v2xw_msg::MsgType::Cpm => v2xw_net::FrameMsg::Cpm,
+        _ => v2xw_net::FrameMsg::Safety,
+    }
+}
+
+fn msg_type_name(t: v2xw_msg::MsgType) -> &'static str {
+    match t {
+        v2xw_msg::MsgType::Bsm => "bsm",
+        v2xw_msg::MsgType::Cam => "cam",
+        v2xw_msg::MsgType::Denm => "denm",
+        v2xw_msg::MsgType::Spat => "spat",
+        v2xw_msg::MsgType::Map => "map",
+        v2xw_msg::MsgType::Psm => "psm",
+        v2xw_msg::MsgType::Vam => "vam",
+        v2xw_msg::MsgType::Cpm => "cpm",
+        v2xw_msg::MsgType::Srm => "srm",
+        v2xw_msg::MsgType::Ssm => "ssm",
+        v2xw_msg::MsgType::Wsa => "wsa",
+        v2xw_msg::MsgType::Crl => "crl",
+        v2xw_msg::MsgType::Mbr => "mbr",
+        v2xw_msg::MsgType::P2pcd => "p2pcd",
+    }
+}
+
+/// The spatial grid's cell size, re-exported so a caller can size a grid the same way the
+/// engine does. It is no longer the radio candidate range, which the link budget decides
+/// (`radio.range`, [`crate::wiring::CandidateRangePlan`]).
+pub const CANDIDATE_RANGE_M: f64 = MAX_RANGE_M;
+
+/// The tier the radio stack runs at, for a caller's report.
+pub fn radio_tier(scenario: &Scenario) -> Tier {
+    scenario.radio.tiers.phy
+}
+
+/// A configured [`Engine`] with `NodeConfig` defaults exposed, for a caller building one
+/// node outside a run.
+pub fn default_node_config() -> NodeConfig {
+    NodeConfig::default()
+}
+
+/// The lanes every `closure` item of the timeline closes, resolved against the world.
+///
+/// Resolved at build, so a target that names nothing in this world is an error when the run
+/// is built, naming the item — not a closure that fires at minute ten and closes nothing.
+fn resolve_closures(
+    scenario: &Scenario,
+    world: &World,
+) -> Result<BTreeMap<usize, Vec<v2xw_core::ids::LaneId>>> {
+    let mut out = BTreeMap::new();
+    for (i, item) in scenario.events.iter().enumerate() {
+        if item.kind != crate::scenario::TimelineKind::Closure {
+            continue;
+        }
+        let field = format!("events[{i}].target");
+        let Some(value) = item.params.get("target") else {
+            return Err(EngineError::Scenario(ScenarioError::conflict(
+                field,
+                "is missing, and a 'closure' event needs it",
+            )));
+        };
+        let target = crate::timeline::ClosureTarget::parse(value)
+            .map_err(|why| EngineError::Scenario(ScenarioError::conflict(field.clone(), why)))?;
+        let lanes = target.lanes(world);
+        if lanes.is_empty() {
+            return Err(EngineError::Scenario(ScenarioError::conflict(
+                field,
+                format!(
+                    "{value} names no vehicle lane of this world, so the closure would close \
+                     nothing"
+                ),
+            )));
+        }
+        out.insert(i, lanes);
+    }
+    Ok(out)
+}
+
+/// How a node sorts the linkage entries of a composite CRL download (1609.2.1 §6.3.5:
+/// each `SecuredCrl` in it is verified on its own). `verified` are the CRLs it verified,
+/// `unverified` what the CRLs it could not verify claim ([`VerifiedCrl::claimed`]).
+/// Returns the entries to install and how many it dropped because only an unverified CRL
+/// carries them, or `None` (refuse the download) when an entry is carried by no CRL in it
+/// at all: a forgery appended to genuine lists.
+///
+/// Only the linkage CRLs of the download (series 1, with an `iRev`) vouch for a linkage
+/// entry. A hash CRL in it (series 2, 3, 4 or 256: the component lists) carries no
+/// linkage entry, and [`VerifiedCrl::signed_form`] reads it as "pruned" (`None`), which
+/// counted before as carrying any entry at all.
+///
+/// [`VerifiedCrl::claimed`]: v2xw_node::rxval::VerifiedCrl::claimed
+/// [`VerifiedCrl::signed_form`]: v2xw_node::rxval::VerifiedCrl::signed_form
+pub(crate) fn sort_composite_entries(
+    verified: &[v2xw_node::rxval::VerifiedCrl],
+    unverified: &[v2xw_node::rxval::VerifiedCrl],
+    entries: &[v2xw_sec::linkage::CrlLinkageEntry],
+) -> Option<(Vec<v2xw_sec::linkage::CrlLinkageEntry>, usize)> {
+    let mut kept = Vec::with_capacity(entries.len());
+    let mut dropped = 0usize;
+    let linkage = |v: &&v2xw_node::rxval::VerifiedCrl| v.i_rev.is_some();
+    for e in entries {
+        if verified
+            .iter()
+            .filter(linkage)
+            .any(|v| !matches!(v.signed_form(e), Some(Err(()))))
+        {
+            kept.push(*e);
+        } else if unverified
+            .iter()
+            .filter(linkage)
+            .any(|v| matches!(v.signed_form(e), Some(Ok(_))))
+        {
+            dropped += 1;
+        } else {
+            return None;
+        }
+    }
+    Some((kept, dropped))
+}
+
+#[cfg(test)]
+mod crl_frame_tests {
+    use super::crl_sdu_bytes;
+
+    /// The SDU's size is the signed CRLs': 328 octets, not the size model's 252;
+    /// the model only when the run signs none.
+    #[test]
+    fn a_crl_frame_is_as_large_as_the_signed_crl_it_carries() {
+        let one: std::sync::Arc<[u8]> = vec![0u8; 328].into();
+        assert_eq!(crl_sdu_bytes(std::slice::from_ref(&one), 252), 328);
+        let two = [one.clone(), vec![0u8; 279].into()];
+        assert_eq!(crl_sdu_bytes(&two, 252), 607);
+        assert_eq!(crl_sdu_bytes(&[], 252), 252);
+    }
+}
+
+#[cfg(test)]
+mod composite_crl_tests {
+    use super::sort_composite_entries;
+    use v2xw_node::rxval::VerifiedCrl;
+    use v2xw_sec::linkage::CrlLinkageEntry;
+
+    fn entry(k: u8) -> CrlLinkageEntry {
+        CrlLinkageEntry {
+            i: 5,
+            la_id1: v2xw_sec::linkage::LaId(1),
+            la_id2: v2xw_sec::linkage::LaId(2),
+            ls1_i: v2xw_sec::linkage::LinkageSeed::new([k; 16]),
+            ls2_i: v2xw_sec::linkage::LinkageSeed::new([k ^ 0x5a; 16]),
+            jmax: 20,
+            max_forward: 10,
+        }
+    }
+
+    fn crl(craca: u8, entries: &[CrlLinkageEntry]) -> VerifiedCrl {
+        VerifiedCrl {
+            craca: [craca; 8],
+            series: 1,
+            issue_date: 0,
+            next_crl: 1,
+            i_rev: Some(5),
+            linkage: entries.to_vec(),
+            hashes: Vec::new(),
+            fresh: true,
+        }
+    }
+
+    /// Edge-case report §6.4: one signed CRL a device cannot verify in a composite
+    /// download (the other provider's, its root off the CTL) is skipped with only its own
+    /// entries; the verified provider's entries still install. An entry no CRL in the
+    /// download carries still refuses it. Fault (the first form: any unverifiable CRL
+    /// refuses the download, `crls.clear()`): nothing installs.
+    #[test]
+    fn an_unverifiable_crl_is_skipped_and_the_rest_of_the_download_installs() {
+        let (a, b) = (entry(1), entry(2));
+        let ok = [crl(0xaa, &[a])];
+        let bad = [crl(0xbb, &[b])];
+        let (kept, dropped) =
+            sort_composite_entries(&ok, &bad, &[a, b]).expect("the download is kept");
+        assert_eq!(kept, vec![a], "the verified provider's entry installs");
+        assert_eq!(
+            dropped, 1,
+            "the unverified provider's entry is dropped, not installed"
+        );
+        assert!(
+            sort_composite_entries(&ok, &bad, &[a, b, entry(3)]).is_none(),
+            "an entry no CRL in the download carries refuses it"
+        );
+        assert!(
+            sort_composite_entries(&ok, &[], &[a, b]).is_none(),
+            "an entry only a missing CRL would carry is a forgery"
+        );
+        assert_eq!(
+            sort_composite_entries(&ok, &[], &[a]).map(|(k, d)| (k.len(), d)),
+            Some((1, 0)),
+            "with every CRL verified nothing changes"
+        );
+    }
+
+    /// A composite that carries a provider's component hash CRL beside its
+    /// linkage CRL. The hash CRL vouches for no linkage entry: an entry no linkage CRL
+    /// signs still refuses the download, and the genuine entry still installs. Fault
+    /// (the hash CRL counted, as before: `signed_form` is `None` for it, read as
+    /// "pruned"): the forged entry is kept and the test goes red.
+    #[test]
+    fn a_hash_crl_in_the_download_vouches_for_no_linkage_entry() {
+        let (a, forged) = (entry(1), entry(9));
+        let hash = VerifiedCrl {
+            series: 2,
+            i_rev: None,
+            linkage: Vec::new(),
+            hashes: vec![[7; 10]],
+            ..crl(0xaa, &[])
+        };
+        let ok = [crl(0xaa, &[a]), hash];
+        assert_eq!(
+            sort_composite_entries(&ok, &[], &[a]),
+            Some((vec![a], 0)),
+            "the linkage CRL's entry installs beside the hash list"
+        );
+        assert!(
+            sort_composite_entries(&ok, &[], &[a, forged]).is_none(),
+            "an entry only the hash CRL could 'carry' is a forgery"
+        );
+    }
+}
+
+/// The frame fields the TS 103 759 suite reads off one safety message, as its sender's
+/// encoder writes them: a BSM's J2735 `VehicleSize` (1 cm; 0 read as not stated) with the
+/// position at the vehicle's centre, or a CAM's `VehicleLength`/`VehicleWidth` (0.1 m;
+/// `unavailable` and `outOfRange` read as not stated) with the position at the front
+/// edge's centre (EN 302 637-2). Neither carries a speed or heading confidence the suite
+/// can use here (a BSM has none at all), so those stay unstated.
+fn frame_extras(msg_type: v2xw_msg::MsgType, d: v2xw_core::geom::Dims) -> v2xw_threat::FrameExtras {
+    use v2xw_threat::consistency::ReferencePoint;
+    match msg_type {
+        v2xw_msg::MsgType::Cam => {
+            let l = v2xw_msg::units::vehicle_length_value(d.length_m);
+            let w = v2xw_msg::units::vehicle_width(d.width_m);
+            v2xw_threat::FrameExtras {
+                length_m: (l < 1022).then(|| f64::from(l) / 10.0),
+                width_m: (w < 61).then(|| f64::from(w) / 10.0),
+                speed_confidence_mps: None,
+                heading_confidence_rad: None,
+                reference: ReferencePoint::FrontCentre,
+            }
+        }
+        _ => {
+            let l = v2xw_msg::j2735::bsm::vehicle_length(d.length_m);
+            let w = v2xw_msg::j2735::bsm::vehicle_width(d.width_m);
+            v2xw_threat::FrameExtras {
+                length_m: (l > 0).then(|| f64::from(l) / 100.0),
+                width_m: (w > 0).then(|| f64::from(w) / 100.0),
+                speed_confidence_mps: None,
+                heading_confidence_rad: None,
+                reference: ReferencePoint::Centre,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod jam_sense_tests {
+    use v2xw_core::ids::NodeId;
+    use v2xw_radio::jamming::{ADJACENT_CHANNEL_SOURCE_BASE, JamArrival, JamWindow, JammerKind};
+    use v2xw_radio::types::ChannelId;
+
+    /// Fix round 5, R4.1.JAM-ED: the MAC's busy-since and idle-at instants hold a jammer
+    /// and an adjacent-channel emitter alike to the energy-detect level (IEEE 802.11-2020
+    /// §17.3.10.6: neither carries an 802.11 preamble), whatever that level is set to.
+    /// Fault: a jammer held to preamble detect (-85 dBm), the pre-fix
+    /// `Engine::jam_sense_level`.
+    #[test]
+    fn carrier_sense_holds_jamming_to_energy_detect() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios");
+        let mut s = crate::Scenario::load(root.join("phase1-grid.yaml")).expect("loads");
+        s.radio.phy.energy_detect_dbm = Some(-60.0);
+        // A jammer on the air: with none, energy detect would change nothing and the
+        // setting is refused at load.
+        s.threats.jammers = serde_json::from_value(serde_json::json!([{
+            "id": "attacker/jammer/constant",
+            "params": {"power_dbm": 20.0, "position_m": [0.0, 0.0]}
+        }]))
+        .expect("a jammer");
+        let engine = crate::Engine::build(s, "").expect("builds");
+        let level = engine.jam_sense_level();
+        let at = |source: NodeId, kind: JammerKind| {
+            JamArrival::new(source, -70.0, ChannelId(172), JamWindow::new(0, 1), kind)
+        };
+        for kind in [
+            JammerKind::Constant,
+            JammerKind::Pulsed,
+            JammerKind::Reactive,
+        ] {
+            assert_eq!(level(&at(NodeId::new(7), kind)), -60.0, "{kind:?} jammer");
+        }
+        let emitter = NodeId::new(ADJACENT_CHANNEL_SOURCE_BASE);
+        assert!(v2xw_radio::jamming::is_adjacent_channel_source(emitter));
+        assert_eq!(level(&at(emitter, JammerKind::Constant)), -60.0, "emitter");
+    }
+}
+
+#[cfg(test)]
+mod glosa_driver_tests {
+    use super::{GLOSA_EASE_MPS2, GlosaDrivers};
+    use v2xw_core::ids::ActorId;
+    use v2xw_node::apps::SpeedAdvice;
+
+    /// A follower looked at every 300 ms (a J2945/1 generation interval under load) eases at
+    /// GLOSA_EASE_MPS2 of simulated time, not at that rate per mobility step.
+    #[test]
+    fn a_follower_eases_at_the_rate_in_time_whatever_the_node_step() {
+        let mut g = GlosaDrivers {
+            compliance: 1.0,
+            ..GlosaDrivers::default()
+        };
+        let actor = ActorId::new(7);
+        let advice = Some(SpeedAdvice {
+            target_mps: Some(5.0),
+            distance_m: 120.0,
+        });
+        let mut cap = f64::NAN;
+        let mut t = 10.0;
+        for _ in 0..=10 {
+            if let Some(v2xw_mobility::MobilityCommand::SpeedCap { v_mps: Some(v), .. }) =
+                g.apply(actor, advice, 12.0, t, 0.1)
+            {
+                cap = v;
+            }
+            t += 0.3;
+        }
+        // Ten looks, 3 s after the first: 12 m/s eased by 3 s of GLOSA_EASE_MPS2 (plus the
+        // first look's step).
+        let want = 12.0 - GLOSA_EASE_MPS2 * 3.1;
+        assert!(
+            (cap - want).abs() < 0.06,
+            "cap {cap} m/s after 3 s, {want} expected"
+        );
+    }
+
+    /// A driver who has left keeps nothing in the GLOSA maps (the memory follows the live
+    /// fleet). Fault: `forget` a no-op -> red.
+    #[test]
+    fn a_departed_driver_leaves_nothing_behind() {
+        let mut g = GlosaDrivers {
+            compliance: 1.0,
+            ..GlosaDrivers::default()
+        };
+        let actor = ActorId::new(9);
+        let advice = Some(SpeedAdvice {
+            target_mps: Some(5.0),
+            distance_m: 120.0,
+        });
+        g.apply(actor, advice, 12.0, 1.0, 0.1);
+        g.apply(actor, None, 12.0, 1.1, 0.1);
+        assert!(!g.decided.is_empty() && !g.capped.is_empty() && !g.seen_s.is_empty());
+        g.forget(actor);
+        assert!(
+            g.decided.is_empty()
+                && g.capped.is_empty()
+                && g.missing.is_empty()
+                && g.seen_s.is_empty()
+        );
+    }
+}

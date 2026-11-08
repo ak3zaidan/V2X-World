@@ -1,0 +1,36 @@
+[package]
+name = "v2xw-core"
+description = "DES kernel: clock, event heap, RNG streams, registry, manifest, provenance ids."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Deterministic RNG: ChaCha12 keystream keyed by SHA-256.
+rand_chacha = { workspace = true }
+sha2 = { workspace = true }
+# Deterministic transcendentals: pure-Rust musl port.
+libm = { workspace = true }
+# Serialization of everything that crosses a crate or process boundary.
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yml = { workspace = true }
+# Insertion-ordered sets/maps for deterministic iteration.
+indexmap = { workspace = true }
+# Crate-wide error type.
+thiserror = { workspace = true }
+
+# SHA-256 in hardware on 64-bit ARM: `asm` selects sha2's ARMv8 SHA-2 extension backend,
+# chosen at run time when the CPU has it and falling back to the portable code when not.
+# The function is SHA-256 either way, so no key, stream or digest changes; it only stops
+# the portable compression function being a fifth of a run (every recorded record is
+# hashed into the run's digest). Not on Windows, where `sha2-asm` does not build.
+[target.'cfg(all(target_arch = "aarch64", not(target_os = "windows")))'.dependencies]
+sha2 = { workspace = true, features = ["asm"] }
+
+[dev-dependencies]
+# Phase-parallel determinism tests: the same phase run on 1 and on 8 threads.
+rayon = { workspace = true }

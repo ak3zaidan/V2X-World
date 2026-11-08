@@ -1,0 +1,47 @@
+{
+  "corpus": "openscms-butterfly-expansion",
+  "source": {
+    "title": "OpenSCMS (LG Electronics), ra/src/core_logic/expansion_function.rs unit tests",
+    "id": "S11",
+    "url": "https://github.com/OpenSCMS/OpenSCMS/blob/8a6f0c26c0965f7e86c0a4443502b8968e9809b5/ra/src/core_logic/expansion_function.rs",
+    "commit": "8a6f0c26c0965f7e86c0a4443502b8968e9809b5",
+    "sha256": "cd782ab26e2152194fde198072e785f87e3a31b23881c7bd73cf35f5a772523c",
+    "licence": "Apache-2.0: values transcribed with citations (byte arrays converted to hex), file not vendored",
+    "transcribed": "2026-10-16"
+  },
+  "parameters": "As camp_bfkeyexp.json. f_point = (f_int mod n)*G, compressed SEC 1; cocoon = f_point + caterpillar (OpenSCMS create_cocoon_pub_key / add_verifying_keys)",
+  "note": "OpenSCMS is an implementation, not a conformance reference (02 section 13); its butterfly expansion agrees with CAMP and 1609.2.1. Its linkage code is non-conformant and is not used.",
+  "vectors": [
+    {
+      "id": "openscms enc i=7590 j=0",
+      "cite": "expansion_function.rs lines 346-396 (test_generate_public_key) and 450-471 (test_combine_f_value_with_i_and_j_encrypt)",
+      "kind": "encryption",
+      "in": {
+        "i": 7590,
+        "j": 0,
+        "key": "5e7ba5dd187f729d2a09b76a74e321cc",
+        "caterpillar_uncompressed": "04d1953c807766b3fb3a8c702123758e683ee81ad2f1e7f2f179e02405de11e6aa3db81ae8489d04045f66a726098270d633bbdc247ed83cba77d9c373379bfca9"
+      },
+      "out": {
+        "f_int": "e30a331dee3a609c31d0866b2012b2544b6421f7a32f2ffc4002e2759a5eee46411840a2c5cddfa8ec7794387bd8de68",
+        "f_point_compressed": "0331131301dd498695af1a01741676e89d47db65e4cb06d8cc87ae6c55261aa8fb",
+        "cocoon_compressed": "031cb03fd5fb8faf7a23cd339da6923c4e44b6a7f6b135acf657808b8ff68c7920"
+      }
+    },
+    {
+      "id": "openscms sign i=7596 j=0",
+      "cite": "expansion_function.rs lines 398-447 (test_generate_public_key_sign)",
+      "kind": "signing",
+      "in": {
+        "i": 7596,
+        "j": 0,
+        "key": "49bbe37ed79b1d5ff72f9db0bb2d1548",
+        "caterpillar_uncompressed": "04af96f57d9be7fe5b45c3ab32072b8c136aec83b118be0e00d4a579a23a80aa7cf13bd635c7baf1f6ba8f11c877c18677d17f9e45e7ea2ded03243ce062bb1a99"
+      },
+      "out": {
+        "f_point_compressed": "03d3cbcbf48ed450757b355bfb91177d9339fa41a5c46f1571f59fe42976028b63",
+        "cocoon_compressed": "02f6f6061761eb6c00303572bd654315cedaf9ebf275e522135c3ca9c55b34e955"
+      }
+    }
+  ]
+}

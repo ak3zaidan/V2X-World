@@ -1,0 +1,11 @@
+# The sensitivity base on the lte-v2x-pc5 sidelink: dsrc-grid.yaml with the access layer swapped
+# and nothing else changed, so a DSRC row and its C-V2X twin differ only in the RAT.
+schema: v2xw/scenario/1
+meta:
+  name: sensitivity-lte-grid
+  base: dsrc-grid.yaml
+  description: >-
+    Open-air 1.2 km procedural grid with forty vehicles on the lte-v2x-pc5 sidelink, for
+    one-at-a-time radio sensitivity checks.
+radio:
+  rat: lte-v2x-pc5

@@ -1,0 +1,1118 @@
+//! `protocol/scms/camp` — the CAMP SCMS / IEEE 1609.2.1 credential-management protocol.
+//!
+//! The specification is IEEE 1609.2.1 and the CAMP SCMS PoC documents. The parts of it that are
+//! *structure* are here:
+//! the roles and the separations between them, the credential types, the flows and the
+//! stages each is required to emit, and the revocation mechanism. The parts that are
+//! *behaviour* are in [`run`], where each role is a node with a queue and each flow is a
+//! sequence of messages across modelled links.
+//!
+//! What this plug-in is for, in one sentence: to measure what credential management costs
+//! and what it leaks. That is why the Registration Authority is a queue rather than a
+//! function, why a pre-linkage value is a type the RA cannot open, and why a Linkage
+//! Authority releases `ls(i)` and never `ls(0)`.
+
+pub mod appcert;
+pub mod calendar;
+pub mod deployment;
+pub mod enrolment;
+pub mod governance;
+pub mod http;
+pub mod inspect;
+pub mod mbr;
+pub mod msg;
+pub mod params;
+pub mod pdu;
+pub mod pdu_prov;
+pub mod pki_view;
+pub mod run;
+
+use v2xw_core::card::{
+    Determinism, Equation, Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation,
+    ValidationStatus,
+};
+use v2xw_core::model::Model;
+use v2xw_core::time::Duration;
+use v2xw_sec::primitive::PrimitiveId;
+
+use crate::sizes::WireSize;
+use crate::sizes::{CRL_LINKAGE_ENTRY_BYTES, CertificateSizes, SizeParams};
+use crate::spec::{
+    ActiveRevocation, Centrality, CredentialTypeSpec, EntityRoleSpec, FlowSpec, HolderKind,
+    PassiveRevocation, ProtocolId, RevocationMechanism, SeparationRule, StorageCounter,
+    TrustBoundary, ValidityPolicy,
+};
+use crate::stage::{FlowId, StageId};
+
+pub use params::{ScmsNodes, ScmsParams};
+pub use run::{ScmsRun, ScmsState};
+
+/// The plug-in's stable id.
+pub const CAMP_SCMS_ID: &str = "protocol/scms/camp";
+
+/// The separations [BRECHT §X] declares mandatory.
+///
+/// A scenario that co-hosts a pair is refused unless it sets
+/// `security.protocol.params.relax_separation` — the check is
+/// [`crate::spec::separation_violations`], which runs against a placement.
+pub const SEPARATIONS: &[SeparationRule] = &[
+    SeparationRule {
+        a: "PCA",
+        b: "RA",
+        reason: "the PCA must not learn which request a certificate came from [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "PCA",
+        b: "LA1",
+        reason: "the PCA must not be able to compute a linkage value from a seed [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "PCA",
+        b: "LA2",
+        reason: "the PCA must not be able to compute a linkage value from a seed [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "LA1",
+        b: "LA2",
+        reason: "one LA holding both chains could link a device unilaterally [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "LOP",
+        b: "RA",
+        reason: "the proxy exists to hide the device's network identity from the RA [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "LOP",
+        b: "MA",
+        reason: "the proxy must not be the party investigating [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "MA",
+        b: "RA",
+        reason: "investigation must require a request the RA answers, not one it makes [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "MA",
+        b: "LA1",
+        reason: "the MA must have to ask for a seed [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "MA",
+        b: "LA2",
+        reason: "the MA must have to ask for a seed [BRECHT §X]",
+    },
+    SeparationRule {
+        a: "MA",
+        b: "PCA",
+        reason: "the MA must have to ask for the chain identifiers [BRECHT §X]",
+    },
+];
+
+/// The flows, and the stages each is required to emit.
+///
+/// `tests/flows.rs` runs every one of these and asserts the stamped stages equal the list
+/// here, in order. The lists are therefore executable specification, not commentary.
+pub const FLOWS: &[FlowSpec] = &[
+    FlowSpec {
+        id: FlowId::Enrolment,
+        participants: &["EE", "DCM", "ECA"],
+        stages: &[
+            StageId::Requested,
+            StageId::ProxyForwarded,
+            StageId::Certified,
+            StageId::Installed,
+        ],
+    },
+    FlowSpec {
+        id: FlowId::Provisioning,
+        participants: &["EE", "LOP", "RA", "LA1", "LA2", "PCA"],
+        stages: PROVISIONING_STAGES,
+    },
+    FlowSpec {
+        id: FlowId::Topup,
+        participants: &["EE", "LOP", "RA", "LA1", "LA2", "PCA"],
+        stages: PROVISIONING_STAGES,
+    },
+    FlowSpec {
+        // The RA's weekly job for an account whose device has not asked yet: backend only.
+        id: FlowId::Pregeneration,
+        participants: &["RA", "LA1", "LA2", "PCA"],
+        stages: &[
+            StageId::Expanded,
+            StageId::PreLinkageReady,
+            StageId::Shuffled,
+            StageId::Certified,
+            StageId::BatchReady,
+        ],
+    },
+    FlowSpec {
+        id: FlowId::Report,
+        participants: &["EE", "LOP", "RA", "MA"],
+        stages: &[
+            StageId::Detect,
+            StageId::ReportSent,
+            StageId::ProxyForwarded,
+            StageId::Shuffled,
+            StageId::ReportReceived,
+        ],
+    },
+    FlowSpec {
+        id: FlowId::LinkageResolution,
+        participants: &["MA", "PCA", "LA1", "LA2", "RA"],
+        stages: &[StageId::Decision, StageId::Resolved, StageId::Blocklisted],
+    },
+    FlowSpec {
+        id: FlowId::CrlIssuance,
+        participants: &["MA", "CRLG", "CRL Store", "CRL Broadcast"],
+        stages: &[
+            StageId::Issued,
+            StageId::Published,
+            StageId::FirstRsuBroadcast,
+        ],
+    },
+    FlowSpec {
+        id: FlowId::CrlDistribution,
+        participants: &["CRL Store", "EE"],
+        stages: &[StageId::Downloaded, StageId::Processed, StageId::Enforced],
+    },
+    FlowSpec {
+        id: FlowId::Reenrolment,
+        // Through the RA ([SM-REENR]; 1609.2.1 `eeRaSuccessorEnrollmentCertRequest`): the
+        // RA acknowledges with the download time, the ECA certifies, the device downloads
+        // and installs.
+        participants: &["EE", "RA", "ECA"],
+        stages: &[
+            StageId::Requested,
+            StageId::Acknowledged,
+            StageId::Certified,
+            StageId::Installed,
+        ],
+    },
+    FlowSpec {
+        id: FlowId::PolicyDistribution,
+        participants: &["SCMS Manager", "PG", "RA"],
+        stages: &[StageId::Decision, StageId::Issued, StageId::Published],
+    },
+];
+
+/// Top-up is the provisioning state machine with a one-period request, so it emits the
+/// same stages ([PRIMER pp.5,7]; [CAMP-EE §2.2.7.7.7]).
+const PROVISIONING_STAGES: &[StageId] = &[
+    StageId::Requested,
+    StageId::ProxyForwarded,
+    StageId::Acknowledged,
+    StageId::Expanded,
+    StageId::PreLinkageReady,
+    StageId::Shuffled,
+    StageId::Certified,
+    StageId::BatchReady,
+    StageId::Downloaded,
+    StageId::Installed,
+];
+
+/// The active half of SCMS revocation: a linked CRL in series 1, daily by default.
+pub const ACTIVE_REVOCATION: ActiveRevocation = ActiveRevocation {
+    entry: WireSize::cited(
+        CRL_LINKAGE_ENTRY_BYTES,
+        "Brecht 2018 §VI-F: 32 B of seeds plus group overhead, ≈ 40 B per entry",
+    ),
+    series: 1,
+    cadence: Duration::from_secs(86_400),
+    stages: &[
+        StageId::Decision,
+        StageId::Issued,
+        StageId::Published,
+        StageId::FirstRsuBroadcast,
+        StageId::Downloaded,
+        StageId::Processed,
+        StageId::Enforced,
+    ],
+};
+
+/// The passive half: the RA stops issuing to a blocklisted enrolment certificate.
+pub const PASSIVE_REVOCATION: PassiveRevocation = PassiveRevocation {
+    blocklist_at: "RA",
+    stages: &[
+        StageId::Decision,
+        StageId::Blocklisted,
+        StageId::LastValidCredentialExpiry,
+    ],
+};
+
+/// The CAMP SCMS plug-in.
+#[derive(Debug)]
+pub struct CampScms {
+    card: ModelCard,
+    params: ScmsParams,
+}
+
+impl Default for CampScms {
+    fn default() -> CampScms {
+        CampScms::new(ScmsParams::default())
+    }
+}
+
+impl CampScms {
+    /// The plug-in with `params`.
+    pub fn new(params: ScmsParams) -> CampScms {
+        CampScms {
+            card: card(&params),
+            params,
+        }
+    }
+
+    /// The protocol's id.
+    pub const fn protocol_id(&self) -> ProtocolId {
+        ProtocolId(CAMP_SCMS_ID)
+    }
+
+    /// Its parameters.
+    pub const fn params(&self) -> &ScmsParams {
+        &self.params
+    }
+
+    /// The backend roles.
+    pub fn roles(&self) -> Vec<EntityRoleSpec> {
+        let p = &self.params;
+        let svc = crate::service::ServiceModelSpec::new(p.backend_servers, p.backend_overhead);
+        let shuffling = svc.batched(crate::service::BatchPolicy::CAMP_SHUFFLE);
+        let cert = CertificateSizes::measured().ok();
+        let pseudonym = cert.map_or(
+            WireSize::cited(80, "SEC 4 §3.4: implicit certificate"),
+            |c| c.pseudonym,
+        );
+        let enrolment = cert.map_or(
+            WireSize::cited(117, "cross-check against the CAMP VSC-A certificate size"),
+            |c| c.enrolment,
+        );
+        vec![
+            EntityRoleSpec {
+                name: "RA",
+                boundary: TrustBoundary::Registration,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: shuffling,
+                storage_growth: vec![
+                    StorageCounter {
+                        what: "enrolment certificate per device [BRECHT Table II]",
+                        bytes_each: enrolment,
+                    },
+                    StorageCounter {
+                        what: "request hash per provisioning request [BRECHT Table II]",
+                        bytes_each: WireSize::cited(32, "FIPS 180-4: SHA-256 digest"),
+                    },
+                ],
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "PCA",
+                boundary: TrustBoundary::Issuer,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: vec![StorageCounter {
+                    what: "(i, j, lv, certificate, request hash) per issued certificate \
+                           [BRECHT Table II]",
+                    bytes_each: pseudonym,
+                }],
+                offline: false,
+            },
+            la_role("LA1", TrustBoundary::Linkage(1), p, svc),
+            la_role("LA2", TrustBoundary::Linkage(2), p, svc),
+            EntityRoleSpec {
+                name: "MA",
+                boundary: TrustBoundary::Misbehaviour,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: vec![StorageCounter {
+                    what: "misbehaviour report [SM-MBR v1.0 §1]",
+                    bytes_each: WireSize::real(
+                        p.sizes.report_payload_bytes,
+                        "the reference report's COER (mbr::REFERENCE_REPORT_COER_BYTES)",
+                    ),
+                }],
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "CRLG",
+                boundary: TrustBoundary::Revocation,
+                central: Centrality::IntrinsicallyCentral,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: vec![StorageCounter {
+                    what: "CRL entry [BRECHT §VI-F]",
+                    bytes_each: ACTIVE_REVOCATION.entry,
+                }],
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "LOP",
+                boundary: TrustBoundary::Proxy,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "CRL Store",
+                boundary: TrustBoundary::Revocation,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: vec![StorageCounter {
+                    what: "CRL entry [BRECHT §VI-F]",
+                    bytes_each: ACTIVE_REVOCATION.entry,
+                }],
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "CRL Broadcast",
+                boundary: TrustBoundary::Revocation,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "ECA",
+                boundary: TrustBoundary::Issuer,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: vec![StorageCounter {
+                    what: "enrolment certificate [BRECHT Table II]",
+                    bytes_each: enrolment,
+                }],
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "DCM",
+                boundary: TrustBoundary::Registration,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "Root CA",
+                boundary: TrustBoundary::Policy,
+                central: Centrality::IntrinsicallyCentral,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: true,
+            },
+            // Hosted, because a policy change is a message with a latency: the SCMS
+            // Manager decides, the Policy Generator signs, the RA re-issues its local file
+            // (`governance`, `FlowId::PolicyDistribution`).
+            EntityRoleSpec {
+                name: "Policy Generator",
+                boundary: TrustBoundary::Policy,
+                central: Centrality::IntrinsicallyCentral,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "SCMS Manager",
+                boundary: TrustBoundary::Policy,
+                central: Centrality::IntrinsicallyCentral,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "Electors",
+                boundary: TrustBoundary::Policy,
+                central: Centrality::IntrinsicallyCentral,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: true,
+            },
+            EntityRoleSpec {
+                name: "ICA",
+                boundary: TrustBoundary::Issuer,
+                central: Centrality::Central,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: true,
+            },
+        ]
+    }
+
+    /// The credential types.
+    pub fn credential_types(&self) -> Vec<CredentialTypeSpec> {
+        let p = &self.params;
+        let cert = CertificateSizes::measured().ok();
+        vec![
+            CredentialTypeSpec {
+                name: "pseudonym-cert",
+                encoded: cert.map_or(WireSize::cited(80, "SEC 4 §3.4"), |c| c.pseudonym),
+                validity: ValidityPolicy {
+                    period: p.i_period,
+                    overlap: Duration::from_secs(60 * 60),
+                    concurrent: p.certs_per_period,
+                    preload: Duration::from_secs(3 * 52 * 7 * 24 * 60 * 60),
+                },
+                holder: HolderKind::EndEntity,
+                covers: Vec::new(),
+            },
+            CredentialTypeSpec {
+                name: "enrollment-cert",
+                encoded: cert.map_or(
+                    WireSize::cited(117, "cross-check against the CAMP VSC-A certificate size"),
+                    |c| c.enrolment,
+                ),
+                validity: ValidityPolicy {
+                    period: Duration::from_secs(7 * 365 * 24 * 60 * 60),
+                    overlap: Duration::ZERO,
+                    concurrent: 1,
+                    preload: Duration::ZERO,
+                },
+                holder: HolderKind::EndEntity,
+                covers: Vec::new(),
+            },
+        ]
+    }
+
+    /// The flows.
+    pub const fn flows(&self) -> &'static [FlowSpec] {
+        FLOWS
+    }
+
+    /// The separations this protocol requires.
+    pub const fn separations(&self) -> &'static [SeparationRule] {
+        SEPARATIONS
+    }
+
+    /// Revocation: both halves.
+    pub const fn revocation(&self) -> RevocationMechanism {
+        RevocationMechanism::Both(ACTIVE_REVOCATION, PASSIVE_REVOCATION)
+    }
+
+    /// The primitives the protocol uses.
+    pub fn primitives(&self) -> Vec<PrimitiveId> {
+        vec![
+            PrimitiveId::ECDSA_P256_SHA256,
+            PrimitiveId::ECQV_P256,
+            PrimitiveId::SHA_256,
+            crate::spec::AES128_BLOCK,
+        ]
+    }
+}
+
+fn la_role(
+    name: &'static str,
+    boundary: TrustBoundary,
+    p: &ScmsParams,
+    svc: crate::service::ServiceModelSpec,
+) -> EntityRoleSpec {
+    EntityRoleSpec {
+        name,
+        boundary,
+        central: Centrality::Central,
+        default_profile: p.backend_profile,
+        default_service: svc,
+        storage_growth: vec![StorageCounter {
+            what: "initial seed and pre-linkage values per device [BRECHT Table II]",
+            bytes_each: WireSize::cited(16, "Ieee1609Dot2BaseTypes.asn: LinkageSeed is 16 B"),
+        }],
+        offline: false,
+    }
+}
+
+impl Model for CampScms {
+    fn card(&self) -> &ModelCard {
+        &self.card
+    }
+}
+
+fn std_src(reference: &'static str) -> Source {
+    Source::new(SourceKind::Standard, reference)
+}
+
+fn paper(reference: &'static str) -> Source {
+    Source::new(SourceKind::Paper, reference)
+}
+
+fn todo(
+    name: &'static str,
+    unit: &'static str,
+    default: serde_json::Value,
+    plan: &'static str,
+) -> Parameter {
+    let mut p = Parameter::new(
+        name,
+        unit,
+        default,
+        Source::todo_calibrate("no published value"),
+    );
+    p.calibration = Some(plan.to_string());
+    p
+}
+
+fn card(p: &ScmsParams) -> ModelCard {
+    let mut card = ModelCard::new(
+        CAMP_SCMS_ID,
+        Family::Protocol,
+        "1.0.0",
+        "The CAMP SCMS / IEEE 1609.2.1 credential-management protocol: nine online backend \
+         roles as queued nodes, butterfly-key pseudonym provisioning, two-Linkage-Authority \
+         identity resolution, and linked-CRL revocation that is forward-only by construction.",
+    );
+    card.tier = vec![Tier::Medium];
+    card.equations = vec![
+        Equation::new(
+            "butterfly expansion",
+            "B(i,j) = A + f1(ck,(i,j))·G ;  Q(i,j) = P + f2(ek,(i,j))·G ;  \
+             b'(i,j) = a + f1(ck,(i,j)) + c",
+        ),
+        Equation::new(
+            "linkage value",
+            "lv(i,j) = plv1(i,j) XOR plv2(i,j), plv_x(i,j) = AES_{ls_x(i)}(la_id_x ‖ j) truncated \
+             to 72 bits",
+        ),
+        Equation::new(
+            "seed chain",
+            "ls_x(i) = H(la_id_x ‖ ls_x(i-1)) truncated to 128 bits; a CRL entry publishes \
+             ls_x(i_rev) and never ls_x(0), which is what makes revocation forward-only",
+        ),
+        Equation::new(
+            "CRL processing cost",
+            "per entry per i-period: 2 SHA-256 chain steps and 2·jmax AES blocks",
+        ),
+        Equation::new(
+            "link delay",
+            "t = latency + 8·bytes / bandwidth, in integer nanoseconds",
+        ),
+    ];
+    card.parameters = vec![
+        Parameter::new(
+            "i_period_minutes",
+            "min",
+            serde_json::json!(10_080),
+            std_src("CAMP SCMS PoC EE Requirements R1.1 §2.1.5.3.2"),
+        ),
+        Parameter::new(
+            "cert_lifetime_minutes",
+            "min",
+            serde_json::json!(10_140),
+            std_src("CAMP SCMS PoC EE Requirements R1.1 §2.1.5.3.2 (one hour of overlap)"),
+        ),
+        Parameter::new(
+            "certs_per_period",
+            "-",
+            serde_json::json!(p.certs_per_period),
+            std_src("CAMP SCMS PoC EE Requirements R1.1 Table 2.1.2.6.2"),
+        ),
+        Parameter::new(
+            "initial_batch_certs",
+            "-",
+            serde_json::json!(p.initial_batch),
+            paper("USDOT SCMS Technical Primer (FHWA-JPO-19-775) p.7: 3,120 = 20 × 52 × 3"),
+        ),
+        Parameter::new(
+            "max_periods_ahead",
+            "-",
+            serde_json::json!(p.max_periods_ahead),
+            paper(
+                "USDOT SCMS Technical Primer (FHWA-JPO-19-775) p.7: three years of weekly \
+                 batches, 3,120 = 20 × 156; the RA clips a request beyond it",
+            ),
+        ),
+        Parameter::new(
+            "enrolment_lifetime_s",
+            "s",
+            serde_json::json!(p.enrolment_lifetime.as_nanos() / 1_000_000_000),
+            std_src(
+                "CAMP SCMS 1.2.2 Table 3 and SCMS-1307: 6 years. Alternatives: 7 y (CAMP R1.1), 3 y (5GAA draft CP (419))",
+            ),
+        ),
+        Parameter::new(
+            "reenrol_lead_s",
+            "s",
+            serde_json::json!(p.reenrol_lead.as_nanos() / 1_000_000_000),
+            std_src(
+                "SCMS Manager EE Re-Enrollment Technical Specification v1.0 §1-3: request \
+                 12-24 months before expiry; 548 d (18 months) is the range's midpoint",
+            ),
+        ),
+        Parameter::new(
+            "reenrol_download_delay_s",
+            "s",
+            serde_json::json!(p.reenrol_download_delay.as_nanos() / 1_000_000_000),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.21 Table 3 download-minWait 5 min \
+                 (the RA's nextDlTime); two-phase re-enrolment [SM-REENR §1-3]",
+            ),
+        ),
+        Parameter::new(
+            "ra_min_preload_periods",
+            "-",
+            serde_json::json!(crate::scms::params::RA_MIN_PRELOAD_PERIODS),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.21 Table 3 ra-maxPreloadTime ≥ 2 weeks",
+            ),
+        ),
+        Parameter::new(
+            "ra_max_preload_periods",
+            "-",
+            serde_json::json!(crate::scms::params::RA_MAX_PRELOAD_PERIODS),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.21 Table 3 ra-maxPreloadTime ≤ 3 \
+                 years; USDOT SCMS Technical Primer p.7 (3,120 = 156 × 20)",
+            ),
+        ),
+        Parameter::new(
+            "electors",
+            "-",
+            serde_json::json!(p.electors),
+            std_src(
+                "SCMS Manager Elector Policy v1.0 §2; IEEE 1609.2.1 Profile v1.0.3 §2.1.15 \
+                 (five elector certificates, P-384, staggered 12-24 y validity as published)",
+            ),
+        ),
+        Parameter::new(
+            "elector_quorum",
+            "-",
+            serde_json::json!(p.elector_quorum),
+            std_src(
+                "SCMS Manager Elector Technical Specification v1.1 §2.2 (any 3 of 5; the \
+                 published CTLs carry quorum 3). A CTL's quorum governs the next CTL \
+                 (IEEE 1609.2.1 FullIeeeTbsCtl)",
+            ),
+        ),
+        Parameter::new(
+            "shuffle_threshold_requests",
+            "-",
+            serde_json::json!(p.shuffle_threshold),
+            std_src(
+                "CAMP SCMS 1.2.2 §5.2.15.5 Table 67 shuffle_threshold (SCMS-631); preset \
+                 'brecht': 10,000 [Brecht et al. 2018 §V-B]",
+            ),
+        ),
+        Parameter::new(
+            "shuffle_window_s",
+            "s",
+            serde_json::json!(p.shuffle_window.as_nanos() / 1_000_000_000),
+            std_src(
+                "CAMP SCMS 1.2.2 Table 67 max_cert_request_age 2 days; preset 'brecht': one \
+                 day",
+            ),
+        ),
+        Parameter::new(
+            "report_shuffle_threshold",
+            "-",
+            serde_json::json!(p.report_shuffle_threshold),
+            std_src("CAMP SCMS 1.2.2 §5.2.8.4 SCMS-765: 10,000 reports or one day"),
+        ),
+        Parameter::new(
+            "report_shuffle_window_s",
+            "s",
+            serde_json::json!(p.report_shuffle_window.as_nanos() / 1_000_000_000),
+            std_src("CAMP SCMS 1.2.2 §5.2.8.4 SCMS-765: 10,000 reports or one day"),
+        ),
+        Parameter::new(
+            "crl_cadence_s",
+            "s",
+            serde_json::json!(p.crl_cadence.as_nanos() / 1_000_000_000),
+            std_src(
+                "SCMS Manager Provider Requirements v1.1 §3.4.10: publish within 1 business \
+                 day of a change (the US presets run that rule, crl.business_day_sla); 5GAA \
+                 draft CP (255): within 24 h; Brecht 2018 §VI-G: daily",
+            ),
+        ),
+        Parameter::new(
+            "next_crl_s",
+            "s",
+            serde_json::json!(p.crl.next_crl.as_nanos() / 1_000_000_000),
+            std_src(
+                "CAMP SCMS 1.2.2 §3 item 10: devices fetch no later than once a week, so \
+                 nextCrl is one week; 5GAA draft CP (254): at least monthly",
+            ),
+        ),
+        todo(
+            "crl_slot_et_hour",
+            "h",
+            serde_json::json!(p.crl.slot_et.0),
+            "ASSUMPTION: the Eastern hour of the business-day CRL publication slot (10:00). \
+             SM-PROV §3.4.10 fixes the deadline, not the hour; replace with a provider's \
+             published CRL schedule.",
+        ),
+        todo(
+            "ma_max_open_cases",
+            "-",
+            serde_json::json!(p.ma.max_open_cases),
+            "ASSUMPTION: the MA's open-investigation table (1,000). No MA capacity is \
+             published; sweep it in an MA-saturation study.",
+        ),
+        todo(
+            "ma_review_s",
+            "s",
+            serde_json::json!(match p.ma.mode {
+                crate::scms::params::MaMode::ManualReview { review } =>
+                    review.as_nanos() / 1_000_000_000,
+                crate::scms::params::MaMode::Automatic => 0,
+            }),
+            "ASSUMPTION: the pilots' manual MA (CAMP 1.2.2 §4.2-4.3; Primer pp.6, 8; owner \
+             decision 7) prints no review time; 8 h is one working shift. Replace with an \
+             operator's measured case time.",
+        ),
+        todo(
+            "la_aca_key_rotation_s",
+            "s",
+            serde_json::json!(p.pdu.la_aca_key_rotation_s),
+            "ASSUMPTION: CAMP 1.2.2 Table 68 shared_key_update_interval is a local option \
+             with no published value; one week (the i-period). Take it from an LA's local \
+             policy.",
+        ),
+        todo(
+            "seed_retry_s",
+            "s",
+            serde_json::json!(p.seed_retry.as_nanos() / 1_000_000_000),
+            "ASSUMPTION: CAMP describes no MA-to-LA retry; 30 s lets a two-of-two LA \
+             deployment with an LA down retry as a committee session does.",
+        ),
+        Parameter::new(
+            "crl_entry_bytes",
+            "B",
+            serde_json::json!(CRL_LINKAGE_ENTRY_BYTES),
+            paper("Brecht 2018 §VI-F: 32 B of seeds plus group overhead"),
+        ),
+        Parameter::new(
+            "crl_max_forward_periods",
+            "-",
+            serde_json::json!(v2xw_sec::linkage::DEFAULT_MAX_FORWARD_PERIODS),
+            paper(
+                "the CAMP end-entity certificate lifetime, 156 weekly \
+                 periods; also a denial-of-service bound, see v2xw-sec's linkage module",
+            ),
+        ),
+        Parameter::new(
+            "pseudonym_change_interval_s",
+            "s",
+            serde_json::json!(300),
+            paper("USDOT SCMS Technical Primer pp.7-8; SAE J2945/1 CERTCHG"),
+        ),
+        Parameter::new(
+            "pseudonym_change_distance_m",
+            "m",
+            serde_json::json!(2_000),
+            paper("USDOT SCMS Technical Primer pp.7-8 (NYC pilot: 2 km or 5 min)"),
+        ),
+        Parameter::new(
+            "cert_attach_interval_ms",
+            "ms",
+            serde_json::json!(450),
+            paper("Rostami et al. 2018 Table 1 (SAE J2945/1 CertAttachInt)"),
+        ),
+        Parameter::new(
+            "backend_hw_profile",
+            "-",
+            serde_json::json!(p.backend_profile),
+            Source::new(
+                SourceKind::Datasheet,
+                "wolfSSL benchmark, Intel i9-11950H; appliance-level RA/PCA/MA transaction rates are NOT PUBLISHED, so the service \
+                 model composes them from these per-operation costs",
+            ),
+        ),
+        Parameter::new(
+            "device_hw_profile",
+            "-",
+            serde_json::json!(p.device_profile),
+            Source::new(SourceKind::Datasheet, "Cohda MK6 with Botan"),
+        ),
+        Parameter::new(
+            "hybrid_backend_pq_profile",
+            "-",
+            serde_json::json!(crate::hybrid::BACKEND_PQ_PROFILE),
+            paper(
+                "arXiv 2503.10238 Table 8 (Raspberry Pi 5, liboqs): the one catalogue profile \
+                 publishing ML-DSA-44 and Falcon-512 sign, verify and keygen as times. Under a \
+                 hybrid security.signature the authorities' post-quantum half is charged here; \
+                 a server is faster, so it is an upper bound",
+            ),
+        ),
+        Parameter::new(
+            "hybrid_device_pq_keygen_profile",
+            "-",
+            serde_json::json!(crate::hybrid::DEVICE_PQ_KEYGEN_PROFILE),
+            paper(
+                "arXiv 2503.10238 Table 8 (Raspberry Pi 4, liboqs): no Cohda MK6 key-generation \
+                 figure is published, and there is no post-quantum butterfly, so a hybrid \
+                 device generates one post-quantum key per pseudonym certificate at this \
+                 rate; a lower bound for the MK6",
+            ),
+        ),
+        todo(
+            "backend_servers",
+            "-",
+            serde_json::json!(p.backend_servers),
+            "The 'c' of the M/M/c service model (an assumption of this engine). No source picks a VM size; set it per \
+             scenario and record it in the manifest.",
+        ),
+        todo(
+            "backend_overhead_us",
+            "us",
+            serde_json::json!(p.backend_overhead.as_nanos() / 1_000),
+            "Per-request overhead beyond the cryptography. RA/PCA/MA transaction rates are NOT PUBLISHED; measure against a reference SCMS \
+             deployment or an emulated RA and replace.",
+        ),
+        todo(
+            "device_overhead_us",
+            "us",
+            serde_json::json!(p.device_overhead.as_nanos() / 1_000),
+            "Per-request overhead on the OBU outside the crypto engine; measure on the \
+             reference OBU profile.",
+        ),
+        todo(
+            "backend_link_latency_ms",
+            "ms",
+            serde_json::json!(p.backend_link_latency.as_nanos() / 1_000_000),
+            "ASSUMPTION for a library run without a deployment: one-way latency between \
+             backend entities. Under security.scms.deployment (every engine run) the \
+             deployment's intra-region figure replaces it (great-circle at 2/3 c plus 1 ms \
+             per link, itself an ASSUMPTION: no provider publishes where it runs).",
+        ),
+        todo(
+            "backend_link_bandwidth_bps",
+            "bit/s",
+            serde_json::json!(p.backend_link_bandwidth_bps),
+            "Backend link capacity; set from the deployment's provisioned bandwidth.",
+        ),
+        todo(
+            "uu_link_latency_ms",
+            "ms",
+            serde_json::json!(p.uu_link_latency.as_nanos() / 1_000_000),
+            "Device-to-backend one-way latency over cellular; replace with the measured \
+             latency distribution of the medium-tier cellular model once that \
+             model is wired to this plug-in.",
+        ),
+        todo(
+            "uu_link_bandwidth_bps",
+            "bit/s",
+            serde_json::json!(p.uu_link_bandwidth_bps),
+            "Cellular uplink capacity; same source as uu_link_latency_ms.",
+        ),
+        Parameter::new(
+            "v2x_air_bandwidth_bps",
+            "bit/s",
+            serde_json::json!(p.v2x_air_bandwidth_bps),
+            std_src(
+                "EN 302 663 V1.3.1 Annex C.3 Table C.1: QPSK rate 1/2 on the 10 MHz OFDM \
+                 PHY, the mode the safety channel transmits at",
+            ),
+        ),
+        todo(
+            "v2x_air_latency_ms",
+            "ms",
+            serde_json::json!(p.v2x_air_latency.as_nanos() / 1_000_000),
+            "Channel-access delay before a roadside CRL broadcast's first bit, not \
+             propagation. It is the MAC's answer and belongs to v2xw-radio; a scenario that \
+             needs contention drives the broadcast through the engine's PHY instead of \
+             through this link. Replace with the measured access delay at the CBR the \
+             deployment runs at.",
+        ),
+        todo(
+            "epoch_ns",
+            "ns",
+            serde_json::json!(p.epoch),
+            "Library runs and a compressed calendar only: the SimTime at which i-period 0 \
+             begins. On the real calendar (every engine run on the US week) it is \
+             ignored and calendar_epoch_unix_s numbers the periods.",
+        ),
+        Parameter::new(
+            "calendar_epoch_unix_s",
+            "s",
+            serde_json::json!(crate::scms::governance::US_IPERIOD_EPOCH_UNIX_S),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile v1.0.3 §2.1.17 Table 2 iPeriodEpoch: 4 am \
+                 Eastern, Tuesday 2015-01-06 (09:00 UTC). Set by the engine on the \
+                 real calendar",
+            ),
+        ),
+        todo(
+            "first_batch_delay_s",
+            "s",
+            serde_json::json!(p.first_batch_delay.as_nanos() / 1_000_000_000),
+            "The 'first batch time' the RA returns in its acknowledgement. CAMP-EE §2.2.7.6 \
+             makes it deployment-specific; take it from the RA being modelled.",
+        ),
+        Parameter::new(
+            "download_poll_interval_s",
+            "s",
+            serde_json::json!(p.download_poll_interval.as_nanos() / 1_000_000_000),
+            std_src(
+                "SCMS Manager 1609.2.1 Profile §2.1.21 Table 3 download-minWait 5 min; §4.3.1: \
+                 retry after minWait, up to maxReqs",
+            ),
+        ),
+        Parameter::new(
+            "max_download_polls",
+            "-",
+            serde_json::json!(p.max_download_polls),
+            std_src("SCMS Manager 1609.2.1 Profile §2.1.21 Table 3 download-maxReqs 100"),
+        ),
+        Parameter::new(
+            "ee_retry_timeout_s",
+            "s",
+            serde_json::json!(p.ee_retry_timeout.as_nanos() / 1_000_000_000),
+            std_src(
+                "CAMP SCMS 1.2.2 §5.2.8.3 SCMS-522: the EE retries if no response is \
+                 received in 10 s (every EE -> RA request: butterfly request, .info, batch)",
+            ),
+        ),
+        Parameter::new(
+            "ee_retry_max_per_hour",
+            "-",
+            serde_json::json!(p.ee_retry_max_per_hour),
+            std_src("CAMP SCMS 1.2.2 §5.2.8.3 SCMS-523: at most 10 retries per 60 minutes"),
+        ),
+        Parameter::new(
+            "download_request_tolerance_s",
+            "s",
+            serde_json::json!(p.download_request_tolerance.as_nanos() / 1_000_000_000),
+            std_src("CAMP SCMS 1.2.2 SCMS-1203 (ra.client-signature-ttl-sec): 5 s"),
+        ),
+        todo(
+            "device_pool_periods",
+            "week",
+            serde_json::json!(DEVICE_POOL_PERIODS),
+            "ASSUMPTION: the i-periods a device holds (the engine's pool_periods, 2: this \
+             week and the next). It is a device download strategy, OEM-configured: the \
+             pilots bracket it, NYC one week ahead topped up weekly [CVP-P2 items 21, 24], \
+             THEA 156 weeks at once [CVP-LOG p.16] (params::PreloadPolicy). Sweep it.",
+        ),
+        todo(
+            "repo_url_bytes",
+            "B",
+            serde_json::json!(p.sizes.repo_url_bytes),
+            "The certificate-repository URL in the RA's acknowledgement. Measure one from a \
+             reference RA, or drop the field if the deployment derives the URL.",
+        ),
+        todo(
+            "batch_container_bytes",
+            "B",
+            serde_json::json!(p.sizes.batch_container_bytes),
+            "Framing the X_Y.zip container adds around one i-period of certificates. Measure \
+             against a real batch file.",
+        ),
+        Parameter::new(
+            "report_payload_bytes",
+            "B",
+            serde_json::json!(p.sizes.report_payload_bytes),
+            std_src(
+                "SCMS Manager Misbehavior Report Specification v1.0 §1-3 and ASN.1 v1.1, \
+                 encoded by mbr::encode_report: the reference report (1VInconsistent, two \
+                 signed BSMs and the accused's certificate) is 524 B COER, pinned by \
+                 tests/mbr.rs. A real report is charged its own bytes",
+            ),
+        ),
+        todo(
+            "linkage_chain_identifier_bytes",
+            "B",
+            serde_json::json!(p.sizes.linkage_chain_identifier_bytes),
+            "The LCI as it crosses RA-to-LA and MA-to-LA. CAMP publishes the concept but not \
+             the encoding; take it from the 1609.2.1 upload interface definition.",
+        ),
+        todo(
+            "etsi_subject_attributes_bytes",
+            "B",
+            serde_json::json!(p.sizes.etsi_subject_attributes_bytes),
+            "The InnerEcRequest subject-attribute block; size it from the real encoder once \
+             the ETSI PKI ASN.1 defect is resolved.",
+        ),
+    ];
+    card.assumptions = vec![
+        "Root CA, the Policy Generator and the electors are offline, as in the CAMP PoC, so they place no messages on any link."
+            .into(),
+        "Service times are deterministic sums of per-operation costs plus a fixed overhead: \
+         the `medium` M/M/c tier without its stochastic variant, whose \
+         log-normal parameters the design leaves todo-calibrate."
+            .into(),
+        "SHA-256 and AES-128 have no cost anchor on any hardware profile, so their operations are counted and charged zero time rather than given an \
+         invented rate."
+            .into(),
+    ];
+    card.limitations = vec![
+        "Availability (entity outages) is a declared hook and is not modelled: \
+         the two-state Markov parameters are todo-calibrate."
+            .into(),
+        "Epidemic V2V CRL exchange and RSU-relayed *provisioning* are not built. CRL \
+         *distribution* has both paths: the cellular fetch from the CRL Store and the \
+         roadside broadcast, the latter as a point-to-point link at the OFDM rate. \
+         Contention, fragmentation and the loss process on that link belong to the radio \
+         crates, so a scenario that needs them drives the broadcast through the engine's \
+         PHY rather than through this link."
+            .into(),
+        "The CRL expansion cost is counted and charged zero time, because no hardware \
+         profile publishes a SHA-256 or AES-128 anchor. A device's \
+         `processed` and `enforced` stages therefore share their `downloaded` instant, and \
+         the expansion's operation counts — not its duration — are what the metric reports."
+            .into(),
+        "The P2PCD and certificate-attachment policies are declared as parameters here and \
+         enforced by the envelope in `v2xw-sec`, not by this crate."
+            .into(),
+    ];
+    card.ignores = vec![
+        "Certificate encryption is modelled by its size and its cost, not by encrypting: \
+         the crypto-mode equivalence guarantee (I-S1) makes the two indistinguishable in the \
+         event log."
+            .into(),
+    ];
+    card.sources = vec![
+        paper(
+            "Brecht et al., 'A Security Credential Management System for V2X Communications', IEEE T-ITS 2018, arXiv:1802.05323",
+        ),
+        std_src(
+            "CAMP VSC5, SCMS PoC Implementation EE Requirements and Specifications, Release 1.1, 2016-05-04",
+        ),
+        paper("USDOT ITS-JPO, SCMS Technical Primer, FHWA-JPO-19-775, 2019"),
+        std_src(
+            "CAMP VSC5, SCMS PoC Implementation EE Requirements and Specifications \
+             Supporting SCMS Software Release 1.2.2, 2016-11-15",
+        ),
+        std_src("SCMS Manager, IEEE 1609.2.1 Profile v1.0.3, 2023-03-15"),
+        std_src("SCMS Manager, Provider Requirements v1.1, 2024-08-09"),
+        std_src("SCMS Manager, EE Certificate Rollover (Re-Enrollment) Technical Standard v1.0"),
+        std_src("SCMS Manager, Misbehavior Report and Application Specification v1.0"),
+        std_src("Every default with its status and source: docs/reference/scms-constants.md"),
+        std_src("IEEE 1609.2-2016 and 1609.2a-2017"),
+        std_src("ETSI TS 103 759 V2.1.1 (misbehaviour report payload)"),
+        paper("Simplicio et al., ACPC, ePrint 2018/324 §2 (CRL expansion cost)"),
+    ];
+    card.validation = Validation::new(ValidationStatus::UnitTested);
+    card.determinism = Determinism {
+        uses_rng: true,
+        rng_domains: vec!["crypto".into()],
+    };
+    card
+}
+
+/// Registers this crate's protocol models.
+///
+/// # Errors
+/// Whatever the registry returns: a card that does not validate, or an id already taken.
+pub fn register(
+    registry: &mut v2xw_core::registry::Registry,
+) -> core::result::Result<Vec<v2xw_core::registry::ModelRef>, v2xw_core::registry::RegistryError> {
+    use std::sync::Arc;
+    Ok(vec![
+        registry.register_model(Arc::new(CampScms::default()))?,
+    ])
+}
+
+/// The i-periods a device holds by default (`security.protocol.params.pool_periods`):
+/// **assumption**, see the card's `device_pool_periods`.
+pub const DEVICE_POOL_PERIODS: u32 = 2;
+
+/// The four uncited wire sizes, re-exported so a card reader can find them.
+pub const UNCITED_SIZE_PARAMETERS: [&str; 4] = SizeParams::NAMES;

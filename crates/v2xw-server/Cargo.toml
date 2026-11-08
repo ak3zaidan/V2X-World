@@ -1,0 +1,64 @@
+[package]
+name = "v2xw-server"
+description = "Control surface and streaming: JSON-RPC control plus the VWP WebSocket."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The contract crate: SimTime, ids, deterministic math, model cards.
+v2xw-core = { workspace = true }
+# The world model and the `vwp-world/1` payload writer (vwp-v1 §4), reused rather than
+# re-encoded: the world endpoint serves exactly the bytes this writer produced.
+v2xw-world = { workspace = true }
+# The metric channel views and the metric-sample type: the record stream the kernel
+# emits is decoded through the *reader's* own views, so the server cannot disagree with
+# the producer about a field name (the defect `v2xw-engine::records` closes).
+v2xw-metrics = { workspace = true }
+# `VehicleClass` and its sourced dimension table, for the §3.1.4 class table.
+v2xw-mobility = { workspace = true }
+# The kernel this server drives. Not a `workspace = true` entry because `v2xw-engine` is
+# a workspace member the root manifest's shared dependency table does not list.
+v2xw-engine = { path = "../v2xw-engine", version = "0.1.0" }
+# The single VWP frame encoder and decoder (vwp-v1 §2, §3) and the replay reader (§7).
+# There is deliberately no second encoder in this crate: two encoders drift.
+v2xw-record = { workspace = true }
+# The chase view's message inspector decodes each frame's octets with the real decoders:
+# the IEEE 1609.2 envelope parser a receiving node verifies with, and the J2735 and ETSI
+# message codecs (`src/feed/decode.rs`).
+v2xw-sec = { workspace = true }
+v2xw-msg = { workspace = true }
+# The PKI view's inspect answers (`src/pki.rs`): one implementation, the proto crate's.
+v2xw-proto = { workspace = true }
+# The hardware profiles, for where a node signs and verifies and how each figure was
+# arrived at (the message panel's crypto placement).
+v2xw-node = { workspace = true }
+# HTTP and the WebSocket upgrade. `ws` is not an axum default feature.
+axum = { workspace = true, features = ["ws"] }
+tokio = { workspace = true }
+# JSON-RPC 2.0 bodies, the OpenRPC document and every introspection result.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Crate-wide error type.
+thiserror = { workspace = true }
+# Structured logs; also the source of the `log` notification of §6.14.
+tracing = { workspace = true }
+# Non-async locks around run state that is touched from both the producer task and the
+# connection tasks. Held for microseconds and never across an await.
+parking_lot = { workspace = true }
+# The session token and the run-id digest.
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+# A real WebSocket client for the resume tests, which cut the TCP connection under it.
+# Both are already in the lockfile, through axum's `ws` feature.
+tokio-tungstenite = "0.29"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+# The `v2xw-server` binary lives in `v2xw-cli` (src/bin/v2xw-server.rs) so that it can
+# serve the agent's endpoints beside the engine's: the agent crate depends on this one,
+# so this crate cannot host it without a cycle.

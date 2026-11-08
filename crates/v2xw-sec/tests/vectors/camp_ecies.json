@@ -1,0 +1,95 @@
+{
+ "corpus": "camp-ecies-p256",
+ "source": {
+  "title": "CAMP SCMS crypto test vectors, ecies.txt",
+  "id": "S6",
+  "url": "https://github.com/conz27/crypto-test-vectors/blob/dd5014e6c3136895744f1fe73734fa3592f37bd4/ecies.txt",
+  "commit": "dd5014e6c3136895744f1fe73734fa3592f37bd4",
+  "sha256": "4cb72bb58c008bd23bb1f8d79413cefe1cad7b6d3760c71a4507fb2f4f914e9a",
+  "licence": "none (repository has no licence file): values transcribed with citations, files not vendored",
+  "transcribed": "2026-10-16"
+ },
+ "vectors": [
+  {
+   "id": "ecies.txt#1",
+   "cite": "CAMP ecies.txt lines 25-78",
+   "in": {
+    "v": "1384c31d6982d52bca3bed8a7e60f52fecdab44e5c0ea166815a8159e09ffb42",
+    "k": "9169155b08b07674cbadf75fb46a7b0d",
+    "r": "060e41440a4e35154ca0efcb52412145836ad032833e6bc781e533bf14851085",
+    "rx": "8c5e20fe31935f6fa682a1f6d46e4468534ffea1a698b14b0b12513eed8deb11",
+    "ry": "1270fec2427e6a154dfcae3368584396c8251a04e2ae7d87b016ff65d22d6f9e",
+    "p1": "a6b7b52554b4203f7e3acfdb3a3ed8674ee086ce5906a7cac2f8a398306d3be9"
+   },
+   "out": {
+    "vx": "f45a99137b1bb2c150d6d8cf7292ca07da68c003daa766a9af7f67f5ee916828",
+    "vy": "f6a25216f44cb64a96c229ae00b479857b3b81c1319fb2adf0e8db2681769729",
+    "c": "a6342013d623ad6c5f6882469673ae33",
+    "t": "80e1d85d30f1bae4ecf1a534a89a0786"
+   },
+   "p1_printed": "9169155b08b07674cbadf75fb46a7b0d",
+   "p1_cite": "CAMP ecies.py line 119 (p11); ecies.py line 179 prints k on the P1 line"
+  },
+  {
+   "id": "ecies.txt#2",
+   "cite": "CAMP ecies.txt lines 85-138",
+   "in": {
+    "v": "d418760f0cb2dcb856bc3c7217ad3aa36db6742ae1db655a3d28df88cbbf84e1",
+    "k": "9169155b08b07674cbadf75fb46a7b0d",
+    "r": "060e41440a4e35154ca0efcb52412145836ad032833e6bc781e533bf14851085",
+    "rx": "8c5e20fe31935f6fa682a1f6d46e4468534ffea1a698b14b0b12513eed8deb11",
+    "ry": "1270fec2427e6a154dfcae3368584396c8251a04e2ae7d87b016ff65d22d6f9e",
+    "p1": "a6b7b52554b4203f7e3acfdb3a3ed8674ee086ce5906a7cac2f8a398306d3be9"
+   },
+   "out": {
+    "vx": "ee9cc7fbd9edecea41f7c8bd258e8d2e988e75bd069addca1e5a38e534ac6818",
+    "vy": "5ae3c8d9fe0b1fc7438f29417c240f8bf81c358ec1a4d0c6e98d8edbcc714017",
+    "c": "dd530be3bcd149e881e09f06e160f5a0",
+    "t": "06c1f0f5eaed453caf78e01a3d16a001"
+   },
+   "p1_printed": "9169155b08b07674cbadf75fb46a7b0d",
+   "p1_cite": "CAMP ecies.py line 119 (p11); ecies.py line 179 prints k on the P1 line"
+  },
+  {
+   "id": "ecies.txt#3",
+   "cite": "CAMP ecies.txt lines 145-198",
+   "in": {
+    "v": "1384c31d6982d52bca3bed8a7e60f52fecdab44e5c0ea166815a8159e09ffb42",
+    "k": "687e9757debfd87b0c267330c183c7b6",
+    "r": "da5e1d853fcc5d0c162a245b9f29d38eb6059f0db172fb7fda6663b925e8c744",
+    "rx": "8008b06fc4c9f9856048da186e7dc390963d6a424e80b274fb75d12188d7d73f",
+    "ry": "2774fb9600f27d7b3bbb2f7fcd8d2c96d4619ef9b4692c6a7c5733b5bac8b27d",
+    "p1": "05bed5f867b89f30fe5552df414b65b9dd4073fc385d14921c641a145aa12051"
+   },
+   "out": {
+    "vx": "f45a99137b1bb2c150d6d8cf7292ca07da68c003daa766a9af7f67f5ee916828",
+    "vy": "f6a25216f44cb64a96c229ae00b479857b3b81c1319fb2adf0e8db2681769729",
+    "c": "1f6346edaeaf57561fc9604febeff44e",
+    "t": "373c0fa7c52a0798ec36eadfe387c3ef"
+   },
+   "p1_printed": "687e9757debfd87b0c267330c183c7b6",
+   "p1_cite": "CAMP ecies.py line 125 (p12); ecies.py line 179 prints k on the P1 line"
+  },
+  {
+   "id": "ecies.txt#4",
+   "cite": "CAMP ecies.txt lines 205-258",
+   "in": {
+    "v": "4624a6f9f6bc6bd088a71ed97b3aee983b5cc2f574f64e96a531d2464137049f",
+    "k": "687e9757debfd87b0c267330c183c7b6",
+    "r": "da5e1d853fcc5d0c162a245b9f29d38eb6059f0db172fb7fda6663b925e8c744",
+    "rx": "8008b06fc4c9f9856048da186e7dc390963d6a424e80b274fb75d12188d7d73f",
+    "ry": "2774fb9600f27d7b3bbb2f7fcd8d2c96d4619ef9b4692c6a7c5733b5bac8b27d",
+    "p1": "05bed5f867b89f30fe5552df414b65b9dd4073fc385d14921c641a145aa12051"
+   },
+   "out": {
+    "vx": "121aa495c6b2c07a2b2daec36bd207d6620d7e6081050df5de3e9696868fcdca",
+    "vy": "46c31a1abea0bddaaaaefbba3afdbff1ac8d196bc313fc130926810c05503950",
+    "c": "6cfd13b76436cd0db70244fae380cba1",
+    "t": "c8bf18ac796b0b1d3a1256d3a91676c8"
+   },
+   "p1_printed": "687e9757debfd87b0c267330c183c7b6",
+   "p1_cite": "CAMP ecies.py line 125 (p12); ecies.py line 179 prints k on the P1 line"
+  }
+ ],
+ "erratum": "Printed P1 = k (generator print bug); in.p1 is the real P1 from ecies.py."
+}

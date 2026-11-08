@@ -1,0 +1,10 @@
+# rsu-crl-slow-backhaul-bc3.yaml run for 240 s, so at least two revocation lists fall in
+# the window. The first list arms the carousel at the units' 2 s download; a later list
+# finds the 3 s carousel already ticking, and only the download-in-flight rule keeps it off
+# the air until it lands.
+schema: v2xw/scenario/1
+meta:
+  base: rsu-crl-slow-backhaul-bc3.yaml
+  name: rsu-crl-slow-backhaul-bc3-240
+time:
+  duration_s: 240.0

@@ -1,0 +1,23 @@
+# Mini release run 1 (train): the Position family, Speed and two of
+# Inconsistent state.
+schema: v2xw/scenario/1
+# Its own seed: no two runs share traffic, so a split by run is a split by traffic.
+seed: "0xD5_0001"
+meta: {base: base.yaml, name: dataset r1 position-speed}
+threats:
+  attackers:
+    - {id: threat/attacker/legacy/ConstPos, actor_ids: [49], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomPos, actor_ids: [2], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/Teleport, actor_ids: [27], schedule: {from_s: 20.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ConstPosOffset, actor_ids: [34], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SineWavePos, actor_ids: [39], schedule: {from_s: 20.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/SlowDrift, actor_ids: [56], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/AlongRoadOffset, actor_ids: [48], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/ConstSpeedOffset, actor_ids: [46], schedule: {from_s: 40.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/RandomSpeed, actor_ids: [15], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/StopAndGo, actor_ids: [35], schedule: {from_s: 0.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/PosSpeedInconsistent, actor_ids: [7], schedule: {from_s: 35.0, to_s: 75.0}}
+    - {id: threat/attacker/legacy/EventualStop, actor_ids: [13], schedule: {from_s: 20.0, to_s: 75.0}}
+exporters:
+  - id: dataset
+    opts: {run_id: r01, split: train, tier: mini, instrumented_receivers: 10, heldout_attacks: [ReversedHeading, HeadingOffset]}

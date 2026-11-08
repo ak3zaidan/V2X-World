@@ -1,0 +1,107 @@
+//! `v2xw-engine` — the simulation kernel: the scenario, the event enum, the main loop, the
+//! manifest.
+//!
+//! This crate sits above
+//! `v2xw-node` and below `v2xw-server`, `v2xw-cli` and `v2xw-py`, and it is where the
+//! nine model crates stop being libraries and start being a run.
+//!
+//! | What lives here | Module |
+//! |---|---|
+//! | the scenario schema and loader | [`scenario`] |
+//! | the concrete `Event` enum that instantiates `Scheduler<E>` | [`event`] |
+//! | the world, actor and node state, and the main loop | [`run`] |
+//! | the phase-parallel structure of the determinism contract | [`run`] |
+//! | the run manifest assembly | [`manifest`] |
+//! | the normative `Keyframe`/`Delta` wire stream | [`snapshot`] |
+//!
+//! Two more modules exist because the layering demands them rather than because the
+//! decision listed them: [`ctx`] is the one implementation of
+//! [`v2xw_core::ctx::Ctx`] in the system — it is what binds the three associated types the
+//! contract crate leaves open — and [`adapters`] is the per-family narrowing
+//! the narrowed contexts require the engine to supply.
+//!
+//! # The shortest possible run
+//!
+//! ```no_run
+//! use v2xw_engine::{Engine, MemoryRecorder, Scenario};
+//!
+//! let scenario = Scenario::load("scenarios/grid-traffic.yaml")?;
+//! // The build timestamp is the caller's: no part of the engine may read a wall clock,
+//! // and the field is excluded from every digest.
+//! let mut engine = Engine::build(scenario, "2026-09-22T00:00:00Z")?;
+//! let mut recorder = MemoryRecorder::new();
+//! let report = engine.run(&mut recorder)?;
+//! println!("{} frames, {} records", report.frames_transmitted, report.records);
+//! # Ok::<(), v2xw_engine::EngineError>(())
+//! ```
+//!
+//! # What the determinism contract costs here
+//!
+//! Every rule the contract crate states has a consequence in this crate, and each is worth
+//! knowing where to find:
+//!
+//! * **No wall clock.** [`Engine::build`] takes the manifest timestamp as an argument and
+//!   the scenario carries `world.imported_at`; there is no `SystemTime` call anywhere.
+//! * **All randomness from keyed streams.** Whether a vehicle is equipped is drawn from
+//!   `(Spawn, Actor)`, and a reception outcome from `(AbstractRx, LinkFrame)` — both keys
+//!   that make the draw independent of what else happened first.
+//! * **No hash iteration reaching an output.** Every collection the run iterates to produce
+//!   an ordering is a `BTreeMap` or an explicitly sorted `Vec`; the two merges say so in
+//!   code rather than relying on the source's iteration order.
+//! * **Quantisation at the writer.** [`records`] quantises in the constructor, so a caller
+//!   cannot emit an unquantised float by forgetting to.
+//! * **Phase-parallel only.** The event loop is a single `while let Some(..) = pop()`. The
+//!   parallel map is in [`Engine::on_phy_end`](run::Engine); nothing else uses `rayon`.
+
+#![deny(missing_docs)]
+#![forbid(unsafe_code)]
+
+pub mod actuated;
+pub mod adapters;
+pub mod app_truth;
+pub mod backend;
+pub mod city;
+pub mod credentials;
+pub mod crypto_config;
+pub mod ctx;
+pub mod dataset_records;
+pub mod daylight;
+pub mod driving;
+pub mod error;
+pub mod event;
+pub mod export;
+pub mod frag;
+pub mod hosted;
+pub mod infra;
+pub mod ma_hook;
+pub mod ma_policy;
+pub mod manifest;
+pub mod nema;
+pub mod perception;
+pub mod phase2;
+pub mod priority;
+pub mod privacy_metrics;
+pub mod pseudonym_policy;
+pub mod records;
+pub mod report_records;
+pub mod reroute_info;
+pub mod run;
+pub mod safety_events;
+pub mod scale;
+pub mod scenario;
+pub mod scms_topology;
+pub mod sec_records;
+pub mod sensitivity;
+pub mod signature;
+pub mod snapshot;
+pub mod sumo_outputs;
+pub mod timeline;
+pub mod vehicle_bus;
+pub mod wiring;
+
+pub use ctx::{DigestRecorder, EngineCtx, MemoryRecorder, NullRecorder, RunRecorder};
+pub use error::{EngineError, Result, ScenarioError};
+pub use event::{Event, NodeTask, Observe};
+pub use run::{Engine, FastForwardReport, RunReport};
+pub use scenario::Scenario;
+pub use snapshot::{ActorState, SnapshotStream, snapshot_cadence};

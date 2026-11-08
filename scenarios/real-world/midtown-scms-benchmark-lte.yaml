@@ -1,0 +1,21 @@
+# The realistic SCMS benchmark on LTE-V2X: midtown-scms-benchmark.yaml with every radio on
+# LTE-V2X sidelink (3GPP Rel-14 PC5 mode 4, sensing-based semi-persistent scheduling) under
+# the SAE J3161/1 profile, on the US C-V2X channel the FCC opened in 2024 (FCC 24-123, the
+# engine's default for `lte-v2x-pc5`). The traffic, the SCMS, the calendar, the roadside
+# units and the observer are identical, so every difference is the radio's.
+#
+# J3161/1 keeps the BSM at 10 Hz with its own congestion control (a rate rule on the
+# channel busy ratio and no power control), so the J2945/1 power-control settings of the
+# DSRC file do not apply here.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-scms-benchmark.yaml
+  name: Midtown SCMS benchmark (LTE-V2X)
+  description: >-
+    The Midtown SCMS benchmark with every radio on LTE-V2X PC5 mode 4 (SAE J3161/1): the
+    same rush hour, deployment and calendar, only the radio differs.
+  tags: [benchmark, real-world, manhattan, rush-hour, scms, cv2x, lte, j3161, calendar]
+
+radio:
+  rat: lte-v2x-pc5

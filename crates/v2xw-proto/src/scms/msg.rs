@@ -1,0 +1,1432 @@
+//! The CAMP SCMS messages and their sizes.
+//!
+//! Two things live here because they must not drift apart: what crosses a link, and how
+//! many bytes it is. Every size is built from [`crate::sizes`]'s components, so a message
+//! that grows a field grows on the wire, and the certificate component is whatever the
+//! real COER encoder produced for this certificate profile.
+
+use p256::Scalar;
+use v2xw_core::ids::NodeId;
+use v2xw_sec::butterfly::{Caterpillar, ExpansionKey};
+use v2xw_sec::ec::Point;
+use v2xw_sec::linkage::{LaId, LinkageSeed, LinkageValue, PreLinkageValue};
+
+use crate::sizes::{
+    AES128_KEY_BYTES, CRL_LINKAGE_ENTRY_BYTES, CertificateSizes, EC_POINT_COMPRESSED_BYTES,
+    ECDSA_P256_SIG_COER_BYTES, ECIES_P256_ENCRYPTED_KEY_BYTES, ENVELOPE_OVERHEAD_CERT_BYTES,
+    ENVELOPE_OVERHEAD_DIGEST_BYTES, HASHED_ID8_BYTES, LINKAGE_VALUE_BYTES, SHA256_BYTES,
+    SizeParams, TIME32_BYTES, WireSize,
+};
+
+/// A value only the Pseudonym Certificate Authority may open.
+///
+/// The enforcement of "the RA learns nothing it should not": a
+/// pre-linkage value travels from a Linkage Authority to the PCA *through* the
+/// Registration Authority, and the RA is the one party on that path that must not be able
+/// to read it. Making that a type rather than a convention means the RA's code physically
+/// cannot get the value out — [`SealedForPca::open`] refuses any opener that is not the
+/// PCA node — and `tests/privacy.rs` checks the refusal rather than assuming it.
+#[derive(Debug, Clone)]
+pub struct SealedForPca<T> {
+    inner: T,
+}
+
+impl<T> SealedForPca<T> {
+    /// Seals a value for the PCA.
+    pub const fn seal(inner: T) -> SealedForPca<T> {
+        SealedForPca { inner }
+    }
+
+    /// Opens it, if `opener` is the PCA.
+    pub fn open(self, opener: NodeId, pca: NodeId) -> Option<T> {
+        (opener == pca).then_some(self.inner)
+    }
+
+    /// The bytes an ECIES-encrypted wrapper adds, whatever is inside.
+    pub const fn wrapper_bytes() -> u32 {
+        ECIES_P256_ENCRYPTED_KEY_BYTES
+    }
+}
+
+/// A value only the Linkage Authority that sealed it may open: the LA encrypts its chain
+/// identifier for itself ([BRECHT §V-B]), so the RA can pass it to the ACA, and the ACA to
+/// the MA, without either reading it.
+///
+/// Each copy is a randomised encryption: one per pre-linkage value, under its own nonce
+/// (derived from the LA's seed for that `(i, j)`, which only the LA holds). Two copies of
+/// one chain identifier are therefore two different ciphertexts, and the ACA, which keeps
+/// one per certificate, cannot group a device's certificates by them. Equality compares
+/// what an observer can compare: the LA and the ciphertext, never the value.
+#[derive(Clone, Copy)]
+pub struct SealedForLa<T> {
+    la: LaIndex,
+    nonce: [u8; 16],
+    inner: T,
+}
+
+impl<T: Copy> SealedForLa<T> {
+    /// Seals `inner` for LA `la` under `nonce`.
+    pub const fn seal(la: LaIndex, nonce: [u8; 16], inner: T) -> SealedForLa<T> {
+        SealedForLa { la, nonce, inner }
+    }
+
+    /// Opens it, if `opener` is the node of the LA it was sealed for in `nodes`.
+    pub fn open(&self, opener: NodeId, nodes: &crate::scms::params::ScmsNodes) -> Option<T> {
+        (opener == nodes.la(self.la)).then_some(self.inner)
+    }
+
+    /// The LA it was sealed for.
+    pub const fn la(&self) -> LaIndex {
+        self.la
+    }
+
+    /// The ciphertext as an observer sees it (its nonce stands for it).
+    pub const fn ciphertext(&self) -> [u8; 16] {
+        self.nonce
+    }
+}
+
+impl<T> PartialEq for SealedForLa<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.la == other.la && self.nonce == other.nonce
+    }
+}
+
+impl<T> Eq for SealedForLa<T> {}
+
+impl<T> core::fmt::Debug for SealedForLa<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "SealedForLa({:?}, {:02x?})", self.la, self.nonce)
+    }
+}
+
+/// A linkage-chain identifier: the handle an LA knows a device's seed chain by.
+///
+/// Opaque by construction. The RA holds a pair of them per device and the MA is told them
+/// during an investigation; neither can derive a linkage value from one, because the seed
+/// never leaves the LA until a revocation decision ([BRECHT §VI-C, §VI-D]).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct Lci(pub u64);
+
+/// The size of a Linkage Authority's linkage chain identifier: a keyed hash
+/// truncated to 128 bits. **ASSUMPTION**: the LA-MA formats are unpublished.
+pub const CHAIN_ID_BYTES: usize = 16;
+
+/// Which of the two Linkage Authorities.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum LaIndex {
+    /// LA1.
+    One,
+    /// LA2.
+    Two,
+}
+
+impl LaIndex {
+    /// The index into a two-element array.
+    pub const fn idx(self) -> usize {
+        match self {
+            LaIndex::One => 0,
+            LaIndex::Two => 1,
+        }
+    }
+}
+
+/// Why the Registration Authority or the Enrolment CA refused a device.
+///
+/// IEEE 1609.2.1 answers a refused request with an error rather than silence, and the
+/// device acts on the reason: a blocklisted device stops asking, a device whose enrolment
+/// certificate expired asks for a successor first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Refusal {
+    /// The enrolment certificate is on the RA's blocklist (passive revocation).
+    Blocklisted,
+    /// The enrolment certificate the request was signed with has expired.
+    EnrolmentExpired,
+    /// The request was not signed by an enrolment certificate the ECA issued, or one the
+    /// EE operator registered with the RA.
+    UnknownEnrolment,
+    /// The ECA refused the request under the US enrolment profile ([SMP] §6.3.1: region,
+    /// series, name, permissions, validity, key reuse, request age). The precise
+    /// rule is recorded in the run's `pdu_rejections`.
+    ProfileViolation,
+    /// A second butterfly request from a device the RA already pre-generates for:
+    /// `ra-maxReqs` = 1 ([SMP] §2.1.21 Table 3; [CAMP122] SCMS-520 "request only the
+    /// initial set, or again when parameters change"). The device tops up by download.
+    RequestLimit,
+}
+
+impl Refusal {
+    /// The reason's stable name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Refusal::Blocklisted => "blocklisted",
+            Refusal::EnrolmentExpired => "enrolment-expired",
+            Refusal::UnknownEnrolment => "unknown-enrolment",
+            Refusal::ProfileViolation => "profile-violation",
+            Refusal::RequestLimit => "request-limit",
+        }
+    }
+}
+
+/// A device's enrolment certificate as the device holds and presents it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct EnrolmentCert {
+    /// 0 for the bootstrap certificate, then one more per successor.
+    pub generation: u32,
+    /// Start of validity.
+    pub valid_from: v2xw_core::time::SimTime,
+    /// End of validity.
+    pub valid_until: v2xw_core::time::SimTime,
+}
+
+impl EnrolmentCert {
+    /// Whether it is valid at `t`.
+    #[must_use]
+    pub const fn valid_at(&self, t: v2xw_core::time::SimTime) -> bool {
+        t >= self.valid_from && t < self.valid_until
+    }
+}
+
+/// The butterfly request material a device uploads.
+#[derive(Debug, Clone)]
+pub struct ProvisioningRequest {
+    /// The enrolment certificate the request is signed with, which the RA checks before
+    /// anything else: issued by the ECA, inside its validity, not blocklisted.
+    pub enrolment: Option<EnrolmentCert>,
+    /// The device.
+    pub device: NodeId,
+    /// The caterpillar signing public key `A`.
+    pub signing_public: Point,
+    /// The caterpillar encryption public key `P`.
+    pub encryption_public: Point,
+    /// The signing expansion key `ck`.
+    pub ck: ExpansionKey,
+    /// The encryption expansion key `ek`.
+    pub ek: ExpansionKey,
+    /// The first i-period requested.
+    pub start_i: u32,
+    /// How many i-periods.
+    pub periods: u32,
+    /// Certificates per i-period (`j` runs `0..jmax`).
+    pub jmax: u32,
+    /// The real `EeRaCertRequestSpdu` (`crate::scms::pdu`), set when the device sends it;
+    /// the RA checks that it decrypts, verifies under the enrolment certificate and
+    /// carries exactly `A`, `ck`, `H` and `ek` above.
+    pub spdu: Option<crate::scms::pdu::Pdu>,
+}
+
+/// One certified pseudonym credential as it reaches the device.
+#[derive(Debug, Clone)]
+pub struct IssuedCredential {
+    /// The i-period.
+    pub i: u32,
+    /// The index within the period.
+    pub j: u32,
+    /// The linkage value in the certificate's `linkageData`.
+    pub lv: LinkageValue,
+    /// The certified public key the PCA put in the certificate.
+    pub certified_public: Point,
+    /// The PCA's secret randomiser, which reaches the device encrypted to its cocoon
+    /// encryption key and which it needs to derive the matching private key (the modelled
+    /// explicit path; zero on the real implicit path, which uses [`Self::implicit`]).
+    pub c: Scalar,
+    /// The real path, ACA → RA: the `AcaRaCertResponseSpdu` the RA opens and
+    /// files. `None` on the modelled path and on the device.
+    pub response: Option<crate::scms::pdu::Pdu>,
+    /// The real path, on the device: what it derived from the decrypted
+    /// `AcaEeCertResponsePrivateSpdu`.
+    pub implicit: Option<Box<ImplicitCredential>>,
+    /// The handle of the RA→ACA request this certificate answers: the SHA-256 of that one
+    /// request ([BRECHT] §VI-D), which the PCA knows and the RA alone maps back to a
+    /// device. The RA files the answer by it, never by the flow it arrived on. Zero on
+    /// the device.
+    pub handle: [u8; 32],
+}
+
+/// An implicit pseudonym certificate as the device derived it.
+#[derive(Debug, Clone)]
+pub struct ImplicitCredential {
+    /// The certificate (COER-encodable `Certificate`). Shared: the engine's ground-truth
+    /// copy of the device's credential holds the same allocation rather than a deep clone.
+    pub certificate: std::sync::Arc<v2xw_msg::sec_types::ieee1609_dot2::Certificate>,
+    /// The issuing ACA's whole-certificate HashedId8.
+    pub aca_id8: [u8; 8],
+    /// `e`, the ECQV-1609 certificate hash.
+    pub e: Scalar,
+    /// `r`, the `privateKeyInfo`.
+    pub r: Scalar,
+    /// The signing key `d = e·b_ij + r` the device derived and checked against
+    /// `e·P_U + Q_ACA` (it signs the device's BSMs and misbehaviour reports).
+    pub private: Scalar,
+}
+
+/// One request the RA sends the PCA: a cocoon key pair and two sealed pre-linkage values.
+#[derive(Debug, Clone)]
+pub struct CertRequestItem {
+    /// The i-period.
+    pub i: u32,
+    /// The index within the period.
+    pub j: u32,
+    /// The cocoon signing key `B`.
+    pub cocoon_signing: Point,
+    /// LA1's pre-linkage value, sealed.
+    pub plv1: SealedForPca<PreLinkageValue>,
+    /// LA2's pre-linkage value, sealed.
+    pub plv2: SealedForPca<PreLinkageValue>,
+    /// LA1's chain identifier, sealed by LA1 for itself (a fresh ciphertext per
+    /// certificate): the PCA stores it, cannot read it, and hands it to the MA so an
+    /// investigation can ask LA1.
+    pub lci1: SealedForLa<Lci>,
+    /// LA2's chain identifier, sealed by LA2 for itself.
+    pub lci2: SealedForLa<Lci>,
+    /// The hash of this one RA→ACA request (SHA-256 of the `RaAcaCertRequestSpdu`, or on
+    /// the modelled path a per-certificate RA-keyed hash): the PCA's only route back to
+    /// the RA's record ([BRECHT §VI-D]). Unique per certificate, so it links nothing.
+    pub handle: [u8; 32],
+    /// The real `RaAcaCertRequestSpdu`; the ACA reads only this when present.
+    pub spdu: Option<crate::scms::pdu::Pdu>,
+}
+
+/// What one Linkage Authority answers a pre-linkage request with.
+#[derive(Debug, Clone)]
+pub struct PreLinkageBatch {
+    /// Which LA.
+    pub la: LaIndex,
+    /// Its identifier.
+    pub la_id: LaId,
+    /// The chain it allocated for this device.
+    pub lci: Lci,
+    /// `(i, j, plv)`, sealed for the PCA, in ascending `(i, j)`.
+    pub values: Vec<(u32, u32, SealedForPca<PreLinkageValue>)>,
+    /// The chain identifier sealed by this LA for itself, one fresh ciphertext per value,
+    /// same order.
+    pub sealed_lci: Vec<SealedForLa<Lci>>,
+    /// The real `EncryptedIndividualPLV` of each value, same order; empty when
+    /// the PDU layer is off.
+    pub encrypted:
+        Vec<v2xw_msg::sec_types::ieee1609_dot2_dot1_aca_ra_interface::EncryptedIndividualPLV>,
+}
+
+/// A misbehaviour report as it leaves a device.
+#[derive(Debug, Clone)]
+pub struct ReportSubmission {
+    /// Who reported.
+    pub reporter: NodeId,
+    /// The i-period of the accused certificate.
+    pub subject_i: u32,
+    /// The linkage value of the accused certificate — the only stable handle a reporter
+    /// has on a pseudonymous device.
+    pub subject_lv: LinkageValue,
+    /// When the observation was made.
+    pub observed_at: v2xw_core::time::SimTime,
+    /// The real report, when the device sent one: `None` on the modelled path.
+    pub secured: Option<SecuredReport>,
+}
+
+/// A real US misbehaviour report as it travels ([SM-MBR] §3–4; `crate::scms::mbr`).
+#[derive(Debug, Clone)]
+pub struct SecuredReport {
+    /// The POST body: the report signed by the reporter's pseudonym certificate under
+    /// PSID 0x26 and encrypted to the MA. The RA forwards it and cannot read it.
+    pub report: crate::scms::pdu::Pdu,
+    /// The `Download-Req` header: an `EeRaDownloadRequest` for `misbehavior-report`
+    /// signed by the reporter's enrolment certificate and encrypted to the RA, which
+    /// authenticates the upload. The MA never receives it.
+    pub header: Option<crate::scms::pdu::Pdu>,
+}
+
+/// What the PCA answers a `lv → ?` lookup with ([BRECHT §VI-C]).
+#[derive(Debug, Clone, Copy)]
+pub struct PcaLookup {
+    /// LA1's chain identifier for the device that holds this linkage value, sealed for
+    /// LA1 (the PCA cannot read it).
+    pub lci1: SealedForLa<Lci>,
+    /// LA2's chain identifier, sealed for LA2.
+    pub lci2: SealedForLa<Lci>,
+    /// The hash of the RA→ACA request the certificate came from.
+    pub handle: [u8; 32],
+}
+
+/// The messages of the CAMP SCMS flows.
+///
+/// Boxed where a payload is large, so the enum stays small enough to move cheaply.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ScmsMsg {
+    /// Device → DCM: bootstrap request with the canonical key.
+    EnrolRequest {
+        /// The device.
+        device: NodeId,
+        /// `EeEcaCertRequestSpdu`.
+        /// The real 1609.2.1 SPDU (`crate::scms::pdu`); `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// DCM → ECA.
+    EnrolForward {
+        /// The device.
+        device: NodeId,
+        /// The device's `EeEcaCertRequestSpdu`, relayed.
+        /// The real 1609.2.1 SPDU (`crate::scms::pdu`); `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// ECA → device: the enrolment certificate and the trust anchors.
+    EnrolResponse {
+        /// The device.
+        device: NodeId,
+        /// The enrolment certificate.
+        cert: EnrolmentCert,
+        /// `EcaEeCertResponseSpdu`.
+        /// The real 1609.2.1 SPDU (`crate::scms::pdu`); `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// Device → LOP → RA: the butterfly provisioning request.
+    ProvisioningRequest(Box<ProvisioningRequest>),
+    /// RA → device: request hash, first batch time, repository URL.
+    ProvisioningAck {
+        /// The device.
+        device: NodeId,
+        /// The hash the RA will know this request by.
+        request_hash: [u8; 32],
+        /// The i-periods the RA accepted, after clipping the request to its policy.
+        periods: u32,
+        /// `RaEeCertAckSpdu`.
+        /// The real 1609.2.1 SPDU (`crate::scms::pdu`); `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+
+        /// The certificates per period it accepted.
+        jmax: u32,
+    },
+    /// RA → LA: allocate a chain and return pre-linkage values.
+    PreLinkageRequest {
+        /// The device the RA is provisioning (the LA learns only that some request needs
+        /// a chain; it never sees the device's keys).
+        device: NodeId,
+        /// Which LA.
+        la: LaIndex,
+        /// First i-period.
+        start_i: u32,
+        /// How many periods.
+        periods: u32,
+        /// Certificates per period.
+        jmax: u32,
+        /// The chain this LA already holds for the request, when the RA pre-generates a
+        /// later period of the one request ([PRIMER] p.6 "adds one week every week"):
+        /// the LA walks the same seed forward instead of allocating a new chain, so a
+        /// revocation by seed covers every pre-generated week.
+        chain: Option<Lci>,
+    },
+    /// LA → RA: the sealed pre-linkage values.
+    PreLinkageResponse(Box<PreLinkageBatch>),
+    /// The RA's shuffle window closing, for the batch of that generation: a batch the
+    /// count threshold released early leaves its timer to find a newer generation, and
+    /// the timer then releases nothing.
+    ShuffleTimer {
+        /// The batch generation the timer was armed for.
+        generation: u64,
+    },
+    /// RA → PCA: certificate requests of one i-period. The RA sends one request per
+    /// message, released in a shuffled order across every device of the batch.
+    CertRequest {
+        /// The i-period.
+        i: u32,
+        /// The requests.
+        items: Box<Vec<CertRequestItem>>,
+    },
+    /// PCA → RA: the certified credentials, sealed for the device.
+    CertResponse {
+        /// The i-period.
+        i: u32,
+        /// The credentials.
+        credentials: Box<Vec<IssuedCredential>>,
+        /// The handles of the requests this message answers, issued or not (an HTTP
+        /// response names the request it answers): how the RA knows a period of a device's
+        /// batch file is complete without asking the PCA whose it was.
+        answers: Box<Vec<[u8; 32]>>,
+    },
+    /// Device → RA: fetch one batch.
+    BatchDownloadRequest {
+        /// The device.
+        device: NodeId,
+        /// The i-period.
+        i: u32,
+        /// The real `EeRaDownloadRequestSpdu`, built by the device when it sends.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// RA → device: the batch.
+    BatchDownload {
+        /// The device.
+        device: NodeId,
+        /// The i-period.
+        i: u32,
+        /// The credentials (the modelled path).
+        credentials: Box<Vec<IssuedCredential>>,
+        /// The real path: the zip `<requestHash>_<i>.zip`'s entries `i_j`, each an
+        /// `AcaEeCertResponsePrivateSpdu` only the device can open, as `(j, spdu)`.
+        files: Box<Vec<(u32, crate::scms::pdu::Pdu)>>,
+    },
+    /// Device → LOP → RA → MA: a misbehaviour report.
+    Report(Box<ReportSubmission>),
+    /// The report shuffle window closing, for the batch of that generation (as
+    /// [`ScmsMsg::ShuffleTimer`]).
+    ReportShuffleTimer {
+        /// The batch generation the timer was armed for.
+        generation: u64,
+    },
+    /// The CRL Generator's cadence boundary: publish what has been appended since the
+    /// last one.
+    CrlPublishTimer,
+    /// MA → PCA: which device holds this linkage value?
+    PcaLookupRequest {
+        /// The i-period.
+        i: u32,
+        /// The linkage value.
+        lv: LinkageValue,
+    },
+    /// PCA → MA.
+    PcaLookupResponse {
+        /// The answer, absent if the PCA never issued such a certificate.
+        found: Option<PcaLookup>,
+    },
+    /// MA → LA: are these two chains the same device?
+    SameDeviceRequest {
+        /// Which LA.
+        la: LaIndex,
+        /// One chain, as the PCA stored it (sealed for this LA).
+        a: SealedForLa<Lci>,
+        /// The other.
+        b: SealedForLa<Lci>,
+    },
+    /// LA → MA: a boolean, and nothing else ([BRECHT §VI-C]).
+    SameDeviceResponse {
+        /// Which LA answered.
+        la: LaIndex,
+        /// Whether the two chains belong to one device.
+        same: bool,
+    },
+    /// MA → LA: which linkage chain is this? ([CAMP122] §5, [BRECHT] §VI-C.) The
+    /// MA forwards the LA's own sealed pointer from the PCA's lookup answer. **Modelled**:
+    /// the MA-LA interface is a `NULL` placeholder in IEEE 1609.2.1, so the encoding is
+    /// unpublished and the size is derived.
+    ChainIdRequest {
+        /// Which LA.
+        la: LaIndex,
+        /// The chain, as the PCA stored it (sealed for this LA).
+        lci: SealedForLa<Lci>,
+    },
+    /// LA → MA: the LA's linkage chain identifier for that chain: a keyed hash under the
+    /// LA's own secret, stable for the chain and never comparable across the two LAs. It
+    /// names neither the device nor the seed. `None` when the LA cannot open the pointer
+    /// or holds no such chain.
+    ChainIdResponse {
+        /// Which LA answered.
+        la: LaIndex,
+        /// The identifier.
+        chain: Option<[u8; CHAIN_ID_BYTES]>,
+    },
+    /// MA → RA: blocklist the enrolment certificate behind this RA→ACA request.
+    BlocklistRequest {
+        /// The PCA's handle: the hash of the RA→ACA request.
+        handle: [u8; 32],
+    },
+    /// RA → MA: the LA hosts and chain identifiers ([BRECHT §VI-D]).
+    ///
+    /// One `(LA1, LA2)` pair for every provisioning request the RA accepted from the
+    /// blocklisted enrolment, the reported request's first: a second request ([CAMP122]
+    /// SCMS-520, "or again when parameters change") has its own chains, and revoking
+    /// only the reported one would leave the other batch valid.
+    BlocklistResponse {
+        /// Whether the RA knew the hash.
+        known: bool,
+        /// Each chain pair: LA1's, LA2's.
+        chains: Vec<(Lci, Lci)>,
+    },
+    /// MA → LA: the seed for the revocation period.
+    SeedRequest {
+        /// Which LA.
+        la: LaIndex,
+        /// The chain.
+        lci: Lci,
+        /// The first revoked period.
+        i: u32,
+    },
+    /// LA → MA: `ls_x(i)` and nothing earlier.
+    SeedResponse {
+        /// Which LA.
+        la: LaIndex,
+        /// The chain asked about: the answer to that request (an HTTPS response pairs
+        /// with its request, so it costs no bytes of its own).
+        lci: Lci,
+        /// The LA's identifier, which the CRL entry carries.
+        la_id: LaId,
+        /// The seed at period `i`.
+        seed: LinkageSeed,
+        /// The period.
+        i: u32,
+    },
+    /// MA → CRL Generator: add one entry per chain pair of the device, and issue.
+    CrlAppend {
+        /// The entries' first revoked period.
+        i: u32,
+        /// Per chain pair: LA1's identifier and seed, LA2's identifier and seed.
+        pairs: Vec<((LaId, LinkageSeed), (LaId, LinkageSeed))>,
+        /// Certificates per period.
+        jmax: u32,
+    },
+    /// CRL Generator → CRL Store / CRL Broadcast: the signed list.
+    CrlPublish {
+        /// How many entries it carries.
+        entries: u32,
+        /// What the Generator signed, as it was when it signed: an entry appended while
+        /// this is on the link is not on this list.
+        list: std::sync::Arc<crate::scms::run::CrlPublication>,
+    },
+    /// Device → CRL Store: fetch the current list.
+    CrlDownloadRequest {
+        /// The device.
+        device: NodeId,
+    },
+    /// CRL Store → device: the list.
+    CrlDownload {
+        /// The device.
+        device: NodeId,
+        /// How many entries.
+        entries: u32,
+    },
+    /// CRL Broadcast → device: the same list, over the 5.9 GHz air interface.
+    ///
+    /// Injected at the broadcast node rather than requested by the device, because that is
+    /// what a broadcast is: the vehicle did not ask, and a vehicle with no cellular
+    /// subscription gets its CRL this way or not at all.
+    CrlAirBroadcast {
+        /// The device in range.
+        device: NodeId,
+    },
+
+    // ---------------- governance, trust and the enrolment lifecycle ----------------
+    /// DCM → device, at bootstrap: the elector anchors, the certificate trust list, the
+    /// Local Certificate Chain File and the Local Policy File.
+    TrustBundle {
+        /// The device.
+        device: NodeId,
+    },
+    /// Device → LOP → RA: "these are the file versions I hold" (IEEE 1609.2.1's LPF and
+    /// LCCF download, made on every RA connection).
+    FileRequest {
+        /// The device.
+        device: NodeId,
+        /// The Local Policy File version it holds.
+        lpf: Option<u32>,
+        /// The Local Certificate Chain File version it holds.
+        lccf: Option<u32>,
+    },
+    /// RA → LOP → device: the newer files, if any.
+    FileResponse {
+        /// The device.
+        device: NodeId,
+        /// A newer Local Policy File.
+        lpf: Option<Box<crate::scms::governance::PolicyFile>>,
+        /// A newer Local Certificate Chain File.
+        lccf: Option<Box<crate::scms::governance::ChainFile>>,
+    },
+    /// Device → LOP → RA: a top-off, `GET /download/info` with a `Download-Req` header
+    /// naming `<requestHash>.info`, signed by the enrolment certificate ([CAMP122] §6.3,
+    /// Table 79). No new butterfly request: `ra-maxReqs` = 1.
+    InfoRequest {
+        /// The device.
+        device: NodeId,
+        /// The i-period the device wants next.
+        i: u32,
+        /// The enrolment certificate it signs with (the modelled path's signer).
+        enrolment: Option<EnrolmentCert>,
+        /// The real `EeRaDownloadRequestSpdu` naming the `.info` file; `None` when the
+        /// layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// RA → LOP → device: the `.info` body, one `Time32`: when the batch for `i` can be
+    /// downloaded. `None` when the RA will never generate it (before `firstI`).
+    InfoResponse {
+        /// The device.
+        device: NodeId,
+        /// The i-period asked for.
+        i: u32,
+        /// The next download time.
+        next_dl: Option<v2xw_core::time::SimTime>,
+        /// The COER body (four octets), on the real path.
+        body: Option<Vec<u8>>,
+    },
+    /// The RA's weekly pre-generation job reaching period `i` of `device`'s account
+    /// ([PRIMER] p.6; `ra-maxGenDelay` 1 week, [SMP] Table 3).
+    PregenTimer {
+        /// The device whose account it is.
+        device: NodeId,
+        /// The i-period now due.
+        i: u32,
+    },
+    /// The device's own SCMS-522 timer: `seq` names the request it was started for, and
+    /// it does nothing when that request has been answered since ([CAMP122] SCMS-522/523).
+    EeRetryTimer {
+        /// The device.
+        device: NodeId,
+        /// The request's sequence number on the device.
+        seq: u32,
+    },
+    /// The CRL Generator's own timer at its last CRL's `nextCrl`: `issued` is its
+    /// publication count then, and it re-issues only if nothing was published since.
+    CrlReissueTimer {
+        /// `crlg.versions` when it was armed.
+        issued: u32,
+    },
+    /// RA → LOP → device: the provisioning request was refused.
+    ProvisioningRefused {
+        /// The device.
+        device: NodeId,
+        /// Why.
+        reason: Refusal,
+    },
+    /// Device → RA: a successor enrolment certificate
+    /// (`EeRaSuccessorEnrollmentCertRequestSpdu`: an `EeEcaCertRequestSpdu` self-signed by
+    /// the new key, signed by the current enrolment certificate, encrypted to the RA).
+    SuccessorEnrolRequest {
+        /// The device.
+        device: NodeId,
+        /// The enrolment certificate it signs with.
+        current: EnrolmentCert,
+        /// The real SPDU; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// RA → ECA: the inner `EeEcaCertRequestSpdu`, after the RA verified the current
+    /// enrolment certificate's signature ([SM-REENR]: the RA re-signs and forwards).
+    SuccessorEnrolForward {
+        /// The device.
+        device: NodeId,
+        /// The enrolment certificate the request was signed with.
+        current: EnrolmentCert,
+        /// The inner `EeEcaCertRequestSpdu`; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+        /// The real certificate that signed the outer request, as the RA verified it: the
+        /// one the successor must follow without overlap.
+        current_cert: Option<Box<v2xw_msg::sec_types::ieee1609_dot2::Certificate>>,
+    },
+    /// RA → device: `RaEeEnrollmentCertAckSpdu`, the request hash and when to download.
+    SuccessorEnrolAck {
+        /// The device.
+        device: NodeId,
+        /// `nextDlTime`.
+        next_dl: v2xw_core::time::SimTime,
+        /// The real SPDU; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// Device → RA: the successor download (`EeRaDownloadRequestSpdu`, file
+    /// `<requestHash>.zip`, signed by the current enrolment certificate).
+    SuccessorEnrolDownload {
+        /// The device.
+        device: NodeId,
+        /// The real SPDU; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// ECA → RA, then RA → device on download: the successor (`EcaEeCertResponseSpdu`).
+    SuccessorEnrolResponse {
+        /// The device.
+        device: NodeId,
+        /// The new certificate.
+        cert: EnrolmentCert,
+        /// The real SPDU; `None` when the layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// DCM (for the EE operator) → RA: register this enrolment certificate; the RA serves
+    /// only registered enrolment certificates ([SMP] §2.1.8).
+    EnrolmentRegistration {
+        /// The device.
+        device: NodeId,
+        /// The certificate's HashedId8; `None` when the layer is off.
+        cert_id8: Option<[u8; 8]>,
+    },
+    /// ECA → device: the successor was refused.
+    EnrolRefused {
+        /// The device.
+        device: NodeId,
+        /// Why.
+        reason: Refusal,
+    },
+    /// RA → ECA: an enrolment certificate was blocklisted, so its successor must not be
+    /// issued either.
+    BlocklistNotice {
+        /// The device.
+        device: NodeId,
+    },
+    /// SCMS Manager → Policy Generator → RA: a new policy.
+    PolicyUpdate(Box<crate::scms::governance::Policy>),
+    /// A committee round between a coordinator and a member (`crate::threshold::session`):
+    /// sized by the protocol, not by [`ScmsSizes`].
+    Committee(crate::threshold::session::CommitteeMsg),
+    /// The MA's timer: ask again any Linkage Authority whose seed has not arrived, for
+    /// every chain of the case.
+    SeedRetry {
+        /// The revocation period.
+        i: u32,
+        /// How many times it has asked again.
+        tries: u32,
+    },
+    /// RSU application and OBU identification certificates
+    /// (`crate::scms::run::appcert`).
+    AppCert(Box<crate::scms::run::appcert::AppMsg>),
+}
+
+/// Every SCMS message size, in one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScmsSizes {
+    /// Certificate sizes from the real encoder.
+    pub certs: CertificateSizes,
+    /// The five uncited sizes, as card parameters.
+    pub params: SizeParams,
+    /// Under a hybrid signature scheme, the post-quantum signature every signed message
+    /// also carries; 0 under ECDSA (`crate::hybrid`).
+    pub hybrid_sig_bytes: u32,
+    /// Under a hybrid scheme, one post-quantum public key as a device uploads it for each
+    /// pseudonym certificate it requests; 0 under ECDSA.
+    pub hybrid_key_upload_bytes: u32,
+    /// One encrypted-key structure wherever something is encrypted to the PCA or to a
+    /// device: 65 B for ECIES (`EciesP256EncryptedKey`), the ML-KEM layout under a
+    /// post-quantum `security.kem` (`crate::hybrid::KemSpec`).
+    pub enc_key_bytes: u32,
+    /// Leaf pseudonyms per issued credential: 1 normally, `k` under an umbrella authority,
+    /// where the PCA issues one umbrella per `k` leaves and the device derives the leaves
+    /// (`crate::threshold::umbrella`).
+    pub umbrella_leaves: u32,
+}
+
+/// What the encoded re-enrolment exchange carries beyond each derived sum, in octets, measured
+/// against the 1609.2.1 PDU layer's own SPDUs (`tests/enrolment.rs`
+/// `the_modelled_reenrolment_is_the_encoded_one`): the encryption wrapper (recipient id,
+/// nonce, tag), the outer and inner signed layers' headers, the response's certificate chain.
+/// Without the PDU layer (a post-quantum profile) the table stands for those SPDUs.
+const SUCCESSOR_REQUEST_EXTRA_BYTES: u32 = 137;
+const SUCCESSOR_FORWARD_EXTRA_BYTES: u32 = 40;
+const SUCCESSOR_ACK_EXTRA_BYTES: u32 = 70;
+const SUCCESSOR_DOWNLOAD_EXTRA_BYTES: u32 = 28;
+const ENROL_RESPONSE_EXTRA_BYTES: u32 = 606;
+
+const DERIVATION: &str = "components: the measured IEEE 1609.2 COER envelope overhead, SEC 1 §2.3.3, FIPS 197 §5, \
+     FIPS 180-4, IEEE 1609.2 §6.3.26, Ieee1609Dot2BaseTypes.asn; structure: Brecht 2018 §V-E, §VI-C, §VI-D; under a hybrid scheme every envelope signature \
+     and every certificate also carries its post-quantum half (crate::hybrid)";
+
+impl ScmsSizes {
+    /// The sizes for a deployment.
+    pub const fn new(certs: CertificateSizes, params: SizeParams) -> ScmsSizes {
+        ScmsSizes {
+            certs,
+            params,
+            hybrid_sig_bytes: 0,
+            hybrid_key_upload_bytes: 0,
+            enc_key_bytes: ECIES_P256_ENCRYPTED_KEY_BYTES,
+            umbrella_leaves: 1,
+        }
+    }
+
+    /// The same deployment under a hybrid signature scheme: every certificate carries the
+    /// holder's post-quantum key and the issuer's post-quantum signature, and every signed
+    /// message the post-quantum signature.
+    #[must_use]
+    pub fn with_hybrid(mut self, scheme: Option<&crate::hybrid::HybridScheme>) -> ScmsSizes {
+        if let Some(h) = scheme {
+            self.certs = self.certs.with_hybrid(h);
+            self.hybrid_sig_bytes = h.envelope_extra_bytes();
+            self.hybrid_key_upload_bytes = h.key_upload_bytes();
+        }
+        self
+    }
+
+    /// The same deployment with a post-quantum KEM (`security.kem`): every encrypted-key
+    /// structure is the KEM's.
+    #[must_use]
+    pub const fn with_kem(mut self, kem: Option<&crate::hybrid::KemSpec>) -> ScmsSizes {
+        if let Some(k) = kem {
+            self.enc_key_bytes = k.wrapped_key_bytes;
+        }
+        self
+    }
+
+    /// The same deployment under an umbrella authority covering `leaves` pseudonyms per
+    /// issued credential.
+    #[must_use]
+    pub const fn with_umbrella(mut self, leaves: u32) -> ScmsSizes {
+        self.umbrella_leaves = if leaves == 0 { 1 } else { leaves };
+        self
+    }
+
+    /// How many issued credentials carry `n` pseudonyms.
+    const fn issued(&self, n: u32) -> u32 {
+        n.div_ceil(self.umbrella_leaves)
+    }
+
+    /// The digest-signed envelope every committee message carries.
+    pub const fn envelope_digest(&self) -> u32 {
+        self.env_digest()
+    }
+
+    /// A digest-signed envelope's overhead: measured for ECDSA, plus the post-quantum
+    /// signature under a hybrid scheme.
+    const fn env_digest(&self) -> u32 {
+        ENVELOPE_OVERHEAD_DIGEST_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// A certificate-signed envelope's overhead, excluding the certificate.
+    const fn env_cert(&self) -> u32 {
+        ENVELOPE_OVERHEAD_CERT_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// One signature as carried inside a structure (an elector's endorsement).
+    const fn sig_bytes(&self) -> u32 {
+        ECDSA_P256_SIG_COER_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// Device → RA: a provisioning request for `certs` pseudonym certificates. Under
+    /// ECDSA the butterfly keys cover any number, so it is [`ScmsSizes::provisioning_request`];
+    /// under a hybrid scheme there is no post-quantum butterfly and the device uploads one
+    /// post-quantum key per certificate, encrypted to the PCA (`crate::hybrid`).
+    pub fn provisioning_request_for(&self, certs: u32) -> WireSize {
+        let base = self.provisioning_request();
+        if self.hybrid_key_upload_bytes == 0 {
+            return base;
+        }
+        WireSize::derived(
+            base.bytes()
+                .saturating_add(certs.saturating_mul(self.hybrid_key_upload_bytes)),
+            "the butterfly request + per certificate (post-quantum public key + ECIES key + \
+             CCM nonce + tag)",
+            DERIVATION,
+        )
+    }
+
+    /// RA → PCA: `n` certificate requests, with each one's post-quantum key under a
+    /// hybrid scheme.
+    pub fn cert_request_for(&self, n: u32) -> WireSize {
+        let base = self.cert_request(n);
+        if self.hybrid_key_upload_bytes == 0 {
+            return base;
+        }
+        WireSize::parameter(
+            base.bytes()
+                .saturating_add(n.saturating_mul(self.hybrid_key_upload_bytes)),
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// Device → DCM: the canonical verification key under a digest-signed envelope.
+    pub const fn enrol_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + EC_POINT_COMPRESSED_BYTES + TIME32_BYTES,
+            "envelope(digest) + canonical public key + time32",
+            DERIVATION,
+        )
+    }
+
+    /// DCM → ECA: the same, re-signed by the DCM with its certificate attached.
+    pub fn enrol_forward(&self) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.authority.bytes()
+                + EC_POINT_COMPRESSED_BYTES
+                + TIME32_BYTES,
+            "envelope(certificate) + DCM certificate + canonical public key + time32",
+            DERIVATION,
+        )
+    }
+
+    /// ECA → device: the enrolment certificate under the ECA's own certificate.
+    pub fn enrol_response(&self) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.authority.bytes()
+                + self.certs.enrolment.bytes()
+                + ENROL_RESPONSE_EXTRA_BYTES,
+            "envelope(certificate) + ECA certificate + enrolment certificate + the encoded \
+             response's chain and headers",
+            DERIVATION,
+        )
+    }
+
+    /// Device → RA: `{A, P, ck, ek, time, start}` signed with the enrolment certificate.
+    ///
+    /// The CAMP estimate is 300–400 B; this is the same structure summed
+    /// from its components with the certificate measured rather than estimated.
+    pub fn provisioning_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.enrolment.bytes()
+                + 2 * EC_POINT_COMPRESSED_BYTES
+                + 2 * AES128_KEY_BYTES
+                + 2 * TIME32_BYTES,
+            "envelope(certificate) + enrolment certificate + A + P + ck + ek + time + start",
+            DERIVATION,
+        )
+    }
+
+    /// RA → device: `{hash8(request), first-batch time, repository URL}`.
+    ///
+    /// Dominated by the URL, which no source gives, so the whole size is carried as the
+    /// `repo_url_bytes` parameter.
+    pub const fn provisioning_ack(&self) -> WireSize {
+        WireSize::parameter(
+            self.env_digest() + HASHED_ID8_BYTES + TIME32_BYTES + self.params.repo_url_bytes,
+            "repo_url_bytes",
+        )
+    }
+
+    /// RA → LA: a chain request.
+    pub const fn pre_linkage_request(&self) -> WireSize {
+        WireSize::parameter(
+            self.env_digest() + self.params.linkage_chain_identifier_bytes + 3 * TIME32_BYTES,
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// LA → RA: `n` sealed pre-linkage values.
+    pub const fn pre_linkage_response(&self, n: u32) -> WireSize {
+        WireSize::parameter(
+            self.env_digest()
+                + self.params.linkage_chain_identifier_bytes
+                + n * (LINKAGE_VALUE_BYTES + self.enc_key_bytes),
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// RA → PCA: `n` certificate requests.
+    pub const fn cert_request(&self, n: u32) -> WireSize {
+        WireSize::parameter(
+            self.env_digest()
+                + n * (EC_POINT_COMPRESSED_BYTES
+                    + 2 * (LINKAGE_VALUE_BYTES + self.enc_key_bytes)
+                    + 2 * (self.params.linkage_chain_identifier_bytes + self.enc_key_bytes)
+                    + SHA256_BYTES),
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// PCA → RA, and RA → device: `n` certificates, each with its sealed randomiser.
+    pub const fn cert_batch(&self, n: u32) -> WireSize {
+        WireSize::derived(
+            self.env_digest()
+                + self.issued(n) * (self.certs.pseudonym.bytes() + self.enc_key_bytes),
+            "envelope(digest) + n · (pseudonym certificate + encrypted-key wrapper), n counted \
+             in issued credentials (one per umbrella under an umbrella authority)",
+            DERIVATION,
+        )
+    }
+
+    /// RA → device: one batch in its container.
+    pub const fn batch_download(&self, n: u32) -> WireSize {
+        WireSize::parameter(
+            self.params.batch_container_bytes
+                + self.env_digest()
+                + self.issued(n) * (self.certs.pseudonym.bytes() + self.enc_key_bytes),
+            "batch_container_bytes",
+        )
+    }
+
+    /// Device → RA: a batch request.
+    pub const fn batch_download_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + HASHED_ID8_BYTES + TIME32_BYTES,
+            "envelope(digest) + request hash8 + i-period",
+            DERIVATION,
+        )
+    }
+
+    /// A misbehaviour report: the [SM-MBR] payload, signed with a pseudonym certificate and
+    /// encrypted to the MA. Only when no real report is built (the PDU layer off); a real
+    /// one is charged its own bytes.
+    pub const fn report(&self) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.pseudonym.bytes()
+                + self.params.report_payload_bytes
+                + self.enc_key_bytes,
+            "envelope(cert) + pseudonym + report_payload_bytes (the reference report's real \
+             COER, mbr::REFERENCE_REPORT_COER_BYTES) + encryption key",
+            DERIVATION,
+        )
+    }
+
+    /// MA → PCA: `(i, lv)`.
+    pub const fn pca_lookup_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + TIME32_BYTES + LINKAGE_VALUE_BYTES,
+            "envelope(digest) + i-period + linkage value",
+            DERIVATION,
+        )
+    }
+
+    /// PCA → MA: two chain identifiers and a request hash.
+    pub const fn pca_lookup_response(&self) -> WireSize {
+        WireSize::parameter(
+            self.env_digest() + 2 * self.params.linkage_chain_identifier_bytes + SHA256_BYTES,
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// MA → LA: "same device?".
+    pub const fn same_device_request(&self) -> WireSize {
+        WireSize::parameter(
+            self.env_digest() + 2 * self.params.linkage_chain_identifier_bytes,
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// LA → MA: one bit, in an envelope.
+    pub const fn same_device_response(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + 1,
+            "envelope(digest) + boolean",
+            DERIVATION,
+        )
+    }
+
+    /// MA → LA: "which chain?", one sealed chain pointer.
+    pub const fn chain_id_request(&self) -> WireSize {
+        WireSize::parameter(
+            self.env_digest() + self.params.linkage_chain_identifier_bytes,
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// LA → MA: the 16-byte linkage chain identifier, in an envelope like
+    /// [`ScmsSizes::same_device_response`]'s. **ASSUMPTION**: the format is unpublished.
+    pub const fn chain_id_response(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + CHAIN_ID_BYTES as u32,
+            "envelope(digest) + linkage chain identifier (16)",
+            DERIVATION,
+        )
+    }
+
+    /// MA → RA: a request hash.
+    pub const fn blocklist_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + SHA256_BYTES,
+            "envelope(digest) + request hash",
+            DERIVATION,
+        )
+    }
+
+    /// RA → MA: the LA hosts and chains, one pair.
+    pub const fn blocklist_response(&self) -> WireSize {
+        self.blocklist_response_for(1)
+    }
+
+    /// RA → MA: `pairs` chain pairs (every request of the enrolment).
+    pub const fn blocklist_response_for(&self, pairs: u32) -> WireSize {
+        WireSize::parameter(
+            self.env_digest() + 2 * pairs * self.params.linkage_chain_identifier_bytes,
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// MA → LA: a seed request.
+    pub const fn seed_request(&self) -> WireSize {
+        WireSize::parameter(
+            self.env_digest() + self.params.linkage_chain_identifier_bytes + TIME32_BYTES,
+            "linkage_chain_identifier_bytes",
+        )
+    }
+
+    /// LA → MA: `ls_x(i)`.
+    pub const fn seed_response(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + crate::sizes::LINKAGE_SEED_BYTES + 2 + TIME32_BYTES,
+            "envelope(digest) + linkage seed + la_id + i-period",
+            DERIVATION,
+        )
+    }
+
+    /// MA → CRL Generator: one entry's worth of material.
+    pub const fn crl_append(&self) -> WireSize {
+        self.crl_append_for(1)
+    }
+
+    /// MA → CRL Generator: `entries` entries' worth of material (one per chain pair).
+    pub const fn crl_append_for(&self, entries: u32) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + entries * CRL_LINKAGE_ENTRY_BYTES,
+            "envelope(digest) + one linkage entry",
+            DERIVATION,
+        )
+    }
+
+    /// A signed CRL of `entries` entries.
+    ///
+    /// 40 B per entry is Brecht 2018 §VI-F's figure — 32 B of seeds plus group overhead —
+    /// and the 10,000-entry list it gives as ≈ 400 kB comes back out of this expression.
+    pub const fn crl(&self, entries: u32) -> WireSize {
+        WireSize::derived(
+            self.env_cert() + self.certs.authority.bytes() + entries * CRL_LINKAGE_ENTRY_BYTES,
+            "envelope(certificate) + CRLG certificate + entries · 40 B",
+            DERIVATION,
+        )
+    }
+
+    /// The RA's `CertificateManagementInformationStatusSpdu` over a `body`-octet
+    /// status when no PDU is encoded (the 1609.2.1 layer off): a certificate-signed
+    /// envelope carrying the RA's authority certificate, and the status.
+    pub const fn info_status(&self, body: u32) -> WireSize {
+        WireSize::derived(
+            self.env_cert() + self.certs.authority.bytes() + body,
+            "envelope(cert) + authority certificate + CertificateManagementInfoStatus",
+            DERIVATION,
+        )
+    }
+
+    /// Device → CRL Store: a fetch.
+    pub const fn crl_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + TIME32_BYTES,
+            "envelope(digest) + last-known CRL time",
+            DERIVATION,
+        )
+    }
+
+    /// A certificate trust list of `certs` certificates and `endorsements` elector
+    /// signatures: each endorsement is an elector index and an ECDSA signature, and the
+    /// header is the sequence number, the quorum and the series.
+    pub fn ctl(&self, certs: u32, endorsements: u32) -> WireSize {
+        WireSize::derived(
+            TIME32_BYTES
+                + 2
+                + certs * self.certs.authority.bytes()
+                + endorsements * (1 + self.sig_bytes()),
+            "sequence + quorum + series + certs · authority certificate + endorsements · \
+             (index + ECDSA signature)",
+            DERIVATION,
+        )
+    }
+
+    /// A certificate-chain file of `certs` authority certificates, signed with the
+    /// signer's certificate attached.
+    pub fn chain_file(&self, certs: u32) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.authority.bytes()
+                + TIME32_BYTES
+                + certs * self.certs.authority.bytes(),
+            "envelope(certificate) + signer certificate + version + certs · authority \
+             certificate",
+            DERIVATION,
+        )
+    }
+
+    /// A policy file: the eight fields of `governance::Policy`, each a COER tag and a
+    /// uint32, signed with the signer's certificate attached.
+    pub fn policy_file(&self) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.authority.bytes()
+                + TIME32_BYTES
+                + crate::scms::governance::Policy::FIELDS * (1 + TIME32_BYTES),
+            "envelope(certificate) + signer certificate + version + 8 · (tag + uint32)",
+            DERIVATION,
+        )
+    }
+
+    /// DCM → device at bootstrap: the anchors, the trust list, the chain and the policy.
+    pub fn trust_bundle(&self, anchors: u32, ctl_certs: u32, chain: u32) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.authority.bytes()
+                + anchors * self.certs.authority.bytes()
+                + self.ctl(ctl_certs, anchors).bytes()
+                + self.chain_file(chain).bytes()
+                + self.policy_file().bytes(),
+            "envelope(certificate) + DCM certificate + elector anchors + trust list + chain \
+             file + policy file",
+            DERIVATION,
+        )
+    }
+
+    /// Device → RA: the two file versions it holds.
+    pub const fn file_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + 2 * (1 + TIME32_BYTES),
+            "envelope(digest) + 2 · (file id + version)",
+            DERIVATION,
+        )
+    }
+
+    /// RA → device: whichever files are newer.
+    pub fn file_response(&self, lpf: bool, chain: Option<u32>) -> WireSize {
+        WireSize::derived(
+            self.env_digest()
+                + if lpf { self.policy_file().bytes() } else { 0 }
+                + chain.map_or(0, |n| self.chain_file(n).bytes()),
+            "envelope(digest) + the newer policy file + the newer chain file",
+            DERIVATION,
+        )
+    }
+
+    /// RA or ECA → device: an error code and the request it answers.
+    pub const fn refusal(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + 1 + HASHED_ID8_BYTES,
+            "envelope(digest) + error code + request hash8",
+            DERIVATION,
+        )
+    }
+
+    /// Device → RA: a successor request, signed with the current enrolment certificate
+    /// attached, carrying the new verification key, encrypted to the RA (`EeRaSuccessor
+    /// EnrollmentCertRequestSpdu`). Under a post-quantum KEM the encrypted key is the KEM's.
+    pub fn successor_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.enrolment.bytes()
+                + EC_POINT_COMPRESSED_BYTES
+                + TIME32_BYTES
+                + self.enc_key_bytes
+                + SUCCESSOR_REQUEST_EXTRA_BYTES,
+            "envelope(certificate) + enrolment certificate + new public key + time32 + \
+             encrypted key + the encrypted layer and the inner signed layer",
+            DERIVATION,
+        )
+    }
+
+    /// RA → ECA: the inner request the RA forwards (`EeEcaCertRequestSpdu`), self-signed.
+    pub const fn successor_forward(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest()
+                + EC_POINT_COMPRESSED_BYTES
+                + TIME32_BYTES
+                + SUCCESSOR_FORWARD_EXTRA_BYTES,
+            "envelope(self) + new public key + time32 + the request's own fields",
+            DERIVATION,
+        )
+    }
+
+    /// RA → device: the signed acknowledgement of a successor request
+    /// (`RaEeEnrollmentCertAckSpdu`), under the RA's certificate.
+    pub fn successor_ack(&self) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.authority.bytes()
+                + HASHED_ID8_BYTES
+                + TIME32_BYTES
+                + SUCCESSOR_ACK_EXTRA_BYTES,
+            "envelope(certificate) + RA certificate + request hash8 + time32 + the info's fields",
+            DERIVATION,
+        )
+    }
+
+    /// Device → RA: the successor download request (`EeRaDownloadRequestSpdu`), signed by the
+    /// current enrolment certificate and encrypted to the RA.
+    pub fn successor_download_request(&self) -> WireSize {
+        WireSize::derived(
+            self.env_cert()
+                + self.certs.enrolment.bytes()
+                + TIME32_BYTES
+                + self.enc_key_bytes
+                + SUCCESSOR_DOWNLOAD_EXTRA_BYTES,
+            "envelope(certificate) + enrolment certificate + time32 + encrypted key + the \
+             encrypted layer and the file name",
+            DERIVATION,
+        )
+    }
+
+    /// DCM → RA: the enrolment certificate to register, by digest.
+    pub const fn registration(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + HASHED_ID8_BYTES,
+            "envelope(digest) + enrolment certificate hash8",
+            DERIVATION,
+        )
+    }
+
+    /// RA → ECA: the blocklisted enrolment certificate's digest.
+    pub const fn blocklist_notice(&self) -> WireSize {
+        WireSize::derived(
+            self.env_digest() + HASHED_ID8_BYTES,
+            "envelope(digest) + enrolment certificate hash8",
+            DERIVATION,
+        )
+    }
+
+    /// Every message kind with a representative size, for the conformance test.
+    ///
+    /// The step names are the ones the flows pass to `proto.msg`, so
+    /// `tests/wire_sizes.rs` can check that no step ever put bytes on a link without an
+    /// entry here.
+    pub fn table(&self) -> Vec<(&'static str, WireSize)> {
+        vec![
+            ("trust-bundle", self.trust_bundle(3, 4, 13)),
+            ("file-request", self.file_request()),
+            ("file-request-proxied", self.file_request()),
+            ("file-response", self.file_response(true, Some(13))),
+            ("file-response-proxied", self.file_response(true, Some(13))),
+            ("provisioning-refused", self.refusal()),
+            ("provisioning-refused-proxied", self.refusal()),
+            ("successor-enrol-request", self.successor_request()),
+            ("successor-enrol-forward", self.successor_forward()),
+            ("successor-enrol-ack", self.successor_ack()),
+            (
+                "successor-enrol-download-request",
+                self.successor_download_request(),
+            ),
+            ("successor-enrol-certified", self.enrol_response()),
+            ("successor-enrol-response", self.enrol_response()),
+            ("enrol-response-proxied", self.enrol_response()),
+            ("enrolment-registration", self.registration()),
+            ("enrol-refused", self.refusal()),
+            ("blocklist-notice", self.blocklist_notice()),
+            ("policy-update", self.policy_file()),
+            ("policy-publish", self.policy_file()),
+            ("provisioning-ack-proxied", self.provisioning_ack()),
+            (
+                "batch-download-request-proxied",
+                self.batch_download_request(),
+            ),
+            ("batch-download-proxied", self.batch_download(1)),
+            ("enrol-request", self.enrol_request()),
+            ("enrol-forward", self.enrol_forward()),
+            ("enrol-response", self.enrol_response()),
+            ("provisioning-request", self.provisioning_request()),
+            ("provisioning-request-proxied", self.provisioning_request()),
+            ("provisioning-ack", self.provisioning_ack()),
+            ("pre-linkage-request", self.pre_linkage_request()),
+            ("pre-linkage-response", self.pre_linkage_response(1)),
+            ("cert-request", self.cert_request(1)),
+            ("cert-response", self.cert_batch(1)),
+            ("batch-download-request", self.batch_download_request()),
+            ("batch-download", self.batch_download(1)),
+            ("report", self.report()),
+            ("report-proxied", self.report()),
+            ("report-forward", self.report()),
+            ("pca-lookup-request", self.pca_lookup_request()),
+            ("pca-lookup-response", self.pca_lookup_response()),
+            ("same-device-request", self.same_device_request()),
+            ("same-device-response", self.same_device_response()),
+            ("chain-id-request", self.chain_id_request()),
+            ("chain-id-response", self.chain_id_response()),
+            ("blocklist-request", self.blocklist_request()),
+            ("blocklist-response", self.blocklist_response()),
+            ("seed-request", self.seed_request()),
+            ("seed-response", self.seed_response()),
+            ("crl-append", self.crl_append()),
+            ("crl-publish", self.crl(1)),
+            ("crl-broadcast", self.crl(1)),
+            ("crl-request", self.crl_request()),
+            ("crl-download", self.crl(1)),
+            ("crl-air-broadcast", self.crl(1)),
+        ]
+    }
+}
+
+/// A device's own butterfly state, kept out of the message module's public surface only
+/// because it never travels: `a`, `p` and the derived private keys stay on the device.
+#[derive(Debug, Clone)]
+pub struct DeviceKeys {
+    /// The caterpillar.
+    pub caterpillar: Caterpillar,
+}

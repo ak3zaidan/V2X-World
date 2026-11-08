@@ -1,0 +1,26 @@
+{
+  "description": "worlds/cache/berlin.osm.xml (preset urban-de, bbox 52.5140,13.3880,52.5250,13.4080), OsmOptions::default()",
+  "max": {
+    "bus-lanes-mismatch": 0,
+    "crossing-node-without-crosswalk": 21,
+    "cycle-crosses-roadway": 3,
+    "cycle-lane-missing": 2,
+    "cycle-on-roadway": 2,
+    "dead-end-uturn": 0,
+    "lanes-mismatch": 0,
+    "oneway-mismatch": 0,
+    "parking-lane-missing": 1,
+    "path-turns-faster-than-a-car": 10,
+    "roadway-overlap": 0,
+    "sidewalk-crosses-roadway": 168,
+    "sidewalk-in-vehicle-envelope": 15,
+    "sidewalk-on-cycle-lane": 9,
+    "sidewalk-on-roadway": 43,
+    "speed-mismatch": 0,
+    "stub-driving-lane": 3,
+    "turn-lanes-violated": 1,
+    "uturn-tighter-than-a-car": 0,
+    "vehicle-envelope-in-building": 10,
+    "width-mismatch": 16
+  }
+}

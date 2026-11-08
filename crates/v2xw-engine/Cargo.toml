@@ -1,0 +1,57 @@
+[package]
+name = "v2xw-engine"
+description = "The simulation kernel: scenario schema and loader, the concrete event enum, the main loop and the run manifest."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+v2xw-core = { workspace = true }
+v2xw-world = { workspace = true }
+v2xw-mobility = { workspace = true }
+v2xw-radio = { workspace = true }
+v2xw-net = { workspace = true }
+v2xw-msg = { workspace = true }
+v2xw-sec = { workspace = true }
+v2xw-node = { workspace = true }
+# The Phase 2 path (`phase2`): the CAMP SCMS deployment and the attacker, detector and
+# report families. Both sit below this crate in the crate layering — neither depends on
+# `v2xw-engine`, and `v2xw-threat`'s manifest says why it must not — so composing them
+# here is the layering working rather than a new edge.
+v2xw-proto = { workspace = true }
+v2xw-threat = { workspace = true }
+v2xw-record = { workspace = true }
+v2xw-metrics = { workspace = true }
+# Emission, fuel and battery-electric energy models and their metric provider, selected by
+# the scenario's `energy:` section. Depends only on core and metrics, below this crate.
+v2xw-energy = { workspace = true }
+# Demand and route choice (dynamic traffic assignment, OD matrices, counts, GTFS, trip
+# purposes): the extra `actors.vehicles.demand.kind`s. It sits beside `v2xw-mobility` and
+# below this crate. A path entry, as `v2xw-trafficval` names this crate, so the root
+# manifest the other tracks also edit stays untouched.
+v2xw-demand = { path = "../v2xw-demand", version = "0.1.0" }
+# `mobility.provider: sumo`: the TraCI co-simulation tier. It depends on the mobility,
+# world and radio crates only, never on this one.
+v2xw-interop = { path = "../v2xw-interop", version = "0.1.0" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The path of the key a scenario document failed to parse at, so the settings window can
+# mark that field (already in the lock through axum).
+serde_path_to_error = "0.1"
+# Scenarios are authored in YAML; JSON is the same schema through
+# the same structs, which is why one loader serves both.
+serde_yml = { workspace = true }
+thiserror = { workspace = true }
+# Phase-parallel maps over actors, receivers and nodes. The event
+# loop never touches it.
+rayon = { workspace = true }
+
+[dev-dependencies]
+# The tests compare a run on one thread against the same run on eight; the pool has to be
+# built explicitly, because the global pool's size is whatever the machine has.
+rayon = { workspace = true }
+v2xw-metrics = { workspace = true }
