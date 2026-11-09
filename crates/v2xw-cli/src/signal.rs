@@ -8,11 +8,15 @@
 //!
 //! A laptop that is closed sends no signal: the process is suspended with the machine and
 //! carries on when it wakes, so nothing is needed for that case.
+//!
+//! The handlers are Unix only. On Windows `install` does nothing and Ctrl-C ends the run as
+//! it always did; the last periodic checkpoint is still there to resume from.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(unix)]
 #[allow(unsafe_code)]
 extern "C" fn on_signal(_: libc::c_int) {
     // Only async-signal-safe operations here: an atomic swap and `_exit`.
