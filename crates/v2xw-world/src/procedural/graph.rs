@@ -1012,6 +1012,8 @@ pub fn conflict_matrix(movements: &[MovementGeometry], lanes: &[Lane]) -> Confli
 /// # Errors
 ///
 /// Whatever the geometry or the world's invariants reject.
+///
+/// [`World`]: crate::model::World
 pub fn into_world(
     graph: LaneGraph,
     mut provenance: crate::model::WorldProvenance,

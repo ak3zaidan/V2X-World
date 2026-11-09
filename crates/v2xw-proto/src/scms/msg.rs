@@ -150,12 +150,12 @@ pub enum Refusal {
     /// The request was not signed by an enrolment certificate the ECA issued, or one the
     /// EE operator registered with the RA.
     UnknownEnrolment,
-    /// The ECA refused the request under the US enrolment profile ([SMP] §6.3.1: region,
+    /// The ECA refused the request under the US enrolment profile (\[SMP\] §6.3.1: region,
     /// series, name, permissions, validity, key reuse, request age). The precise
     /// rule is recorded in the run's `pdu_rejections`.
     ProfileViolation,
     /// A second butterfly request from a device the RA already pre-generates for:
-    /// `ra-maxReqs` = 1 ([SMP] §2.1.21 Table 3; [CAMP122] SCMS-520 "request only the
+    /// `ra-maxReqs` = 1 (\[SMP\] §2.1.21 Table 3; \[CAMP122\] SCMS-520 "request only the
     /// initial set, or again when parameters change"). The device tops up by download.
     RequestLimit,
 }
@@ -243,7 +243,7 @@ pub struct IssuedCredential {
     /// `AcaEeCertResponsePrivateSpdu`.
     pub implicit: Option<Box<ImplicitCredential>>,
     /// The handle of the RA→ACA request this certificate answers: the SHA-256 of that one
-    /// request ([BRECHT] §VI-D), which the PCA knows and the RA alone maps back to a
+    /// request (\[BRECHT\] §VI-D), which the PCA knows and the RA alone maps back to a
     /// device. The RA files the answer by it, never by the flow it arrived on. Zero on
     /// the device.
     pub handle: [u8; 32],
@@ -416,7 +416,7 @@ pub enum ScmsMsg {
         /// Certificates per period.
         jmax: u32,
         /// The chain this LA already holds for the request, when the RA pre-generates a
-        /// later period of the one request ([PRIMER] p.6 "adds one week every week"):
+        /// later period of the one request (\[PRIMER\] p.6 "adds one week every week"):
         /// the LA walks the same seed forward instead of allocating a new chain, so a
         /// revocation by seed covers every pre-generated week.
         chain: Option<Lci>,
@@ -509,7 +509,7 @@ pub enum ScmsMsg {
         /// Whether the two chains belong to one device.
         same: bool,
     },
-    /// MA → LA: which linkage chain is this? ([CAMP122] §5, [BRECHT] §VI-C.) The
+    /// MA → LA: which linkage chain is this? (\[CAMP122\] §5, \[BRECHT\] §VI-C.) The
     /// MA forwards the LA's own sealed pointer from the PCA's lookup answer. **Modelled**:
     /// the MA-LA interface is a `NULL` placeholder in IEEE 1609.2.1, so the encoding is
     /// unpublished and the size is derived.
@@ -537,7 +537,7 @@ pub enum ScmsMsg {
     /// RA → MA: the LA hosts and chain identifiers ([BRECHT §VI-D]).
     ///
     /// One `(LA1, LA2)` pair for every provisioning request the RA accepted from the
-    /// blocklisted enrolment, the reported request's first: a second request ([CAMP122]
+    /// blocklisted enrolment, the reported request's first: a second request (\[CAMP122\]
     /// SCMS-520, "or again when parameters change") has its own chains, and revoking
     /// only the reported one would leave the other batch valid.
     BlocklistResponse {
@@ -635,7 +635,7 @@ pub enum ScmsMsg {
         lccf: Option<Box<crate::scms::governance::ChainFile>>,
     },
     /// Device → LOP → RA: a top-off, `GET /download/info` with a `Download-Req` header
-    /// naming `<requestHash>.info`, signed by the enrolment certificate ([CAMP122] §6.3,
+    /// naming `<requestHash>.info`, signed by the enrolment certificate (\[CAMP122\] §6.3,
     /// Table 79). No new butterfly request: `ra-maxReqs` = 1.
     InfoRequest {
         /// The device.
@@ -661,7 +661,7 @@ pub enum ScmsMsg {
         body: Option<Vec<u8>>,
     },
     /// The RA's weekly pre-generation job reaching period `i` of `device`'s account
-    /// ([PRIMER] p.6; `ra-maxGenDelay` 1 week, [SMP] Table 3).
+    /// (\[PRIMER\] p.6; `ra-maxGenDelay` 1 week, \[SMP\] Table 3).
     PregenTimer {
         /// The device whose account it is.
         device: NodeId,
@@ -669,7 +669,7 @@ pub enum ScmsMsg {
         i: u32,
     },
     /// The device's own SCMS-522 timer: `seq` names the request it was started for, and
-    /// it does nothing when that request has been answered since ([CAMP122] SCMS-522/523).
+    /// it does nothing when that request has been answered since (\[CAMP122\] SCMS-522/523).
     EeRetryTimer {
         /// The device.
         device: NodeId,
@@ -740,7 +740,7 @@ pub enum ScmsMsg {
         pdu: Option<crate::scms::pdu::Pdu>,
     },
     /// DCM (for the EE operator) → RA: register this enrolment certificate; the RA serves
-    /// only registered enrolment certificates ([SMP] §2.1.8).
+    /// only registered enrolment certificates (\[SMP\] §2.1.8).
     EnrolmentRegistration {
         /// The device.
         device: NodeId,

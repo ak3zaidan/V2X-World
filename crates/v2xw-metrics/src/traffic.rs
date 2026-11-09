@@ -80,7 +80,7 @@ impl TrafficControlProvider {
         }
     }
 
-    /// The definitions, in [`FIELDS`] order.
+    /// The definitions, in `FIELDS` order.
     #[must_use]
     pub fn definitions() -> Vec<MetricDef> {
         let src = cards::design("v2xw_engine::actuated (traffic.control)");

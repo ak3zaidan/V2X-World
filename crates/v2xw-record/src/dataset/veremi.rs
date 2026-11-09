@@ -478,7 +478,7 @@ impl VeremiExport {
     /// and their noise on the metre grid, the heading vector on the 1e-6 grid, RSSI on the
     /// dB grid.
     ///
-    /// Called by [`write`], so an export written through this module is on-grid whatever
+    /// Called by [`write`](fn@write), so an export written through this module is on-grid whatever
     /// the caller handed in; it is public because a caller assembling an export by hand
     /// should be able to normalise it before comparing.
     pub fn quantise(&mut self) {
@@ -1314,7 +1314,7 @@ fn kin(v: &serde_json::Value, file: &str) -> Result<[[f64; 3]; 8]> {
     ])
 }
 
-/// Reads a directory [`write`] wrote back into an export — the round trip a consumer's
+/// Reads a directory [`write`](fn@write) wrote back into an export — the round trip a consumer's
 /// reader performs, field for field. The layout is the codebook's; `slice_s` is not in the
 /// files and is taken from the caller.
 ///
@@ -1450,7 +1450,7 @@ pub fn read_dir(dir: impl AsRef<Path>, codebook: Codebook, slice_s: f64) -> Resu
     Ok(out)
 }
 
-/// Lints the receiver-visible files [`write`] wrote: no forbidden key, and no true
+/// Lints the receiver-visible files [`write`](fn@write) wrote: no forbidden key, and no true
 /// identity of the ground-truth file as a value (the leakage linter's whole-dataset
 /// check, [`super::leakage::lint_dataset`]).
 ///

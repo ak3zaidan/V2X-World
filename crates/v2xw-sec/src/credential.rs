@@ -238,8 +238,8 @@ impl ImplicitIssuer {
     ///
     /// The profile is the US one the protocol issues: a pseudonym carries
     /// `linkageData {iCert, lv}`, `crlSeries 1` and is valid one week plus one hour
-    /// ([CAMP122] Table 3); an RSU application certificate has no linkage data,
-    /// `crlSeries 3` and `hours(169)` ([CAMP122] Table 68). `cracaId` is the issuer's
+    /// (\[CAMP122\] Table 3); an RSU application certificate has no linkage data,
+    /// `crlSeries 3` and `hours(169)` (\[CAMP122\] Table 68). `cracaId` is the issuer's
     /// `HashedId3`.
     ///
     /// # Errors

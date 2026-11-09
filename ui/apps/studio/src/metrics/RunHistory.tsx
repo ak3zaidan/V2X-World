@@ -20,9 +20,11 @@ export function RunHistory(): React.JSX.Element | null {
   const [a, setA] = useState<string>("previous");
   const [b, setB] = useState<string>("current");
 
+  // A background read whose failure this list handles (it hides itself): quiet, so a socket that
+  // drops while it is in flight is not an error line in the page's log.
   const refresh = useCallback(() => {
     engine
-      .request("runs.list", {})
+      .request("runs.list", {}, { quiet: true })
       .then((r) => setRuns(r.runs))
       .catch(() => setRuns(null));
   }, []);

@@ -272,7 +272,7 @@ pub const TAI_MINUS_UTC_AT_1609_EPOCH_S: i64 = 32;
 /// is the UTC midnight that *follows* an inserted 23:59:60, and the second column is
 /// TAI − UTC from that midnight on.
 ///
-/// Source: IANA tzdb `leap-seconds.list`, https://data.iana.org/time-zones/tzdb/leap-seconds.list
+/// Source: IANA tzdb `leap-seconds.list`, <https://data.iana.org/time-zones/tzdb/leap-seconds.list>
 /// (fetched 2026-10-16, sha256 `db5a895f16853b03bfc865e8d68f9fc8710ef1740e3400c701cd46a5bbbc3433`),
 /// "Updated through IERS Bulletin C", "File expires on 28 June 2027". The five entries
 /// are the ones since the IEEE 1609.2 epoch (end-2005, end-2008, mid-2012,

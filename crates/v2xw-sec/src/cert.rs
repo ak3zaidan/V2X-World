@@ -327,7 +327,8 @@ where
 /// `issuer` is `self(sha256)` and there is no signature to check against anything else: a
 /// trust anchor is trusted because it is in the trust store, not because of its
 /// signature. Modelling it with a real self-signature would add a verification the
-/// receiver never performs — [`crate::envelope::Envelope::verify_plan`] stops at the
+/// receiver never performs — [`Envelope`](crate::envelope::Envelope)'s
+/// [`verify_plan`](crate::envelope::SecurityEnvelopeInfo::verify_plan) stops at the
 /// trust store and does not plan one.
 pub fn trust_anchor(spec: &CertSpec, compressed_key: &[u8]) -> Result<Certificate> {
     let mut spec = spec.clone();

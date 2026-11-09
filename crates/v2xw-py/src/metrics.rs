@@ -8,16 +8,16 @@
 //! of Python dictionaries and back is the single most expensive thing these bindings could
 //! do, so the default does not:
 //!
-//! * [`PyMetrics::arrow`] hands Python the **same allocation**, through the Arrow C data
+//! * `PyMetrics::arrow` hands Python the **same allocation**, through the Arrow C data
 //!   interface. Nothing is serialised, nothing is copied, and a hundred-megabyte table
 //!   costs a pointer. This is the path the recording format means by "tabular metric batches
 //!   … for Python plug-in exchange", and it needs `pyarrow` importable.
-//! * [`PyMetrics::ipc`] returns the Arrow **IPC stream** as `bytes`. One buffer, one copy,
+//! * `PyMetrics::ipc` returns the Arrow **IPC stream** as `bytes`. One buffer, one copy,
 //!   no per-row objects, and no dependency on `pyarrow` at all — `polars.read_ipc_stream`
 //!   or a file on disk will take it. This is the fallback, and it is also what an
 //!   out-of-process consumer wants.
 //!
-//! [`PyMetrics::rows`] does build Python objects, one dictionary per sample. It exists
+//! `PyMetrics::rows` does build Python objects, one dictionary per sample. It exists
 //! because a five-row assertion in a test should not require Arrow, and it says so in its
 //! own docstring rather than being quietly the fast path.
 //!

@@ -739,7 +739,7 @@ pub mod rx_cause {
     /// The signature did not verify (or the envelope did not parse).
     pub const SIGNATURE_INVALID: &str = "signature-invalid";
     /// The signer's CRACA's CRL is more than `overdue_CRL_tolerance` past its `nextCrl`
-    /// on the receiver ([CAMP122] Table 67): a stale list, not a forgery.
+    /// on the receiver (\[CAMP122\] Table 67): a stale list, not a forgery.
     pub const CRL_OVERDUE: &str = "crl-overdue";
     /// Another 1609.2 receiver rule refused the message before its signature was relied
     /// on: the chain to an installed root, the signer's validity, region or PSID.

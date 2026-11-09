@@ -33,7 +33,7 @@
 //! failed anyway is `collision`, `hidden-terminal` or `fading` as before. The rule is
 //! exact rather than a heuristic threshold, it costs one extra deterministic evaluation,
 //! and it cannot be confused with congestion because congestion is what the
-//! counterfactual holds fixed. See [`crate::phy::OfdmPhy::finish_rx`].
+//! counterfactual holds fixed. See [`crate::phy::OfdmPhy`]'s [`Phy::finish_rx`].
 //!
 //! # What is not shipped, and why
 //!
@@ -55,6 +55,8 @@
 //! duty)` and not of how often the engine asked. The other two models draw nothing. Every
 //! window list is in `(from, to)` order and every power sum goes through
 //! [`crate::numeric::sum_powers_mw`], which sorts by [`NodeId`].
+//!
+//! [`Phy::finish_rx`]: crate::traits::Phy::finish_rx
 
 use std::collections::BTreeMap;
 

@@ -224,6 +224,9 @@ const NO_ACTOR = 0xffffffff;
 /** Coefficients cached per slot: x and y cubics, z linear, heading cubic. */
 const COEF = 14;
 
+/** Numbers kept per slot for a departing actor's motion: x, y, z, heading, speed, yaw rate. */
+const GONE = 6;
+
 function makeSnapshot(capacity: number): PoseSnapshot {
   return {
     clockSeconds: 0,
@@ -478,6 +481,12 @@ export class PoseInterpolator {
   /** Per slot: the sim time a departed actor last existed, and its id, for the fade-out. */
   #goneAt: Float64Array;
   #goneId: Uint32Array;
+  /**
+   * Per slot: how a departed actor was moving in its last snapshot, `GONE` numbers each (x, y, z,
+   * heading, speed, yaw rate), so it carries on while it fades. Kept here rather than read from
+   * the history, which drops that snapshot before the fade is over.
+   */
+  #goneMotion: Float64Array;
   #nextSeq = 0;
   /**
    * Per-slot curve cache. The cubic through a segment depends only on the two snapshots (and the
@@ -536,6 +545,7 @@ export class PoseInterpolator {
     this.#bornAt = new Float64Array(this.#capacity).fill(Number.NaN);
     this.#goneAt = new Float64Array(this.#capacity).fill(Number.NaN);
     this.#goneId = new Uint32Array(this.#capacity).fill(NO_ACTOR);
+    this.#goneMotion = new Float64Array(this.#capacity * GONE);
     this.#errPos = new Float32Array(this.#capacity * 3);
     this.#errHead = new Float32Array(this.#capacity);
     this.#errId = new Uint32Array(this.#capacity).fill(NO_ACTOR);
@@ -658,6 +668,9 @@ export class PoseInterpolator {
     const gid = new Uint32Array(n).fill(NO_ACTOR);
     gid.set(this.#goneId, 0);
     this.#goneId = gid;
+    const gm = new Float64Array(n * GONE);
+    gm.set(this.#goneMotion, 0);
+    this.#goneMotion = gm;
     this.#errPos = growF32(this.#errPos, n * 3);
     this.#errHead = growF32(this.#errHead, n);
     const eid = new Uint32Array(n).fill(NO_ACTOR);
@@ -993,14 +1006,31 @@ export class PoseInterpolator {
       if (!live || newest.actorId[i] !== shownId) {
         // The actor this slot showed is not in the newest snapshot any more. Until the render
         // clock reaches the last instant it existed it is drawn from the history as usual; then
-        // it fades out where it stopped. (A departure is a trip's end or the map's edge; the
-        // engine's last word on it is that snapshot.)
+        // it fades out, carrying on as it was moving. (A departure is a trip's end or the map's
+        // edge; the engine's last word on it is that snapshot.)
         if (shownId !== NO_ACTOR && goneId[i] !== shownId) {
           let last = Number.NaN;
           for (let k = 1; k < this.#size; k++) {
             const s = this.#at(k);
             if (i < s.count && s.occupied[i] === 1 && s.actorId[i] === shownId) {
               last = s.simSeconds;
+              const g = i * GONE;
+              const gm = this.#goneMotion;
+              gm[g] = s.position[i * 3];
+              gm[g + 1] = s.position[i * 3 + 1];
+              gm[g + 2] = s.position[i * 3 + 2];
+              gm[g + 3] = s.heading[i];
+              gm[g + 4] = s.speed[i];
+              // The turn rate over its last step, as dead reckoning past the newest uses (CTRV).
+              let omega = 0;
+              if (k + 1 < this.#size) {
+                const o = this.#at(k + 1);
+                const T = s.simSeconds - o.simSeconds;
+                if (i < o.count && o.occupied[i] === 1 && o.actorId[i] === shownId && T > 1e-9) {
+                  omega = Math.max(-MAX_YAW_RATE, Math.min(MAX_YAW_RATE, wrapAngle(s.heading[i] - o.heading[i]) / T));
+                }
+              }
+              gm[g + 5] = omega;
               break;
             }
           }
@@ -1023,7 +1053,15 @@ export class PoseInterpolator {
               }
               oFade[i] = 1;
             } else {
-              // Hold where it last was, fading.
+              // Past its last snapshot: on at the speed and turn rate it last had, fading. Held
+              // where it last was instead, a car leaving the map at 13 m/s stopped dead in one
+              // frame and dissolved standing still — a jerk of several pixels in a chase view.
+              this.#evalT = after;
+              this.#coast(i, raw);
+              oPos[p] = raw[0];
+              oPos[p + 1] = raw[1];
+              oPos[p + 2] = raw[2];
+              oHead[i] = wrapAngle(raw[3]);
               oFade[i] = Math.max(0, 1 - after / fadeSim);
             }
             this.outSnapped[i] = 0;
@@ -1494,6 +1532,33 @@ export class PoseInterpolator {
       if (this.#at(k + 1).simSeconds <= t) break;
     }
     return bk;
+  }
+
+  /**
+   * The pose of departed slot `i`, {@link #evalT} seconds of sim time past its last snapshot (a
+   * field, not an argument, for the reason given there), from the motion kept in
+   * {@link #goneMotion}: the same constant-turn-rate dead reckoning as {@link #deadReckon}.
+   */
+  #coast(i: number, out: Float64Array): void {
+    const dt = this.#evalT;
+    const g = i * GONE;
+    const gm = this.#goneMotion;
+    const h0 = gm[g + 3];
+    const v = gm[g + 4];
+    const omega = gm[g + 5];
+    const turn = omega * dt;
+    out[2] = gm[g + 2];
+    if (Math.abs(turn) < 1e-4) {
+      out[0] = gm[g] + Math.cos(h0) * v * dt;
+      out[1] = gm[g + 1] + Math.sin(h0) * v * dt;
+      out[3] = h0;
+    } else {
+      const r = v / omega;
+      const h1 = h0 + turn;
+      out[0] = gm[g] + r * (Math.sin(h1) - Math.sin(h0));
+      out[1] = gm[g + 1] + r * (Math.cos(h0) - Math.cos(h1));
+      out[3] = h1;
+    }
   }
 
   /** Copy snapshot `s`'s pose of slot `i` into `out`. */

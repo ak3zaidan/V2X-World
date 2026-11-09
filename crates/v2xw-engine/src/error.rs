@@ -3,7 +3,7 @@
 //! Scenario validation is the loud one: the contract is that an invalid
 //! scenario produce an error naming *the field* and *the conflict*, not a line number and
 //! a serde message. [`ScenarioError::Conflict`] is that shape, and
-//! [`crate::scenario::validate`] is the only thing that builds it.
+//! [`crate::scenario::validate`](fn@crate::scenario::validate) is the only thing that builds it.
 
 use thiserror::Error;
 

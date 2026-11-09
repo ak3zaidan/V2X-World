@@ -2,25 +2,25 @@
 //!
 //! # Three ways out, for three different jobs
 //!
-//! * [`PyRecording::table`] / [`PyRecording::arrow`] — a whole channel as one Arrow table.
+//! * `PyRecording::table` / `PyRecording::arrow` — a whole channel as one Arrow table.
 //!   `v2xw-record`'s exporter infers the column schema from the records themselves
 //!   (`TableSchema::infer`) and builds the batch, so this is the columnar path and the one
 //!   to reach for with a dataset. `arrow` hands the buffers to `pyarrow` through the C data
 //!   interface; `table` returns the Arrow IPC stream as `bytes` for a caller without
 //!   `pyarrow`.
-//! * [`PyRecording::records`] — a list of decoded dictionaries. One Python object per
+//! * `PyRecording::records` — a list of decoded dictionaries. One Python object per
 //!   field. Honest and slow, for looking at a handful of records.
-//! * [`PyRecording::__iter__`] — the same, streamed, so a recording larger than memory can
+//! * `PyRecording::__iter__` — the same, streamed, so a recording larger than memory can
 //!   be walked without materialising it.
 //!
 //! # Verification is not free and is not implied
 //!
 //! Opening a recording reads its footer and index. It does **not** check the chunk CRCs,
-//! because that means decompressing the whole file. [`PyRecording::verify`] does, and its
+//! because that means decompressing the whole file. `PyRecording::verify` does, and its
 //! report distinguishes "checked and correct" from "there was nothing to check": a chunk
 //! may declare `uncompressed_crc = 0`, which the container defines as *absent*, and a
 //! reader that called such a file verified would be lying. `integrity_verified` is false
-//! when any chunk was unchecked, and [`PyRecording::require_chunk_checksums`] turns that
+//! when any chunk was unchecked, and `PyRecording::require_chunk_checksums` turns that
 //! into a refusal.
 
 use std::collections::BTreeMap;

@@ -4863,7 +4863,7 @@ pub fn install_rsu_app_certs<R: CredentialSink + ?Sized>(
         .count()
 }
 
-/// One OBU identification certificate the SCMS issued a privileged vehicle ([CAMP122]
+/// One OBU identification certificate the SCMS issued a privileged vehicle (\[CAMP122\]
 /// Table 1 row 44): the certificate, its issuing ACA and `d` from the vehicle's
 /// own download, and its validity window in run time.
 #[derive(Debug, Clone)]

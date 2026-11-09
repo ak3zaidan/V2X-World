@@ -76,7 +76,7 @@ pub struct DeviceState {
     pub download_retries: u32,
     /// Bytes of each i-period's batch file that reached it before its link went down:
     /// the next download asks for the rest with `Range: bytes=<n>-` and the RA answers
-    /// 206 with the remainder ([SMP] §4.3.2, [RFC 7233]). Cleared when the batch lands.
+    /// 206 with the remainder (\[SMP\] §4.3.2, [RFC 7233]). Cleared when the batch lands.
     pub batch_resume: BTreeMap<u32, u32>,
     /// Batch downloads it resumed with `Range` instead of starting over.
     pub range_resumes: u32,
@@ -118,7 +118,7 @@ pub struct DeviceState {
     /// The HashedId8 of its last `EeRaCertRequestSpdu` as sent: the 1609.2.1
     /// `requestHash` its batch and `.info` file names are formed from.
     pub request_hash8: Option<[u8; 8]>,
-    /// Its enrolment certificate's `id.name`, unique at the ECA ([SMP] §6.3.1).
+    /// Its enrolment certificate's `id.name`, unique at the ECA (\[SMP\] §6.3.1).
     pub name: Option<String>,
     /// The RA's URL, which the bootstrap installs with the RA certificate.
     pub ra_url: Option<String>,
@@ -152,7 +152,7 @@ pub struct DeviceState {
     provisioning: Option<ProvisioningProgress>,
     /// The request hash of the one butterfly request the RA acknowledged: from then on
     /// the device tops up by `.info` and batch download, never by a new request
-    /// (`ra-maxReqs` = 1, [SMP] Table 3; [CAMP122] SCMS-520).
+    /// (`ra-maxReqs` = 1, \[SMP\] Table 3; \[CAMP122\] SCMS-520).
     pub ra_account: Option<[u8; 32]>,
     /// `.info` requests the device sent (top-offs).
     pub info_requests: u32,
@@ -178,7 +178,7 @@ pub struct DeviceState {
     /// When it retried within the last 60 minutes (the SCMS-523 cap).
     retry_log: Vec<SimTime>,
     /// Requests it sent again because the RA had not answered within the timeout
-    /// ([CAMP122] SCMS-522).
+    /// (\[CAMP122\] SCMS-522).
     pub ee_retries: u32,
     /// Retries it had to hold back because it had already made the SCMS-523 maximum in
     /// the last 60 minutes.
@@ -443,7 +443,7 @@ pub struct RaState {
     /// Requests refused because the enrolment certificate had expired or was unknown.
     pub refused_enrolment: u32,
     /// Enrolment certificates the EE operator registered, by device: the RA serves only
-    /// these ([SMP] §2.1.8). The HashedId8s are empty when the PDU layer is off. A
+    /// these (\[SMP\] §2.1.8). The HashedId8s are empty when the PDU layer is off. A
     /// successor is registered when the ECA's answer passes through the RA, linking old
     /// and new ([SM-REENR]).
     pub registered: BTreeMap<NodeId, BTreeSet<[u8; 8]>>,
@@ -486,7 +486,7 @@ pub struct RaState {
     shuffle_generation: u64,
     report_shuffle_generation: u64,
     /// The pre-generation accounts, one per device the RA accepted a request from: what
-    /// the RA expands every later week from ([PRIMER] p.6).
+    /// the RA expands every later week from (\[PRIMER\] p.6).
     pub accounts: BTreeMap<NodeId, PregenAccount>,
     /// Second butterfly requests refused under `ra-maxReqs` = 1.
     pub max_reqs_refused: u32,
@@ -501,7 +501,7 @@ pub struct RaState {
     /// `.info` answers naming a period the weekly job has not reached yet.
     pub pregen_deferred: u32,
     /// Weekly jobs not run because the enrolment was blocklisted after the job was armed:
-    /// "generation stops for blacklisted devices" ([CAMP122] SCMS-509).
+    /// "generation stops for blacklisted devices" (\[CAMP122\] SCMS-509).
     pub pregen_blocked: u32,
     /// Weekly-job timers armed, as `(device, i)`.
     pregen_timers: BTreeSet<(NodeId, u32)>,
@@ -531,13 +531,13 @@ pub struct RaState {
     /// While a past-due week is generated off the run's clock: the request instant, up to
     /// which every account whose week is due joins the weekly job's population batch.
     population_until: Option<SimTime>,
-    /// Past-due weekly jobs ([`ScmsRun::generate_past_due`]) whose scratch run failed.
+    /// Past-due weekly jobs (`ScmsRun::generate_past_due`) whose scratch run failed.
     pub past_due_failures: u32,
     /// The run's clock up to which the i-period boundaries' weekly jobs are armed
     /// ([`ScmsRun::arm_boundary_jobs`]).
     boundaries_armed: Option<SimTime>,
     /// Weekly jobs a boundary of the run started on its own (week `i + horizon` for every
-    /// account, [PRIMER] p.6), one per distinct week.
+    /// account, \[PRIMER\] p.6), one per distinct week.
     pub boundary_jobs: u32,
     /// Certificate requests sent to the ACAs so far: the next one goes to ACA
     /// `aca_next % n` (round-robin over the provider's ACAs; the deployment's split rule is
@@ -559,15 +559,15 @@ struct AcaRoute {
 }
 
 /// What the RA keeps from a device's one butterfly request to pre-generate every later
-/// week ([SMP] Table 3: `ra-maxReqs` 1, `ra-maxPreloadTime` 2 weeks – 3 years,
-/// `ra-maxGenDelay` 1 week; [PRIMER] p.6 "keeps 3 years generated and adds one week every
+/// week (\[SMP\] Table 3: `ra-maxReqs` 1, `ra-maxPreloadTime` 2 weeks – 3 years,
+/// `ra-maxGenDelay` 1 week; \[PRIMER\] p.6 "keeps 3 years generated and adds one week every
 /// week").
 ///
 /// Generation is evaluated lazily against that schedule, without the age-based request
 /// shuffle (CAMP 1.2.2 `max_cert_request_age` applies to initial requests only,
-/// [CAMP122] Table 68). A week the schedule reached at least `first_batch_delay` before
+/// \[CAMP122\] Table 68). A week the schedule reached at least `first_batch_delay` before
 /// the device asks is generated when first asked for, on a scratch kernel at the instant
-/// it fell due ([`ScmsRun::generate_past_due`]), so the device finds it held, as it would
+/// it fell due (`ScmsRun::generate_past_due`), so the device finds it held, as it would
 /// at a real RA; a week that falls due later runs at the weekly job's instant on the run's
 /// kernel. **Modelled**: the backend hops of a week generated after the fact are off the
 /// run's kernel (marked pre-run, as a preload's are), not charged at the job instant.
@@ -584,7 +584,7 @@ pub struct PregenAccount {
     /// When the RA accepted the request.
     pub accepted_at: SimTime,
     /// The Local Policy File version in force then: a new request is accepted only once
-    /// it changed ("again when parameters change", [CAMP122] SCMS-520).
+    /// it changed ("again when parameters change", \[CAMP122\] SCMS-520).
     pub lpf_version: u32,
     /// The i-periods expanded so far (the request's own, then pre-generated ones).
     pub generated: BTreeSet<u32>,
@@ -796,7 +796,7 @@ pub struct MaState {
     pub decisions: Vec<[u8; 32]>,
     /// The `[LA1, LA2]` linkage chain identifier pairs it has decided to revoke:
     /// a later case whose chain the LAs name with a pair already here ends `linked`, with
-    /// no second blocklist request and no second seed release ([CAMP122] §5). The MA
+    /// no second blocklist request and no second seed release (\[CAMP122\] §5). The MA
     /// knows a chain only by these identifiers, never by the device.
     pub decided_chains: BTreeSet<([u8; CHAIN_ID_BYTES], [u8; CHAIN_ID_BYTES])>,
     /// Revocation requests waiting for the operator (manual-review mode), by the run
@@ -871,7 +871,7 @@ impl MaState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubjectFrom {
     /// The opened report's `suspect.signingCertificate`: its `linkageData` and its
-    /// issuer ([SM-MBR] §3; [CAMP122] §5). The US path.
+    /// issuer ([SM-MBR] §3; \[CAMP122\] §5). The US path.
     SuspectCertificate,
     /// A report another provider's MA shared. For a real report, this MA read the
     /// subject from the re-encrypted report's `suspect.signingCertificate` itself;
@@ -948,13 +948,13 @@ pub struct ReportEvidence {
 pub struct CrlPublication {
     /// The entries the list carries.
     pub entries: Vec<v2xw_sec::linkage::CrlLinkageEntry>,
-    /// The signed full linkage CRL ([`CrlGenerator::secured`]).
+    /// The signed full linkage CRL.
     pub secured: Option<crate::scms::pdu::Pdu>,
-    /// The superseded CRACAs' lists ([`CrlGenerator::secured_retired`]).
+    /// The superseded CRACAs' lists.
     pub secured_retired: Vec<crate::scms::pdu::Pdu>,
-    /// The hash CRLs of the publication ([`CrlGenerator::hash_crls`]).
+    /// The hash CRLs of the publication.
     pub hash_crls: BTreeMap<u16, crate::scms::pdu::Pdu>,
-    /// The Generator's signature over the list ([`CrlGenerator::signature`]).
+    /// The Generator's signature over the list.
     pub signature: Option<([u8; 8], [u8; 64])>,
 }
 
@@ -1030,7 +1030,7 @@ pub struct Case {
     pub linked: bool,
     /// A single-subject revocation: the MA's decision names one pseudonym certificate.
     /// The PCA lookup returns the request hash and the two sealed chain pointers, each LA
-    /// names its chain (`chain-id-request`/`-response`; [CAMP122] §5, [BRECHT]
+    /// names its chain (`chain-id-request`/`-response`; \[CAMP122\] §5, \[BRECHT\]
     /// §VI-C), and only then does the RA blocklist the request and both LAs release their
     /// seeds. `false` for the two-report research API ([`ScmsRun::investigate`],
     /// [`ScmsRun::request_link`]), which keeps the one-bit "same device?" exchange.
@@ -1158,13 +1158,13 @@ pub struct EcaState {
     /// Enrolment certificates the RA told it are blocklisted.
     pub blocklist: BTreeSet<NodeId>,
     /// Canonical public keys the EE operators registered, by canonical identity (direct
-    /// authorisation, [SMP] §2.1.7).
+    /// authorisation, \[SMP\] §2.1.7).
     pub canonical: BTreeMap<String, Point>,
     /// Every request key it has seen (compressed SEC1): a key used before with this
-    /// operator is refused ([SMP] §6.3.1).
+    /// operator is refused (\[SMP\] §6.3.1).
     pub seen_keys: BTreeSet<[u8; 33]>,
     /// The `id.name` of every enrolment certificate it issued, and whose it is: a name is
-    /// unique ([SMP] §6.3.1), kept only by a successor.
+    /// unique (\[SMP\] §6.3.1), kept only by a successor.
     pub names: BTreeMap<String, NodeId>,
     /// Requests refused under the US enrolment profile (the reason is in
     /// `pdu_rejections`).

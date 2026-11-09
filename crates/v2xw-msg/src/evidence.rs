@@ -261,7 +261,7 @@ pub const EVIDENCE: &[MessageEvidence] = &[
 /// The evidence for one message type.
 ///
 /// Panics only if [`EVIDENCE`] is missing a row, which
-/// [`tests::every_message_type_has_exactly_one_row`] makes impossible.
+/// `tests::every_message_type_has_exactly_one_row` makes impossible.
 pub fn evidence_for(ty: MsgType) -> &'static MessageEvidence {
     EVIDENCE
         .iter()

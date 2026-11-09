@@ -243,7 +243,7 @@ impl AttackSchedule {
     /// The legacy rule, in order: inside the window, inside the geofence, and inside the
     /// "on" part of the pulse. Dormancy after a CRL observation is attacker state rather
     /// than schedule state, so it is applied by the attacker
-    /// ([`crate::attack::LegacyAttacker`]), not here.
+    /// ([`crate::attack_legacy::LegacyAttacker`]), not here.
     #[must_use]
     pub fn active_at(&self, t: SimTime, x_m: f64, y_m: f64) -> bool {
         if t < self.from || t > self.to {

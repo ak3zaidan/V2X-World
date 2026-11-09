@@ -67,7 +67,7 @@
 //! radius, the heading check through the bearing error two stated radii imply over the
 //! longest straight baseline the sender's own headings describe (up to 10 s), and the
 //! map check through the stated disc. Each receiver holds a map of the motor-vehicle
-//! lanes ([`RoadMap`]), as F2MD's position-plausibility check assumes, so a position
+//! lanes (`RoadMap`), as F2MD's position-plausibility check assumes, so a position
 //! lie that stays self-consistent (the legacy `ConstPosOffset`) is visible at all. A PSM
 //! sender is checked as a vulnerable road user. The authority's reporter budget is a
 //! rate inside its window, not a run-long count, so a receiver that follows one liar
@@ -628,14 +628,14 @@ pub const REPORT_INTERVAL_S: f64 = 1.0;
 /// as possible but no later than once a week" [CAMP122 §3 item 10] and "on every RA
 /// connection" [PRIMER pp.5, 8]; neither prints an interval, which an OEM configures. One
 /// hour is well inside the weekly bound and is the profile's own polling granularity for
-/// the RA (`ra-minWait` 1 h, [SMP] §2.1.21 Table 3); a scenario that measures revocation
+/// the RA (`ra-minWait` 1 h, \[SMP\] §2.1.21 Table 3); a scenario that measures revocation
 /// latency states its own.
 pub const CRL_FETCH_INTERVAL_S: f64 = 3_600.0;
 
 /// The bytes of the RA's answer to a conditional CRL poll when the device's copy is
 /// current: HTTP 412 with no body.
 ///
-/// [SMP] §4.3.2 and §4.3.1: the composite CRL (6.3.5.8) and the information status
+/// \[SMP\] §4.3.2 and §4.3.1: the composite CRL (6.3.5.8) and the information status
 /// (6.3.5.14) are fetched with `If-Modified-Since`, and 412 means "already current".
 /// **ASSUMPTION** (scms-constants.md): a minimal HTTP/1.1 response, `HTTP/1.1 412 Precondition
 /// Failed` (34 B with CRLF), a `Date:` header (37 B), `Content-Length: 0` (19 B) and the
@@ -643,8 +643,8 @@ pub const CRL_FETCH_INTERVAL_S: f64 = 3_600.0;
 pub const CRL_NOT_MODIFIED_BYTES: u32 = 92;
 
 /// The CRL store's download path: an unauthenticated `GET` at `https://<MA>:8894/
-/// download-crl/` ([CAMP122] §6.2.3), conditional on the copy's time
-/// (`If-Modified-Since`, [SMP] §4.3.2). The 1609.2.1 composite-CRL path is paywalled and
+/// download-crl/` (\[CAMP122\] §6.2.3), conditional on the copy's time
+/// (`If-Modified-Since`, \[SMP\] §4.3.2). The 1609.2.1 composite-CRL path is paywalled and
 /// UNCONFIRMED, so the CAMP one stands for it, as for every EE-RA path (B9a).
 pub const CRL_STORE_PATH: &str = "/download-crl/";
 
@@ -671,7 +671,7 @@ fn if_modified_since() -> v2xw_proto::scms::http::Header {
 pub const CRL_BROADCAST_INTERVAL_S: f64 = 5.0;
 
 /// Whether the engine puts an attack kind on the air; a scenario naming one it does not
-/// is refused (see [`unrendered`]).
+/// is refused (see `unrendered`).
 #[must_use]
 pub fn renders_on_air(kind: AttackKind) -> bool {
     unrendered(kind).is_none()
@@ -2295,7 +2295,7 @@ pub struct Phase2Report {
     /// (arrival to answer, the wait for a server included), summed over
     /// providers.
     pub ra_ack_requests: u64,
-    /// Of those, the ones answered later than 1 s ([CAMP122] §5.2.8.3 SCMS-521).
+    /// Of those, the ones answered later than 1 s (\[CAMP122\] §5.2.8.3 SCMS-521).
     /// Measured, never enforced: no deployed RA figure exists.
     pub ra_ack_over_1s: u64,
     /// The 99th-percentile acknowledgement delay over every provider's RA, ms (the upper
@@ -2360,7 +2360,7 @@ pub struct Phase2Report {
     pub crl_frames_refused_mtu: u64,
     /// How many CRL downloads cellular vehicles completed.
     pub crl_downloads: u64,
-    /// Conditional CRL polls the RA answered with HTTP 412 (the copy is current; [SMP]
+    /// Conditional CRL polls the RA answered with HTTP 412 (the copy is current; \[SMP\]
     /// §4.3.2): each a request and a 92 B answer on the cellular link. Under
     /// `security.scms.crl_poll: info-status` these are the information-status polls
     /// answered 412: the composite is then fetched only when something changed.
@@ -2604,7 +2604,7 @@ pub struct Phase2Report {
     /// A down component's own scheduled jobs, run when it restarted.
     pub backend_timers_deferred: u64,
     /// EE requests to the RA sent again because no answer came within
-    /// `ee_retry_timeout_s` ([CAMP122] SCMS-522), summed over every provider's devices.
+    /// `ee_retry_timeout_s` (\[CAMP122\] SCMS-522), summed over every provider's devices.
     pub ee_retries: u64,
     /// Retries held back by the SCMS-523 cap (`ee_retry_max_per_hour` in 60 minutes).
     pub ee_retries_capped: u64,
@@ -3355,7 +3355,7 @@ pub const HOST_PARAM_KEYS: [&str; 4] = [
 ];
 
 /// The keys `detection.local[].params` accepts besides `report_interval_s`: exactly the
-/// names [`apply_detector_param`] reads.
+/// names `apply_detector_param` reads.
 pub const DETECTOR_PARAM_KEYS: [&str; 16] = [
     "consistency_threshold_m",
     "heading_threshold_deg",
@@ -4321,7 +4321,7 @@ impl Phase2 {
     }
 
     /// Issues an emergency vehicle its OBU identification certificates before it joins
-    /// ([CAMP122] Table 1 row 44): the month `now` falls in, and the next one
+    /// (\[CAMP122\] Table 1 row 44): the month `now` falls in, and the next one
     /// when its request time is already past (the vehicle's cellular link was up before
     /// the run), through the real request, ACA issuance and download, signed with the
     /// enrolment certificate [`Phase2::provision`] gave it. The cycle then renews each
@@ -5046,7 +5046,7 @@ impl Phase2 {
         self.relay_in_range_among(pos, role, None)
     }
 
-    /// [`ScmsPhase2::relay_in_range`], restricted to `among` when it is given: under
+    /// [`Phase2::relay_in_range`], restricted to `among` when it is given: under
     /// `net.rsu_ip.air: sch` the units whose WSA the vehicle verified.
     pub fn relay_in_range_among(
         &self,
@@ -7258,7 +7258,7 @@ impl Phase2 {
     }
 
     /// A signed BSM `signer` put on the air, claiming `generated` as its generation time:
-    /// kept (the last [`EVIDENCE_BSMS`]) so a report about that certificate can attach the
+    /// kept (the last `EVIDENCE_BSMS`) so a report about that certificate can attach the
     /// BSMs its reporter judged.
     pub fn note_signed_bsm(&mut self, signer: [u8; 8], generated: SimTime, spdu: &[u8]) {
         if self.etsi.is_some() || self.home().state.pki.is_none() {
@@ -7409,7 +7409,7 @@ impl Phase2 {
     /// it is counted here by reason ([`Phase2Report::reports_not_filed_by`]) and dropped.
     /// Always `true` without the PDU layer (every report is modelled there), on the ETSI
     /// path, and with `modelled_reports`. A roadside unit's own detection is not filed
-    /// (the US profile has no roadside reporter, [`Phase2::real_mbr`]); it is
+    /// (the US profile has no roadside reporter, `Phase2::real_mbr`); it is
     /// counted under its own reason.
     pub fn files_report(&mut self, node: NodeId, report: &MisbehaviourReport) -> bool {
         if self.params.modelled_reports {
@@ -7534,7 +7534,7 @@ impl Phase2 {
     /// ingested it ([`Phase2::advance`]), not here.
     ///
     /// Under the SCMS with the PDU layer on, the report is a real US misbehaviour report
-    /// ([`Phase2::real_mbr`]) whenever its detection has a PSID-0x20 type and subtype:
+    /// (`Phase2::real_mbr`) whenever its detection has a PSID-0x20 type and subtype:
     /// the RA checks the enrolment-signed upload header, the MA decrypts it and verifies
     /// the evidence, and each refusal is on `scms.state.pdu_rejections`.
     #[allow(clippy::too_many_arguments)]
@@ -9963,8 +9963,8 @@ impl Phase2 {
     }
 
     /// The internet legs a cellular exchange with `node`'s RA crosses, ns: the city to the
-    /// provider's region and back ([`Phase2::internet_legs`]; zero under `flat`). A top-up's
-    /// messages cross them through the kernel's path oracle ([`InternetLeg`]); the CRL
+    /// provider's region and back (`Phase2::internet_legs`; zero under `flat`). A top-up's
+    /// messages cross them through the kernel's path oracle (`InternetLeg`); the CRL
     /// poll is priced in the engine and adds them itself.
     #[must_use]
     pub fn internet_round_trip_ns(&self, node: NodeId) -> u64 {
@@ -9975,8 +9975,8 @@ impl Phase2 {
     }
 
     /// A vehicle's conditional CRL poll on the wire: `GET /download-crl/
-    /// HTTP/1.1` to its provider's CRL store (`Host: ma.<provider>:8894`, [CAMP122]
-    /// §6.2.1, §6.2.3) with `If-Modified-Since` its copy's time ([SMP] §4.3.2) and no
+    /// HTTP/1.1` to its provider's CRL store (`Host: ma.<provider>:8894`, \[CAMP122\]
+    /// §6.2.1, §6.2.3) with `If-Modified-Since` its copy's time (\[SMP\] §4.3.2) and no
     /// body: the download is unauthenticated, so no SPDU rides in it.
     #[must_use]
     pub fn crl_poll_request_bytes(&self, node: NodeId) -> u32 {
@@ -10047,7 +10047,7 @@ impl Phase2 {
     ///
     /// Every due poll is a request on the air: a device cannot know that nothing changed
     /// without asking. It is a conditional GET (`If-Modified-Since` its copy's time,
-    /// [SMP] §4.3.2), answered with the composite CRL when something changed and with
+    /// \[SMP\] §4.3.2), answered with the composite CRL when something changed and with
     /// HTTP 412 ([`CRL_NOT_MODIFIED_BYTES`]) when its copy is current. Before this, a poll
     /// that would have found nothing new put nothing on the air.
     pub fn crl_polls_due(&mut self, now: SimTime) -> Vec<(NodeId, u32, bool)> {
@@ -10093,7 +10093,7 @@ impl Phase2 {
     /// provider had published when it joined, as its RA serves them (every provider's
     /// `t0` CRL for a device on the road from the start, which it fetched within the week
     /// before the run; for a later joiner, the composite list its RA serves at `now`,
-    /// since a device fetches on every RA connection, [PRIMER] pp. 5, 8). Marks its copy
+    /// since a device fetches on every RA connection, \[PRIMER\] pp. 5, 8). Marks its copy
     /// as of those lists, so its first conditional poll is answered 412 unless a provider
     /// has published since; the caller installs them on the node. `None` for a node with
     /// no device record or a run whose stores published nothing.
@@ -10217,7 +10217,7 @@ impl Phase2 {
     }
 
     /// Switches a device off or back on (a timeline `outage` on a vehicle or handset).
-    /// While off it reaches no part of the SCMS ([`NodeSec::powered_off`]). `false` when
+    /// While off it reaches no part of the SCMS (`NodeSec::powered_off`). `false` when
     /// the node has no device record here.
     pub fn set_powered(&mut self, node: NodeId, on: bool) -> bool {
         match self.nodes.get_mut(&node) {
@@ -10253,7 +10253,7 @@ impl Phase2 {
     }
 
     /// Under `security.scms.crl_poll: info-status`: the RA's answer to `node`'s
-    /// information-status poll (1609.2.1 §6.3.5.14, `If-Modified-Since` as [SMP] §4.4
+    /// information-status poll (1609.2.1 §6.3.5.14, `If-Modified-Since` as \[SMP\] §4.4
     /// profiles it): `None` for HTTP 412 when the status the vehicle last received is
     /// still the RA's, else the size of the signed `CertificateManagementInformationStatusSpdu`,
     /// which the RA signs and logs (`ScmsRun::ra_info_status`) and the vehicle keeps.

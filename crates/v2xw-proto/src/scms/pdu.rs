@@ -130,7 +130,7 @@ pub enum PduError {
     #[error("key: {0}")]
     Key(&'static str),
     /// The request is well formed but the issuer's policy refuses it (for enrolment, the
-    /// US profile's request-validity rules, [SMP] §6.3.1).
+    /// US profile's request-validity rules, \[SMP\] §6.3.1).
     #[error("refused by policy: {0}")]
     Policy(&'static str),
     /// A component's issuing CA is not in its provider's PKI, so nothing it certifies
@@ -407,7 +407,7 @@ thread_local! {
 }
 
 /// How many explicit-certificate signatures this thread has verified (not answered from
-/// the memo of [`explicit_cert_verifies`]).
+/// the memo of `explicit_cert_verifies`).
 #[must_use]
 pub fn explicit_cert_checks_run() -> u64 {
     EXPLICIT_CHECKS.with(std::cell::Cell::get)
@@ -919,7 +919,7 @@ impl ScmsPki {
 
     /// The provider's PKI from the governance entities' own certificates and keys
     /// ([`crate::scms::governance::Governance::pdu_pki`]): one certificate per component,
-    /// as a provider's chain file lists the certificate that signs ([SMP] §6.1).
+    /// as a provider's chain file lists the certificate that signs (\[SMP\] §6.1).
     /// `by_role` gives each governance role's (certificate,
     /// signing key, encryption scalar); the ACA is the governance role `pca`.
     ///
@@ -1984,7 +1984,7 @@ pub struct HeldStatus {
 /// What a device downloads after an information status: only what is strictly newer
 /// than what it holds (1609.2.1 §6.3.5.14; the US profile prefers the composite CRL,
 /// 6.3.5.8, over individual CRLs and the chain file, 6.3.5.7, over separate CTL and CA
-/// downloads, [SMP] §4.4).
+/// downloads, \[SMP\] §4.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StatusFetch {
     /// A CRL is newer, or a CRACA is listed that the device holds no CRL of: fetch the

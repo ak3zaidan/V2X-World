@@ -24,3 +24,6 @@ v2xw-mobility = { workspace = true }
 [[bin]]
 name = "v2xw-demand"
 path = "src/main.rs"
+# Not documented: its rustdoc page would be written over the `v2xw-demand` library's
+# (the same output name), and the library is where the API is.
+doc = false

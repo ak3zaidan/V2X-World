@@ -611,7 +611,7 @@ pub struct FastForwardReport {
     /// Simulated nanoseconds spent inside the windows.
     pub skipped_ns: u64,
     /// Nanoseconds the traffic stood still across the windows, from the instant each froze
-    /// it to the live step that resumed it ([`Engine::resume_after_fast_forward`]): the
+    /// it to the live step that resumed it (`Engine::resume_after_fast_forward`): the
     /// time the road's own clocks did not count.
     #[serde(skip_serializing_if = "is_zero_u64")]
     pub traffic_paused_ns: u64,

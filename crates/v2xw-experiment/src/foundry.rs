@@ -166,7 +166,7 @@ pub const ATTACKER_EDGES: [f64; 2] = [0.15, 0.35];
 
 /// The topology bins: the world-source variants a scenario can name.
 ///
-/// Derived from [`v2xw_world::WorldSourceSpec::label`]'s prefix rather than from a match on
+/// Derived from `v2xw_world::WorldSourceSpec::label`'s prefix rather than from a match on
 /// the enumeration, so a source added upstream lands in `other` instead of failing to
 /// compile — which is the right trade for a descriptor axis.
 pub const TOPOLOGY_BINS: [&str; 4] = ["procedural", "osm-xml", "osm-bbox", "other"];

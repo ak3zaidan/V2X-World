@@ -26,7 +26,7 @@
 //! a world of `extent 0 x 0 m`, 0 drivable lanes and 488 `clipped-out` anomalies — the
 //! importer returns `Ok`, because an empty world is not a malformed one. The order check
 //! below therefore rejects only what is out of range, and the real guard is
-//! [`refuse_an_empty_network`], which looks at what came out: an import with no drivable
+//! `refuse_an_empty_network`, which looks at what came out: an import with no drivable
 //! lane is refused, naming the box, the extract's own bounds and the argument order.
 //!
 //! # The import date is an argument

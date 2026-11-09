@@ -128,7 +128,7 @@ pub enum SumoAnomaly {
     /// A `<connection>`'s `state` was not one of the documented codes.
     UnknownLinkState,
     /// A `<connection>` restricted which classes may use it, which a
-    /// [`Connection`](crate::model::Connection) cannot carry.
+    /// [`Connection`] cannot carry.
     ConnectionAccessDropped,
     /// A `<connection>` allowed no class at all, and was marked not permitted.
     ConnectionAllowsNothing,
@@ -154,7 +154,7 @@ pub enum SumoAnomaly {
     /// foe, which the format is not supposed to do.
     ResponseWithoutFoe,
     /// A `<junction type>` has no exact equivalent in
-    /// [`JunctionControl`](crate::model::JunctionControl) and was approximated.
+    /// [`JunctionControl`] and was approximated.
     JunctionTypeApproximated,
     /// A `<junction type>` was not one of the documented values.
     UnknownJunctionType,
@@ -397,7 +397,7 @@ pub struct SumoCounts {
     /// Junctions carrying a signal plan.
     pub signalised_junctions: u64,
     /// Connections in the world (each movement appears twice: see
-    /// [`Connection`](crate::model::Connection)).
+    /// [`Connection`]).
     pub connections: u64,
     /// Movements the importer built: half the connection count that has a connector.
     pub movements: u64,

@@ -16,7 +16,7 @@
 //! Each [`SizeEntry`] is a `(message type, content profile)` pair with a fixed base, a
 //! per-element increment, and **its anchors**: the published numbers it is checked against
 //! (invariant I-S2). [`SizeEntry::check`] is the check, and
-//! [`tests::every_entry_satisfies_its_own_anchors`] runs it over the whole table.
+//! `tests::every_entry_satisfies_its_own_anchors` runs it over the whole table.
 //!
 //! Anchors are recorded at the layer scope their source states and converted to payload
 //! scope before comparison, because comparing a modelled UPER payload against a figure that
@@ -248,7 +248,7 @@ pub struct SizeEntry {
     /// interpretable; and it is a cross-check on the encoder, because a hand-written
     /// encoder that disagrees with a structurally derived size model by more than a few
     /// bytes has a bug in one of them —
-    /// [`tests::the_real_spat_encoder_lands_near_the_row_it_retired`] is that check.
+    /// `tests::the_real_spat_encoder_lands_near_the_row_it_retired` is that check.
     ///
     /// [`J2735SizeCodec`] no longer *claims* a type whose rows are all superseded, so
     /// [`assert_no_overlapping_claims`] still passes with the real codec registered. The
@@ -292,7 +292,7 @@ impl SizeEntry {
     ///
     /// A row with no anchors passes, because there is nothing to check it against — but
     /// [`SizeEntry::status`] must then say [`EntryStatus::DerivedNoAnchor`], which
-    /// [`tests::an_unanchored_entry_admits_it`] enforces.
+    /// `tests::an_unanchored_entry_admits_it` enforces.
     pub fn check(&self) -> Result<(), MsgError> {
         let modelled = self.bytes(self.nominal_elements);
         if let Some((lo, hi)) = self.anchor_spread()

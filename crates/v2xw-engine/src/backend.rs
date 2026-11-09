@@ -263,7 +263,7 @@ pub const WIRED_RTO_MS: f64 = 200.0;
 pub const RECONNECT_S: f64 = 1.0;
 
 /// The longest an EE↔SCMS TLS session may live: "The max lifetime of a session shall be
-/// 5 minutes", with session resumption not supported ([SMP] §3.2). A message sent
+/// 5 minutes", with session resumption not supported (\[SMP\] §3.2). A message sent
 /// on a session older than this opens a new TCP connection and a full TLS handshake.
 pub const TLS_SESSION_MAX: Duration = Duration::from_secs(5 * 60);
 
@@ -272,7 +272,7 @@ pub const TLS_SESSION_MAX: Duration = Duration::from_secs(5 * 60);
 ///
 /// **Measured** (scms-constants.md, "TLS"): `tools/scms_constants/tls_handshake_sizes.py`
 /// runs a real OpenSSL 3.0.15 handshake restricted to the US profile — server-only X.509
-/// authentication, ECDHE-ECDSA suites, no session tickets ([SMP] §2.1.18, §3.2;
+/// authentication, ECDHE-ECDSA suites, no session tickets (\[SMP\] §2.1.18, §3.2;
 /// [SM-EESEC] §5.2.3) — and counts each flight. **ASSUMPTIONS** the measurement
 /// rests on: a two-certificate ECDSA P-256 chain (leaf 367 B + issuing CA 323 B DER; no
 /// provider publishes its TLS chain) and OpenSSL's ClientHello (an OBU's stack is not
@@ -307,6 +307,8 @@ pub fn scms_tcp_config(tls: v2xw_radio::ip_transport::TlsVersion) -> TcpConfig {
 /// poll, a roadside unit's forward) and the protocol kernels' [`PathOracle`] (every
 /// request, response and poll of a top-up, a re-enrolment or a trust-list fetch), so both
 /// queue on the same cells, the same TCP connections and the same backhaul lines.
+///
+/// [`PathOracle`]: v2xw_proto::net::PathOracle
 #[derive(Debug)]
 pub struct Carrier {
     packet: Option<PacketUu>,
@@ -351,7 +353,7 @@ pub struct CarrierStats {
     /// TCP timeouts.
     pub tcp_rtos: u64,
     /// Full TLS handshakes (server-authenticated, no resumption: every session pays
-    /// the whole handshake, [SMP] §3.2).
+    /// the whole handshake, \[SMP\] §3.2).
     pub tls_handshakes: u64,
     /// Sessions closed because they reached [`TLS_SESSION_MAX`].
     pub tls_sessions_expired: u64,
@@ -491,7 +493,7 @@ impl Carrier {
     }
 
     /// Sets the TLS version of every new session: `session-scmsAuth` is TLS 1.2 or 1.3
-    /// ([SMP] §2.1.18; CAMP's EE suites are TLS 1.2, [CAMP122] §6.3.3.5).
+    /// (\[SMP\] §2.1.18; CAMP's EE suites are TLS 1.2, \[CAMP122\] §6.3.3.5).
     pub fn set_tls(&mut self, tls: v2xw_radio::ip_transport::TlsVersion) {
         self.tcp = scms_tcp_config(tls);
     }
@@ -1158,7 +1160,7 @@ impl BackendAccess {
 
     /// The vehicles whose service-channel transfer gave up since the last call: their
     /// flow will never complete, and the vehicle tries again at its next
-    /// contact ([`crate::phase2::ScmsPhase2::abort_cut_off_flows`]).
+    /// contact ([`crate::phase2::Phase2::abort_cut_off_flows`]).
     pub fn take_sch_failures(&mut self) -> Vec<NodeId> {
         std::mem::take(&mut self.carrier().sch_failed_nodes)
             .into_iter()
@@ -1397,6 +1399,8 @@ impl BackendAccess {
     /// the vehicle's own keep-alive TCP/TLS connection through the PF scheduler
     /// ([`Carrier`]). What this does is observe the vehicle's position (a cell change
     /// starts a handover) and refuse a vehicle with no serving cell.
+    ///
+    /// [`PathOracle`]: v2xw_proto::net::PathOracle
     pub fn packet_link(
         &mut self,
         ctx: &mut EngineCtx<'_>,

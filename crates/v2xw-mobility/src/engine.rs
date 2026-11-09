@@ -1316,7 +1316,7 @@ pub struct EngineParams {
     pub lc2013: Option<crate::lanechange::lc2013::Lc2013Params>,
     /// Congestion-aware rerouting, every this many seconds per vehicle, or `0` (off, the
     /// default). When on, each lane's speed is sampled every second and smoothed over
-    /// [`CONGESTION_ADAPTATION_STEPS`] samples, the router prices a lane at its length over
+    /// `CONGESTION_ADAPTATION_STEPS` samples, the router prices a lane at its length over
     /// that speed, and every vehicle re-plans its route from where it is once a period
     /// (SUMO's rerouting device, `--device.rerouting.period`, with its default adaptation
     /// interval of 1 s and 180 adaptation steps). Set by `traffic.reroute_period_s`.
@@ -3078,7 +3078,7 @@ impl NativeMobility {
     }
 
     /// How many of the dropped trips had no route, or an origin lane too short to stand on
-    /// (the rest waited [`MAX_DEPART_DELAY`] for room and gave up).
+    /// (the rest waited `MAX_DEPART_DELAY` for room and gave up).
     pub fn unroutable_trips(&self) -> u64 {
         self.unroutable_trips
     }
@@ -9378,7 +9378,7 @@ pub fn arrival_time_s(gap_m: f64, v_mps: f64, v_end_mps: Option<f64>, b_mps2: f6
 /// line — negative, since that obstacle stands beyond the line ([`STOP_LINE_MARGIN_M`]).
 /// When stopping
 /// `s0` short of the obstacle would take more than a planned stop's deceleration
-/// ([`PLANNED_STOP_MAX_DECEL_MPS2`]), the driver uses the room up to the line itself —
+/// (`PLANNED_STOP_MAX_DECEL_MPS2`), the driver uses the room up to the line itself —
 /// the amber rule decided "stop" by the distance to the *line* (ITE), so the stop it
 /// decided on is one the vehicle can make there.
 // `min(..).max(..)` sends a NaN to the bound; `clamp` would pass it through.

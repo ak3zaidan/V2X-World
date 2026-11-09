@@ -4,13 +4,13 @@
 //! | | RSU application | OBU identification |
 //! |---|---|---|
 //! | holder | roadside unit (SPaT/MAP signing) | emergency or other privileged vehicle |
-//! | validity | 1 week + 1 h, `hours(169)` ([CAMP122] Table 68 `rse_application_cert_validity` 169 h / overlap 1 h, §7) | 1 month + 1 h ([CAMP122] Table 3, SCMS-1370) |
+//! | validity | 1 week + 1 h, `hours(169)` (\[CAMP122\] Table 68 `rse_application_cert_validity` 169 h / overlap 1 h, §7) | 1 month + 1 h (\[CAMP122\] Table 3, SCMS-1370) |
 //! | key | a fresh request key `R_U = k_U·G` per certificate, no butterfly | original butterfly, `(i, j = 0)` with a local i-value (`baseCertNumber`) |
 //! | request `additionalParams` | `encryptionKey` (the response key `U`) | `original {ck, H, ek}` |
 //! | response | `AcaEeCertResponsePrivateSpdu`: encrypted to `U`, signed by the issuing ACA | the same, encrypted to the cocoon key `J_i0` |
 //! | shuffle | none | none (the RA does not shuffle) |
-//! | `id` | not `linkageData` ([SMP] §6.3.3); `none` here | the same |
-//! | `crlSeries` | 3, revoked by HashedId10 on a hash CRL ([SMP] §6.3.3, Table 1) | 3 |
+//! | `id` | not `linkageData` (\[SMP\] §6.3.3); `none` here | the same |
+//! | `crlSeries` | 3, revoked by HashedId10 on a hash CRL (\[SMP\] §6.3.3, Table 1) | 3 |
 //! | `cracaId` | HashedId3 of the CRACA: the ICA, because the US CRL signer is `issuerIsCraca` under the ICA (published CRL-signer SSP `CrlSsp{issuerIsCraca, 4,3,1,2}`, `governance.rs`) | the same |
 //!
 //! The exchange, every leg a real SPDU:
@@ -90,14 +90,14 @@ pub const SRM_PSID: u64 = 0x20_4096;
 // table publishes for an end-entity certificate is Wyoming's, below.
 
 /// Vehicle-initiated distress notification, PSID `0pC0-00-02` = 0x4082 (16 514), Wyoming
-/// DOT, on an OBU identification certificate ([CAMP122] Table 1 row 44).
+/// DOT, on an OBU identification certificate (\[CAMP122\] Table 1 row 44).
 pub const DISTRESS_NOTIFICATION_PSID: u64 = 0x4082;
 /// Its SSP: a UPER J2945/2 DSRC-SSP, version 1, one `SSPentry {index
 /// msg-travelerInformation (31), constraint SSPconstraintAll}`, "UPER encoded in hex:
-/// 00 80 01 F0 40" ([CAMP122] Table 1 row 44).
+/// 00 80 01 F0 40" (\[CAMP122\] Table 1 row 44).
 pub const DISTRESS_NOTIFICATION_SSP: [u8; 5] = [0x00, 0x80, 0x01, 0xF0, 0x40];
 
-/// The Wyoming distress-notification `PsidSsp`, whose COER [CAMP122] Table 1 row 44
+/// The Wyoming distress-notification `PsidSsp`, whose COER \[CAMP122\] Table 1 row 44
 /// prints as "80 02 40 82 80 05 00 80 01 F0 40" (opaque SSP). The engine's default
 /// identification profile ([`AppCertKind::psids`]) does not include it: no published
 /// source puts it on emergency vehicles. It is here for scenarios and attack studies that
@@ -132,7 +132,7 @@ impl AppCertKind {
         }
     }
 
-    /// Validity in hours: 169 for the RSU certificate ([CAMP122] Table 68); 30 days + 1 h
+    /// Validity in hours: 169 for the RSU certificate (\[CAMP122\] Table 68); 30 days + 1 h
     /// for identification (assumption, see the module notes).
     pub const fn validity_hours(self) -> u16 {
         match self {
@@ -399,7 +399,7 @@ impl OpenedRequest {
 
 /// The RA's checks on a non-pseudonym `EeRaCertRequestSpdu`: decrypt with the RA key;
 /// the inner `SignedCertificateRequest` is signed by one ECA-issued enrolment
-/// certificate and verifies; `type implicit` ([SMP] §6.3.3: every profiled certificate is
+/// certificate and verifies; `type implicit` (\[SMP\] §6.3.3: every profiled certificate is
 /// implicit); `id` not `linkageData` (no butterfly → crlSeries 3 "and id must not be
 /// LinkageData"; butterfly without LinkageData → 3); `cracaId 000000`, `crlSeries 0`;
 /// `verificationKey` P-256; `additionalParams` either `encryptionKey` or `original`.

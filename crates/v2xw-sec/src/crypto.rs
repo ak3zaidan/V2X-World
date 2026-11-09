@@ -36,7 +36,7 @@
 //!   until v2.0.0 of the modelled card — let anyone holding a peer's certificate and the
 //!   digest compute a token `verify_prehashed` accepts; nothing reached it only because
 //!   signing needs a [`KeyHandle`] carrying a secret. A forgery model in `v2xw-threat`
-//!   would have succeeded modelled and failed real. See [`modeled_token`].
+//!   would have succeeded modelled and failed real. See `modeled_token`.
 //!
 //!   Two more places where the equality is not free, and is therefore arranged:
 //!
@@ -46,7 +46,7 @@
 //!     high-`s` one — see [`CryptoBackend::verify_prehashed`] on `Real`.
 //!   * **Invalid key material.** Curve membership is a question `Modeled` cannot answer,
 //!     because its public material is deliberately not a point. So neither backend asks
-//!     it: [`check_public_material`] is the single shape check both use, and material that
+//!     it: `check_public_material` is the single shape check both use, and material that
 //!     is not a point fails every *verification* instead of the import, identically in
 //!     both modes.
 //! * **Sizes.** A `Modeled` token is exactly `sig_bytes` long, from the same descriptor
@@ -402,7 +402,7 @@ pub trait CryptoBackend<C: Ctx + ?Sized>: CryptoBackendInfo {
     /// Returns a `bool`, not a `Result`: an invalid signature is *data* — the outcome a
     /// misbehaviour scenario is measuring — and not an error. A malformed handle is an
     /// error, and is reported as `false` here only because the caller of a verification
-    /// has nothing better to do with it; [`CryptoBackend::public_material`] is the call
+    /// has nothing better to do with it; [`CryptoBackendInfo::public_material`] is the call
     /// that surfaces a bad handle.
     fn verify_prehashed(
         &mut self,
@@ -1236,6 +1236,10 @@ impl<C: Ctx + ?Sized> CryptoBackend<C> for Modeled {
 /// use it) can test the algebra; every certificate path in the engine uses
 /// the 1609.2 form, through [`crate::cert::issue_implicit`] and
 /// [`crate::cert::verification_key`].
+///
+/// [`verify_reconstruction`]: ecqv::verify_reconstruction
+/// [`cert_hash_sec4`]: ecqv::cert_hash_sec4
+/// [`cert_hash_1609`]: ecqv::cert_hash_1609
 pub mod ecqv {
     use super::*;
 
@@ -1276,7 +1280,7 @@ pub mod ecqv {
 
     /// A 32-byte digest reduced to a scalar.
     ///
-    /// Reduction rather than rejection, for the reason [`super::scalar_from_seed`] gives:
+    /// Reduction rather than rejection, for the reason `super::scalar_from_seed` gives:
     /// a variable number of hash evaluations would make the operation's cost depend on
     /// its input, and the engine charges a fixed cost per primitive operation.
     pub fn hash_to_scalar(digest: &[u8; 32]) -> Scalar {

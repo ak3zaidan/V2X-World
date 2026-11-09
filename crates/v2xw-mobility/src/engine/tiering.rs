@@ -144,7 +144,7 @@ impl NativeMobility {
 
     /// Puts a vehicle handed in from the other tier on its route lane, at its speed, if
     /// there is room: it can follow whoever is ahead at its desired gap, and whoever is
-    /// behind can follow it ([`Self::may_follow_newcomer`]). `Err` gives it back.
+    /// behind can follow it (`Self::may_follow_newcomer`). `Err` gives it back.
     ///
     /// # Errors
     /// The hand-off itself, when there is no room.

@@ -24,6 +24,9 @@ path = "src/main.rs"
 [[bin]]
 name = "v2xw-server"
 path = "src/bin/v2xw-server.rs"
+# Not documented: its rustdoc page would be written over the `v2xw-server` library's
+# (the same output name), and the library is where the API is.
+doc = false
 
 # The SUMO cross-validation and the city audit report their own wall time, so they live
 # where the workspace's one real clock does (`src/wall.rs`; the conformance firewall).

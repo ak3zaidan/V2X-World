@@ -6,7 +6,7 @@
 //! `v2xw-world`, `-mobility`, `-radio`, `-net`, `-msg`, `-node`, `-proto`, `-threat` and
 //! `-metrics` is declared against it, so they all share one context instead of each crate
 //! inventing an incompatible one. The kernel in this crate owns the pieces it is built
-//! from ([`Scheduler`], [`RngRegistry`], [`ProvenanceLog`], [`ParamSet`]); the world and
+//! from ([`crate::Scheduler`], [`crate::RngRegistry`], [`crate::ProvenanceLog`], [`ParamSet`]); the world and
 //! the actor index live in `v2xw-world`, which is why they are associated types rather
 //! than concrete ones.
 //!

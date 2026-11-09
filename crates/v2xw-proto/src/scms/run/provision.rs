@@ -570,8 +570,8 @@ impl ScmsState {
     /// and every period within `ra-maxPreloadTime` (the Local Policy File's
     /// `max_periods_ahead`, 156 weeks = 3 years) of `firstI`, at acceptance; each later
     /// period at the i-period boundary that brings it inside the horizon ("adds one week
-    /// every week", [PRIMER] p.6). The job runs at the boundary, so the generation delay
-    /// is zero, inside `ra-maxGenDelay` = 1 week ([SMP] Table 3). `None` before `firstI`.
+    /// every week", \[PRIMER\] p.6). The job runs at the boundary, so the generation delay
+    /// is zero, inside `ra-maxGenDelay` = 1 week (\[SMP\] Table 3). `None` before `firstI`.
     #[must_use]
     pub fn pregen_due(&self, account: &PregenAccount, i: u32) -> Option<SimTime> {
         if i < account.first_i {

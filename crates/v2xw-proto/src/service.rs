@@ -36,14 +36,14 @@ pub const ACK_BUCKETS_MS: [u64; 16] = [
     1, 2, 5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000, 300_000,
 ];
 
-/// The [CAMP122] §5.2.8.3 SCMS-521 bound: a request is acknowledged within 1 s.
+/// The \[CAMP122\] §5.2.8.3 SCMS-521 bound: a request is acknowledged within 1 s.
 pub const ACK_SLA_NS: u64 = 1_000_000_000;
 
 /// How long an entity took to answer the requests it received from outside its provider:
 /// `done - arrival` per request, where `arrival` is when the request reached
 /// the entity and `done` when its answer left, so the wait for a free server counts.
 ///
-/// [CAMP122] §5.2.8.3 SCMS-521 asks the RA to acknowledge a request within 1 s. No
+/// \[CAMP122\] §5.2.8.3 SCMS-521 asks the RA to acknowledge a request within 1 s. No
 /// deployed RA figure exists, so nothing is refused for missing it: the delays are
 /// measured, `over_1s` counts the misses and [`AckDelays::p99_ms`] reads the tail.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
@@ -114,7 +114,7 @@ impl BatchPolicy {
     /// The CAMP 1.2.2 certificate-request shuffle, the engine's default: release at
     /// `shuffle_threshold` = 1,000 requests ("minimum number for full privacy mode") or
     /// when the oldest request reaches `max_cert_request_age` = 2 days, whichever comes
-    /// first ([CAMP122] §5.2.15.5 Tables 67-69, SCMS-631, §11).
+    /// first (\[CAMP122\] §5.2.15.5 Tables 67-69, SCMS-631, §11).
     pub const CAMP_122_CERT_SHUFFLE: BatchPolicy = BatchPolicy {
         max_items: 1_000,
         max_delay: Duration::from_secs(2 * 86_400),
@@ -287,7 +287,7 @@ pub struct ServiceModelSpec {
     /// The batching window, where the entity has one.
     pub batching: Option<BatchPolicy>,
     /// Availability: `None` (always up, the default) or the two-state model whose down
-    /// intervals [`crate::Kernel::availability_faults`] draws.
+    /// intervals [`crate::Kernel::availability_windows`] draws.
     pub availability: Option<AvailabilityModel>,
     /// Requests that may wait beyond the busy servers; one more arriving is turned away
     /// as busy (`capacity.<role>.queue_limit`). `None`:
@@ -476,7 +476,7 @@ impl ServiceQueue {
     }
 
     /// [`ServiceQueue::admit`] for a request from outside the entity's provider, which is
-    /// owed an acknowledgement ([CAMP122] SCMS-521): also records `done - arrival`, the
+    /// owed an acknowledgement (\[CAMP122\] SCMS-521): also records `done - arrival`, the
     /// wait for a server included, in [`ServiceQueue::acks`].
     pub fn admit_request(&mut self, arrival: SimTime, work: Duration) -> SimTime {
         let (_start, done) = self.admit_at(arrival, work);

@@ -89,7 +89,7 @@ pub enum FlowId {
     IdentificationCert,
     /// The RA's weekly pre-generation job for one account: the RA expands the week, the
     /// LAs add their pre-linkage values and the PCA certifies it in a batch shuffled with
-    /// every other account's week, with no device in the loop ([PRIMER] p.6; [CAMP122]
+    /// every other account's week, with no device in the loop (\[PRIMER\] p.6; \[CAMP122\]
     /// 5.2.7.6.4). The device that asked first carries its own week on its top-up flow.
     Pregeneration,
 }

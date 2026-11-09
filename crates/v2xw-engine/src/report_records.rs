@@ -11,7 +11,7 @@
 //!   certificate digests, the subtypes, the evidence's time window, the accused's
 //!   broadcast positional accuracy, the secMark phase of the evidence, the issuing
 //!   provider of the accused certificate, and `la_link`, an opaque token equal for two
-//!   reports exactly when the Linkage Authorities would answer "same device" ([BRECHT]
+//!   reports exactly when the Linkage Authorities would answer "same device" (\[BRECHT\]
 //!   §VI-B/C: the MA, the PCA and one LA can link). No node id, no attacker label.
 //! * `pki.report_fate` (NODE_AND_GT) is the device's own store log with the ground-truth
 //!   join of the accused beside it, for the P1-E6 accounting.
@@ -35,7 +35,7 @@ pub enum Fate {
     /// Deleted by the quota after the daily multiplier had lowered its weight: it lost
     /// its place to decay.
     DecayedOut,
-    /// Deleted unsent after the maximum age (one week, [CAMP122] §5.2.8.4 step 5).
+    /// Deleted unsent after the maximum age (one week, \[CAMP122\] §5.2.8.4 step 5).
     Expired,
     /// Left the device on an access link.
     Uploaded,

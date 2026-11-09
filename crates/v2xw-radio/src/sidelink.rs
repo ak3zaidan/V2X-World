@@ -443,7 +443,7 @@ pub fn lte_tbs(itbs: u8, n_prb: u32) -> Option<u32> {
 ///
 /// LTE: `{0, 20, 50, 100, 200, …, 1000}` ms, twelve non-zero values, up to sixteen
 /// configured [Garcia 2021 §II.B]. NR widens the list to
-/// `{0, 1..99, 100, 200, …, 1000}` ms [`sl-ResourceReservePeriodList-r16`]. Zero means
+/// `{0, 1..99, 100, 200, …, 1000}` ms \[`sl-ResourceReservePeriodList-r16`\]. Zero means
 /// "no reservation": one-shot selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Rri(pub u32);
@@ -466,7 +466,7 @@ impl Rri {
     }
 
     /// True when the value is one NR admits: zero, 1 to 99, or a multiple of 100 up to
-    /// 1,000 [`sl-ResourceReservePeriodList-r16`].
+    /// 1,000 \[`sl-ResourceReservePeriodList-r16`\].
     #[must_use]
     pub fn is_nr_legal(self) -> bool {
         self.0 < 100 || (self.0 <= 1000 && self.0 % 100 == 0)
@@ -565,7 +565,7 @@ pub const LTE_SUBCHANNEL_SIZES: [u32; 19] = [
 pub const NR_SUBCHANNEL_SIZES: [u32; 8] = [10, 12, 15, 20, 25, 50, 75, 100];
 
 /// `PSCCH` PRB counts NR admits, all below the sub-channel size
-/// [RAN1 #99 via Garcia 2021; the 38.331 clause is UNVERIFIED].
+/// \[RAN1 #99 via Garcia 2021; the 38.331 clause is UNVERIFIED\].
 pub const NR_PSCCH_PRBS: [u32; 5] = [10, 12, 15, 20, 25];
 
 /// The in-band-emission mask: how far below its own transmit power a sidelink transmitter

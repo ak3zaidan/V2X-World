@@ -1141,7 +1141,7 @@ pub fn family_of(s: &Scenario) -> Result<Vec<(String, MaPolicy)>> {
 }
 
 /// The operator's review a family member's decision pays in `s`, s, as the run carries it
-/// out ([`apply_decision`]): none for an automatic policy; a stated `ma_review_s`, or the
+/// out (`apply_decision`): none for an automatic policy; a stated `ma_review_s`, or the
 /// policy's own review on the real calendar; none on a compressed one, where a week lasts
 /// minutes and the run decides automatically. A review the policy writes itself always
 /// applies. The offline replay adds it to the evidence rule's decision.

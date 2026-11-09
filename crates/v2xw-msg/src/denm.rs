@@ -35,7 +35,7 @@
 //! into the generated types (the same gap that stops ETSI TS 102 941 compiling), so
 //! the constraint is enforced here instead: [`build_denm`] fills both
 //! containers and [`build_termination_denm`] fills neither, and
-//! [`tests::a_termination_denm_carries_no_situation_or_location`] pins it.
+//! `tests::a_termination_denm_carries_no_situation_or_location` pins it.
 
 use v2xw_core::belief::PositionEstimate;
 use v2xw_core::geo::GeoOrigin;

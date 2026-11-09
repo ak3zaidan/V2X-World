@@ -133,7 +133,7 @@ pub struct RotationPolicy {
     /// Minimum age of the active pseudonym before a change.
     pub min_age: Duration,
     /// Minimum straight-line distance from the last change point, metres ([CVP-P2] item
-    /// 25; [PRIMER] pp.8-9: "2 km from the last change point"). Not the distance driven: a
+    /// 25; \[PRIMER\] pp.8-9: "2 km from the last change point"). Not the distance driven: a
     /// route that loops back to where the pseudonym changed has not gone far enough.
     pub min_distance_m: f64,
     /// Whether both conditions must hold, or either.

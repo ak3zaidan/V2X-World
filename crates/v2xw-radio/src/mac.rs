@@ -812,7 +812,7 @@ impl EdcaOcbMac {
         self.state(node, ch).cbr.note_busy(from, to);
     }
 
-    /// [`Mac::note_busy`] for an interval declared ahead of `now` ([`CbrMeter::note_busy_at`]).
+    /// [`Self::note_busy`] for an interval declared ahead of `now` ([`CbrMeter::note_busy_at`]).
     pub fn note_busy_at(
         &mut self,
         node: NodeId,

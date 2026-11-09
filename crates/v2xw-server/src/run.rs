@@ -109,6 +109,8 @@ impl Run {
     ///
     /// # Errors
     /// [`ServerError::Internal`] if the world's JSON form cannot be produced.
+    ///
+    /// [`ServerError::Internal`]: crate::ServerError::Internal
     pub fn new(engine: Box<dyn Engine>, world_json: String) -> Result<Arc<Self>> {
         let descriptor = engine.descriptor().clone();
         let world = Arc::clone(engine.world());
@@ -282,7 +284,7 @@ impl Run {
     /// [`Run::tick_wait`], because the lock is held across the whole operation.
     ///
     /// # Errors
-    /// [`ServerError::Internal`] if the engine aborted.
+    /// [`ServerError::Internal`](crate::ServerError::Internal) if the engine aborted.
     pub fn tick(&self) -> Result<bool> {
         let mut engine = self.engine.lock();
         match engine.step()? {
@@ -426,6 +428,9 @@ impl Run {
     ///
     /// # Errors
     /// [`ServerError::SeekOutOfRange`] or [`ServerError::NotSupportedHere`].
+    ///
+    /// [`ServerError::SeekOutOfRange`]: crate::ServerError::SeekOutOfRange
+    /// [`ServerError::NotSupportedHere`]: crate::ServerError::NotSupportedHere
     pub fn seek(&self, t: SimTime) -> Result<Vec<StepOutput>> {
         self.engine.lock().seek(t)
     }
@@ -531,6 +536,9 @@ impl Run {
     /// # Errors
     /// [`ServerError::InvalidParams`] naming the parameter if the generator refuses the
     /// combination; [`ServerError::Internal`] only if the world it built does not encode.
+    ///
+    /// [`ServerError::InvalidParams`]: crate::ServerError::InvalidParams
+    /// [`ServerError::Internal`]: crate::ServerError::Internal
     pub fn generate_world(
         &self,
         kind: &str,

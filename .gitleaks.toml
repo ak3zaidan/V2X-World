@@ -1,0 +1,28 @@
+# gitleaks configuration: the default rules, with the known false positives allowed.
+#
+# Every allowed path holds published or simulated key material, never a credential:
+# - crates/v2xw-sec/tests/vectors: published test vectors (NIST CAVP, CAMP, IEEE 1609.2a
+#   annex, OpenSCMS) and the oracle's answers to them;
+# - ui/apps/studio/test/fixtures/pki: the simulated PKI's certificates and keys
+#   (rootca.provider-a.sim and the rest), derived from a fixed seed;
+# - the IEEE 1609.2.1 ASN.1 modules, where `BlindedKey ::=` is a type definition.
+# Run: gitleaks git --redact .
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "published test vectors, simulated PKI fixtures, ASN.1 type definitions"
+# The regexes below match the whole line, not only the detected value.
+regexTarget = "line"
+paths = [
+  '''^crates/v2xw-sec/tests/vectors/''',
+  '''^ui/apps/studio/test/fixtures/pki/''',
+  '''(^|/)Ieee1609Dot2Dot1CamRaInterface\.asn$''',
+]
+regexes = [
+  # RFC 6455's sample handshake nonce ("the sample nonce").
+  '''dGhlIHNhbXBsZSBub25jZQ==''',
+  # Telemetry row ids in the Studio, `key: "verify_wait_p95_ms"` and the like.
+  '''key: "[a-z0-9_]+"''',
+]

@@ -63,6 +63,8 @@ jobs:
         run: zensical build --clean --strict
 
       - name: Build the Rust API docs into site/api
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: |
           # Libraries only: the v2xw-server and v2xw-demand binaries share a doc directory
           # with the libraries of the same name, and v2xw-demand-cli has no library.

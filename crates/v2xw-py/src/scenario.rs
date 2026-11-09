@@ -14,7 +14,7 @@
 //!   constantly.
 //!
 //! The typed document is available to Python as a plain `dict`
-//! ([`PyScenario::as_dict`]) rather than as a mirrored class hierarchy. A mirror of a
+//! (`PyScenario::as_dict`) rather than as a mirrored class hierarchy. A mirror of a
 //! schema with forty structs in it is forty places to forget to update; the `dict` is
 //! generated from the same serde derives the loader uses, so it cannot drift.
 

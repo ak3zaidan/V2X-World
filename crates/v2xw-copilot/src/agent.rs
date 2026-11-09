@@ -310,7 +310,7 @@ pub fn poll_delay_ms(poll_ms: u64, n: usize) -> u64 {
 }
 
 /// The tools the model is offered, in the chat-completions shape both providers take: the
-/// control tools ([`control::tools`], `simulate` first) and the original ones.
+/// control tools (`control::tools`, `simulate` first) and the original ones.
 /// `list_scenarios` is not offered — the list is in the instructions — but is still
 /// carried out if called.
 #[must_use]

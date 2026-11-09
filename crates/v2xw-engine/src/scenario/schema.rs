@@ -19,6 +19,8 @@
 //! importer already takes. A second, scenario-shaped copy of it would be a schema that can
 //! express a source the importer cannot build, and the mismatch would surface as a runtime
 //! error in the middle of a run rather than as a validation error at load.
+//!
+//! [`crate::scenario::validate`]: fn@crate::scenario::validate
 
 use std::collections::BTreeMap;
 
@@ -1147,7 +1149,7 @@ pub struct Time {
     pub warmup_s: Option<f64>,
     /// Which calendar the credential system runs on. `real`, the
     /// default, is the deployment's: one-week i-periods counted from the US epoch,
-    /// 2015-01-06 04:00 Eastern ([SMP] §2.1.17 Table 2), so a run starting
+    /// 2015-01-06 04:00 Eastern (\[SMP\] §2.1.17 Table 2), so a run starting
     /// 2026-10-16 provisions i = 614. `compressed` is the only way to state a shorter
     /// `security.protocol.params.i_period_s`: its i-period numbers, validity windows and
     /// every calendar-driven wait are not the deployment's, and the manifest and the run
@@ -2246,7 +2248,7 @@ pub struct Rsu {
     /// none at all — an extract carries road geometry and buildings, not the mast
     /// inventory of a deployment. A scenario on a real city therefore states the position
     /// itself, in [`Rsu::position_m`]. Exactly one of the two must be given, which
-    /// [`crate::scenario::validate`] enforces.
+    /// [`crate::scenario::validate`](fn@crate::scenario::validate) enforces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<u32>,
     /// Where it stands, world-local ENU metres `[east, north, up]`, when the world has no
@@ -4098,7 +4100,7 @@ pub struct LifecycleSpec {
     /// The SCMS component whose certificate a provider revokes during the run:
     /// `none` (absent), `ica`, `pca`, `ra`, `eca`, `la1`, `la2`, `ma` or `crlg`. The
     /// certificate goes on the hash CRL of the `(cracaId, crlSeries)` it names (series 2
-    /// or 256, [SMP] Table 1), and receivers that install that list refuse what it signed.
+    /// or 256, \[SMP\] Table 1), and receivers that install that list refuse what it signed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_revoked: Option<String>,
     /// Whose component `component_revoked` revokes: a provider of the deployment by name
@@ -4417,7 +4419,7 @@ pub struct DeploymentOptionsSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub butterfly: Option<String>,
     /// Emergency vehicles hold OBU identification certificates and sign their signal
-    /// requests (SRM) under them ([CAMP122] Table 1 row 44; on in every preset). Off:
+    /// requests (SRM) under them (\[CAMP122\] Table 1 row 44; on in every preset). Off:
     /// they sign SRMs under their pseudonyms, which then permit the SRM.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identification_certs: Option<bool>,

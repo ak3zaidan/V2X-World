@@ -2770,16 +2770,16 @@ fn tr37885_card() -> ModelCard {
 /// The NLOS path-loss exponent of the Mangel model, 2.69 [Mangel 2011, as printed in
 /// Abbas 2015 Eq. 6 and quoted.2's `abbas-nlos-intersection` row].
 pub const MANGEL_N_NLOS: f64 = 2.69;
-/// The fitted offset of the Mangel model, 3.75 dB [same].
+/// The fitted offset of the Mangel model, 3.75 dB \[same\].
 pub const MANGEL_OFFSET_DB: f64 = 3.75;
 /// The suburban offset `i_s·2.94 dB` of the Mangel model (`i_s` = 1 suburban, 0 urban)
-/// [same].
+/// \[same\].
 pub const MANGEL_SUBURBAN_DB: f64 = 2.94;
-/// The exponent on the transmitter's distance to the intersection, 0.957 [same].
+/// The exponent on the transmitter's distance to the intersection, 0.957 \[same\].
 pub const MANGEL_DT_EXPONENT: f64 = 0.957;
-/// The exponent on `x_t·w_r`, 0.81 [same].
+/// The exponent on `x_t·w_r`, 0.81 \[same\].
 pub const MANGEL_XW_EXPONENT: f64 = 0.81;
-/// The Gaussian (log-normal) fading σ of the Mangel model, 4.1 dB [same].
+/// The Gaussian (log-normal) fading σ of the Mangel model, 4.1 dB \[same\].
 pub const MANGEL_SIGMA_DB: f64 = 4.1;
 
 /// The breakpoint distance of the Mangel model's receiver-street term, metres:

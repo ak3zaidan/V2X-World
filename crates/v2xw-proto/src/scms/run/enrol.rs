@@ -67,11 +67,11 @@ impl ScmsRun {
     /// its pre-run enrolment ([`ScmsRun::preload`]): the certificate ends at `until` and
     /// was issued one full lifetime earlier. The device's one ECA exchange then asks for,
     /// and the ECA issues, a certificate with that back-dated start and the profile's
-    /// whole lifetime ([CAMP122] Table 3, six years); the DCM registers it and it signs
+    /// whole lifetime (\[CAMP122\] Table 3, six years); the DCM registers it and it signs
     /// every Download-Req (OF-1: the age used to be a second certificate, issued out of
     /// band with a shortened lifetime, which replaced the one the exchange issued). A
     /// start before the issuing ECA's own is moved up to it (the ECA issues only inside
-    /// its validity, [SMP] §6.3.1), which moves the end later by as much. Returns the
+    /// its validity, \[SMP\] §6.3.1), which moves the end later by as much. Returns the
     /// model certificate, whose `valid_until` is the end in force.
     pub fn age_enrolment(&mut self, device: NodeId, until: SimTime) -> EnrolmentCert {
         const NS: u64 = 1_000_000_000;

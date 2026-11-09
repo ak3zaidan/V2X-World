@@ -33,7 +33,7 @@ impl ScmsRun {
     ///
     /// MA → PCA (`lv` → request hash and the two sealed chain pointers), MA → LA1 and LA2
     /// (pointer → linkage chain identifier), MA → RA (hash → blocklist, LCIs),
-    /// MA → LA1 and LA2 (LCI → `ls(i_rev)`), MA → CRLG ([CAMP122] §5; [BRECHT §VI-C/D]). **Both** Linkage Authorities must answer with a seed
+    /// MA → LA1 and LA2 (LCI → `ls(i_rev)`), MA → CRLG (\[CAMP122\] §5; [BRECHT §VI-C/D]). **Both** Linkage Authorities must answer with a seed
     /// before an entry exists: a CRL entry is the pair of seeds, and one LA alone can
     /// neither issue nor refuse on the other's behalf.
     ///

@@ -122,6 +122,8 @@
 //!   posted speed, a queue's busy time over its capacity) are plain arithmetic on values the
 //!   server already quantised, go only into a report, and never into a run.
 //! * No `unsafe`, and every public item documented.
+//!
+//! [`v2xw_engine::scenario::validate`]: fn@v2xw_engine::scenario::validate
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]

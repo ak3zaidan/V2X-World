@@ -177,7 +177,7 @@ pub fn left_rules(
 /// The pairs `(gives way, has right of way)` of `plan`'s vehicle movements that the rules
 /// `rules` can show green together and that `plan`'s junction's conflict matrix calls foes:
 /// the movement that gives way shows green-yield, not green, while the other shows any
-/// green ([`NemaPlan::vector`]).
+/// green (`NemaPlan::vector`).
 ///
 /// * Two movements from one approach lane share one head and are never split; two lanes
 ///   of one road merging into one exit lane are a lane drop, which the drivers zip. Both

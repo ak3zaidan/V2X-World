@@ -10,14 +10,14 @@
 //! For local period `p` the EE holds at most one certificate whose validity starts at
 //! `start(p)` and lasts the kind's validity (RSU: 169 h, so consecutive certificates
 //! overlap by the cited hour). It asks for `p + 1` at `start(p + 1) − lead`, where `lead`
-//! is at most the RA's `ra-maxGenDelay` of one week ([SMP] §2.1.21 Table 3; "generated
+//! is at most the RA's `ra-maxGenDelay` of one week (\[SMP\] §2.1.21 Table 3; "generated
 //! at most a week ahead"): an RSU therefore needs its backhaul at least once a week.
 //! The RA refuses a request whose validity starts more than that ahead, and a second,
 //! different request for a period it already answered (1 (+1) concurrent), so an
 //! EE cannot stockpile certificates; each refusal is recorded.
 //!
 //! When the request cannot go out (the backhaul is down) the EE retries after
-//! `ra-minWait` (1 h, [SMP] §4.3.1 "retry after *-minWait"); it polls the download every
+//! `ra-minWait` (1 h, \[SMP\] §4.3.1 "retry after *-minWait"); it polls the download every
 //! `download-minWait` (5 min, Table 3) until the file is there. A lost request or ack is
 //! retried with the *same* SPDU, which the RA recognises by its HashedId8 and answers
 //! again; a different request for the same period is refused. When no installed
@@ -51,7 +51,7 @@ pub struct AppCertParams {
     /// "1 month"). The RSU certificate's period is the run's i-period (1 week).
     pub id_period: Duration,
     /// `ra-maxGenDelay`: how far ahead of its validity start a certificate may be
-    /// generated (1 week, [SMP] Table 3).
+    /// generated (1 week, \[SMP\] Table 3).
     pub max_gen_ahead: Duration,
     /// How long before the next period starts the EE asks for it; `None` = as early as
     /// the RA allows (`max_gen_ahead`), the most robust firmware.

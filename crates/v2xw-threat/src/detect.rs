@@ -448,7 +448,7 @@ pub struct DetectorParams {
     pub heading_conf_factor: f64,
     /// Whether the heading check allows for the bearing error its own position errors
     /// imply, over the longest straight baseline the history holds (`false`, the legacy
-    /// one-step check with a fixed displacement gate). See [`Legacy12::heading_bounded`].
+    /// one-step check with a fixed displacement gate). See `Legacy12::heading_bounded`.
     pub heading_bearing_bound: bool,
     /// How far, degrees, the claimed heading may wander across the bounded check's
     /// baseline for the baseline to count as straight (10).

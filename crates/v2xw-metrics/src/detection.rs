@@ -981,7 +981,7 @@ struct OpenReception {
 /// same pseudonym fell on it: an observation is assigned to the reception of that
 /// (receiver, pseudonym) pair nearest in time, which tolerates the receiver's clock offset
 /// (a detector stamps with the node's own clock) up to half the beacon interval.
-/// Receptions older than [`MESSAGE_HORIZON_NS`] are closed into the matrix at each flush.
+/// Receptions older than `MESSAGE_HORIZON_NS` are closed into the matrix at each flush.
 #[derive(Debug, Default)]
 pub struct MessageLevel {
     closed: ConfusionMatrix,

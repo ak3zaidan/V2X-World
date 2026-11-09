@@ -62,7 +62,7 @@ use crate::types::{
 };
 
 /// Thermal noise in a 10 MHz channel: `−174 + 10·log10(10^7) = −104 dBm`
-/// [kTB].
+/// \[kTB\].
 pub const THERMAL_NOISE_10MHZ_DBM: f64 = -104.0;
 
 /// The noise figure of the NXP SAF5400 automotive 802.11p radio, 6 dB
@@ -1034,7 +1034,7 @@ impl OfdmPhy {
     /// # Why the candidates come from the interferer list
     ///
     /// The incumbent set is [`Arrival::interferers`] — what the engine *declared*
-    /// overlaps this arrival — and not the live [`OfdmPhy::arrivals`] map. Two reasons,
+    /// overlaps this arrival — and not the live `OfdmPhy::arrivals` map. Two reasons,
     /// and they are both defects this replaced:
     ///
     /// 1. **Determinism (invariant I-R2).** The map loses an arrival as soon as its own

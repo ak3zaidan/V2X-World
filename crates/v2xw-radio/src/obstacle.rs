@@ -142,7 +142,7 @@ impl BuildingIndex {
     /// segment inside a footprint, or on one of its walls, is inside that footprint's
     /// envelope — so the ring test downstream finds exactly what it would find over every
     /// building in the world. Found in **one** traversal of the tree that descends only
-    /// into the nodes whose box the segment enters ([`SegmentSelection`]): a 2 km diagonal
+    /// into the nodes whose box the segment enters (`SegmentSelection`): a 2 km diagonal
     /// across Midtown spans a rectangle holding most of the island's footprints, and the
     /// traversal visits the few dozen the line actually passes.
     ///

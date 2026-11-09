@@ -1,17 +1,17 @@
 //! Enrolment as the US profile specifies it, as real IEEE 1609.2.1 SPDUs.
 //!
 //! * **The request** ([`ee_eca_cert_request_us`]): `eca-ee.eeEcaCertRequest` for an
-//!   implicit certificate whose `toBeSigned` is the US enrolment profile ([SMP] §6.3.1):
+//!   implicit certificate whose `toBeSigned` is the US enrolment profile (\[SMP\] §6.3.1):
 //!   `id.name` unique, `cracaId 000000`, `crlSeries` 4, `region` the identified
 //!   countries USA/Canada/Mexico (840/124/484), no `appPermissions`, no
-//!   `certIssuePermissions`, and the wildcard `certRequestPermissions` of [SMP] §4.4 (one
+//!   `certIssuePermissions`, and the wildcard `certRequestPermissions` of \[SMP\] §4.4 (one
 //!   `PsidGroupPermissions` whose `subjectPermissions` is `all`, every other field its
 //!   DEFAULT).
-//! * **Direct authorisation** ([SMP] §2.1.7): the device's canonical key is made in
+//! * **Direct authorisation** (\[SMP\] §2.1.7): the device's canonical key is made in
 //!   the secure environment, the EE operator gives the ECA the canonical public key, and
 //!   the request carries `canonicalId` and is signed (`SignerSelf`) with the canonical
 //!   private key. The ECA looks the identifier up to verify ([`open_ee_eca_cert_request`]).
-//! * **The ECA's checks** ([`check_us_profile`]): the request-validity rules of [SMP]
+//! * **The ECA's checks** ([`check_us_profile`]): the request-validity rules of \[SMP\]
 //!   §6.3.1 plus the maximum request age of one week (Profile Table 3); a breach is
 //!   a typed [`PduError::Policy`], which the run records.
 //! * **Successor enrolment** ([`ee_ra_successor_request`], [`ra_open_successor_request`],
@@ -57,19 +57,19 @@ use crate::scms::pdu::{
 };
 
 /// The countries a US enrolment certificate may name: USA, Canada, Mexico (UN M.49 840,
-/// 124, 484) ([SMP] §6.3.1).
+/// 124, 484) (\[SMP\] §6.3.1).
 pub const US_ENROLMENT_REGIONS: [u16; 3] = [840, 124, 484];
 
-/// The CRL series of enrolment certificates ([SMP] §6.3.1; in practice the RA's
+/// The CRL series of enrolment certificates (\[SMP\] §6.3.1; in practice the RA's
 /// blocklist does the revoking).
 pub const ENROLMENT_CRL_SERIES: u16 = 4;
 
 /// The oldest an `EeEcaCertRequest` may be when the ECA receives it: one week
-/// ([SMP] Table 3, "ECA max request age").
+/// (\[SMP\] Table 3, "ECA max request age").
 pub const MAX_REQUEST_AGE_S: u32 = 7 * 86_400;
 
 /// How far ahead of the ECA's clock a request's `generationTime` may be: 5 s, the clock
-/// tolerance the profile gives the RA's download header ([SMP] §6.2). Assumed to
+/// tolerance the profile gives the RA's download header (\[SMP\] §6.2). Assumed to
 /// apply at the ECA as well.
 pub const CLOCK_TOLERANCE_S: u32 = 5;
 
@@ -113,7 +113,7 @@ pub fn lifetime_duration(lifetime_s: u64) -> Ieee1609Duration {
     }
 }
 
-/// The wildcard `certRequestPermissions` of an enrolment certificate ([SMP] §4.4,
+/// The wildcard `certRequestPermissions` of an enrolment certificate (\[SMP\] §4.4,
 /// 6.3.4.2): one group, `subjectPermissions all`, `minChainLength`, `chainLengthRange` and
 /// `eeType` at their DEFAULTs (1, 0, app).
 #[must_use]
@@ -137,7 +137,7 @@ pub(crate) fn us_region(regions: &[u16]) -> GeographicRegion {
     ))
 }
 
-/// The US enrolment `toBeSigned` a device requests on `R_U` ([SMP] §6.3.1).
+/// The US enrolment `toBeSigned` a device requests on `R_U` (\[SMP\] §6.3.1).
 pub fn us_enrolment_tbs(
     req: &EnrolmentRequest<'_>,
     request_public: &Point,
@@ -188,7 +188,7 @@ pub fn ee_eca_cert_request_us(
     )))
 }
 
-/// The canonical identity of a canonical public key: HashedId32 ([SMP] §2.1.7), here the
+/// The canonical identity of a canonical public key: HashedId32 (\[SMP\] §2.1.7), here the
 /// SHA-256 of the COER `PublicVerificationKey`, as 64 upper-case hex digits (the text form
 /// is UNCONFIRMED; see the module note).
 pub fn canonical_id(canonical_public: &Point) -> Result<String> {
@@ -266,7 +266,7 @@ pub fn open_ee_eca_cert_request(
     Ok((r, auth))
 }
 
-/// The ECA's checks of an enrolment request against the US profile ([SMP] §6.3.1) at
+/// The ECA's checks of an enrolment request against the US profile (\[SMP\] §6.3.1) at
 /// Time32 `now`, given the ECA's own certificate. The checks that need the ECA's records
 /// (the key never used before, the name unique, the canonical identity known) are the
 /// run's.

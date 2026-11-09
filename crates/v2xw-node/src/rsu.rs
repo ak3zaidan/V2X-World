@@ -1185,7 +1185,7 @@ impl RsuRuntime {
     /// Hands the unit real encoder output for one broadcast message type.
     ///
     /// This is the path to real wire bytes for a SPaT or a MAP: the engine holds the world
-    /// and can build them, a node cannot ([`RsuRuntime::payload_length`] explains why).
+    /// and can build them, a node cannot (`RsuRuntime::payload_length` explains why).
     /// Setting an empty payload removes the override and returns the unit to the size
     /// model.
     pub fn set_payload(&mut self, msg_type: MsgType, bytes: Vec<u8>) {

@@ -27,7 +27,7 @@
 //! different `HashedId8` and fail to match a certificate it holds. This crate never
 //! constructs a non-canonical point — [`crate::ec::Point::to_ecc_point`] only emits the
 //! compressed alternatives — so hashing the encoder's own output is hashing the canonical
-//! form. [`the_encoder_emits_only_canonical_points`] in `crate::envelope` is the test
+//! form. `the_encoder_emits_only_canonical_points` in `crate::envelope` is the test
 //! that keeps that true.
 
 use v2xw_core::hash::sha256;

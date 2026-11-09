@@ -3,7 +3,7 @@
 //! **Scaffolding; built: C1a (`site`, `lat_deg`, `lon_deg`).**
 //!
 //! What is here: the keys' menus, ranges, titles and status, the refusal, and the three
-//! calls [`crate::phase2`] already makes ([`apply_sites`] and [`ica_levels`] for each
+//! calls [`crate::phase2`] already makes (`apply_sites` and `ica_levels` for each
 //! provider in `deployment_of`, [`apply_capacity`] once every provider's run exists).
 //! Every value but the default is refused with "not built yet", so nothing half-works;
 //! the defaults (no site, no capacity, `ica_levels: 1`) are today's deployment exactly.

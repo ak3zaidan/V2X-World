@@ -181,7 +181,7 @@ impl CrosswalkIndex {
         self.by_lane.get(&lane).map_or(&[], Vec::as_slice)
     }
 
-    /// Every crosswalk band on the vehicle's path from its rear to [`HORIZON_M`] ahead of
+    /// Every crosswalk band on the vehicle's path from its rear to `HORIZON_M` ahead of
     /// its front, nearest first.
     pub fn ahead(&self, world: &World, v: &VehiclePath<'_>) -> Vec<BandAhead> {
         if self.walks.is_empty() {
@@ -300,7 +300,7 @@ impl CrosswalkIndex {
     }
 }
 
-/// Every band of `by_lane` on the vehicle's path from its rear to [`HORIZON_M`] ahead of
+/// Every band of `by_lane` on the vehicle's path from its rear to `HORIZON_M` ahead of
 /// its front, nearest first: [`CrosswalkIndex::ahead`] over any set of bands, the painted
 /// crosswalks' or the mid-block paths' ([`crate::vru::midblock`]).
 pub fn bands_ahead(

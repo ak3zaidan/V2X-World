@@ -30,7 +30,7 @@ pub fn crl_bytes(sizes: &ScmsSizes, entries: u32) -> WireSize {
 /// The series-1 entries of a linkage CRL with `iRev = i_rev`: each entry's seeds walked
 /// forward from its own period to `i_rev` (`ls(i+1) = H(la_id ‖ ls(i))`), and entries
 /// whose last tracked period `i + max_forward` is before `i_rev` pruned as exhausted
-/// ([CAMP122] §5.2.10.2.3). `iMax` is that last period.
+/// (\[CAMP122\] §5.2.10.2.3). `iMax` is that last period.
 #[must_use]
 pub fn linkage_revocations(entries: &[CrlLinkageEntry], i_rev: u32) -> Vec<LinkageRevocation> {
     entries
@@ -73,7 +73,7 @@ pub struct IssuedCrl {
 
 /// One SCMS component's certificate put on its provider's component CRL.
 ///
-/// [SMP] Table 1 and IEEE 1609.2 §5.1.3: a hash CRL revokes the certificates that name
+/// \[SMP\] Table 1 and IEEE 1609.2 §5.1.3: a hash CRL revokes the certificates that name
 /// its `crlCraca` (by the low 3 bytes, `cracaId`) and its `crlSeries`. Each component
 /// certificate names its own: an ICA-issued component series 2 under the ICA (S2X) or
 /// the root (ISS); a root-issued one (MA, PG, the ISS CRL signer) series 256 under the
@@ -119,7 +119,7 @@ pub fn component_authority<'a>(
 /// lists the series, with the CRACA its `associatedCraca` names (itself for `isCraca`,
 /// its issuer for `issuerIsCraca`).
 ///
-/// The published certificates decide it ([SMP] Table 1 rows 2 and 256 name no signer):
+/// The published certificates decide it (\[SMP\] Table 1 rows 2 and 256 name no signer):
 /// the CRL signer holds `{issuerIsCraca, [4, 3, 1, 2]}` (ISS `crlg.preprod`), so it signs
 /// series 2, 3 and 4 under its issuer; every published US root holds
 /// `{isCraca, [256]}`, so the root signs series 256 itself ("root-signed", Table 1). No
@@ -178,7 +178,7 @@ pub enum HashRefusal {
 /// Generator's own earlier, validly signed list would otherwise roll a revocation back.
 /// `issueDate` breaks a tie. A Generator never reuses an `(iRev, indexWithinI)`: once
 /// index 255 is spent at an `iRev`, further publications wait for the next i-period
-/// ([`ScmsState::publish_crl`]). What a real device does with a stale
+/// (`ScmsState::publish_crl`). What a real device does with a stale
 /// CRL is not published; refusing it is the reading of the counters' purpose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CrlOrder {
@@ -374,7 +374,7 @@ impl ScmsRun {
     /// Every certificate issued after the changeover names the new CRACA, and a device
     /// matches a CRL to a certificate by its `cracaId` (IEEE 1609.2 §5.1.3.2), so until
     /// that CRACA has a list no device can check one of them for revocation or apply the
-    /// overdue rule to it ([CAMP122] Table 67): every CRACA's CRL exists before the run.
+    /// overdue rule to it (\[CAMP122\] Table 67): every CRACA's CRL exists before the run.
     /// Before, the first list under the new root waited for the next `nextCrl` (a week
     /// later), and with the Generator down from 700 s (`multi-week-crlg-down`) never came:
     /// the run refused nothing as `crl-overdue`.
@@ -462,7 +462,7 @@ impl ScmsRun {
         Ok(rev)
     }
 
-    /// The MA revokes `device`'s OBU identification certificates at `at` ([SMP] §6.3.3,
+    /// The MA revokes `device`'s OBU identification certificates at `at` (\[SMP\] §6.3.3,
     /// Table 1): a non-pseudonym certificate carries no linkage data, so it
     /// is revoked by its `HashedId10` on the series-3 hash CRL of the CRACA it names (the
     /// ICA; the CRL signer `{issuerIsCraca, [4,3,1,2]}` signs it). Every identification

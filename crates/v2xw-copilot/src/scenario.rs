@@ -20,6 +20,8 @@
 //! to the including *file* and a draft has no path. A draft that names one is checked
 //! without it and the report says so, rather than being checked against a silently empty
 //! base.
+//!
+//! [`v2xw_engine::scenario::validate`]: fn@v2xw_engine::scenario::validate
 
 use serde::Serialize;
 use serde_json::Value;

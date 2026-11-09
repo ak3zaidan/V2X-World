@@ -55,7 +55,7 @@ use crate::scenario::{PyScenario, to_py_dict};
 /// A record that the recording refuses — an undeclared channel, a ground-truth record on a
 /// NODE channel, a float off its declared grid — is counted, not raised: the engine is
 /// mid-phase and has no useful answer, which is the reason `RunRecorder::write` is
-/// infallible in the first place. [`PyRun::records_refused`] is where the count surfaces,
+/// infallible in the first place. `PyRun::records_refused` is where the count surfaces,
 /// and a non-zero value there means the recording is not the whole run.
 pub struct TeeRecorder<'a> {
     writer: Option<&'a mut RecordingWriter<BufWriter<File>>>,

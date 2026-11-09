@@ -662,7 +662,7 @@ impl<M> Kernel<M> {
     }
 
     /// [`Kernel::dispatch`] for a request from outside the entity's provider (a device's,
-    /// or one the proxy relays), which is owed an acknowledgement within 1 s ([CAMP122]
+    /// or one the proxy relays), which is owed an acknowledgement within 1 s (\[CAMP122\]
     /// §5.2.8.3 SCMS-521): its `done - arrival` is recorded in the entity's
     /// [`ServiceQueue::acks`]. Nothing is refused for a late answer.
     ///

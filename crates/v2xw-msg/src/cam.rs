@@ -22,7 +22,7 @@
 //! # Size
 //!
 //! A typical unsecured CAM of this shape encodes to about 60 bytes of UPER
-//! ([`tests::typical_cam_size_is_consistent_with_the_field_range`] pins the exact number).
+//! (`tests::typical_cam_size_is_consistent_with_the_field_range` pins the exact number).
 //! Field captures report *secured* CAMs of 182–199 B at minimum and 357 B on
 //! average; the gap is the security envelope and the lower layers, and the test does that
 //! arithmetic explicitly rather than leaving the reader to wonder whether 60 B is wrong.
@@ -220,7 +220,7 @@ impl VehicleRole {
 ///
 /// Bit numbering is the CDD's: `lowBeamHeadlightsOn(0)` … `parkingLightsOn(7)`, with bit 0
 /// the **most significant** bit of the encoded octet, which is what `BIT STRING` means and
-/// what [`ExteriorLightMask::to_cdd`] implements.
+/// what `ExteriorLightMask::to_cdd` implements.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]

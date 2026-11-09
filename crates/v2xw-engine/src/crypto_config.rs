@@ -21,7 +21,7 @@ pub const THRESHOLD_ROLES: [&str; 3] = ["pca", "crl", "linkage"];
 /// The fault modes `actors.backend.failures[].mode` accepts.
 pub const FAILURE_MODES: [&str; 3] = ["offline", "slow", "malicious"];
 /// The server roles `actors.backend.failures[].node` names (bare for the home provider,
-/// or `<provider>/<role>`), as [`role_node`] resolves them; one list for the error
+/// or `<provider>/<role>`), as `role_node` resolves them; one list for the error
 /// message and the settings menu.
 pub const FAILURE_ROLES: [&str; 11] = [
     "ra",

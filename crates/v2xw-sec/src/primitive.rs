@@ -22,7 +22,7 @@
 //! note. Two rows are recorded *as published* although they are implausible next to their
 //! neighbours — the Cohda MK6 ECDSA verify at 0.001 ms and the Cohda SPHINCS+ sign at
 //! 5.485 ms — because silently "fixing" a published figure is how a table stops being
-//! evidence. They are flagged in [`CostRow::note`] and a test asserts the flag is there.
+//! evidence. They are flagged in `CostRow::note` and a test asserts the flag is there.
 //!
 //! A profile with no row is filled by [`CostTable::row_or_scaled`], which takes the
 //! nearest cycle count and scales it by the clock ratio, and tags the result

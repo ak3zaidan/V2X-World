@@ -57,8 +57,9 @@ export function useCanComparePrevious(): boolean {
       return;
     }
     let live = true;
+    // Quiet: a failure only hides the button, and is not the user's error.
     engine
-      .request("runs.list", {})
+      .request("runs.list", {}, { quiet: true })
       .then((r: RunsListResult) => live && setCan(r.can_compare_previous))
       .catch(() => live && setCan(false));
     return () => {

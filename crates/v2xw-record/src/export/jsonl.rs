@@ -31,8 +31,8 @@ pub fn write(path: impl AsRef<Path>, schema: &TableSchema, rows: &[(u64, Vec<u8>
     writer.finish()
 }
 
-/// [`write`] one row at a time, for a caller that streams a recording rather than holding
-/// a channel's rows. The file is the same bytes as [`write`] given the same rows in the
+/// [`write`](fn@write) one row at a time, for a caller that streams a recording rather than holding
+/// a channel's rows. The file is the same bytes as [`write`](fn@write) given the same rows in the
 /// same order.
 #[derive(Debug)]
 pub struct JsonlWriter {
@@ -66,7 +66,7 @@ impl JsonlWriter {
     /// Writes one record, recorded at `at`, as a line.
     ///
     /// # Errors
-    /// As [`write`].
+    /// As [`write`](fn@write).
     pub fn write_row(&mut self, at: u64, json: &[u8]) -> Result<()> {
         let line = row_line(&self.schema, at, json)?;
         self.out

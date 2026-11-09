@@ -37,6 +37,8 @@
 //! [`f64::total_cmp`], so equal-cost paths are resolved by the lane id rather than by heap
 //! luck, and no [`std::collections::HashMap`] appears anywhere in the search: the visited
 //! set and the predecessor map are [`BTreeMap`]s.
+//!
+//! [`LaneKind::is_motorised`]: v2xw_world::LaneKind::is_motorised
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap};

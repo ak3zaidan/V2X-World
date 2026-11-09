@@ -50,7 +50,7 @@ pub trait RunRecorder {
     ///
     /// Infallible on purpose: a recorder that cannot write has to decide what that means
     /// for the run, and the engine has no useful answer in the middle of a phase. A
-    /// failing backend counts the failure and reports it at [`RunRecorder::finish`].
+    /// failing backend counts the failure and reports it through [`RunRecorder::refused`].
     fn write(&mut self, at: SimTime, record: &OwnedRecord);
 
     /// Stores one VWP wire frame — a `Keyframe` or a `Delta` (vwp-v1 §3.3, §3.4).
@@ -485,7 +485,7 @@ impl<'a> EngineCtx<'a> {
 
     /// Stamps every record emitted from now on at `at` rather than at [`Ctx::now`].
     ///
-    /// `None` restores the default. See [`EngineCtx::emit_at`] for why the two can differ.
+    /// `None` restores the default. See `EngineCtx::emit_at` for why the two can differ.
     pub fn stamp_records_at(&mut self, at: Option<SimTime>) {
         self.emit_at = at;
     }

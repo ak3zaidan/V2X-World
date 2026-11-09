@@ -9,7 +9,7 @@
 //!
 //! # The batch is Arrow
 //!
-//! [`MaBatch::to_pyarrow`] hands the batch to `pyarrow` through the C data interface, as a
+//! `MaBatch::to_pyarrow` hands the batch to `pyarrow` through the C data interface, as a
 //! detector's window is handed over. The same batch also answers `column(name)` and
 //! `rows()` in plain Python values, so a rule runs where `pyarrow` is not installed; both
 //! read the same rows.

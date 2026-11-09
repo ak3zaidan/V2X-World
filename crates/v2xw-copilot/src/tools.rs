@@ -11,7 +11,7 @@
 //!
 //! 1. **Rename.** A tool name may hold letters, digits, `_` and `-`, and a JSON-RPC method
 //!    name holds a dot. `run.start` becomes `run__start`, and [`method_name`] inverts it.
-//!    No method contains `__`, so the mapping is one-to-one — [`tests`] pins that.
+//!    No method contains `__`, so the mapping is one-to-one — `tests` pins that.
 //! 2. **Close the schema.** The OpenRPC document refers to
 //!    `#/components/schemas/…`, which means nothing once one method's schema is lifted out
 //!    of the document. Every referenced schema is collected transitively and inlined under

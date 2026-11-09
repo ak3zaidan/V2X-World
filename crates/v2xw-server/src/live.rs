@@ -17,20 +17,20 @@
 //!    documents the same consequence for `rayon`). The kernel therefore cannot be moved
 //!    into a task, and it cannot live behind the `Mutex<Box<dyn Engine>>` [`crate::Run`]
 //!    holds, because that box is `Send`. So the kernel is **built on its own thread and
-//!    never leaves it**: [`spawn_host`] sends a `Scenario` (which is `Send`) across the
+//!    never leaves it**: `spawn_host` sends a `Scenario` (which is `Send`) across the
 //!    boundary and the engine is constructed on the far side.
 //! 2. **The run loop runs to the horizon.** `v2xw_engine::Engine::run` is one
 //!    `while let Some(..) = scheduler.pop()` to the end of the scenario; the scheduler is
 //!    private, so there is no `run_until` and no way to advance one step from outside. The
 //!    step boundary this module needs is therefore taken from the **record stream**:
-//!    [`StepRecorder`] watches the instant each record is emitted at and closes a step
+//!    `StepRecorder` watches the instant each record is emitted at and closes a step
 //!    when that instant crosses a mobility-step boundary. Backpressure is a bounded
 //!    channel — when the transport stops draining, the recorder's `send` blocks and the
 //!    kernel stops inside it. Blocking there is safe precisely because the kernel reads no
 //!    wall clock: stopping it for a second changes nothing it computes.
 //! 3. **A record stream is not a scene.** `gt.kinematics`, `node.tx`, `phy.rx`,
 //!    `node.verify` and `metric.sample` carry what happened; a `Keyframe` needs a *scene*.
-//!    [`Projector`] rebuilds one: it holds the actor table, allocates the `u32` slots
+//!    `Projector` rebuilds one: it holds the actor table, allocates the `u32` slots
 //!    §0.1 requires to be stable for an actor's lifetime, and turns each channel's
 //!    reader-side view into the §3.6 payload of its wire channel. Nothing is invented — a
 //!    field the records do not carry is written as the §3.5.2 sentinel for *unknown*,
@@ -40,8 +40,8 @@
 //!
 //! **Which actor a node is mounted on.** `gt.kinematics` names an actor; `node.tx` names a
 //! node; no channel joins them, and `v2xw_engine::Engine` exposes no accessor for the map
-//! it keeps internally. [`Projector::equip`] reconstructs it from the three published
-//! facts that decide it, and [`Projector::mapping_is_consistent`] reports whether every
+//! it keeps internally. `Projector::equip` reconstructs it from the three published
+//! facts that decide it, and `Projector::mapping_is_consistent` reports whether every
 //! node the run actually named was one the reconstruction accounted for. That check is the
 //! reason the coupling is tolerable and not the reason it is a good idea: the engine should
 //! publish the map, and this module says so in one place rather than being quietly wrong
@@ -60,7 +60,7 @@
 //!    the instant it is *dispatched* at, and a spawn's state belongs to the next instant,
 //!    so an equipped vehicle's first frame lands one mobility step before its first
 //!    `gt.kinematics` row. An id named ahead of its actor is held, not condemned: see
-//!    [`Projector::unmapped_nodes`].
+//!    `Projector::unmapped_nodes`.
 //!
 //! # No wall clock
 //!
@@ -157,7 +157,7 @@ pub struct LiveOptions {
     /// the specification without reference to any server, enforces the first: a slot at or
     /// beyond `actor_capacity` is a `ProtocolError` and the client stops applying the
     /// frame. So the stricter reading is the one that interoperates, and this server obeys
-    /// it — [`Projector::absorb`] refuses a slot past this number rather than sending one
+    /// it — `Projector::absorb` refuses a slot past this number rather than sending one
     /// the client is required to reject.
     pub actor_capacity: u32,
 }

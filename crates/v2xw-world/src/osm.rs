@@ -496,7 +496,7 @@ pub struct ImportCounts {
     pub segments_after_collapse: u64,
     /// Junctions removed by the collapse.
     pub junctions_collapsed: u64,
-    /// Junctions merged into a neighbour by [`join_short_junctions`].
+    /// Junctions merged into a neighbour by `join_short_junctions`.
     #[serde(default)]
     pub junctions_joined: u64,
     /// Road segments absorbed into a joined junction's area.
@@ -1016,7 +1016,7 @@ pub struct OsmSimplifications {
     pub snap_parallel_footways: bool,
     /// Join two junctions into one where the road between them is too short to leave a
     /// usable lane once both junction areas are cut out of it (`netconvert
-    /// --junctions.join`). **Implemented** ([`join_short_junctions`]).
+    /// --junctions.join`). **Implemented** (`join_short_junctions`).
     #[serde(default = "default_true")]
     pub join_short_junctions: bool,
 }
@@ -1334,7 +1334,7 @@ pub struct OsmOptions {
     /// way whatever its class.
     ///
     /// `None`, the default, reads the way's own `width:lanes` or `width` tag and falls
-    /// back to the class default of [`CLASS_LANE_WIDTH_M`] — so an avenue and a service
+    /// back to the class default of `CLASS_LANE_WIDTH_M` — so an avenue and a service
     /// alley no longer get identical geometry (V6/W2). `Some(w)` is the last resort of
     /// the old behaviour: it replaces the class default, but a way that states its own
     /// width still wins.
@@ -9143,7 +9143,7 @@ fn triangle_overlap_m2(subject: [Vec3; 3], clip: [Vec3; 3]) -> f64 {
     (twice * 0.5).abs()
 }
 
-/// The largest footprint [`drop_kiosks_on_the_carriageway`] treats as street furniture, m²:
+/// The largest footprint `drop_kiosks_on_the_carriageway` treats as street furniture, m²:
 /// a newsstand or a kiosk, well under any building a road could pass through. **This
 /// importer's choice.**
 pub const KIOSK_MAX_AREA_M2: f64 = 25.0;

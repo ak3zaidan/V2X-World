@@ -182,7 +182,7 @@ impl Scenario {
 
     /// The first thing wrong with this scenario, if anything is.
     ///
-    /// [`validate`] returns all of them; this is the pass-or-fail spelling.
+    /// [`validate`](fn@validate) returns all of them; this is the pass-or-fail spelling.
     ///
     /// # Errors
     /// The first [`ScenarioError`] the rules produce, in schema order.

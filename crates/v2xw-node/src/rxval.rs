@@ -11,7 +11,7 @@
 //! | `generationTime` lies inside the signer's validity period | §5.2, SDEE profile | `GenerationTimeOutsideValidity` |
 //! | `generationLocation` lies inside the signer's effective region: its own, else the first one up its validated path (1609.2 `region`: "If it is omitted … the same validity region as the certificate that issued it"), worldwide when none has one | §5.2, SDEE profile | `OutsideRegion` |
 //! | no certificate of the chain is on a hash CRL (series 2, 3, 4, 256) whose `crlCraca` and `crlSeries` match it | §5.1.3 | `RevokedByHash`, `IssuerRevoked` |
-//! | the CRL of the signer's CRACA (any held series-1 CRL under `CrlOverdueScope::All`) is not more than `overdue_CRL_tolerance` (2 weeks) past its `nextCrl` | [CAMP122] Table 67 | `CrlOverdue` |
+//! | the CRL of the signer's CRACA (any held series-1 CRL under `CrlOverdueScope::All`) is not more than `overdue_CRL_tolerance` (2 weeks) past its `nextCrl` | \[CAMP122\] Table 67 | `CrlOverdue` |
 //! | `generationTime` is not older than the message type's maximum age, nor later than the receiver's own time by more than the future tolerance (checked on every received SPDU, before the verification policy) | §5.2 relevance checks; values: C2C-CC BSP RS_BSP_168 (ASSUMPTION for the US) | `GenerationTimeTooOld`, `GenerationTimeInFuture` |
 //!
 //! Series-1 (linkage) revocation stays on the node's [`crate::stores::CrlGate`], which
@@ -91,7 +91,7 @@ use v2xw_sec::linkage::CrlLinkageEntry;
 use v2xw_sec::primitive::{ChainLink, PrimitiveId, PrimitiveOpKind};
 use v2xw_sec::sig1609::SpduSigner;
 
-/// `overdue_CRL_tolerance` ([CAMP122] Table 67): two weeks past `nextCrl`, then the device
+/// `overdue_CRL_tolerance` (\[CAMP122\] Table 67): two weeks past `nextCrl`, then the device
 /// distrusts every message and warns the driver.
 pub const OVERDUE_CRL_TOLERANCE_S: u32 = 14 * 86_400;
 
@@ -101,7 +101,7 @@ pub const SERIES_PSEUDONYM: u16 = 1;
 /// Which messages an overdue pseudonym CRL makes the device refuse
 /// (`security.scms.crl_overdue_scope`).
 ///
-/// [CAMP122] Table 67 (printed pp. 457-458) defines `overdue_CRL_tolerance` as "How long an
+/// \[CAMP122\] Table 67 (printed pp. 457-458) defines `overdue_CRL_tolerance` as "How long an
 /// EE can continue to operate without a CRL update past a next CRL date before deciding
 /// that messages are not trustworthy and rejecting all of them (and turning on an
 /// appropriate driver warning indicator)". "All of them" can be read two ways, and the
@@ -566,7 +566,7 @@ pub struct HeldCrl {
     /// `crlSeries`.
     pub series: u16,
     /// Its place in the series: `crlSerial` (a hash CRL) or `iRev · 256 + indexWithinI`
-    /// (a linkage CRL), as [`crl_order`] reads it.
+    /// (a linkage CRL), as `crl_order` reads it.
     pub counter: u32,
     /// `issueDate`, Time32.
     pub issue_date: u32,
@@ -825,7 +825,7 @@ impl VerifiedCrl {
 
     /// `e` (an entry at its own i-period, as the CRL Generator records it) as this CRL
     /// carries it: seeds walked forward to `iRev` and `iMax` kept, or `None` when the
-    /// entry is exhausted before `iRev` (pruned, [CAMP122] §5.2.10.2.3) or this is not a
+    /// entry is exhausted before `iRev` (pruned, \[CAMP122\] §5.2.10.2.3) or this is not a
     /// linkage CRL. `Some(Err(()))` when the CRL should carry it and does not, or when the
     /// entry's period is after `iRev` (no CRL signs an entry from its future).
     pub fn signed_form(&self, e: &CrlLinkageEntry) -> Option<Result<CrlLinkageEntry, ()>> {
@@ -926,7 +926,7 @@ impl RxTrust {
     }
 
     /// Sets how long past a CRL's `nextCrl` the device keeps trusting the certificates
-    /// that CRL governs ([CAMP122] Table 67 `overdue_CRL_tolerance`; two weeks unless set).
+    /// that CRL governs (\[CAMP122\] Table 67 `overdue_CRL_tolerance`; two weeks unless set).
     pub fn set_overdue_crl_tolerance(&mut self, seconds: u32) {
         self.overdue_tolerance_s = Some(seconds);
     }

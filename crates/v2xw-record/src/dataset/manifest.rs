@@ -20,7 +20,7 @@
 //! # No wall clock
 //!
 //! The legacy writer put `datetime.now(timezone.utc)` in `build_utc`. This crate may not
-//! read a clock (the non-negotiable rule, and [`crate::lib`]'s third bullet), so
+//! read a clock (the non-negotiable rule, and the [crate documentation](crate)'s third bullet), so
 //! `build_utc` comes from the engine's own [`v2xw_core::Manifest`], which captured it once
 //! at build time and carries it through the run. A dataset assembled without one says
 //! `unknown` rather than inventing a time, and the datasheet says so too: a fabricated

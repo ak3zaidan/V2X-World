@@ -720,7 +720,7 @@ pub struct OpenedReport {
     pub signed: Vec<u8>,
 }
 
-/// The MA's processing of a received report ([5GAA] (263) preconditions; [SM-MBR] §3):
+/// The MA's processing of a received report (\[5GAA\] (263) preconditions; [SM-MBR] §3):
 /// decrypt with the MA key, open the signed layer (psid 0x26, `generationTime` present,
 /// every other header field absent, signer one certificate that chains to the PKI,
 /// signature valid), decode the report, and verify the suspect evidence.
@@ -1017,7 +1017,7 @@ pub struct QueuedReport<T> {
 pub struct MbrQueue<T> {
     /// The device-specific storage quota, bytes.
     pub quota: u64,
-    /// Reports older than this (seconds) may be deleted unsent ([CAMP122]
+    /// Reports older than this (seconds) may be deleted unsent (\[CAMP122\]
     /// §5.2.8.4 step 5: one week).
     pub max_age_s: i64,
     /// The Eastern hour of the daily re-weighting ([SM-MBR] §2.2: 5 am).

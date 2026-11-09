@@ -138,11 +138,11 @@ impl ScmsNodes {
     }
 }
 
-/// SCMS-522: the EE retries a request the RA has not answered within 10 s ([CAMP122]
+/// SCMS-522: the EE retries a request the RA has not answered within 10 s (\[CAMP122\]
 /// §5.2.8.3 requirement table).
 pub const EE_RETRY_TIMEOUT_S: u64 = 10;
 
-/// SCMS-523: at most 10 EE retries per 60 minutes ([CAMP122] §5.2.8.3).
+/// SCMS-523: at most 10 EE retries per 60 minutes (\[CAMP122\] §5.2.8.3).
 pub const EE_RETRY_MAX_PER_HOUR: u32 = 10;
 
 /// The window SCMS-523 counts retries over.
@@ -161,7 +161,7 @@ pub struct ScmsParams {
     pub epoch: SimTime,
     /// The real US calendar: when `Some(e)`, i-period 0 began at UTC Unix second `e`
     /// (the US epoch is 2015-01-06 04:00 EST = 09:00 UTC, [`crate::scms::governance::US_IPERIOD_EPOCH_UNIX_S`];
-    /// [SMP] §2.1.17 Table 2) and `epoch` is ignored: simulated time 0 is
+    /// \[SMP\] §2.1.17 Table 2) and `epoch` is ignored: simulated time 0 is
     /// [`PduLayer::t0_unix_s`], so a run starting 2026-10-16 is in i-period 614 and every
     /// `iCert`, `iRev` and validity start carries the deployment's real value. `None`
     /// (the default for library runs and for a compressed calendar) starts i-period 0 at
@@ -180,8 +180,8 @@ pub struct ScmsParams {
     /// more.
     pub max_periods_ahead: u32,
     /// How long an enrolment certificate is valid: **6 years** (365-day years), CAMP SCMS
-    /// Release 1.2.2 Table 3 / SCMS-1307 ([CAMP122]), the owner's default. CAMP
-    /// Release 1.1 allowed 7 years and the 5GAA draft CP 3 ([5GAA]); both are settings. A
+    /// Release 1.2.2 Table 3 / SCMS-1307 (\[CAMP122\]), the owner's default. CAMP
+    /// Release 1.1 allowed 7 years and the 5GAA draft CP 3 (\[5GAA\]); both are settings. A
     /// run compresses it to see re-enrolment.
     pub enrolment_lifetime: Duration,
     /// How long before its enrolment certificate expires a device requests the successor
@@ -192,7 +192,7 @@ pub struct ScmsParams {
     pub reenrol_lead: Duration,
     /// How long after a successor request the RA tells the device to come back for the
     /// certificate (`nextDlTime` in `RaEeEnrollmentCertAck`): 5 minutes, the profile's
-    /// `download-minWait` ([SMP] Table 3). Re-enrolment is two-phase, request
+    /// `download-minWait` (\[SMP\] Table 3). Re-enrolment is two-phase, request
     /// then download ([SM-REENR] §1–3).
     pub reenrol_download_delay: Duration,
     /// How many electors sign the trust list: 5 (SCMS Manager Elector Policy v1.0 §2;
@@ -212,13 +212,13 @@ pub struct ScmsParams {
     /// [`ElectorReplacementPq::Classical`]: crate::scms::governance::ElectorReplacementPq::Classical
     pub elector_replacement_pq: crate::scms::governance::ElectorReplacementPq,
     /// The RA's certificate-request shuffle window: the maximum age of a request in the
-    /// aggregator, 2 days by default ([CAMP122] Table 67 `max_cert_request_age`;
+    /// aggregator, 2 days by default (\[CAMP122\] Table 67 `max_cert_request_age`;
     /// [`ShufflePreset`]).
     pub shuffle_window: Duration,
     /// The RA's report shuffle window [CAMP-EE SCMS-765].
     pub report_shuffle_window: Duration,
     /// How many provisioning requests release the certificate-request shuffle before its
-    /// window closes: 1,000 by default ([CAMP122] Table 67 `shuffle_threshold`;
+    /// window closes: 1,000 by default (\[CAMP122\] Table 67 `shuffle_threshold`;
     /// [`ShufflePreset::Brecht`] is the 10,000 / one day of [BRECHT §V-B]).
     pub shuffle_threshold: u32,
     /// How many reports release the report shuffle before its window closes
@@ -238,22 +238,22 @@ pub struct ScmsParams {
     /// How long after the acknowledgement the device first polls for a batch.
     pub first_batch_delay: Duration,
     /// How long between polls of a repository that is not ready: `download-minWait`,
-    /// 5 minutes ([SMP] §2.1.21 Table 3; the 408 rule "retry after minWait, up to
-    /// maxReqs", [SMP] §4.3.1).
+    /// 5 minutes (\[SMP\] §2.1.21 Table 3; the 408 rule "retry after minWait, up to
+    /// maxReqs", \[SMP\] §4.3.1).
     pub download_poll_interval: Duration,
-    /// How many polls before the device gives up: `download-maxReqs`, 100 ([SMP] Table 3).
+    /// How many polls before the device gives up: `download-maxReqs`, 100 (\[SMP\] Table 3).
     pub max_download_polls: u32,
     /// How long a device waits for the RA's answer before it sends the same request
-    /// again: 10 s ([CAMP122] §5.2.8.3 SCMS-522, "the EE shall retry if no response is
+    /// again: 10 s (\[CAMP122\] §5.2.8.3 SCMS-522, "the EE shall retry if no response is
     /// received within 10 seconds"). Applies to the provisioning request, the `.info`
     /// top-off and each batch download (every EE → RA request through the LOP). Zero turns
     /// the retry off (the pre-2026-10-18 behaviour: a request lost to an outage is lost).
     pub ee_retry_timeout: Duration,
-    /// How many retries a device may make in any 60 minutes: 10 ([CAMP122] SCMS-523). A
+    /// How many retries a device may make in any 60 minutes: 10 (\[CAMP122\] SCMS-523). A
     /// device that has used them waits until the oldest leaves the window.
     pub ee_retry_max_per_hour: u32,
     /// How far a download request's `generationTime` may be from the RA's clock: 5 s
-    /// ([CAMP122] SCMS-1203, `ra.client-signature-ttl-sec`).
+    /// (\[CAMP122\] SCMS-1203, `ra.client-signature-ttl-sec`).
     pub download_request_tolerance: Duration,
     /// Backend servers per entity, the `c` of the M/M/c.
     pub backend_servers: u32,
@@ -327,12 +327,12 @@ pub struct CrlIssuance {
     /// deadline, not the hour).
     pub slot_et: (u32, u32),
     /// `nextCrl - issueDate`. **Assumption**: 7 days, so that the "no later than once a
-    /// week" device fetch ([CAMP122] §3 item 10) always finds a current CRL; the draft
-    /// CP's ceiling is monthly ([5GAA] (254)).
+    /// week" device fetch (\[CAMP122\] §3 item 10) always finds a current CRL; the draft
+    /// CP's ceiling is monthly (\[5GAA\] (254)).
     pub next_crl: Duration,
     /// Whether the CRL Generator issues a fresh CRL when `next_crl` has passed with no
     /// new entry ([1609.2] `nextCrl`: "the time when the next CRL is expected"; a device
-    /// stops trusting the CRACA's certificates 2 weeks past it, [CAMP122] Table 67
+    /// stops trusting the CRACA's certificates 2 weeks past it, \[CAMP122\] Table 67
     /// `overdue_CRL_tolerance`). Off in the library (a run drained with `ScmsRun::run`
     /// would never end); the engine turns it on.
     pub reissue: bool,
@@ -340,7 +340,7 @@ pub struct CrlIssuance {
     /// publication. **Off**: the US profile distributes full lists only. Its device
     /// endpoints serve the current list of each CRACA and series: the composite CRL
     /// ("preferred over individual CRLs") or the individual CRL, unauthenticated, from the
-    /// CRL store ([SMP] §4.4, 1609.2.1 6.3.5.8 and 6.3.5.10; [CAMP122] §6.2.3
+    /// CRL store (\[SMP\] §4.4, 1609.2.1 6.3.5.8 and 6.3.5.10; \[CAMP122\] §6.2.3
     /// `download-crl`), and `CertificateManagementInfoStatus` names one `issueDate` per
     /// `(cracaId, series)`, so a device has no way to ask for a delta. No US source
     /// describes delta distribution (inference, labelled). On, the Generator also signs
@@ -386,7 +386,7 @@ impl Default for MaPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaMode {
     /// An operator reviews each case before the MA acts: the CV-pilot "minimum viable"
-    /// MA ([CAMP122] §4.2-4.3; [PRIMER] pp. 6, 8). The default. The
+    /// MA (\[CAMP122\] §4.2-4.3; \[PRIMER\] pp. 6, 8). The default. The
     /// operator's delay is **an assumption** (8 h, one working shift); a scenario sets it.
     ManualReview {
         /// Time from opening the case to the operator's go-ahead.
@@ -413,7 +413,7 @@ pub struct PduLayer {
     /// 2026-01-05T00:00:00Z; a scenario sets its `time.t0`.
     pub t0_unix_s: i64,
     /// How often each LA's AES-128 key shared with the ACA rotates, in seconds of
-    /// `Time32` (CAMP `shared_key_update_interval`, a local option, [CAMP122] Table 68).
+    /// `Time32` (CAMP `shared_key_update_interval`, a local option, \[CAMP122\] Table 68).
     /// **Assumption**: one week, the i-period; 0 never rotates.
     pub la_aca_key_rotation_s: u32,
     /// The PSIDs a pseudonym certificate's `appPermissions` lists: what the EE requests
@@ -544,10 +544,10 @@ impl Default for ThresholdDeployment {
     }
 }
 
-/// `ra-maxPreloadTime` lower bound, in i-periods: 2 weeks ([SMP] §2.1.21 Table 3).
+/// `ra-maxPreloadTime` lower bound, in i-periods: 2 weeks (\[SMP\] §2.1.21 Table 3).
 pub const RA_MIN_PRELOAD_PERIODS: u32 = 2;
-/// `ra-maxPreloadTime` upper bound, in i-periods: 3 years = 156 weeks ([SMP] Table 3;
-/// [PRIMER] p.7, 3,120 = 156 × 20).
+/// `ra-maxPreloadTime` upper bound, in i-periods: 3 years = 156 weeks (\[SMP\] Table 3;
+/// \[PRIMER\] p.7, 3,120 = 156 × 20).
 pub const RA_MAX_PRELOAD_PERIODS: u32 = 156;
 
 /// How far ahead a fleet downloads (its device strategy): THEA took 3 years at

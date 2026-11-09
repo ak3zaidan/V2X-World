@@ -53,7 +53,7 @@
 //! 1. `ToBeSignedCertificate`'s extension additions `appExtensions`,
 //!    `certIssueExtensions`, `certRequestExtension` are mandatory in 2022 and `OPTIONAL`
 //!    in 2025. The generated types are the 2025 (superset) form; the 2022 rule is enforced
-//!    by [`crate::scms_types::check_edition`].
+//!    by [`crate::scms_types::check_tbs_certificate`].
 //! 2. `Countersignature` additionally requires `omitted ABSENT` in 2025 (a value rule).
 //! 3. `CrlContents` gains the extension addition `iPeriodInfo` in 2025.
 //!

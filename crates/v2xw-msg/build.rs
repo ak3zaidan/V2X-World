@@ -464,10 +464,14 @@ fn link_ieee1609dot2dot1_scopes(generated: &mut String) -> Result<(), String> {
 ///   block (Markdown collapses runs of spaces anyway, so nothing renders differently);
 /// * ``` fences are removed, so a formula in the specification's prose stays prose.
 ///
-/// Only the contents of `#[doc = "…"]` attributes are touched, and only spaces and
-/// backticks within them, so no generated identifier, literal or expression can be
-/// affected — the same transformation applied to code would be a bug, which is why the
-/// match is anchored on the whole line.
+/// A third keeps rustdoc quiet without changing the text: the specifications cite
+/// their references as `[16]` and write bare URLs, which rustdoc reads as broken
+/// intra-doc links and unlinked URLs (see [`escape_links`]).
+///
+/// Only the contents of `#[doc = "…"]` attributes are touched, and only spaces,
+/// backticks, brackets and URLs within them, so no generated identifier, literal or
+/// expression can be affected — the same transformation applied to code would be a bug,
+/// which is why the match is anchored on the whole line.
 fn sanitise_doc_comments(generated: &str) -> String {
     let mut out = String::with_capacity(generated.len());
     for line in generated.lines() {
@@ -525,12 +529,51 @@ fn sanitise_doc_comments(generated: &str) -> String {
             }
             out.push_str(indent);
             out.push_str("#[doc = \"");
-            out.push_str(&cleaned);
+            out.push_str(&escape_links(&cleaned));
             out.push_str("\"]");
         } else {
             out.push_str(line);
         }
         out.push('\n');
+    }
+    out
+}
+
+/// Escapes the Markdown that rustdoc would misread in one sanitised doc string.
+///
+/// Outside inline code, `[` and `]` become `\\[` and `\\]` in the string literal (an
+/// escaped bracket in the doc text, rendered as a plain bracket), so a citation such as
+/// `[16]` is not taken for an intra-doc link; and an `http://` or `https://` URL is wrapped
+/// in `<…>`, which renders it as a link. `content` is the text between the quotes of a
+/// `#[doc = "…"]` attribute, so its escapes (`\\"`, `\\\\`) are passed through as pairs.
+fn escape_links(content: &str) -> String {
+    let mut out = String::with_capacity(content.len() + 8);
+    let mut in_code = false;
+    let mut rest = content;
+    while let Some(c) = rest.chars().next() {
+        if c == '\\' {
+            let pair: String = rest.chars().take(2).collect();
+            out.push_str(&pair);
+            rest = &rest[pair.len()..];
+            continue;
+        }
+        if c == '`' {
+            in_code = !in_code;
+        } else if !in_code && (c == '[' || c == ']') {
+            out.push_str("\\\\");
+        } else if !in_code && (rest.starts_with("http://") || rest.starts_with("https://")) {
+            let end = rest
+                .find(|ch: char| ch.is_whitespace() || ch == '\\' || ch == '>')
+                .unwrap_or(rest.len());
+            let url = rest[..end].trim_end_matches(['.', ',', ';', ':', ')']);
+            out.push('<');
+            out.push_str(url);
+            out.push('>');
+            rest = &rest[url.len()..];
+            continue;
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
     }
     out
 }

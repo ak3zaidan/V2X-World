@@ -57,7 +57,7 @@ use crate::ring::{DropCounts, EnqueueReport, ResumeRing, SendQueue};
 /// out at about 280 KB instead of 60-90 KB. The parameter is parsed and rejected when
 /// malformed so that a client that cannot decompress zstd is already honoured today and
 /// keeps working when compression lands; turning it on is a `zstd` dependency and one
-/// branch in [`Session::push`].
+/// branch in `Session::push`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compression {
     /// zstd, the default.

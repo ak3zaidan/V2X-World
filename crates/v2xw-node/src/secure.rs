@@ -1029,7 +1029,7 @@ impl NodeSecurity {
 
     /// Signs `payload` and returns the SPDU with the payload beside it.
     ///
-    /// The caller must have called [`NodeSecurity::provision`] for the credential in use;
+    /// The caller must have called [`NodeSecurity::install`] for the credential in use;
     /// signing without a credential is [`SecError`], never a zero-length signature.
     pub fn sign(
         &mut self,

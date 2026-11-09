@@ -165,7 +165,7 @@ impl ObservedMessage {
 ///
 /// Mirrors `v2xw_node::stores::Neighbor`. Present so a detector that wants the node's
 /// aggregate picture — how many distinct signers it is tracking, when it last heard one —
-/// does not have to re-derive it from [`crate::detect::DetectorSuite`]'s own history.
+/// does not have to re-derive it from each detector's own history.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeerBelief {
     /// The signer's certificate digest.

@@ -34,6 +34,8 @@
 //! carried its own class would let a node task be scheduled at `Control` priority, which
 //! is exactly the ordering violation the kernel's dispatch assertion exists to catch —
 //! and it would catch it one instant *after* the mistake was made.
+//!
+//! [`EventKey`]: v2xw_core::event::EventKey
 
 use serde::{Deserialize, Serialize};
 use v2xw_core::event::EventClass;

@@ -1,6 +1,6 @@
 //! HTTP/1.1 request and response framing on the EE-RA exchanges.
 //!
-//! The device reaches the RA over HTTPS ([CAMP122] §6.1-6.3): a REST-like service
+//! The device reaches the RA over HTTPS (\[CAMP122\] §6.1-6.3): a REST-like service
 //! whose payloads are binary OER, `Content-Type: application/octet-stream`, at
 //! `https://<SERVER>:8892/<PATH>`. TLS records and handshakes are charged by the transport
 //! (`v2xw-radio` `ip_transport.rs`, `v2xw-engine` `backend.rs`); this module charges what
@@ -9,37 +9,37 @@
 //!
 //! - a `POST` carries the SPDU as its body (`Content-Length` bytes);
 //! - a `GET` download carries no body: the `SecuredAuthenticatedDownloadRequest` travels
-//!   Base64-encoded in the `Download-Req` header ([CAMP122] Table 79), so its
+//!   Base64-encoded in the `Download-Req` header (\[CAMP122\] Table 79), so its
 //!   bytes are charged once, at their Base64 length, never also as a body;
 //! - the policy and chain-file checks are conditional `GET`s (`If-None-Match`,
-//!   [CAMP122] SCMS-544), answered `200` with the file or `304` without one.
+//!   \[CAMP122\] SCMS-544), answered `200` with the file or `304` without one.
 //!
 //! **ASSUMPTION** (scms-constants.md `http_header_set`): the minimal header set an HTTP/1.1
 //! client and server must or conventionally send. A request carries `Host`, plus
 //! `Content-Type` and `Content-Length` when it has a body; an answer carries `Date`
 //! (RFC 9110 §6.6.1, an origin server with a clock must send it) and `Content-Length`,
 //! plus `Content-Type` when it has a body. No `User-Agent`, `Accept`, `Connection` or
-//! `Server`. The paths are [CAMP122] Table 79's; the IEEE 1609.2.1 v3 path strings are
+//! `Server`. The paths are \[CAMP122\] Table 79's; the IEEE 1609.2.1 v3 path strings are
 //! paywalled and **UNCONFIRMED**, so the CAMP/CV-Pilot ones stand for them. The
 //! `Host` is the RA's certificate name and port, which the server's TLS certificate must
-//! match ([SMP] §3.2).
+//! match (\[SMP\] §3.2).
 
 use crate::sizes::{SizeProvenance, WireSize};
 
 /// The protocol version on every request and status line.
 pub const HTTP_VERSION: &str = "HTTP/1.1";
-/// The RA's service port ([CAMP122] §6.2.1, §6.3.1).
+/// The RA's service port (\[CAMP122\] §6.2.1, §6.3.1).
 pub const RA_PORT: u16 = 8892;
-/// The MA's and CRL store's service port ([CAMP122] §6.2.1).
+/// The MA's and CRL store's service port (\[CAMP122\] §6.2.1).
 pub const MA_PORT: u16 = 8894;
-/// Every payload's media type ([CAMP122] §6.1).
+/// Every payload's media type (\[CAMP122\] §6.1).
 pub const CONTENT_TYPE: &str = "application/octet-stream";
 /// An RFC 9110 §5.6.7 IMF-fixdate (`Sun, 06 Nov 1994 08:49:37 GMT`): always 29 bytes.
 pub const IMF_FIXDATE_BYTES: u32 = 29;
-/// The `Download-Req` header ([CAMP122] Table 79).
+/// The `Download-Req` header (\[CAMP122\] Table 79).
 pub const DOWNLOAD_REQ: &str = "Download-Req";
 
-/// [CAMP122] Table 79 paths.
+/// \[CAMP122\] Table 79 paths.
 pub mod path {
     /// Request pseudonym batch provisioning (POST).
     pub const PROVISION_PSEUDONYM_BATCH: &str = "/provision-pseudonym-certificate-batch";
@@ -53,7 +53,7 @@ pub mod path {
     pub const LOCAL_CHAIN: &str = "/download/local-certificate-chain";
     /// Submit a misbehaviour report (POST, body and `Download-Req`).
     pub const MISBEHAVIOR_REPORT: &str = "/process-misbehavior-report";
-    /// Request an application certificate (POST, [CAMP122] Table 79's `provision-` form).
+    /// Request an application certificate (POST, \[CAMP122\] Table 79's `provision-` form).
     pub const PROVISION_APP_CERT: &str = "/provision-application-certificate";
     /// Download an application certificate (GET, `Download-Req`).
     pub const DOWNLOAD_CERT: &str = "/download/certificate";
@@ -88,13 +88,13 @@ impl Method {
 pub enum Status {
     /// `200 OK`.
     Ok,
-    /// `206 Partial Content`: a resumed (`Range`) batch download ([SMP] §4.3.2).
+    /// `206 Partial Content`: a resumed (`Range`) batch download (\[SMP\] §4.3.2).
     PartialContent,
     /// `304 Not Modified`: the file named by `If-None-Match` is current (SCMS-544).
     NotModified,
-    /// `412 Precondition Failed`: the `If-Modified-Since` copy is current ([SMP] §4.3.1).
+    /// `412 Precondition Failed`: the `If-Modified-Since` copy is current (\[SMP\] §4.3.1).
     PreconditionFailed,
-    /// `500 Internal Server Error`: the production RA's only error ([CAMP122] §6.3.1).
+    /// `500 Internal Server Error`: the production RA's only error (\[CAMP122\] §6.3.1).
     InternalServerError,
 }
 
@@ -217,7 +217,7 @@ pub fn post_bytes(host: Header, path: &str, body_len: u32) -> u32 {
 
 /// A `GET` download whose `n`-byte `SecuredAuthenticatedDownloadRequest` rides in the
 /// `Download-Req` header, Base64-encoded; `range_from` adds `Range: bytes=<from>-` for a
-/// resumed download ([SMP] §4.3.2).
+/// resumed download (\[SMP\] §4.3.2).
 #[must_use]
 pub fn download_bytes(host: Header, path: &str, n: u32, range_from: Option<u32>) -> u32 {
     let range = range_from.map(|from| Header {

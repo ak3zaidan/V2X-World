@@ -561,7 +561,7 @@ pub enum CertProfile {
     S2xProduction,
     /// The ISS/OmniTrust form ([`ISS_ROLE_SPECS`]): 70 y root, identifiedRegion
     /// {124, 484, 840} on the ICA and every ICA-issued component, the RA's group in
-    /// `certRequestPermissions`, and the CRL signer root-issued on series 256 ([SMP]
+    /// `certRequestPermissions`, and the CRL signer root-issued on series 256 (\[SMP\]
     /// Table 1 "CRL signer: signed by root"), so the root is the CRACA every certificate
     /// below it names, as every ISS pre-production sub-CA does.
     Iss,
@@ -665,7 +665,7 @@ pub const ROOT_ISSUED: [&str; 3] = ["pg", "ma", "crlg"];
 
 /// The `SecurityMgmtSsp` a role's certificate carries for PSID 35 (1609.2.1-2022
 /// `Ieee1609Dot2Dot1Protocol`) at version 2, as the 2022 module fixes and every SAESOL
-/// certificate carries ([`security_mgmt_ssp_of`] for a provider's own form).
+/// certificate carries ([`security_mgmt_ssp_in`] for a provider's own form).
 #[must_use]
 pub fn security_mgmt_ssp(role: &str) -> SecurityMgmtSsp {
     security_mgmt_ssp_v(role, 2)
@@ -1997,7 +1997,7 @@ impl Governance {
     /// Provider `label`'s PDU-layer PKI (home or peer): its current root, ICA and
     /// components, the very certificates and keys the chain files carry and a rollover
     /// re-certifies, so one certificate per component signs on the wire and appears in
-    /// the records and the Studio ([SMP] §6.1). `None` for an
+    /// the records and the Studio (\[SMP\] §6.1). `None` for an
     /// unknown label.
     ///
     /// # Errors
@@ -2307,7 +2307,7 @@ impl Governance {
     }
 
     /// The certificate of the `i`-th approved elector, in the order of
-    /// [`GovNodes::electors`] (U9).
+    /// [`GovernanceNodes::electors`] (U9).
     #[must_use]
     pub fn approved_elector_cert(&self, i: usize) -> Option<&Certificate> {
         self.electors

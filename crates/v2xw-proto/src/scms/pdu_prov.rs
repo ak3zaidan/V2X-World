@@ -18,7 +18,7 @@
 //! the device. The device learns its key only by decrypting with `h_ij`.
 //!
 //! The LA↔ACA keys: 1609.2.1 leaves how the key is shared out of scope, and CAMP makes its
-//! rotation a local option (`shared_key_update_interval`, [CAMP122] Table 68). Here each LA
+//! rotation a local option (`shared_key_update_interval`, \[CAMP122\] Table 68). Here each LA
 //! has one key per rotation epoch, drawn from the deployment seed ([`LaAcaKeys`]); the ACA
 //! finds the key by the `symmRecipInfo` HashedId8 among the current and the previous epoch,
 //! so a PLV sealed just before a rotation still opens.
@@ -58,7 +58,7 @@ use super::pdu::{
 const STRUCT_VERSION: u8 = 2;
 
 /// The pseudonym certificate's validity: 10,140 minutes, one week plus the hour of overlap
-/// ([SMP] Table 2).
+/// (\[SMP\] Table 2).
 pub const PSEUDONYM_LIFETIME_MIN: u16 = 10_140;
 
 /// The CRL series of a linkage-revoked pseudonym certificate (series 1 is the
@@ -794,7 +794,7 @@ pub fn ee_open_aca_response(
 
 /// The device's `EeRaDownloadRequestSpdu` for `filename`: `eeRaDownloadRequest
 /// {generationTime, filename}` signed by the enrolment certificate, encrypted to the RA
-/// (the CAMP `Download-Req` header carries the same, [CAMP122] §6.3).
+/// (the CAMP `Download-Req` header carries the same, \[CAMP122\] §6.3).
 ///
 /// # Errors
 /// Encoding fails or the RA has no encryption key.
@@ -834,7 +834,7 @@ pub struct OpenedDownload {
 
 /// The RA: decrypts a download request with its encryption key, verifies it under an
 /// ECA-issued enrolment certificate, and checks `generationTime` against `now` within
-/// `tolerance_s` (the client-signature TTL, 5 s, [CAMP122] SCMS-1203).
+/// `tolerance_s` (the client-signature TTL, 5 s, \[CAMP122\] SCMS-1203).
 ///
 /// # Errors
 /// Decryption, signature, issuer, shape or freshness.
@@ -868,7 +868,7 @@ pub fn ra_open_download_request(
 }
 
 /// The `.info` file of a provisioning request: `<16 upper-case hex of requestHash>.info`
-/// ([CAMP122] §6.3, `/download/info`, filename `[0-9A-F]{16}.info`).
+/// (\[CAMP122\] §6.3, `/download/info`, filename `[0-9A-F]{16}.info`).
 #[must_use]
 pub fn info_filename(request_hash8: [u8; 8]) -> String {
     let mut s = String::with_capacity(21);
@@ -879,7 +879,7 @@ pub fn info_filename(request_hash8: [u8; 8]) -> String {
     s
 }
 
-/// What a `Download-Req` file name asks for, under the CAMP grammar ([CAMP122] §6.3,
+/// What a `Download-Req` file name asks for, under the CAMP grammar (\[CAMP122\] §6.3,
 /// Table 79): `[0-9A-F]{16}_[0-9A-F]{1,8}.zip` is the batch of one i-period,
 /// `[0-9A-F]{16}.info` the next-download time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -934,7 +934,7 @@ pub fn parse_download_filename(name: &str) -> Option<DownloadFile> {
 }
 
 /// The body of a `.info` download: a single COER `Time32`, the time of the next batch
-/// ([CAMP122] §6.3, Table 79 "single Time32 (next batch time)"). `Time32` is `Uint32`, a
+/// (\[CAMP122\] §6.3, Table 79 "single Time32 (next batch time)"). `Time32` is `Uint32`, a
 /// fixed-size 0..2^32−1 integer, so its OER is exactly four octets, big-endian
 /// (ITU-T X.696 §10.3.4).
 ///
@@ -957,7 +957,7 @@ pub fn open_info_body(bytes: &[u8]) -> Result<u32> {
 }
 
 /// The name of file `i_j` inside a batch zip: `X_Y`, X = i and Y = j in upper-case hex
-/// ([CAMP122] §6.3).
+/// (\[CAMP122\] §6.3).
 #[must_use]
 pub fn batch_entry_name(i: u32, j: u32) -> String {
     format!("{i:X}_{j:X}")

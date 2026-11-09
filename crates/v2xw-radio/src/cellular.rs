@@ -320,15 +320,15 @@ impl LatencySpec {
 pub enum UuLatencyPreset {
     /// LTE first hop: RTT 29.2 ± 4.8 ms [Narayanan et al. WWW'20 Table 2].
     LteFirstHop,
-    /// 5G mmWave first hop: RTT 27.4 ± 6.4 ms [same].
+    /// 5G mmWave first hop: RTT 27.4 ± 6.4 ms \[same\].
     Nr5gFirstHop,
-    /// 5G to an east-coast server: RTT 54.0 ± 4.5 ms [same].
+    /// 5G to an east-coast server: RTT 54.0 ± 4.5 ms \[same\].
     Nr5gEastCoast,
-    /// 5G to a west-coast server: RTT 81.9 ± 5.5 ms [same].
+    /// 5G to a west-coast server: RTT 81.9 ± 5.5 ms \[same\].
     Nr5gWestCoast,
-    /// 4G to an east-coast server: RTT 58.0 ± 4.3 ms [same].
+    /// 4G to an east-coast server: RTT 58.0 ± 4.3 ms \[same\].
     Lte4gEastCoast,
-    /// 4G to a west-coast server: RTT 88.9 ± 5.5 ms [same].
+    /// 4G to a west-coast server: RTT 88.9 ± 5.5 ms \[same\].
     Lte4gWestCoast,
     /// The remote-driving budget's DSRC one-hop figure, 2-3 ms [MASA living lab].
     ///

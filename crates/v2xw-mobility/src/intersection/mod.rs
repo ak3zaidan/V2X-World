@@ -21,6 +21,8 @@
 //! same. One equation therefore produces every deceleration, which is both the legacy
 //! engine's design [`run.py` L2466-2483] and the reason a vehicle decelerates smoothly for
 //! a signal instead of stopping dead on it.
+//!
+//! [`EntryDecision`]: crate::views::EntryDecision
 
 pub mod gap_acceptance;
 pub mod signal_fixed_time;

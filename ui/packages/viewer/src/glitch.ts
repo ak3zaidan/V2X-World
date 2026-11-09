@@ -15,7 +15,7 @@
  * |---|---|
  * | `pop` | an actor appears or vanishes **inside** the view — not at its edge, not by culling — within `nearM` of the camera |
  * | `teleport` | a drawn actor moves further in one frame than its speed allows: `> max(0.75 m, 2.5·v·dt + 0.3 m)` |
- * | `stutter` | frame-to-frame screen-space jerk of a tracked actor, `|Δ²p| > max(1.5 px, 0.5·|Δp|)` while it moves more than 1 px a frame; also the camera itself |
+ * | `stutter` | frame-to-frame jerk of a tracked actor on screen, `> max(1.5 px, 0.5·|Δp|)` while it moves more than 1 px a frame, measured from where steady motion in the camera's frame would have drawn it (perspective bends a steady path on screen); also the camera itself |
  * | `heading_snap` | a vehicle's drawn heading turns more than 0.12 rad (6.9°) in one frame, a person's more than 0.35 rad, or a stationary vehicle rotates |
  * | `overlap_vehicle` | two drawn vehicle bodies (length × width boxes) interpenetrate by more than 5 cm |
  * | `overlap_building` | a drawn vehicle's footprint is inside a building below its roof, and that building has no road through it |
@@ -208,6 +208,16 @@ export class GlitchHunter {
   #sy = new Float64Array(0);
   #psx = new Float64Array(0);
   #psy = new Float64Array(0);
+  /**
+   * The body centre in the camera's own frame (metres), this frame's and last frame's, for the
+   * stutter rule: smooth motion is a straight line there, where on screen it is not (see below).
+   */
+  #rx = new Float64Array(0);
+  #ry = new Float64Array(0);
+  #rz = new Float64Array(0);
+  #prx = new Float64Array(0);
+  #pry = new Float64Array(0);
+  #prz = new Float64Array(0);
   #wx = new Float64Array(0);
   #wy = new Float64Array(0);
   #wh = new Float64Array(0);
@@ -361,6 +371,12 @@ export class GlitchHunter {
     this.#sy = g64(this.#sy);
     this.#psx = g64(this.#psx);
     this.#psy = g64(this.#psy);
+    this.#rx = g64(this.#rx);
+    this.#ry = g64(this.#ry);
+    this.#rz = g64(this.#rz);
+    this.#prx = g64(this.#prx);
+    this.#pry = g64(this.#pry);
+    this.#prz = g64(this.#prz);
     this.#wx = g64(this.#wx);
     this.#wy = g64(this.#wy);
     this.#wh = g64(this.#wh);
@@ -610,12 +626,16 @@ export class GlitchHunter {
         }
       }
 
-      // Stutter: second difference of the screen position.
+      // Stutter: where the actor is drawn against where steady motion would have put it.
       // A frame the interpolator snapped (a discontinuity in the data, counted as a teleport) and
       // the one after it are not judged for stutter: the jump is the event, already counted.
       const snapNear = snappedArr[s] === 1 || this.#snapPrev[s] === 1;
       this.#snapPrev[s] = snappedArr[s];
-      if (drawn && interior && !snapNear && this.#tracked[s] >= 2 && Number.isFinite(this.#psx[s])) {
+      // The body centre in the camera's frame: V · (x, y, cz, 1).
+      const rx = e[0] * x + e[4] * y + e[8] * cz + e[12];
+      const ry = e[1] * x + e[5] * y + e[9] * cz + e[13];
+      const rz = e[2] * x + e[6] * y + e[10] * cz + e[14];
+      if (drawn && interior && !snapNear && this.#tracked[s] >= 2 && Number.isFinite(this.#psx[s]) && Number.isFinite(this.#prx[s])) {
         // Screen velocities per second, expressed in pixels per 60 Hz frame, so a frame the
         // display dropped (twice the time, twice the motion) is not mistaken for a jerk.
         const k1 = 1 / (60 * Math.max(dt, 1e-4));
@@ -625,7 +645,29 @@ export class GlitchHunter {
         const pvx = (this.#sx[s] - this.#psx[s]) * k0;
         const pvy = (this.#sy[s] - this.#psy[s]) * k0;
         const sp = Math.max(Math.hypot(vx, vy), Math.hypot(pvx, pvy));
-        const jerk = Math.hypot(vx - pvx, vy - pvy);
+        // The jerk is measured against steady motion *in the camera's frame*, carried on for this
+        // frame's dt and projected, not against steady motion on the screen. Perspective bends a
+        // straight, steady path on screen: an oncoming car passing a chase camera eight metres off
+        // sweeps across the picture faster every frame (1/depth), and at the four frames a second
+        // of a software renderer one frame's change of that sweep is more than half of it. The
+        // screen-space rule counted that car, drawn exactly where it was, as a stutter (traffic3d's
+        // two-wheeler chase, an oncoming passenger car 8.5 m from the camera: "jerked 10.4 px").
+        // Straight in the camera's frame it is no jerk at all, while a frozen frame, an uneven
+        // render clock or a camera that falls behind its subject is the same jerk either way.
+        const ratio = Math.max(dt, 1e-4) / Math.max(this.#prevDt, 1e-4);
+        const qx = this.#rx[s] + (this.#rx[s] - this.#prx[s]) * ratio;
+        const qy = this.#ry[s] + (this.#ry[s] - this.#pry[s]) * ratio;
+        const qz = this.#rz[s] + (this.#rz[s] - this.#prz[s]) * ratio;
+        const qw = pr[3] * qx + pr[7] * qy + pr[11] * qz + pr[15];
+        let jerk: number;
+        if (qw > 1e-6) {
+          const qsx = ((pr[0] * qx + pr[4] * qy + pr[8] * qz + pr[12]) / qw * 0.5 + 0.5) * W;
+          const qsy = (1 - ((pr[1] * qx + pr[5] * qy + pr[9] * qz + pr[13]) / qw * 0.5 + 0.5)) * H;
+          jerk = Math.hypot(sx - qsx, sy - qsy) * k1;
+        } else {
+          // Steady motion would have taken it behind the camera: judge it on screen, as before.
+          jerk = Math.hypot(vx - pvx, vy - pvy);
+        }
         if (sp > 1 || jerk > 1) {
           this.#jerkSum2 += jerk * jerk;
           this.#jerkN++;
@@ -652,6 +694,12 @@ export class GlitchHunter {
         this.#psy[s] = this.#tracked[s] >= 1 ? this.#sy[s] : NaN;
         this.#sx[s] = sx;
         this.#sy[s] = sy;
+        this.#prx[s] = this.#tracked[s] >= 1 ? this.#rx[s] : NaN;
+        this.#pry[s] = this.#tracked[s] >= 1 ? this.#ry[s] : NaN;
+        this.#prz[s] = this.#tracked[s] >= 1 ? this.#rz[s] : NaN;
+        this.#rx[s] = rx;
+        this.#ry[s] = ry;
+        this.#rz[s] = rz;
         if (this.#tracked[s] < 250) this.#tracked[s]++;
       } else {
         this.#tracked[s] = 0;

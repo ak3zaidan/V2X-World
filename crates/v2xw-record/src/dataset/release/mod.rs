@@ -335,7 +335,7 @@ pub struct WrittenFile {
     pub rows: Option<u64>,
 }
 
-/// What [`write`] produced.
+/// What [`write`](fn@write) produced.
 #[derive(Debug, Clone)]
 pub struct WrittenRelease {
     /// The release root (`<out>/dataset`).

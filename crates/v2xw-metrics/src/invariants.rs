@@ -22,7 +22,7 @@
 //!
 //! # What a check does when it has no data
 //!
-//! It reports [`InvariantOutcome::skipped`] with the reason, and `held()` answers `true`.
+//! It reports `InvariantOutcome::skipped` with the reason, and `held()` answers `true`.
 //! An invariant no record bears on is not violated — but a run that thought it was checking
 //! I-N1 and had no byte attributions should be told, not reassured, so the reason travels
 //! with the outcome and [`InvariantReport::skipped`] lists them.

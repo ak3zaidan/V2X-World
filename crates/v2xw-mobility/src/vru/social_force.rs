@@ -466,7 +466,7 @@ pub struct Pedestrian {
     /// changed faster than [`PED_MAX_ACCEL_MPS2`]), which closes the same way.
     pub carry: Vec3,
     /// The direction it faces, radians: where it actually walks, turned at no more than
-    /// [`PED_MAX_YAW_RATE`], and held while it stands ([`SocialForce::settle`]).
+    /// [`PED_MAX_YAW_RATE`], and held while it stands (`SocialForce::settle`).
     pub heading_rad: f64,
     /// How it actually moved over the last step, m/s: the displacement of its drawn position
     /// over the step, after the kerb, the pavement's edges and a corner's carry. What the
@@ -507,7 +507,7 @@ const STEER_LOOKAHEAD_M: f64 = 1.0;
 /// the 1995 model's own driving term for a walker setting off from standing at the
 /// document's mean desired speed, 1.34 m/s over τ = 0.5 s (2.68 m/s²), so the mean walker
 /// sets off as the model has it. Nothing in the model bounded the sum of the other terms:
-/// each neighbour pushes with up to 7 m/s² ([`pair_force_cap`]) and each kerb with up to
+/// each neighbour pushes with up to 7 m/s² (`pair_force_cap`) and each kerb with up to
 /// 50 m/s², and a walker in a crowd waiting on a 1 m pavement at a crossing (the quarter
 /// benchmark's first live window, 1,812 steps over 3 m/s² in 60 s) swung sideways at up
 /// to 1.5 m/s and was stopped dead on the pavement's edge. Legs do not do that.
@@ -834,7 +834,7 @@ impl SocialForce {
     }
 
     /// The walkable lanes a walker may go on to from `lane`: its walkable successors whose
-    /// start is within [`CARRY_MAX_M`] of its end. A successor further off is a gap in the
+    /// start is within `CARRY_MAX_M` of its end. A successor further off is a gap in the
     /// imported walk network (the Midtown extract has 5–8 m ones), which a walker could only
     /// cross by a jump; routes do not use it.
     pub fn walk_successors(world: &World, lane: LaneId) -> Vec<LaneId> {

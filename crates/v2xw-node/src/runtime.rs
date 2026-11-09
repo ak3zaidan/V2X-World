@@ -106,7 +106,7 @@ pub struct RxFrame {
     /// certificate out of its own cache and checks the signature with its own crypto
     /// backend, so [`RxFrame::signature_valid`] is not consulted at all. `None` is the
     /// legacy path, where the engine decided validity on the node's behalf and the node
-    /// only pays for the check. See [`ObuRuntime::classify`].
+    /// only pays for the check. See `ObuRuntime::classify`.
     pub spdu: Option<Vec<u8>>,
     /// On the legacy path (`spdu` `None`): the signer certificate the frame attaches,
     /// which the receiver validates to its installed roots before

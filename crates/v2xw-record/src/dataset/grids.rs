@@ -3,7 +3,7 @@
 //!
 //! The rule: "every schema field that carries a float declares its quantum … the quantum is part
 //! of the field's contract and appears in the model card **or the dataset schema**", and the
-//! determinism contract asks for "a test [that] scans every output file for any value that is off
+//! determinism contract asks for "a test \[that\] scans every output file for any value that is off
 //! its grid".
 //!
 //! [`crate::export::scan`] already does that for the channel tables, against the
