@@ -29,6 +29,14 @@ script fails if a mark names no test that runs. Mark a new test slow when it tak
 in a debug build; CI's `ci` profile (`cargo test --profile ci`, the workspace optimised at
 opt-level 1 with overflow checks and debug assertions on) is what both CI jobs use.
 
+The Studio's browser tests render WebGL on SwiftShader, a software rasteriser, so on CI's
+few slow cores a frame takes several times longer than on a laptop. To reproduce that
+locally, `VWP_E2E_CPU_HOGS=<n> pnpm --dir ui --filter @vwp/studio test:e2e` runs `n`
+busy-loop processes alongside the suite (one per core is about a CI runner). Tests that wait
+for the camera wait on the viewer's frame clock (`renderClockSeconds`), not on wall time, and
+poll with probes that draw nothing; a test that needs a frame rate or a wall-clock interval
+is wrong on a slow runner even when it passes on a fast one.
+
 ## Selected integration suites
 
 | Crate | Tests | What they establish |

@@ -286,7 +286,12 @@ fn generate(unit: &Unit, asn_root: &Path, out_dir: &Path, patches: &[Patch]) -> 
         println!("cargo:warning=v2xw-msg [{}]: {warning}", unit.label);
     }
 
-    let mut generated = sanitise_doc_comments(&result.generated);
+    // rasn-compiler formats its output with rustfmt, but looks for it without the
+    // executable suffix, so on Windows it silently keeps the unformatted one-line text,
+    // which the scope fix and the patches below cannot match. Formatting again here is a
+    // no-op where rasn-compiler found rustfmt and makes the output the same everywhere.
+    let formatted = rustfmt(&result.generated)?;
+    let mut generated = sanitise_doc_comments(&formatted);
     if unit.out_file == SECURITY.out_file {
         link_ieee1609dot2dot1_scopes(&mut generated)?;
     }
@@ -323,6 +328,55 @@ const DOT1_MODULES: &[&str] = &[
     "ieee1609_dot2_dot1_ma_ra_interface",
     "ieee1609_dot2_dot1_protocol",
 ];
+
+/// rustfmt with its default options, as rasn-compiler runs it, reading the source on stdin.
+/// `$RUSTFMT` names it explicitly; otherwise it is the one beside `$CARGO` (the active
+/// toolchain's), with the platform's executable suffix.
+fn rustfmt(source: &str) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let exe = format!("rustfmt{}", std::env::consts::EXE_SUFFIX);
+    let path = std::env::var_os("RUSTFMT")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("CARGO")
+                .map(|c| PathBuf::from(c).with_file_name(&exe))
+                .filter(|p| p.is_file())
+        })
+        .unwrap_or_else(|| PathBuf::from(&exe));
+    let mut child = Command::new(&path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            format!(
+                "cannot run {} to format the generated bindings: {e}\n\
+                 Install the toolchain's rustfmt component (rust-toolchain.toml lists it) \
+                 or set RUSTFMT.",
+                path.display()
+            )
+        })?;
+    let mut stdin = child.stdin.take().ok_or("rustfmt: no stdin")?;
+    let input = source.to_owned();
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("rustfmt did not finish: {e}"))?;
+    writer
+        .join()
+        .map_err(|_| "rustfmt: the stdin writer panicked".to_string())?
+        .map_err(|e| format!("rustfmt: cannot write the bindings: {e}"))?;
+    // 3: formatted, with lines it could not shorten (rasn-compiler accepts it too).
+    if !matches!(out.status.code(), Some(0) | Some(3)) {
+        return Err(format!(
+            "rustfmt could not format the generated bindings ({}):\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    String::from_utf8(out.stdout).map_err(|e| format!("rustfmt wrote non-UTF-8 output: {e}"))
+}
 
 /// Fixes two scoping gaps in what `rasn-compiler` 0.16 emits for the 1609.2.1 modules.
 ///

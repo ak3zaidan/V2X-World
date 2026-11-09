@@ -89,6 +89,8 @@ interface Placement extends Differential {
   readonly coveredFraction: number;
   /** What covers it, when anything does. */
   readonly coveredBy: string;
+  /** The viewer's frame clock (`renderClockSeconds`) when the placement was read. */
+  readonly clock: number;
 }
 
 interface LumaStats {
@@ -128,9 +130,10 @@ async function differential(
   page: Page,
   target: HideTarget,
   region: { subject: true } | { bandFromTop: number; bandToTop: number },
+  draw = true,
 ): Promise<Placement & { luma: LumaStats }> {
   return page.evaluate(
-    ({ target, region, delta, patch, nothingFollowed }) => {
+    ({ target, region, delta, patch, nothingFollowed, draw }) => {
       const engine = (window as unknown as { __vwpStudio: { engine: Record<string, unknown> } }).__vwpStudio.engine;
       const viewer = engine.viewer as {
         camera: {
@@ -146,6 +149,7 @@ async function differential(
           locators: { group: { visible: boolean } };
         };
         worldRenderer: { buildingsGroup: { visible: boolean } };
+        renderClockSeconds: number;
         step(dt: number): unknown;
       };
       const canvas = document.querySelector('[data-testid="viewer-canvas"]') as HTMLCanvasElement;
@@ -155,7 +159,8 @@ async function differential(
       const nodes = target === "actors"
         ? [viewer.actors.group, viewer.overlays.locators.group]
         : [viewer.worldRenderer.buildingsGroup];
-      const blank = { ndcX: 0, ndcY: 0, ndcZ: 0, inFrame: false, topmost: "none", coveredFraction: 0, coveredBy: "" };
+      const clock = viewer.renderClockSeconds;
+      const blank = { ndcX: 0, ndcY: 0, ndcZ: 0, inFrame: false, topmost: "none", coveredFraction: 0, coveredBy: "", clock };
       const zero = { signal: 0, noise: 0, samples: 0 };
       const noLuma = { mean: 0, stdDev: 0, min: 0, max: 0 };
 
@@ -239,8 +244,9 @@ async function differential(
           problem: null, ndcX, ndcY, ndcZ, inFrame, topmost,
           coveredFraction: sampled === 0 ? 0 : covered / sampled,
           coveredBy,
+          clock,
         };
-        if (!inFrame) return { ...place, ...zero, luma: noLuma };
+        if (!inFrame || !draw) return { ...place, ...zero, luma: noLuma };
 
         pw = patch;
         ph = patch;
@@ -312,7 +318,7 @@ async function differential(
         luma: { mean, stdDev: Math.sqrt(Math.max(0, sumSq / n - mean * mean)), min, max },
       };
     },
-    { target, region, delta: PIXEL_DELTA, patch: PATCH, nothingFollowed: NOTHING_FOLLOWED },
+    { target, region, delta: PIXEL_DELTA, patch: PATCH, nothingFollowed: NOTHING_FOLLOWED, draw },
   );
 }
 
@@ -320,6 +326,19 @@ async function differential(
 function placeFollowedVehicle(page: Page): Promise<Placement & { luma: LumaStats }> {
   guardAgainstReload(page);
   return differential(page, "actors", { subject: true });
+}
+
+/**
+ * Where the followed vehicle projects and what covers it, without drawing anything.
+ *
+ * {@link placeFollowedVehicle} draws five frames inside one task to take its pixel differential;
+ * under SwiftShader on a slow runner that is several seconds, during which no real frame runs. A
+ * loop that only waits for the camera to arrive must not pay that per poll: it starved the very
+ * frames it was waiting for, and two polls of it spanned many seconds of a moving run.
+ */
+function locateFollowedVehicle(page: Page): Promise<Placement> {
+  guardAgainstReload(page);
+  return differential(page, "actors", { subject: true }, false);
 }
 
 /** What the buildings contribute to a horizontal band of the frame, and how that band reads. */
@@ -459,43 +478,89 @@ async function streaming(page: Page): Promise<void> {
 }
 
 /**
- * How much a 96-pixel patch at the centre of the frame changes between two consecutive draws.
+ * How much a 96-pixel patch changes between two consecutive draws: at the centre of the frame, or
+ * centred on a point given in normalised device coordinates.
  *
  * Zero on a settled scene — measured at exactly zero over four consecutive draws with the run
  * paused and the camera converged. Anything above that is the scene still moving, and it is the only
  * honest way to know when a differential measurement can be trusted.
  */
-async function stillness(page: Page): Promise<number> {
-  return page.evaluate((delta: number) => {
-    const v = (
-      window as unknown as {
-        __vwpStudio: { engine: { viewer: { step(dt: number): unknown } } };
+async function stillness(page: Page, at: { ndcX: number; ndcY: number } = { ndcX: 0, ndcY: 0 }): Promise<number> {
+  return page.evaluate(
+    ({ delta, at }) => {
+      const v = (
+        window as unknown as {
+          __vwpStudio: {
+            engine: {
+              viewer: {
+                step(dt: number): unknown;
+                overlays: { group: { children: { visible: boolean }[] }; locators: { group: { visible: boolean } } };
+              };
+            };
+          };
+        }
+      ).__vwpStudio.engine.viewer;
+      const canvas = document.querySelector('[data-testid="viewer-canvas"]') as HTMLCanvasElement;
+      const gl = (canvas.getContext("webgl2") ?? canvas.getContext("webgl")) as WebGLRenderingContext;
+      const patch = 96;
+      const pw = Math.min(patch, canvas.width);
+      const ph = Math.min(patch, canvas.height);
+      // readPixels counts rows from the bottom of the drawing buffer.
+      const x0 = Math.max(0, Math.min(canvas.width - pw, Math.round(((at.ndcX + 1) / 2) * canvas.width) - (pw >> 1)));
+      const y0 = Math.max(0, Math.min(canvas.height - ph, Math.round(((at.ndcY + 1) / 2) * canvas.height) - (ph >> 1)));
+      const grab = (): Uint8Array => {
+        const buf = new Uint8Array(pw * ph * 4);
+        gl.readPixels(x0, y0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        return buf;
+      };
+      // The render-clock overlays off, as in `differential`: they move on a paused run.
+      const marks = v.overlays.locators.group;
+      const animated = v.overlays.group.children.filter((c) => c !== marks && c.visible);
+      for (const c of animated) c.visible = false;
+      v.step(1 / 60);
+      const a = grab();
+      v.step(1 / 60);
+      const b = grab();
+      for (const c of animated) c.visible = true;
+      let n = 0;
+      for (let i = 0; i < a.length; i += 4) {
+        if (Math.abs(a[i] - b[i]) > delta || Math.abs(a[i + 1] - b[i + 1]) > delta || Math.abs(a[i + 2] - b[i + 2]) > delta) {
+          n++;
+        }
       }
-    ).__vwpStudio.engine.viewer;
-    const canvas = document.querySelector('[data-testid="viewer-canvas"]') as HTMLCanvasElement;
-    const gl = (canvas.getContext("webgl2") ?? canvas.getContext("webgl")) as WebGLRenderingContext;
-    const patch = 96;
-    const x0 = Math.max(0, (canvas.width >> 1) - (patch >> 1));
-    const y0 = Math.max(0, (canvas.height >> 1) - (patch >> 1));
-    const pw = Math.min(patch, canvas.width - x0);
-    const ph = Math.min(patch, canvas.height - y0);
-    const grab = (): Uint8Array => {
-      const buf = new Uint8Array(pw * ph * 4);
-      gl.readPixels(x0, y0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-      return buf;
-    };
-    v.step(1 / 60);
-    const a = grab();
-    v.step(1 / 60);
-    const b = grab();
-    let n = 0;
-    for (let i = 0; i < a.length; i += 4) {
-      if (Math.abs(a[i] - b[i]) > delta || Math.abs(a[i + 1] - b[i + 1]) > delta || Math.abs(a[i + 2] - b[i + 2]) > delta) {
-        n++;
-      }
-    }
-    return n / (a.length / 4);
-  }, PIXEL_DELTA);
+      return n / (a.length / 4);
+    },
+    { delta: PIXEL_DELTA, at: { ndcX: at.ndcX, ndcY: at.ndcY } },
+  );
+}
+
+/** The viewer's frame clock, `renderClockSeconds`: the sum of every real frame's held `dt`. */
+function viewerClock(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __vwpStudio: { engine: { viewer: { renderClockSeconds: number } } } }).__vwpStudio.engine
+        .viewer.renderClockSeconds,
+  );
+}
+
+/**
+ * Wait until the viewer's own frame clock has advanced by `seconds`.
+ *
+ * The camera's smoothing and its fly-down advance on that clock — each real frame's `dt`, held to
+ * `maxFrameSeconds` — not on the wall clock. On a GPU the two run together; on a software renderer
+ * at one or two frames a second, 700 ms of wall time can be a single frame or none, so a poll
+ * spaced in wall time can compare two reads with no camera motion between them. Spaced on this
+ * clock, every pair of reads has the same camera motion behind it whatever the frame rate.
+ */
+async function waitForViewerClock(page: Page, seconds: number, timeoutMs = 30_000): Promise<void> {
+  const until = (await viewerClock(page)) + seconds;
+  await expect
+    .poll(() => viewerClock(page), {
+      timeout: timeoutMs,
+      intervals: [100, 200, 250],
+      message: `the viewer did not advance its frame clock by ${seconds} s`,
+    })
+    .toBeGreaterThanOrEqual(until);
 }
 
 /**
@@ -507,9 +572,14 @@ async function stillness(page: Page): Promise<number> {
  * a GPU. And a camera-motion threshold in metres cannot be right in two modes at once — six metres
  * is nothing at 1,700 m altitude and is most of the frame at nine metres behind a car.
  *
- * So the criterion is the frame itself: keep waiting until two consecutive draws of the middle of
- * the frame are the same. An earlier version waited on metres and measured a 20% noise floor it
- * then blamed on the renderer; with this one the floor is zero.
+ * So the criterion is the frame itself: keep waiting until two consecutive draws of the patch
+ * around the subject are the same. An earlier version waited on metres and measured a 20% noise
+ * floor it then blamed on the renderer; with this one the floor is zero.
+ *
+ * Polls are spaced on the viewer's clock ({@link waitForViewerClock}), and each costs one draw-free
+ * placement and two draws. Each used to be the full five-draw differential: on a slow CI runner
+ * that was several seconds a poll, held the main thread so the camera got few real frames to
+ * arrive in, and ran the 120 s test out inside the loop.
  */
 async function freeze(page: Page, budgetMs = 60_000): Promise<void> {
   await rpc(page, "run.pause").catch(() => undefined);
@@ -518,8 +588,8 @@ async function freeze(page: Page, budgetMs = 60_000): Promise<void> {
   let moving = 1;
   let where = "the centre of the frame";
   while (Date.now() < deadline) {
-    await page.waitForTimeout(700);
-    const subject = await placeFollowedVehicle(page);
+    await waitForViewerClock(page, 0.7);
+    const subject = await locateFollowedVehicle(page);
     if (subject.problem === NOTHING_FOLLOWED) {
       // No subject: the middle of the frame is the best available witness.
       moving = await stillness(page);
@@ -535,7 +605,7 @@ async function freeze(page: Page, budgetMs = 60_000): Promise<void> {
       moving = 1;
       where = "the followed vehicle, which is still off-frame";
     } else {
-      moving = subject.noise;
+      moving = await stillness(page, subject);
       where = "the patch around the followed vehicle";
     }
     // Two quiet reads, not one. A single quiet sample can land between two slow camera steps.
@@ -791,23 +861,33 @@ test("the chase view shows the vehicle it follows", async ({ page }) => {
  * stopping the simulation. That matters here: `freeze` pauses the run, a paused run sends no
  * `Telemetry`, and with no telemetry the OBU HUD renders nothing. Measuring whether the HUD covers
  * the car on a frozen frame would have measured an empty viewport and called it clear.
+ *
+ * Drift is measured over 0.8 s of the viewer's frame clock, not 800 ms of wall time, and the probe
+ * draws nothing. On a slow CI runner the old loop took a five-draw pixel differential per poll —
+ * seconds each, with the run still going — so "800 ms" between two reads was really several
+ * seconds of a moving car, often through a turn, and the camera had had few real frames in which
+ * to follow it.
  */
-async function settleInFrame(page: Page, budgetMs = 45_000): Promise<Placement & { luma: LumaStats }> {
+async function settleInFrame(page: Page, budgetMs = 45_000): Promise<Placement> {
+  const span = 0.8;
+  const limit = 0.03;
   const deadline = Date.now() + budgetMs;
-  let previous = await placeFollowedVehicle(page);
+  let previous = await locateFollowedVehicle(page);
   let drift = 1;
   while (Date.now() < deadline) {
-    await page.waitForTimeout(800);
-    const now = await placeFollowedVehicle(page);
-    if (now.problem === null && previous.problem === null && now.inFrame) {
-      drift = Math.hypot(now.ndcX - previous.ndcX, now.ndcY - previous.ndcY);
-    }
+    await waitForViewerClock(page, span);
+    const now = await locateFollowedVehicle(page);
+    const measurable = now.problem === null && previous.problem === null && now.inFrame && previous.inFrame;
+    // Per 0.8 s of the frame clock: one long last frame can carry the clock a little past it.
+    const elapsed = Math.max(span, now.clock - previous.clock);
+    drift = measurable ? (Math.hypot(now.ndcX - previous.ndcX, now.ndcY - previous.ndcY) * span) / elapsed : 1;
     previous = now;
-    if (drift < 0.03) return now;
+    if (drift < limit) return now;
   }
-  expect(drift, `the followed vehicle never settled in the frame (${drift.toFixed(3)} ndc per 800 ms)`).toBeLessThan(
-    0.03,
-  );
+  expect(
+    drift,
+    `the followed vehicle never settled in the frame (${drift.toFixed(3)} ndc per ${span} s of the viewer's clock)`,
+  ).toBeLessThan(limit);
   return previous;
 }
 

@@ -57,6 +57,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # `xmllint` validates the SUMO exporters' files against SUMO's schemas. macOS ships
+      # it; Windows runners have none, so the schema step is skipped there explicitly.
+      - name: Install xmllint (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q libxml2-utils
+
+      - name: Skip SUMO schema validation (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "V2XW_SKIP_SUMO_XSD=1" >> "$GITHUB_ENV"
+
       - name: Format check
         run: cargo fmt --all -- --check
 

@@ -14,6 +14,8 @@ const studioPort = process.env.VWP_STUDIO_PORT ?? "5174";
 
 export default defineConfig({
   testDir: "./e2e",
+  // `VWP_E2E_CPU_HOGS=<n>` loads the CPU to reproduce a slow CI runner; see e2e/global-setup.ts.
+  globalSetup: "./e2e/global-setup.ts",
   timeout: 120_000,
   expect: { timeout: 30_000 },
   fullyParallel: false,

@@ -6,8 +6,9 @@
 //!    they come from a local SUMO install (`$SUMO_HOME` or `$V2XW_SUMO_VENV`,
 //!    `<sumo>/data/xsd`) or are fetched at test time, pinned to SUMO 1.27.1, into the
 //!    git-ignored `target/sumo-xsd/`. `$V2XW_SUMO_XSD_DIR` names a directory to use
-//!    instead. With no schema and no network the test fails rather than skipping, unless
-//!    `V2XW_SKIP_SUMO_XSD=1` says so explicitly;
+//!    instead. With no schema and no network the test fails rather than skipping.
+//!    `V2XW_SKIP_SUMO_XSD=1` skips this step explicitly (CI sets it on Windows, whose
+//!    runners have no `xmllint`; Linux and macOS validate);
 //! 2. agree with the engine's own trip records (the run report's despawn causes) and with
 //!    the recording's own counts (an edge-by-edge recount of `gt.kinematics`);
 //! 3. be byte-identical across two runs of the same seed;
@@ -65,6 +66,10 @@ fn patch_summary(dir: &Path) {
 /// Where SUMO's schemas are, fetching them if need be. `None` only with the explicit
 /// opt-out.
 fn xsd_dir() -> Option<PathBuf> {
+    if std::env::var("V2XW_SKIP_SUMO_XSD").as_deref() == Ok("1") {
+        eprintln!("SKIPPED: schema validation, V2XW_SKIP_SUMO_XSD=1");
+        return None;
+    }
     if let Ok(d) = std::env::var("V2XW_SUMO_XSD_DIR") {
         return Some(PathBuf::from(d));
     }
