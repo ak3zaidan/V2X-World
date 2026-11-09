@@ -108,13 +108,33 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.screenshot({ path: `${SHOTS}/01-map-view.png`, fullPage: false });
 
   // 6. Clicking an actor: pick → flyTo → view.follow → Telemetry → HUD.
-  //    The click goes through the real picker: find a drawn actor's screen position first.
+  //    The HUD fills from the radio's `Telemetry`, so the subject is the first drawn actor with a
+  //    radio behind it. `selectFirstActor()` takes the first occupied pose slot, and which actor
+  //    holds it depends on how long the shared mock run has been going: trip ends respawn into
+  //    the lowest free slot, and an eighth of the mock's actors carry no radio. When slot 0 holds
+  //    one of those the HUD says "Carries no radio" and `hud-identity` never comes, which is how
+  //    this step failed 20 minutes into a slow CI run (regressions.spec.ts's `followFirstActor`
+  //    has the same note).
   const clicked = await page.evaluate(() => {
-    const api = window.__vwpStudio;
-    if (!api) return null;
-    return api.selectFirstActor();
+    const engine = window.__vwpStudio?.engine as unknown as
+      | {
+          client: { poses: { count: number; occupied: Uint8Array; actorId: Uint32Array } } | null;
+          nodeByActor: Map<number, number>;
+          selectActor(id: number | null, mode?: string): Promise<void>;
+        }
+      | undefined;
+    const poses = engine?.client?.poses;
+    if (!engine || !poses) return null;
+    for (let slot = 0; slot < poses.count; slot++) {
+      if (poses.occupied[slot] !== 1) continue;
+      const id = poses.actorId[slot];
+      if (engine.nodeByActor.get(id) === undefined) continue;
+      void engine.selectActor(id, "chase");
+      return id;
+    }
+    return null;
   });
-  expect(clicked).not.toBeNull();
+  expect(clicked, "no drawn actor has a radio behind it").not.toBeNull();
 
   // The chip appears only while the camera follows someone.
   await expect(page.getByTestId("follow-chip")).toBeVisible({ timeout: 20_000 });

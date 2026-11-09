@@ -668,6 +668,53 @@ export class CameraController {
   }
 
   /**
+   * The map extent ({@link fitExtent}'s argument) at which the part of the viewport nothing floats
+   * over holds a ground box with `paddingM` clear on every side, seen from the current map focus
+   * and bearing.
+   *
+   * "Box extent plus twice the padding" is that number only when the focus is the box's centre
+   * and nothing covers the viewport. Neither holds for the plan view's own framing: the focus
+   * stays put until the traffic drifts out of the middle half of the view, and the world clamp
+   * can hold it at the world's centre; the toolbar's inset moves the focus to the middle of the
+   * rectangle below it (a lens shift, {@link setViewInsets}), so the canvas reaches that much
+   * less far below the focus. On the mock run's 2 km world the two took 27 m and 44 m of a 60 m
+   * margin between them, and the vehicle at the bottom edge was culled.
+   *
+   * `about` measures from another focus instead: the world's centre, for the widest view of the
+   * world itself, which is where the clamp puts the focus once the window holds the whole world.
+   */
+  extentHolding(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    paddingM = 0,
+    about: { readonly x: number; readonly y: number } = this.target,
+  ): number {
+    const { top, right, bottom, left } = this.#insets;
+    const visibleH = Math.max(1, this.#viewportH - top - bottom);
+    const visibleW = Math.max(1, this.#viewportW - left - right);
+    // Straight down at `bearing`: the screen's up is the bearing direction, its right a quarter
+    // turn clockwise of it.
+    const ux = Math.cos(this.#bearing);
+    const uy = Math.sin(this.#bearing);
+    let up = 0;
+    let across = 0;
+    for (const x of [minX, maxX]) {
+      for (const y of [minY, maxY]) {
+        const dx = x - about.x;
+        const dy = y - about.y;
+        up = Math.max(up, Math.abs(dx * ux + dy * uy));
+        across = Math.max(across, Math.abs(dx * uy - dy * ux));
+      }
+    }
+    // The focus is in the middle of the unobstructed rectangle, and a metre is extent / height
+    // pixels in both directions.
+    const pad = Math.max(0, paddingM);
+    return Math.max((2 * (up + pad) * this.#viewportH) / visibleH, (2 * (across + pad) * this.#viewportH) / visibleW);
+  }
+
+  /**
    * Tell the controller how big the followed subject is: the chase camera stands off and looks at
    * it in proportion (a bus from further back and higher up than a car, a person from closer and
    * lower), and the dashboard camera sits at its driver's eye. `vru` is a person or a rider.
@@ -1647,16 +1694,22 @@ export class CameraController {
    * 40 % of the frame outside the city — a black band with nothing in it. The same happens when a
    * drag reaches the edge.
    *
-   * The window is the vertical extent by the horizontal extent, rotated by the bearing; its
-   * axis-aligned span is what has to fit. When the world is *narrower* than the window on an axis
-   * the focus is centred on that axis instead, which is the only framing that can be right.
+   * The window is the part of the viewport nothing floats over ({@link setViewInsets}), rotated by
+   * the bearing; its axis-aligned span is what has to fit. It is centred on the focus, which the
+   * lens shift puts in its middle; the whole canvas is not. Clamping the canvas as if it were
+   * centred kept it a toolbar's height short of the edge opposite the toolbar, and culled the
+   * vehicles there; what lies beyond the world now is only ever under a panel. When the world is
+   * *narrower* than the window on an axis the focus is centred on that axis instead, which is the
+   * only framing that can be right.
    */
   #clampMapTarget(): void {
     const world = this.#world?.world;
     if (!world) return;
     const b = world.bbox;
-    const halfV = this.extentM / 2;
-    const halfH = halfV * Math.max(0.01, this.camera.aspect);
+    const { top, right, bottom, left } = this.#insets;
+    const metresPerPx = this.extentM / this.#viewportH;
+    const halfV = (Math.max(1, this.#viewportH - top - bottom) * metresPerPx) / 2;
+    const halfH = (Math.max(1, this.#viewportW - left - right) * metresPerPx) / 2;
     const ab = Math.abs(Math.cos(this.#bearing));
     const sb = Math.abs(Math.sin(this.#bearing));
     const spanX = halfH * sb + halfV * ab;

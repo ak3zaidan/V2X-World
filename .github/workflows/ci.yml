@@ -34,7 +34,9 @@ jobs:
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    # Windows takes about 41 min just to build the test binaries, and 120 min left too
+    # little for its tests; a hang still ends the job.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 180 || 120 }}
     strategy:
       fail-fast: false
       matrix:

@@ -165,6 +165,11 @@ export interface ActorFraming {
   readonly centerZ: number;
   /** The larger horizontal span of the box, metres. */
   readonly extentM: number;
+  /** The box itself, metres. */
+  readonly minX: number;
+  readonly minY: number;
+  readonly maxX: number;
+  readonly maxY: number;
 }
 
 /** What one frame did, returned by {@link Viewer.renderFrame}. */
@@ -1143,6 +1148,10 @@ export class Viewer {
       centerY: (minY + maxY) / 2,
       centerZ: sumZ / count,
       extentM: Math.max(maxX - minX, maxY - minY),
+      minX,
+      minY,
+      maxX,
+      maxY,
     };
   }
 
@@ -1585,9 +1594,24 @@ export class Viewer {
     }
     const own = this.#autoExtentM;
     if (own !== null && Math.abs(this.cameras.extentM - own) <= 1e-6 * Math.max(1, own)) {
-      const w = this.worldRenderer.world;
-      const worldExtent = w ? Math.max(w.bbox.maxXM - w.bbox.minXM, w.bbox.maxYM - w.bbox.minYM) * 1.05 : Infinity;
-      const want = Math.min(worldExtent, f.extentM + 2 * OPEN_TRAFFIC_PADDING_M);
+      // Both measured from where the camera actually looks and in the part of the viewport
+      // nothing covers (`CameraController.extentHolding`): sized round the traffic's own centre
+      // on the whole canvas, the margin went to the held focus and the toolbar's lens shift, and
+      // a vehicle at the world's edge was culled from the opening frame.
+      const c = this.cameras;
+      // Never wider than the whole world held from its centre, 2.5 % clear of it.
+      const wb = this.worldRenderer.world?.bbox;
+      const worldExtent = wb
+        ? c.extentHolding(
+            wb.minXM,
+            wb.minYM,
+            wb.maxXM,
+            wb.maxYM,
+            Math.max(wb.maxXM - wb.minXM, wb.maxYM - wb.minYM) * 0.025,
+            { x: (wb.minXM + wb.maxXM) / 2, y: (wb.minYM + wb.maxYM) / 2 },
+          )
+        : Infinity;
+      const want = Math.min(worldExtent, c.extentHolding(f.minX, f.minY, f.maxX, f.maxY, OPEN_TRAFFIC_PADDING_M));
       if (want > this.cameras.extentM) this.cameras.fitExtent(want);
       this.#autoExtentM = this.cameras.extentM;
     } else {

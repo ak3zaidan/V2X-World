@@ -147,6 +147,61 @@ describe("the aerial view draws the traffic", () => {
   });
 
   /**
+   * The same property for the opening frame the viewer widens itself, with the Studio's toolbar
+   * over the top of the canvas.
+   *
+   * The toolbar's inset moves the focus to the middle of the rectangle below it (a lens shift), so
+   * the canvas reaches a toolbar's height less far below the focus than above it. The fit used to
+   * be the traffic's box plus 60 m about the box's own centre, on the whole canvas, and the world
+   * clamp moved the focus as if the canvas were centred. Each layout below lost its southernmost
+   * vehicle that way, on one half of the defect each:
+   *
+   * - traffic reaching the world's south edge: the clamp pinned the frame to that edge and the
+   *   canvas ended about 40 m short of it;
+   * - a vehicle arriving south of the traffic: the focus holds until the traffic's centre leaves
+   *   the middle half of the view, so the new box's 60 m margin was measured from a centre the
+   *   camera was not on, and the lens shift took the rest — the Studio e2e's "1 of 200 live
+   *   vehicles are outside the opening aerial frustum", there with the focus held on the world's
+   *   centre by the clamp.
+   */
+  it("holds the southernmost vehicle in the opening frame under a toolbar inset", () => {
+    const grid = makeGridWorld({ blocks: 16, blockM: 120, buildingsPerBlock: 1 });
+    const b = grid.world.bbox;
+    const extent = Math.max(b.maxXM - b.minXM, b.maxYM - b.minYM);
+    const cx = (b.minXM + b.maxXM) / 2;
+    const cy = (b.minYM + b.maxYM) / 2;
+    // Each layout is the traffic's y positions, in phases of two seconds each.
+    const layouts: Record<string, number[][]> = {
+      "at the world's edge": [[b.minYM + 5, b.maxYM - 300, b.minYM + 400]],
+      "arriving south of the traffic": [
+        // Wider than the 1,400 m opening, so the first phase widens it and the second widens again.
+        [cy - 650, cy + 650, cy],
+        [cy - 650, cy + 650, cy, cy - 750],
+      ],
+    };
+    for (const [name, phases] of Object.entries(layouts)) {
+      const { viewer } = makeViewer();
+      viewer.setWorld(grid.world);
+      viewer.setViewInsets({ top: 44 });
+      // As `StudioEngine.#adoptWorld` opens it: the viewer's own zoom, so it may widen.
+      viewer.setOpeningExtent(Math.min(extent * 1.05, STUDIO_MAP_OPEN_EXTENT_M));
+      viewer.cameras.snap();
+      for (const ys of phases) {
+        const poses = placedPoses(ys.map((y, i) => ({ actorId: i + 1, x: cx + 250 * (i - 1), y, headingRad: 0, speedMps: 0 })));
+        viewer.capture(poses);
+        viewer.capture(poses);
+        settle(viewer, 120);
+      }
+      const live = phases[phases.length - 1].length;
+      expect(viewer.cameras.mode).toBe("map");
+      expect(viewer.actors.stats.live).toBe(live);
+      expect(viewer.actors.stats.culled, `${name}: the southernmost vehicle is outside the opening frame`).toBe(0);
+      expect(viewer.actors.stats.drawn).toBe(live);
+      viewer.dispose();
+    }
+  });
+
+  /**
    * The same property with a crowd, and with the framing the viewer itself offers
    * (`Viewer.frameActors`, which the `f` key is bound to). This is the control: it shows the
    * assertion above is about *where the camera points*, not about culling being broken.

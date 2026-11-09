@@ -14,8 +14,15 @@ use tokio_tungstenite::tungstenite::Message;
 use v2xw_record::wire::{Frame, MsgType};
 use v2xw_server::{ServerOptions, StubOptions, serve_stub};
 
-/// Reads `frames` canonical frames slowly; returns `(drops notified, seq gaps seen)`.
-async fn slow_read(sync: &str, frames: usize) -> (usize, usize) {
+/// Reads up to `frames` canonical frames slowly; returns `(drops notified, seq gaps seen,
+/// frames read)`.
+///
+/// It stops early at the end of the run. A free run outruns a slow reader, and how far
+/// depends on the reader: Windows rounds the 3 ms sleep up to its ~15 ms timer tick, the
+/// fixture reached its end before 600 frames were read, and a loop that only counted
+/// frames waited for good — the connection's keep-alives kept the per-read timeout from
+/// firing. A whole-read deadline turns any other stall into a failure.
+async fn slow_read(sync: &str, frames: usize) -> (usize, usize, usize) {
     let server = serve_stub(
         ServerOptions {
             bind: std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
@@ -53,7 +60,12 @@ async fn slow_read(sync: &str, frames: usize) -> (usize, usize) {
     }
     let (mut drops, mut gaps, mut seen) = (0usize, 0usize, 0usize);
     let mut next: Option<u64> = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
     while seen < frames {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{sync}: read {seen} of {frames} frames in 180 s and the run never ended"
+        );
         let msg = tokio::time::timeout(Duration::from_secs(30), ws.next())
             .await
             .expect("the stream kept coming")
@@ -62,8 +74,10 @@ async fn slow_read(sync: &str, frames: usize) -> (usize, usize) {
         match msg {
             Message::Text(text) => {
                 let v: Value = serde_json::from_str(&text).expect("json");
-                if v.get("method").and_then(Value::as_str) == Some("stream.drop") {
-                    drops += 1;
+                match v.get("method").and_then(Value::as_str) {
+                    Some("stream.drop") => drops += 1,
+                    Some("run.state") if v["params"]["reason"] == "end of run" => break,
+                    _ => {}
                 }
             }
             Message::Binary(bytes) => {
@@ -87,17 +101,18 @@ async fn slow_read(sync: &str, frames: usize) -> (usize, usize) {
     }
     let _ = ws.close(None).await;
     server.stop().await;
-    (drops, gaps)
+    (drops, gaps, seen)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_client_synchronised_run_sheds_nothing_for_a_slow_reader() {
-    let (free_drops, _) = slow_read("free", 600).await;
+    let (free_drops, _, _) = slow_read("free", 600).await;
     assert!(
         free_drops > 0,
         "the control: an unthrottled free run outruns a slow reader and says so"
     );
-    let (drops, gaps) = slow_read("client", 600).await;
+    let (drops, gaps, seen) = slow_read("client", 600).await;
     assert_eq!(drops, 0, "a client-synchronised run dropped frames");
     assert_eq!(gaps, 0, "and the seq is dense");
+    assert_eq!(seen, 600, "and the run waited for the reader to the end");
 }

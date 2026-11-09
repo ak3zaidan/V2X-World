@@ -473,8 +473,10 @@ async function streaming(page: Page): Promise<void> {
       { timeout: 60_000 },
     )
     .toBeGreaterThan(0);
-  // A couple of seconds of real frames, so LOD, culling and the interpolator have all settled.
-  await page.waitForTimeout(2500);
+  // A couple of seconds of real frames, so LOD, culling, the opening frame and the interpolator
+  // have all settled: counted on the viewer's frame clock, since 2.5 s of wall time on a software
+  // renderer under load was measured at 0.57 s of it.
+  await waitForViewerClock(page, 2.5, 60_000);
 }
 
 /**
