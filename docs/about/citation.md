@@ -31,20 +31,7 @@ To cite the software:
 }
 ```
 
-A paper describing the simulator is in preparation
-([arXiv:XXXX.XXXXX](https://arxiv.org/abs/XXXX.XXXXX), a placeholder); the entry below will
-be filled in when it is available:
-
-```bibtex
-@misc{zaidan_v2xworld_paper,
-  title         = {TODO: paper title},
-  author        = {Zaidan, Ahmed},
-  year          = {TODO},
-  eprint        = {XXXX.XXXXX},
-  archivePrefix = {arXiv},
-  url           = {https://arxiv.org/abs/XXXX.XXXXX}
-}
-```
+A paper describing the simulator is in preparation.
 
 The [V2X-SCMS-MBD dataset](https://huggingface.co/datasets/akzaidan/v2x-scms-mbd-mini) on Hugging Face
 is licensed CC BY 4.0, which requires attribution: cite it with the software entry above

@@ -15,17 +15,13 @@
   <a href="LICENSE"><img alt="Code licence: Apache-2.0" src="https://img.shields.io/badge/code-Apache--2.0-blue"></a>
   <a href="https://creativecommons.org/licenses/by/4.0/"><img alt="Data licence: CC BY 4.0" src="https://img.shields.io/badge/data-CC%20BY%204.0-lightgrey"></a>
   <a href="rust-toolchain.toml"><img alt="Rust 1.98.1" src="https://img.shields.io/badge/rust-1.98.1-orange?logo=rust"></a>
-  <a href="https://arxiv.org/abs/XXXX.XXXXX"><img alt="Paper (coming soon)" src="https://img.shields.io/badge/paper-coming%20soon-b31b1b?logo=arxiv"></a>
   <a href="https://huggingface.co/datasets/akzaidan/v2x-scms-mbd-mini"><picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/datasets/huggingface/badges/resolve/main/dataset-on-hf-sm-dark.svg"><img alt="Dataset on Hugging Face" src="https://huggingface.co/datasets/huggingface/badges/resolve/main/dataset-on-hf-sm.svg"></picture></a>
 </p>
 
 <p align="center">
   <a href="https://ak3zaidan.github.io/V2X-World/"><img alt="Website" src=".github/assets/readme/btn-website.svg" width="128"></a>
-  <a href="https://github.com/ak3zaidan/V2X-World/releases"><img alt="Download" src=".github/assets/readme/btn-download.svg" width="128"></a>
   <a href="https://ak3zaidan.github.io/V2X-World/getting-started/introduction/"><img alt="Docs" src=".github/assets/readme/btn-docs.svg" width="128"></a>
-  <a href="https://arxiv.org/abs/XXXX.XXXXX"><img alt="Paper" src=".github/assets/readme/btn-paper.svg" width="128"></a>
   <a href="https://huggingface.co/datasets/akzaidan/v2x-scms-mbd-mini"><img alt="Dataset" src=".github/assets/readme/btn-dataset.svg" width="128"></a>
-  <a href="https://ak3zaidan.github.io/V2X-World/try/"><img alt="Try online" src=".github/assets/readme/btn-try.svg" width="128"></a>
 </p>
 
 https://github.com/user-attachments/assets/527e9bd5-5d25-4480-9bf7-0818f529f154
@@ -173,21 +169,9 @@ run, and `tools/dataset/` assembles, checks and publishes a release. The full sc
 > The eleven-run full release is planned. The dataset is free for anyone to use, share and
 > adapt under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); please cite it.
 
-## Paper and citation
+## Citation
 
-A paper describing the simulator is in preparation; the link and the entry below will be
-filled in when it is available.
-
-```bibtex
-@misc{zaidan_v2xworld_paper,
-  title         = {TODO: paper title},
-  author        = {Zaidan, Ahmed},
-  year          = {TODO},
-  eprint        = {XXXX.XXXXX},
-  archivePrefix = {arXiv},
-  url           = {https://arxiv.org/abs/XXXX.XXXXX}
-}
-```
+A paper describing the simulator is in preparation.
 
 To cite the software, use [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this repository"
 button reads it) or:
