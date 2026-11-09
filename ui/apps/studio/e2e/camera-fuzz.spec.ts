@@ -170,7 +170,9 @@ test.afterEach(async ({ request }) => {
 });
 
 test(`the camera survives a random walk through every control (seed ${SEED})`, async ({ page }, testInfo) => {
-  test.setTimeout(Math.max(300_000, STEPS * 15_000));
+  // A step is about 12.8 s on a hosted Ubuntu runner's software renderer (462 s for 36), and a
+  // runner a quarter slower took 546 s; 25 s a step leaves room for that without hiding a hang.
+  test.setTimeout(Math.max(300_000, STEPS * 25_000));
   await page.setViewportSize({ width: 1280, height: 800 });
   await streaming(page);
   const rnd = prng(SEED);

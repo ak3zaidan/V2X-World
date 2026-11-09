@@ -1162,6 +1162,9 @@ test("the world chip agrees with the world that was decoded", async ({ page }) =
  * ends.
  */
 test("the views are still correct at t = 0 and after the run has finished", async ({ page }) => {
+  // Two seeks and a frozen check at each end: 102 s on a hosted Ubuntu runner's software
+  // renderer, so the default 120 s ran out on a runner a quarter slower.
+  test.setTimeout(240_000);
   await streaming(page);
 
   /**
