@@ -47,6 +47,11 @@ rows:
     set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
     metric: cbr_mean
     expect: up
+    # Measured +0.9 % (sl_cbr +0.8 %): with sensing excluding only the sub-channels a
+    # reservation holds, the wider frame adds little distinct busy area. At MCS 7, where
+    # both frames fit two sub-channels, the change is below this, so the row still fails
+    # when the footprint stops moving.
+    min_change: 0.005
     source: >-
       the larger transport block needs more sub-channels at the same MCS. At MCS 5: the
       225 B certificate frame needs three sub-channels where the 161 B digest frame needs two;
