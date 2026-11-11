@@ -473,6 +473,9 @@ pub struct NodeConfig {
     /// that sends BSMs keeps it (SAE J2945/1 has no clearing rule, and §6.3.6.16 `DATAACC-039` asks for 200 m of history), and a
     /// station without the BSM service (an ETSI CAM station) clears it.
     pub path_history_on_change: Option<v2xw_msg::j2945::PathHistoryOnChange>,
+    /// Whether the opt-in driver brake model is on: the brake at low speed and at stops
+    /// (`messages.bsm.brake_hold`, [`crate::vehicle::brake_hold_card`]); off by default.
+    pub brake_hold: bool,
     /// Whether the node's facilities layer is ETSI's (the GeoNetworking/BTP stack): an
     /// SRM or SSM then goes out as a SREM or SSEM, with the ETSI `ItsPduHeader` in front.
     pub etsi_facilities: bool,
@@ -511,6 +514,7 @@ impl Default for NodeConfig {
             denm_triggers: crate::events::DenmTriggers::default(),
             path_history_points: v2xw_msg::j2945::PathHistoryParams::J2945_1.max_points,
             path_history_on_change: None,
+            brake_hold: false,
             etsi_facilities: false,
         }
     }
@@ -717,6 +721,7 @@ impl ObuRuntime {
             bsm_timing: None,
             own: crate::vehicle::OwnVehicle::default()
                 .with_path_history_points(config.path_history_points)
+                .with_brake_hold(config.brake_hold)
                 .with_path_history_on_change(config.path_history_on_change.unwrap_or(
                     if config.services.bsm {
                         v2xw_msg::j2945::PathHistoryOnChange::Keep
@@ -1285,6 +1290,17 @@ impl ObuRuntime {
                 .below(128);
             self.schedule
                 .restart_bsm_count(u8::try_from(start).unwrap_or(0));
+        }
+        if self.own.needs_stop_draw() {
+            // The opt-in brake-hold model's draw for the vehicle's next stop
+            // (`messages.bsm.brake_hold`, [`crate::vehicle::brake_hold_card`]).
+            let u = ctx
+                .rng(
+                    v2xw_core::rng::RngDomain::plugin(crate::vehicle::BRAKE_HOLD_STREAM),
+                    v2xw_core::rng::EntityRef::Node(self.node),
+                )
+                .f64();
+            self.own.supply_stop_draw(u);
         }
         let changes_before = self.stores.certs.changes();
         // No change while the BSM carries a critical event flag (J2945/1 CERTCHG-002).

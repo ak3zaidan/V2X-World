@@ -41,6 +41,18 @@ describe("§3.2 — the normative quantisation rule", () => {
     expect(Math.round(-0.5)).not.toBe(-1);
   });
 
+  it("rounds the largest double below one half to zero, as Rust's f64::round does", () => {
+    // 0.49999999999999994 + 0.5 is not representable and rounds to 1.0, so floor(v + 0.5) gives 1
+    // where round-half-away-from-zero (and the Rust encoder, `quant.rs`) gives 0.
+    const below = 0.49999999999999994;
+    expect(below).toBeLessThan(0.5);
+    expect(roundHalfAwayFromZero(below)).toBe(0);
+    expect(roundHalfAwayFromZero(-below)).toBe(-0);
+    // Above 2^52 every double is an integer and is its own rounding.
+    expect(roundHalfAwayFromZero(4503599627370497)).toBe(4503599627370497);
+    expect(roundHalfAwayFromZero(-4503599627370497)).toBe(-4503599627370497);
+  });
+
   it("reproduces the §9 worked example exactly", () => {
     expect(quantisePositionMm(12.345 - -500)).toBe(512345);
     expect(quantisePositionMm(-3.21 - -500)).toBe(496790);

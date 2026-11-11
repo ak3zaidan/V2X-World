@@ -1557,6 +1557,43 @@ classes:
         assert!((rep.pos.x - 26.0).abs() < 1e-9, "{}", rep.pos.x);
     }
 
+    /// The shipped dataset `faulty-stale-fix` class reports a position OLDER than its
+    /// secMark: on a moving vehicle the position lags the true position at the stamped
+    /// time by 3 to 5 fixes. Fault: the old `{"3", "5"}` slips in
+    /// data/calibration/dataset-faulty-devices.yaml put it ahead -> red.
+    #[test]
+    fn the_dataset_stale_fix_class_reports_a_position_behind_its_secmark() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/calibration/dataset-faulty-devices.yaml");
+        let text = std::fs::read_to_string(path).expect("the shipped fault calibration");
+        let mut cal = BsmTimingCalibration::from_text(&text).expect("parses");
+        let mut stale = cal
+            .classes
+            .iter()
+            .find(|c| c.name == "faulty-stale-fix")
+            .expect("the stale-fix class")
+            .clone();
+        assert!(
+            stale.slip_epochs.keys().all(|k| *k < 0),
+            "{:?}",
+            stale.slip_epochs
+        );
+        stale.share = 1.0;
+        stale.epoch_slip_prob = 1.0;
+        stale.frozen_repeat_prob = 0.0;
+        cal.classes = vec![stale];
+        let v = 20.0;
+        for n in 0..20 {
+            let mut r = rng(n);
+            let mut d = BsmTimingDevice::assign(&cal, &mut r);
+            let rep = d.report(&cal, &mut r, &belief(2_030, v)).unwrap();
+            let truth_at_stamp = v * rep.sec_mark_at as f64 * 1e-9;
+            let lag_s = (truth_at_stamp - rep.pos.x) / v;
+            assert!(rep.slip < 0, "slip {}", rep.slip);
+            assert!(lag_s > 0.19, "position {lag_s} s behind its secMark");
+        }
+    }
+
     fn clocked(drift_ms: f64, dev_ms: f64) -> BsmTimingCalibration {
         let mut cal = BsmTimingCalibration::provisional()
             .with_locked_share(0.0)

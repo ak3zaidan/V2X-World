@@ -431,7 +431,8 @@ impl LegacyAttacker {
             }
             AttackKind::DataReplay => {
                 let n = self.state.history.len();
-                if n >= m.replay_lag_samples {
+                // A lag of 0 would index one past the newest sample.
+                if m.replay_lag_samples > 0 && n >= m.replay_lag_samples {
                     let old = self.state.history[n - m.replay_lag_samples];
                     cx = old.x_m;
                     cy = old.y_m;

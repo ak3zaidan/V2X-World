@@ -37,7 +37,7 @@ classes:
     share: 0.075
     secmark_phase_ms: {dist: uniform, lo: 0.0, hi: 100.0}
     epoch_slip_prob: 0.6
-    slip_epochs: {"3": 0.5, "5": 0.5}
+    slip_epochs: {"-3": 0.5, "-5": 0.5}
     frozen_repeat_prob: 0.05
     header_jitter_ms: {sd: 150.0}
     fault_kind: timestamp_lag

@@ -3212,7 +3212,8 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<DetectionParams> {
                                 &field,
                                 format!(
                                     "is {value}; reading takes v1_0 or asn1_v1_1, time_base \
-                                     takes generation_time or secmark, consecutive takes \
+                                     takes generation_time, secmark, receive_time or \
+                                     nominal, consecutive takes \
                                      msg_count or received, max_accel_reading takes \
                                      accel-set or speed-difference, and every other \
                                      parameter a number"
@@ -5962,6 +5963,7 @@ impl Phase2 {
         let map = RoadMap::new(world);
         let env: &dyn v2xw_threat::obs::LocalEnvironment =
             if self.map_check { &map } else { &NoMap };
+        let origin: v2xw_core::GeoOrigin = world.origin.into();
         for m in delivered {
             let Some(signer) = &m.signer else { continue };
             // Misbehaviour detection reads safety messages: the US checks are defined on
@@ -6028,6 +6030,21 @@ impl Phase2 {
                 self.checked_at.insert((node, key), m.received_at);
             }
             let claimed = m.claimed_pos.unwrap_or(Vec3::ZERO);
+            // The US profile judges a BSM as a fielded receiver decodes it: position at the
+            // J2735 1e-7° LSB, speed at 0.02 m/s, heading at 0.0125°. Its ConstantPosition
+            // ("moved < 1 cm") and RandomPosition sit at that margin, and the real-data
+            // checker reads the decoded fields (tools/realdata/enginebridge.py, K2).
+            let (claimed, claimed_speed_mps, claimed_heading_rad) =
+                if self.us_profile.is_some() && m.msg_type == v2xw_msg::MsgType::Bsm {
+                    v2xw_msg::j2735::bsm::on_air(
+                        &origin,
+                        claimed,
+                        m.claimed_speed_mps,
+                        m.claimed_heading_rad,
+                    )
+                } else {
+                    (claimed, m.claimed_speed_mps, m.claimed_heading_rad)
+                };
             // The sender's own statement of its accuracy, as the message carried it. A
             // message that says "unavailable" (or one the join never saw) earns no
             // tolerance beyond the suite's own floor: a sender cannot widen a receiver's
@@ -6064,8 +6081,8 @@ impl Phase2 {
                 claimed_generation_time: m.claimed_generation_time,
                 claimed_x_m: claimed.x,
                 claimed_y_m: claimed.y,
-                claimed_speed_mps: m.claimed_speed_mps,
-                claimed_heading_rad: m.claimed_heading_rad,
+                claimed_speed_mps,
+                claimed_heading_rad,
                 claimed_pos_confidence_m: confidence_m,
                 repetitions: 1,
                 // The signer certificate's validity period, when the receiver refused the

@@ -148,6 +148,10 @@ mod tests {
             detector: "positionJump".to_string(),
             subject: "aabb".to_string(),
             score: Some(1.25),
+            msg_cnt: None,
+            prev_msg_cnt: None,
+            dt_s: None,
+            residual: None,
         });
         assert_eq!(ctx.on_channel("det.observation").len(), 1);
         assert_eq!(ctx.on_channel("ma.report").len(), 0);

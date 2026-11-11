@@ -470,11 +470,13 @@ fn execute(
             ),
         });
     }
-    // Every SUMO-format output is computed from gt.kinematics, as the VeReMi one is.
+    // Every SUMO-format output is computed from gt.kinematics, as the VeReMi one is, and
+    // so is the dataset release's ground truth (its trajectories and kinematics samples):
+    // it refused a `receptions` recording after the run, on the missing channel.
     if level != crate::stream::RecordLevel::Full
         && let Some(x) = exporters
             .iter()
-            .find(|x| v2xw_engine::sumo_outputs::is_sumo(&x.id))
+            .find(|x| v2xw_engine::sumo_outputs::is_sumo(&x.id) || x.id == "dataset")
     {
         return Err(CliError::BadArgument {
             flag: "record-level",

@@ -79,10 +79,13 @@ function clampI16(v: number): number {
 
 /**
  * §3.2 — `round_half_away_from_zero`. `Math.round` rounds half **up** (−0.5 → −0), which would
- * disagree with the Rust producer on exactly the negative half-way values, so it is not used.
+ * disagree with the Rust producer on exactly the negative half-way values, so it is applied to the
+ * magnitude only. `floor(v + 0.5)` is not used either: the addition itself rounds, so
+ * 0.49999999999999994 became 1 and an odd integer above 2^52 became the next even one.
  */
 export function roundHalfAwayFromZero(v: number): number {
-  return v >= 0 ? Math.floor(v + 0.5) : Math.ceil(v - 0.5);
+  const r = Math.round(Math.abs(v));
+  return v < 0 ? -r : r;
 }
 
 /** §3.2 — `q(v, scale) = clamp(round_half_away_from_zero(v * scale), TYPE_MIN, TYPE_MAX)`. */

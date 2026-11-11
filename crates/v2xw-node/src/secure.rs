@@ -345,6 +345,30 @@ impl NodeCrypto {
         }
     }
 
+    /// `spdu` with its payload replaced and signed again (`Envelope::resign_payload`).
+    ///
+    /// # Errors
+    /// As [`Envelope::resign_payload`].
+    pub fn resign_payload(
+        &mut self,
+        envelope: &Envelope,
+        ctx: &mut dyn NodeCtx,
+        signer: &SignerHandle,
+        spdu: &[u8],
+        payload: &[u8],
+        msg_type: MsgType,
+    ) -> Result<SecuredPdu, SecError> {
+        let mut c = SecCtx::new(ctx);
+        match self {
+            NodeCrypto::Modeled(b) => {
+                envelope.resign_payload(&mut c, b.as_mut(), signer, spdu, payload, msg_type)
+            }
+            NodeCrypto::Real(b) => {
+                envelope.resign_payload(&mut c, b.as_mut(), signer, spdu, payload, msg_type)
+            }
+        }
+    }
+
     /// Signs a payload into a `SignedData` SPDU through `envelope`.
     pub fn sign_envelope(
         &mut self,
@@ -1588,6 +1612,30 @@ impl NodeSecurity {
             }
         }
         (modelled, crate::rxval::linkage_key(certificate))
+    }
+
+    /// `frame`, signed by the signer `digest` names, with its payload replaced by
+    /// `payload` and signed again: the header and signer identifier are `frame`'s own
+    /// (`Envelope::resign_payload`). What a falsifying sender's frame carries on the air:
+    /// its claim, signed. `None` when the signer is not held or the SPDU does not decode.
+    pub fn restate_payload(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        frame: &SignedFrame,
+        digest: &HashedId8,
+        msg_type: MsgType,
+        payload: &[u8],
+    ) -> Option<SignedFrame> {
+        let signer = self.signer_by_digest(digest).cloned()?;
+        let pdu = self
+            .crypto
+            .resign_payload(&self.envelope, ctx, &signer, &frame.spdu, payload, msg_type)
+            .ok()?;
+        Some(SignedFrame {
+            payload: payload.to_vec(),
+            spdu: pdu.bytes().to_vec(),
+            cert_bytes: frame.cert_bytes,
+        })
     }
 
     /// The provisioned signer whose certificate has digest `digest`, if any: the

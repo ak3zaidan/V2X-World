@@ -560,7 +560,8 @@ impl Attacker for ExtendedAttacker {
             }
             ExtendedAttackKind::RelayReplay => {
                 let n = self.state.captured.len();
-                if n >= self.params.relay_lag_messages {
+                // A lag of 0 would index one past the newest capture.
+                if self.params.relay_lag_messages > 0 && n >= self.params.relay_lag_messages {
                     let captured = self.state.captured[n - self.params.relay_lag_messages].clone();
                     let age_s = ns_to_secs(t.saturating_sub(captured.claimed_generation_time));
                     let mut relayed = out.clone();

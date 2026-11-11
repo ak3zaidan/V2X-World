@@ -63,7 +63,7 @@
 
 use v2xw_core::belief::PositionEstimate;
 use v2xw_core::geo::GeoOrigin;
-use v2xw_core::geom::Dims;
+use v2xw_core::geom::{Dims, Vec3};
 use v2xw_core::math;
 use v2xw_core::time::{SimTime, WallClock};
 
@@ -1932,7 +1932,7 @@ pub fn semi_major_orientation(rad: f64) -> u16 {
         return ORIENTATION_UNAVAILABLE;
     }
     let steps = (bearing / (360.0 / 65_535.0)).round();
-    let v = clamp_or(steps, 0, 65_534, i64::from(ORIENTATION_UNAVAILABLE));
+    let v = clamp_or(steps, 0, 65_535, i64::from(ORIENTATION_UNAVAILABLE));
     // 65535 is unavailable and 360° is 0°, so fold the top of the circle onto zero.
     if v >= 65_535 { 0 } else { v as u16 }
 }
@@ -1960,10 +1960,42 @@ pub fn heading(rad: f64) -> u16 {
     let v = clamp_or(
         steps,
         HEADING_MIN,
-        HEADING_MAX - 1,
+        HEADING_MAX,
         i64::from(HEADING_UNAVAILABLE),
     );
     if v >= HEADING_MAX { 0 } else { v as u16 }
+}
+
+/// The position (world ENU metres), speed (m/s) and heading (ENU radians) a receiver
+/// decodes from a BSM whose sender put `pos`, `speed_mps` and `heading_rad` in it: each
+/// through this module's own encoder (`Latitude`/`Longitude` at 1e-7°, `Speed` at
+/// 0.02 m/s, `Heading` at 0.0125°) and back. A fielded receiver has only the decoded
+/// message, so a check that judges the claim judges these. A field its encoder sends as
+/// unavailable (a position off the globe, a negative speed, a non-finite heading) is
+/// returned as given. The height is kept: a BSM's elevation is not what the checks read.
+#[must_use]
+pub fn on_air(origin: &GeoOrigin, pos: Vec3, speed_mps: f64, heading_rad: f64) -> (Vec3, f64, f64) {
+    let (lat_deg, lon_deg, alt_m) = origin.to_geodetic(pos);
+    let pos = match (latitude(lat_deg), longitude(lon_deg)) {
+        (Some(la), Some(lo)) if la != LATITUDE_UNAVAILABLE && lo != LONGITUDE_UNAVAILABLE => {
+            let q = origin.to_enu(f64::from(la) * 1e-7, f64::from(lo) * 1e-7, alt_m);
+            Vec3::new(q.x, q.y, pos.z)
+        }
+        _ => pos,
+    };
+    let s = speed(speed_mps);
+    let speed_mps = if s == SPEED_UNAVAILABLE {
+        speed_mps
+    } else {
+        f64::from(s) * 0.02
+    };
+    let h = heading(heading_rad);
+    let heading_rad = if h == HEADING_UNAVAILABLE {
+        heading_rad
+    } else {
+        (90.0 - f64::from(h) * 0.0125) * (std::f64::consts::PI / 180.0)
+    };
+    (pos, speed_mps, heading_rad)
 }
 
 /// `SteeringWheelAngle`, LSB 1.5 degree; `None` becomes `unavailable(127)`.
@@ -2171,6 +2203,15 @@ mod tests {
     use super::*;
     use v2xw_core::belief::FixQuality;
     use v2xw_core::geom::Vec3;
+
+    #[test]
+    fn a_bearing_just_short_of_north_rounds_onto_zero() {
+        // ENU 90.004° is a bearing of 359.996°: 28 799.7 steps of 0.0125°, whose nearest
+        // step is 28 800 = 360° = 0°, not 28 799. Likewise ENU 90.001° is 359.999°, which
+        // is 65 534.8 steps of 360/65 535°, nearest 65 535 = 360° = 0°, not 65 534.
+        assert_eq!(heading(90.004_f64.to_radians()), 0);
+        assert_eq!(semi_major_orientation(90.001_f64.to_radians()), 0);
+    }
 
     fn core() -> BsmCoreData {
         BsmCoreData {

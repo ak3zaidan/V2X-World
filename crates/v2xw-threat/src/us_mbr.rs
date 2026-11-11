@@ -71,6 +71,14 @@
 //! Δt is read from the 1609.2 `generationTime` (`time_base = generation_time`, default) or
 //! from the BSM's `secMark` (`time_base = secmark`), wrapped at the minute and placed in
 //! the minute the generation times say. The gap limit `max_gap_s` is a parameter.
+//! Two further receiver clocks a deployed receiver may use:
+//!
+//! | `time_base` | Δt is | consecutive gap judged on |
+//! |---|---|---|
+//! | `generation_time` (default) | the difference of the 1609.2 `generationTime`s | Δt |
+//! | `secmark` | the difference of the J2735 `secMark`s, minute-wrapped | Δt |
+//! | `receive_time` | the difference of the receiver's arrival times of the two BSMs | Δt |
+//! | `nominal` | a fixed `nominal_dt_s` (0.1 s, the 10 Hz BSM interval) | the generation-time gap |
 
 use std::collections::BTreeMap;
 
@@ -141,6 +149,9 @@ pub struct UsMbrParams {
     pub spacing_tolerance_s: f64,
     /// What makes two BSMs of one certificate consecutive (`msgCnt` successors).
     pub consecutive: Consecutive,
+    /// Under `time_base = nominal`, the fixed Δt every pair is judged with, seconds: the
+    /// nominal 10 Hz BSM interval, ASN.1 v1.1 "sent 0.1 seconds apart" (0.1).
+    pub nominal_dt_s: f64,
 }
 
 /// Which acceleration MaxAcceleration judges.
@@ -215,6 +226,10 @@ pub enum TimeBase {
     GenerationTime,
     /// The BSM's own `secMark`, wrapped at the minute.
     SecMark,
+    /// The receiver's arrival times of the two BSMs (a receive or log clock).
+    ReceiveTime,
+    /// A fixed nominal interval, `nominal_dt_s`, whatever the true spacing.
+    Nominal,
 }
 
 impl TimeBase {
@@ -224,6 +239,8 @@ impl TimeBase {
         match self {
             Self::GenerationTime => "generation_time",
             Self::SecMark => "secmark",
+            Self::ReceiveTime => "receive_time",
+            Self::Nominal => "nominal",
         }
     }
 }
@@ -251,12 +268,13 @@ impl Default for UsMbrParams {
             time_base: TimeBase::GenerationTime,
             spacing_tolerance_s: 0.05,
             consecutive: Consecutive::MsgCount,
+            nominal_dt_s: 0.1,
         }
     }
 }
 
 /// The parameter names [`UsMbrParams::apply`] reads.
-pub const PARAM_KEYS: [&str; 20] = [
+pub const PARAM_KEYS: [&str; 21] = [
     "constant_position",
     "random_position",
     "gps_drift_m",
@@ -277,6 +295,7 @@ pub const PARAM_KEYS: [&str; 20] = [
     "time_base",
     "spacing_tolerance_s",
     "consecutive",
+    "nominal_dt_s",
 ];
 
 /// The bounds a numeric parameter must lie in, where the profile states any: the brake
@@ -333,6 +352,7 @@ impl UsMbrParams {
                 };
             }
             "spacing_tolerance_s" => self.spacing_tolerance_s = v,
+            "nominal_dt_s" => self.nominal_dt_s = v,
             "consecutive" => {
                 self.consecutive = if on {
                     Consecutive::Received
@@ -346,13 +366,16 @@ impl UsMbrParams {
     }
 
     /// Sets a choice parameter by name (`reading`: `v1_0` | `asn1_v1_1`; `time_base`:
-    /// `generation_time` | `secmark`); false for any other key or value.
+    /// `generation_time` | `secmark` | `receive_time` | `nominal`); false for any other key
+    /// or value.
     pub fn apply_str(&mut self, key: &str, v: &str) -> bool {
         match (key, v) {
             ("reading", "v1_0") => self.reading = RandomPositionReading::V1_0,
             ("reading", "asn1_v1_1") => self.reading = RandomPositionReading::Asn1V1_1,
             ("time_base", "generation_time") => self.time_base = TimeBase::GenerationTime,
             ("time_base", "secmark") => self.time_base = TimeBase::SecMark,
+            ("time_base", "receive_time") => self.time_base = TimeBase::ReceiveTime,
+            ("time_base", "nominal") => self.time_base = TimeBase::Nominal,
             ("consecutive", "msg_count") => self.consecutive = Consecutive::MsgCount,
             ("consecutive", "received") => self.consecutive = Consecutive::Received,
             ("max_accel_reading", "accel-set") => self.max_accel_reading = AccelReading::AccelSet,
@@ -377,8 +400,19 @@ impl UsMbrParams {
                 let k = (gen_ms - d + 30_000).div_euclid(60_000);
                 (d + k * 60_000) as f64 * 1e-3
             }
+            (TimeBase::ReceiveTime, ..) => ns_to_secs(m.received_at.saturating_sub(r.heard)),
+            (TimeBase::Nominal, ..) => self.nominal_dt_s,
             // No secMark on one of the two (not a BSM): the header clock.
             _ => by_generation,
+        }
+    }
+
+    /// The gap that decides whether `r` and `m` are consecutive (within `max_gap_s`):
+    /// Δt itself, except under a nominal Δt, where the generation times say.
+    fn gap(&self, r: &Last, m: &ObservedMessage, dt: f64) -> f64 {
+        match self.time_base {
+            TimeBase::Nominal => ns_to_secs(m.claimed_generation_time.saturating_sub(r.t)),
+            _ => dt,
         }
     }
 
@@ -389,6 +423,21 @@ impl UsMbrParams {
             (Consecutive::MsgCount, Some(a), Some(b)) => b == (a + 1) % 128,
             _ => true,
         }
+    }
+}
+
+/// One fired check: its id, the pair it judged (the previous BSM's `msgCnt` and the pair's
+/// Δt, s; `None` for a single-BSM check) and the quantity it compared with its threshold.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Hit {
+    id: DetectorId,
+    pair: Option<(Option<u8>, f64)>,
+    residual: f64,
+}
+
+impl Hit {
+    fn new(id: DetectorId, pair: Option<(Option<u8>, f64)>, residual: f64) -> Self {
+        Self { id, pair, residual }
     }
 }
 
@@ -475,12 +524,7 @@ impl UsSmMbr {
 
     /// The checks `m` fails against the previous BSM `prev` of its sender (if consecutive)
     /// and on its own.
-    fn checks(
-        &mut self,
-        prev: Option<Last>,
-        m: &ObservedMessage,
-        me: &SelfBelief,
-    ) -> Vec<DetectorId> {
+    fn checks(&mut self, prev: Option<Last>, m: &ObservedMessage, me: &SelfBelief) -> Vec<Hit> {
         let p = &self.params;
         let mut out = Vec::new();
         // MaxAcceleration on the BSM's own accelSet, when that is the reading and the BSM
@@ -494,14 +538,16 @@ impl UsSmMbr {
             // "The time between" two BSMs, on the configured clock (generationTime by
             // default, or secMark).
             let dt = p.delta_t(&r, m);
-            if dt > 0.0 && dt <= p.max_gap_s && p.in_sequence(r.msg_cnt, m) {
+            let gap = p.gap(&r, m, dt);
+            if dt > 0.0 && gap > 0.0 && gap <= p.max_gap_s && p.in_sequence(r.msg_cnt, m) {
+                let pair = Some((r.msg_cnt, dt));
                 let disp = math::hypot(m.claimed_x_m - r.x, m.claimed_y_m - r.y);
                 if p.constant_position
                     && disp < p.position_resolution_m
                     && m.claimed_speed_mps >= p.speed_resolution_mps
                     && r.speed >= p.speed_resolution_mps
                 {
-                    out.push(DetectorId::ConstantPositionFrozen);
+                    out.push(Hit::new(DetectorId::ConstantPositionFrozen, pair, disp));
                 }
                 // v1.0 judges every consecutive pair; the ASN.1 v1.1 only two BSMs "sent
                 // 0.1 seconds apart".
@@ -520,23 +566,31 @@ impl UsSmMbr {
                     // ENU, heading 0 = east, counter-clockwise (crate::obs).
                     let px = r.x + along * v2xw_core::math::cos(r.heading);
                     let py = r.y + along * v2xw_core::math::sin(r.heading);
-                    if math::hypot(m.claimed_x_m - px, m.claimed_y_m - py) > p.gps_drift_m {
-                        out.push(DetectorId::PositionJump);
+                    let off = math::hypot(m.claimed_x_m - px, m.claimed_y_m - py);
+                    if off > p.gps_drift_m {
+                        out.push(Hit::new(DetectorId::PositionJump, pair, off));
                     }
                 }
                 if p.max_acceleration && accel_set.is_none() {
                     fell_back = p.max_accel_reading == AccelReading::AccelSet;
-                    if (m.claimed_speed_mps - r.speed).abs() / dt > p.max_accel_mps2 {
-                        out.push(DetectorId::ImplausibleAcceleration);
+                    let implied = (m.claimed_speed_mps - r.speed).abs() / dt;
+                    if implied > p.max_accel_mps2 {
+                        out.push(Hit::new(DetectorId::ImplausibleAcceleration, pair, implied));
                     }
                 }
             }
         }
-        if p.max_acceleration && accel_set.is_some_and(|a| a.abs() > p.max_accel_mps2) {
-            out.push(DetectorId::ImplausibleAcceleration);
+        if p.max_acceleration
+            && let Some(a) = accel_set.filter(|a| a.abs() > p.max_accel_mps2)
+        {
+            out.push(Hit::new(DetectorId::ImplausibleAcceleration, None, a.abs()));
         }
         if p.max_speed && m.claimed_speed_mps > p.max_speed_mps {
-            out.push(DetectorId::ImplausibleSpeed);
+            out.push(Hit::new(
+                DetectorId::ImplausibleSpeed,
+                None,
+                m.claimed_speed_mps,
+            ));
         }
         // §2.3.1.3.4: braking, and the acceleration makes an acute angle with a velocity.
         if p.brake_acceleration
@@ -546,13 +600,15 @@ impl UsSmMbr {
                 .is_some_and(|a| a > p.brake_accel_tolerance_mps2)
             && m.claimed_speed_mps >= p.speed_resolution_mps
         {
-            out.push(DetectorId::BrakeAcceleration);
+            out.push(Hit::new(
+                DetectorId::BrakeAcceleration,
+                None,
+                m.bsm.accel_long_mps2.unwrap_or(0.0),
+            ));
         }
-        if p.obs_distance
-            && math::hypot(m.claimed_x_m - me.x_m, m.claimed_y_m - me.y_m)
-                > p.obs_distance_m + p.obs_gps_drift_m
-        {
-            out.push(DetectorId::AcceptanceRangeThreshold);
+        let range = math::hypot(m.claimed_x_m - me.x_m, m.claimed_y_m - me.y_m);
+        if p.obs_distance && range > p.obs_distance_m + p.obs_gps_drift_m {
+            out.push(Hit::new(DetectorId::AcceptanceRangeThreshold, None, range));
         }
         if fell_back {
             self.accel_unavailable_fallbacks += 1;
@@ -615,7 +671,8 @@ impl Detector for UsSmMbr {
             self.last.retain(|_, l| l.heard >= horizon);
         }
         let mut fired = Vec::with_capacity(fired_ids.len());
-        for d in fired_ids {
+        for hit in &fired_ids {
+            let d = hit.id;
             // The fingerprint keeps the research suite's frozen columns
             // (DetectorId::ALL); a US-only check has no column.
             if DetectorId::ALL.contains(&d) {
@@ -628,14 +685,18 @@ impl Detector for UsSmMbr {
                 at: m.received_at,
             });
         }
-        for o in &fired {
-            ctx.emit(DetObservation::new(
-                o.at,
-                me.node,
-                o.detector.as_str(),
-                &o.subject,
-                o.score,
-            ));
+        // One row per fired check, with the pair it judged and its residual, so a
+        // per-verdict join (tools/realdata/enginebridge.py, K2) needs no re-derivation.
+        for (o, hit) in fired.iter().zip(&fired_ids) {
+            ctx.emit(
+                DetObservation::new(o.at, me.node, o.detector.as_str(), &o.subject, o.score)
+                    .with_pair(
+                        m.bsm.msg_cnt,
+                        hit.pair.and_then(|(c, _)| c),
+                        hit.pair.map(|(_, dt)| dt),
+                        Some(hit.residual),
+                    ),
+            );
         }
         Verdict {
             subject,
@@ -758,7 +819,8 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
             Source::new(
                 SourceKind::Code,
                 "USDOT ITS JPO CV Pilot BSMs: the receiver's Δt \
-                 clock, IEEE 1609.2 generationTime or J2735 secMark",
+                 clock, IEEE 1609.2 generationTime, J2735 secMark, the receiver's arrival \
+                 time or a fixed nominal interval",
             ),
         ),
         Parameter::new(
@@ -770,6 +832,12 @@ pub fn card(p: &UsMbrParams) -> ModelCard {
                  seconds apart\"; J2735 MsgCount (msg_count) or consecutively received \
                  (received)",
             ),
+        ),
+        param(
+            "nominal_dt_s",
+            "s",
+            json!(p.nominal_dt_s),
+            "ASN.1 v1.1 \"sent 0.1 seconds apart\": the nominal Δt under time_base = nominal",
         ),
         Parameter::new(
             "spacing_tolerance_s",
@@ -880,6 +948,50 @@ mod tests {
         assert!(run(&msgs, UsMbrParams::default()).iter().all(Vec::is_empty));
     }
 
+    fn on_clock(time_base: TimeBase) -> UsMbrParams {
+        UsMbrParams {
+            time_base,
+            ..UsMbrParams::default()
+        }
+    }
+
+    #[test]
+    fn a_jittered_arrival_trips_random_position_only_on_the_receive_clock() {
+        // Generated and secMark-stamped exactly 100 ms apart, heard 160 ms apart.
+        let mut a = bsm(0, 0.0, 20.0);
+        a.bsm.sec_mark_ms = Some(0);
+        let mut b = bsm(100, 2.0, 20.0);
+        b.bsm.sec_mark_ms = Some(100);
+        b.received_at = 160_000_000;
+        let pair = [a, b];
+        for quiet in [TimeBase::GenerationTime, TimeBase::SecMark] {
+            assert!(run(&pair, on_clock(quiet))[1].is_empty(), "{quiet:?}");
+        }
+        assert_eq!(
+            run(&pair, on_clock(TimeBase::ReceiveTime))[1],
+            vec!["positionJump"]
+        );
+    }
+
+    #[test]
+    fn a_nominal_tenth_of_a_second_trips_random_position_on_a_150_ms_gap() {
+        // 150 ms apart at 30 m/s: 4.5 m moved, 3.0 m predicted under a nominal 0.1 s.
+        let pair = [bsm(0, 0.0, 30.0), bsm(150, 4.5, 30.0)];
+        assert!(run(&pair, on_clock(TimeBase::GenerationTime))[1].is_empty());
+        assert_eq!(
+            run(&pair, on_clock(TimeBase::Nominal))[1],
+            vec!["positionJump"]
+        );
+        // The consecutive gap is still the true one: 0.6 s apart is not a pair.
+        let far = [bsm(0, 0.0, 30.0), bsm(600, 99.0, 30.0)];
+        assert!(run(&far, on_clock(TimeBase::Nominal))[1].is_empty());
+        let mut p = UsMbrParams::default();
+        assert!(p.apply_str("time_base", "receive_time"));
+        assert_eq!(p.time_base, TimeBase::ReceiveTime);
+        assert!(p.apply_str("time_base", "nominal") && p.apply("nominal_dt_s", 0.2));
+        assert_eq!((p.time_base, p.nominal_dt_s), (TimeBase::Nominal, 0.2));
+    }
+
     #[test]
     fn random_position_fires_just_past_the_one_metre_drift() {
         // 0.95 m off the prediction stays quiet, 1.05 m fires: the [SM-MBR] 1 m gpsDrift.
@@ -975,6 +1087,46 @@ mod tests {
     /// vehicle held at a red light (brakes on, 0 m/s², standstill) does not, because the
     /// rule's acute angle needs a velocity. Fault: drop the speed gate and the standstill
     /// BSM with +0.3 m/s² fires.
+    /// A car pulling away from a stop where it held the brake, with the opt-in brake hold
+    /// on (`messages.bsm.brake_hold`), reports its brakes on with a non-negative accelSet
+    /// during the pedal overlap, and BrakeAcceleration fires on it, as on the Orem CV data;
+    /// with the hold off it does not. Fault: drop the hold in
+    /// `OwnVehicle::brakes` -> the first assertion is red.
+    #[test]
+    fn brake_acceleration_fires_on_a_held_brake_car_pulling_away() {
+        use v2xw_node::vehicle::{OwnVehicle, VehicleBus};
+        let bus = |t_s: f64, v: f64, a: f64| VehicleBus {
+            t: (t_s * 1e9) as u64,
+            speed_mps: v,
+            a_long_mps2: a,
+            a_lat_mps2: 0.0,
+            yaw_rate_rad_s: 0.0,
+            hazard_lights: false,
+            low_beam: false,
+            intent: None,
+            heavy: false,
+            speed_limit_mps: 13.4,
+            non_urban: None,
+            abs_active: false,
+        };
+        let fired = |m: ObservedMessage| run(&[m], UsMbrParams::default()).remove(0);
+        for (hold, want) in [(true, vec!["brakeAcceleration"]), (false, vec![])] {
+            let mut v = OwnVehicle::default().with_brake_hold(hold);
+            // The stop's draw holds the brake (0 is below any hold probability).
+            v.supply_stop_draw(0.0);
+            v.set_bus(bus(1.0, 0.0, 0.0));
+            // Pulling away gently (0 < a <= the 0.15 m/s² release threshold): the pedal
+            // overlap keeps the held brake on.
+            v.set_bus(bus(1.1, 1.0, 0.1));
+            let on = v.brakes().wheel_brakes != v2xw_msg::j2735::bsm::BrakeAppliedStatus::NONE;
+            assert_eq!(
+                fired(braking(0, 0.0, 1.0, Some(on), 0.1)),
+                want,
+                "hold {hold}"
+            );
+        }
+    }
+
     #[test]
     fn brake_acceleration_fires_on_brakes_with_positive_acceleration() {
         let fired = |m: ObservedMessage| run(&[m], UsMbrParams::default()).remove(0);
@@ -1144,5 +1296,65 @@ mod tests {
         d.on_message(&mut ctx, &me(), &lost[0], &NoMap);
         assert_eq!(d.consecutive_before(&lost[1]), None);
         assert_eq!(d.consecutive_before(&counted(100, 1.0, 10.0, 6)), Some(0));
+    }
+
+    /// A creeping car (0.06 m/s north) moves 6 mm in 0.1 s. Its true positions sit 0.3
+    /// and 0.84 of a latitude LSB (1e-7°, 1.11 cm) above a grid line, so the BSMs on the
+    /// air carry two latitudes one LSB apart. Judged on the unquantised claim the move is
+    /// under 1 cm (ConstantPosition); judged on what the receiver decodes it is 1.11 cm.
+    #[test]
+    fn constant_position_judges_the_decoded_latitude_not_the_unquantised_claim() {
+        use v2xw_core::geo::GeoOrigin;
+        use v2xw_core::geom::Vec3;
+        let origin = GeoOrigin::new(40.75, -73.99, 0.0);
+        let per_lsb = origin.metres_per_degree_latitude() * 1e-7;
+        let y0 = 1000.3 * per_lsb;
+        let y1 = y0 + 0.006;
+        let north = std::f64::consts::FRAC_PI_2;
+        let at = |t_ms: u64, y: f64, decoded: bool| {
+            let (p, s, h) = if decoded {
+                v2xw_msg::j2735::bsm::on_air(&origin, Vec3::new(0.0, y, 0.0), 0.06, north)
+            } else {
+                (Vec3::new(0.0, y, 0.0), 0.06, north)
+            };
+            let mut m = bsm(t_ms, p.x, s);
+            m.claimed_y_m = p.y;
+            m.claimed_heading_rad = h;
+            m
+        };
+        let raw = run(
+            &[at(0, y0, false), at(100, y1, false)],
+            UsMbrParams::default(),
+        );
+        assert!(raw[1].contains(&"constantPositionFrozen"), "{raw:?}");
+        let air = run(
+            &[at(0, y0, true), at(100, y1, true)],
+            UsMbrParams::default(),
+        );
+        assert!(air.iter().all(Vec::is_empty), "{air:?}");
+    }
+
+    /// Every fired check writes one `det.observation` row naming the pair it judged.
+    #[test]
+    fn a_fired_check_writes_one_observation_row_with_its_pair() {
+        let mut d = UsSmMbr::new(UsMbrParams::default());
+        let mut ctx = CollectingCtx::new(1);
+        d.on_message(&mut ctx, &me(), &counted(0, 5.0, 3.0, 9), &NoMap);
+        assert!(ctx.on_channel("det.observation").is_empty());
+        let v = d.on_message(&mut ctx, &me(), &counted(100, 5.0, 3.0, 10), &NoMap);
+        let rows = ctx.on_channel("det.observation");
+        assert_eq!(rows.len(), v.fired.len());
+        assert_eq!(
+            rows.len(),
+            1,
+            "a frozen position fires ConstantPosition alone"
+        );
+        let r: DetObservation = serde_json::from_slice(&rows[0].json).unwrap();
+        assert_eq!(r.detector, "constantPositionFrozen");
+        assert_eq!(r.subject, v2xw_core::hash::hex_encode(&[7u8; 8]));
+        assert_eq!((r.prev_msg_cnt, r.msg_cnt), (Some(9), Some(10)));
+        assert_eq!(r.dt_s, Some(0.1));
+        assert_eq!(r.residual, Some(0.0));
+        assert_eq!(rows[0].visibility, v2xw_core::ctx::Visibility::Node);
     }
 }

@@ -2495,6 +2495,14 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the GNSS receiver static-hold threshold",
     },
+    // The standstill speed noise: 0 to 0.5 m/s, past every creeping band of the CV-pilot data.
+    Bound {
+        path: "actors.vehicles.gnss.standstill_speed_sigma_mps",
+        lo: 0.0,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the standstill reported-speed noise",
+    },
     // The receiver's white velocity output noise: 0 to five times the SPS committed sd.
     Bound {
         path: "actors.vehicles.gnss.velocity_noise_mps",
@@ -4677,6 +4685,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                bsm or cam.",
     },
     KeyStatus {
+        path: "messages.bsm.brake_hold",
+        status: Status::Wired,
+        note: "Opt-in driver brake model (node/vehicle/brake-hold, fitted to Orem CV \
+               data by speed band): the brake switch comes on when slowing at low speed \
+               and stays on until the driver accelerates, plus a short pedal overlap, and \
+               one keyed draw per stop decides whether the brake is held while standing. \
+               Off unless set. Refused unless messages.sets has bsm.",
+    },
+    KeyStatus {
         path: "messages.path_history_points",
         status: Status::Wired,
         note: "The most path-history points a BSM's Part II or a CAM carries (J2945/1's 15 \
@@ -4911,7 +4928,7 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "actors.vehicles.gnss",
         status: Status::Wired,
-        note: "The positioning error every equipped vehicle's BSM carries: receiver grade, outliers, degraded bursts and outages; and the accuracy its PositionalAccuracy states (stated_sigma_m, stated_sigma_log_sd: unset states the model's honest radius, set states a deployed OBU's, CV-pilot medians 0.30-2.00 m).",
+        note: "The positioning error every equipped vehicle's BSM carries: receiver grade, outliers, degraded bursts and outages; and the accuracy its PositionalAccuracy states (stated_sigma_m, stated_sigma_log_sd: unset states the model's honest radius, set states a deployed OBU's, CV-pilot medians 0.30-2.00 m). static_hold_vehicle_speed (opt-in, todo-calibrate) sends the vehicle's wheel speed while the receiver holds the position, holding only at standstill; standstill_speed_sigma_mps (opt-in, todo-calibrate) adds a standing car's Doppler-like speed noise.",
     },
     KeyStatus {
         path: "actors.vehicles.bsm_timing",
@@ -6576,6 +6593,10 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ("actors.vehicles.gnss.smoothing_tau_s", g.smoothing_tau_s),
             ("actors.vehicles.gnss.static_hold_mps", g.static_hold_mps),
             (
+                "actors.vehicles.gnss.standstill_speed_sigma_mps",
+                g.standstill_speed_sigma_mps,
+            ),
+            (
                 "actors.vehicles.gnss.velocity_noise_mps",
                 g.velocity_noise_mps,
             ),
@@ -6595,6 +6616,24 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 "actors.vehicles.gnss.static_hold_mps",
                 "is set, and actors.vehicles.gnss.smoothing_tau_s is not: the hold is a \
                  smoothing receiver's, and raw fixes ignore it"
+                    .to_string(),
+            ));
+        }
+        if g.standstill_speed_sigma_mps.is_some_and(|v| v > 0.0)
+            && g.static_hold_vehicle_speed != Some(true)
+        {
+            e.push(conflict(
+                "actors.vehicles.gnss.standstill_speed_sigma_mps",
+                "is set, and actors.vehicles.gnss.static_hold_vehicle_speed is not on: the \
+                 standstill speed is the vehicle-speed hold's"
+                    .to_string(),
+            ));
+        }
+        if g.static_hold_vehicle_speed == Some(true) && g.static_hold_mps == Some(0.0) {
+            e.push(conflict(
+                "actors.vehicles.gnss.static_hold_vehicle_speed",
+                "is on, and actors.vehicles.gnss.static_hold_mps is 0: the speed is the \
+                 vehicle's only while the receiver holds, and with no hold it never does"
                     .to_string(),
             ));
         }
@@ -10642,6 +10681,15 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "messages.bsm.path_history_on_change",
             "says what a pseudonym change does to the path history, and messages.sets has \
              neither bsm nor cam, the messages that carry it"
+                .to_string(),
+        ));
+    }
+    if m.bsm.as_ref().is_some_and(|b| b.brake_hold.is_some()) && !m.sets.iter().any(|x| x == "bsm")
+    {
+        e.push(conflict(
+            "messages.bsm.brake_hold",
+            "sets the BSM's brake-hold model, and messages.sets does not include bsm, the \
+             message whose brakes field it drives"
                 .to_string(),
         ));
     }

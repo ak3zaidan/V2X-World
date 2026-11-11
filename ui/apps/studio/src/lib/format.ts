@@ -210,7 +210,8 @@ export function simClock(ns: number | bigint): string {
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = Math.floor(total % 60);
-  const ms = Math.floor((total % 1) * 1000);
+  // From the nanoseconds, not the float seconds: `(1.001 % 1) * 1000` is 0.99999…, which floors to 0.
+  const ms = Math.floor((n % 1e9) / 1e6);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
 }
 

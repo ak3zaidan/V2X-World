@@ -910,6 +910,10 @@ fn with_backend(mut s: Scenario) -> Scenario {
 }
 
 fn backend_run(n: usize, attacker: bool) -> (RunReport, MemoryRecorder) {
+    run(backend_run_scenario(n, attacker))
+}
+
+fn backend_run_scenario(n: usize, attacker: bool) -> Scenario {
     let mut s = with_backend(deterministic_radio(fleet(n, 45.0)));
     s.actors.rsus = vec![
         serde_json::from_value(serde_json::json!({
@@ -933,7 +937,7 @@ fn backend_run(n: usize, attacker: bool) -> (RunReport, MemoryRecorder) {
             p.params["report_shuffle_window_s"] = 1.into();
         }
     }
-    run(s)
+    s
 }
 
 #[test]
@@ -1616,4 +1620,78 @@ fn settings_that_did_nothing_now_act_or_refuse() {
         .find(|o| o["value"] == "obu/cohda-mk5")
         .expect("the MK5 is listed");
     assert_eq!(mk5["available"], false);
+}
+
+/// Every frame's tapped octets, beside the ordinary record stream.
+#[derive(Default)]
+struct Tapping {
+    inner: MemoryRecorder,
+    taps: BTreeMap<(u32, u64), Vec<u8>>,
+}
+
+impl v2xw_engine::RunRecorder for Tapping {
+    fn write(&mut self, at: u64, record: &v2xw_core::ctx::OwnedRecord) {
+        self.inner.write(at, record);
+    }
+    fn tap_frame(&mut self, _at: u64, node: v2xw_core::ids::NodeId, msg: u64, spdu: &[u8]) {
+        self.taps.insert((node.index(), msg), spdu.to_vec());
+    }
+}
+
+/// A falsifying sender signs what it claims. The SPDU on the air (what a receiver keeps
+/// and a misbehaviour report attaches as evidence) carries the claimed position, as the
+/// frame's `node.tx` content states it, quantised as J2735 puts it on the air. Before the
+/// fix every attacker BSM's SPDU carried the sender's true position: the claim was only in
+/// the frame's metadata, so the MA judged evidence no receiver had heard.
+#[test]
+fn an_attackers_signed_bsm_carries_its_claimed_position_not_its_true_one() {
+    use v2xw_msg::j2735::bsm;
+    let s = backend_run_scenario(6, true);
+    let world = v2xw_engine::wiring::build_world(&s).expect("world");
+    let origin: v2xw_core::geo::GeoOrigin = world.origin.into();
+    let mut engine = Engine::build(s, "").expect("builds");
+    let mut rec = Tapping::default();
+    let report = engine.run(&mut rec).expect("runs");
+    let p = &report.phase2;
+    assert_eq!(p.attackers, 1);
+    assert!(p.reports_at_ma > 0, "{p:?}");
+    assert_eq!(p.reports_evidence_unverifiable, 0, "{p:?}");
+    let mut checked = 0usize;
+    let mut wrong = Vec::new();
+    for tx in on::<NodeTxView>(&rec.inner) {
+        if tx.msg_type.as_deref() != Some("bsm") {
+            continue;
+        }
+        let (Some(msg), Some(c)) = (tx.msg, tx.content.as_ref()) else {
+            continue;
+        };
+        let (Some(x), Some(y)) = (c.claimed_x_m, c.claimed_y_m) else {
+            continue;
+        };
+        let Some(spdu) = rec.taps.get(&(tx.node.index(), msg)) else {
+            continue;
+        };
+        let data: v2xw_msg::sec_types::ieee1609_dot2::Ieee1609Dot2Data =
+            v2xw_msg::sec_types::coer::decode(v2xw_msg::MsgType::Bsm, spdu).expect("an SPDU");
+        let opened = v2xw_sec::sig1609::open_signed(&data).expect("signed data");
+        let m = bsm::decode_message_frame(&opened.payload).expect("a BSM");
+        let (lat, lon, _) = origin.to_geodetic(v2xw_core::Vec3::new(x, y, 0.0));
+        let (want_lat, want_lon) = (bsm::latitude(lat).unwrap(), bsm::longitude(lon).unwrap());
+        checked += 1;
+        if (m.core.lat - want_lat).abs() > 1 || (m.core.lon - want_lon).abs() > 1 {
+            wrong.push((
+                tx.node.index(),
+                msg,
+                (m.core.lat, m.core.lon),
+                (want_lat, want_lon),
+            ));
+        }
+    }
+    assert!(checked > 100, "only {checked} BSMs checked");
+    assert!(
+        wrong.is_empty(),
+        "{} of {checked} BSMs carry a position other than their claim: {:?}",
+        wrong.len(),
+        &wrong[..wrong.len().min(5)]
+    );
 }

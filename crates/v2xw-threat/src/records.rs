@@ -58,6 +58,20 @@ pub struct DetObservation {
     /// The detector's normalised score, `≈ 1` at its firing threshold.
     #[serde(default)]
     pub score: Option<f64>,
+    /// The judged message's `msgCnt`, when the detector reads one (the US profile).
+    /// Absent otherwise, so every other detector's row is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msg_cnt: Option<u8>,
+    /// The `msgCnt` of the previous BSM a pair check compared it with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_msg_cnt: Option<u8>,
+    /// The pair's Δt on the detector's configured clock, s (pair checks only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_s: Option<f64>,
+    /// The quantity the check compared with its threshold, in the check's own unit:
+    /// metres for a position check, m/s for a speed, m/s² for an acceleration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub residual: Option<f64>,
 }
 
 impl Record for DetObservation {
@@ -75,7 +89,29 @@ impl DetObservation {
             detector: detector.to_string(),
             subject: subject.to_string(),
             score: Some(q(score)),
+            msg_cnt: None,
+            prev_msg_cnt: None,
+            dt_s: None,
+            residual: None,
         }
+    }
+
+    /// The same row with the pair a check judged: the message's and its predecessor's
+    /// `msgCnt`, the pair's Δt (quantised to 1e-3 s) and the check's residual (quantised
+    /// to 1e-6 in its unit).
+    #[must_use]
+    pub fn with_pair(
+        mut self,
+        msg_cnt: Option<u8>,
+        prev_msg_cnt: Option<u8>,
+        dt_s: Option<f64>,
+        residual: Option<f64>,
+    ) -> Self {
+        self.msg_cnt = msg_cnt;
+        self.prev_msg_cnt = prev_msg_cnt;
+        self.dt_s = dt_s.map(|d| quantize_to(d, 1e-3));
+        self.residual = residual.map(|r| quantize_to(r, 1e-6));
+        self
     }
 }
 

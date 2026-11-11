@@ -145,6 +145,16 @@ fn the_settings_load_and_out_of_range_ones_are_refused() {
         params: serde_json::json!({"reading": "asn1_v1_1", "time_base": "secmark", "max_gap_s": 0.2}),
     }];
     assert!(validate(&us).is_empty(), "{:?}", validate(&us));
+    // The receiver's Δt clock, by name, and the nominal interval.
+    for tb in ["generation_time", "secmark", "receive_time", "nominal"] {
+        us.detection.local[0].params = serde_json::json!({"time_base": tb, "nominal_dt_s": 0.1});
+        assert!(validate(&us).is_empty(), "{tb}: {:?}", validate(&us));
+    }
+    us.detection.local[0].params = serde_json::json!({"time_base": "log_clock"});
+    assert!(
+        !validate(&us).is_empty(),
+        "an unknown time_base was accepted"
+    );
     us.detection.local[0].params = serde_json::json!({"reading": "v2_0"});
     assert!(!validate(&us).is_empty(), "an unknown reading was accepted");
     // What makes two BSMs consecutive, by name.

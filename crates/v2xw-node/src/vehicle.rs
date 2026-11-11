@@ -16,6 +16,7 @@
 //! | Output | Rule | Source |
 //! |---|---|---|
 //! | brake lights / `wheelBrakes` | the service brake is applied when the vehicle decelerates harder than [`BRAKE_SWITCH_DECEL_MPS2`] | this build's threshold: engine drag and rolling resistance alone decelerate a car at up to about 0.5 m/s², so anything harder needs the brake |
+//! | brake hold (opt-in, `messages.bsm.brake_hold`) | below [`BRAKE_LOW_SPEED_MPS`] the switch comes on at a deceleration of [`BRAKE_LOW_DECEL_MPS2`] and stays on until the commanded acceleration turns positive, plus [`BRAKE_RELEASE_OVERLAP_S`] (cut short once it passes [`BRAKE_RELEASE_ACCEL_MPS2`]), and at any speed past [`BRAKE_HIGH_DECEL_MPS2`]; at each stop (below [`STANDSTILL_MPS`]) one keyed draw holds it while standing with probability [`BRAKE_HOLD_STOP_P`], released [`BRAKE_PULL_AWAY_OVERLAP_S`] after the acceleration turns positive ([`brake_hold_card`]) | fitted to the Orem ev64-jn8c share of BSMs with the brake on, and with the accelerometer non-negative while on, by speed band; the SM-MBR `BrakeAcceleration` rate (5.4 per ID-minute at 0.5–5 m/s, 0.86 at 0–0.5 m/s) is the held-out check |
 //! | `eventHardBraking` | deceleration past 0.4 g (0.2 g heavy) | J2735 2024-09 §7.234 |
 //! | `eventABSactivated` | while the anti-lock brakes regulate ([`VehicleBus::abs_active`]) | J2945/1 §6.3.6.15 `DATAACC-035`: set the ABS flag when the information is available |
 //! | critical event | hard braking, ABS, traction control or stability control flag set ([`OwnVehicle::critical_event`]) | J2945/1 §3.1.2 |
@@ -39,6 +40,139 @@ use v2xw_msg::j2945::{
 
 /// Deceleration beyond which the service brake is on, m/s² (see the module table).
 pub const BRAKE_SWITCH_DECEL_MPS2: f64 = 0.7;
+
+/// Speed below which the vehicle stands for the brake hold, m/s: J2735's `Speed` LSB
+/// (0.02 m/s), the smallest speed a BSM can tell from zero.
+pub const STANDSTILL_MPS: f64 = 0.02;
+
+/// The source of every fitted brake-hold parameter ([`brake_hold_card`]).
+pub const BRAKE_HOLD_FIT_SOURCE: &str = "fit to Orem ev64-jn8c 2025-02-02..08 \
+    wheel_brakes_flags by speed band (USDOT ITS CV Pilot BSMs, data.transportation.gov)";
+
+/// Probability that a driver holds the brake for the whole of a stop (one draw per stop,
+/// [`brake_hold_card`]); fitted to the share of standstill BSMs with the brake on.
+pub const BRAKE_HOLD_STOP_P: f64 = 0.57;
+
+/// Speed below which a driver slowing down is on the brake, m/s ([`brake_hold_card`]).
+pub const BRAKE_LOW_SPEED_MPS: f64 = 9.0;
+
+/// Deceleration beyond which a driver below [`BRAKE_LOW_SPEED_MPS`] is on the brake, m/s²
+/// ([`brake_hold_card`]); once on, the brake stays on until the driver's commanded
+/// acceleration turns positive.
+pub const BRAKE_LOW_DECEL_MPS2: f64 = 0.6;
+
+/// Deceleration beyond which the brake is on at any speed with the brake-hold model on,
+/// m/s² ([`brake_hold_card`]); it replaces [`BRAKE_SWITCH_DECEL_MPS2`] in the model, and
+/// there is no latch above [`BRAKE_LOW_SPEED_MPS`].
+pub const BRAKE_HIGH_DECEL_MPS2: f64 = 1.0;
+
+/// How long the brake held at a stop stays on after the commanded acceleration turns
+/// positive, s ([`brake_hold_card`]): the pedal overlap of a driver pulling away.
+pub const BRAKE_PULL_AWAY_OVERLAP_S: f64 = 0.6;
+
+/// How long the brake put on while slowing stays on after the commanded acceleration
+/// turns positive, s ([`brake_hold_card`]): the pedal overlap of a driver who slowed
+/// without stopping.
+pub const BRAKE_RELEASE_OVERLAP_S: f64 = 0.2;
+
+/// Commanded acceleration beyond which the brake is off at once, m/s² ([`brake_hold_card`]):
+/// a driver whose car accelerates this hard has the foot on the throttle, not the brake.
+/// The pedal overlaps ([`BRAKE_PULL_AWAY_OVERLAP_S`], [`BRAKE_RELEASE_OVERLAP_S`]) run only
+/// while the acceleration is positive but under it. Without it the overlaps kept the brake
+/// on at clearly positive accelerations, so SM-MBR `BrakeAcceleration` fired with a far
+/// above zero (a 0.5 m/s² margin cleared 5 % of the engine's triggers, 72 % of Orem's;
+/// K3 Addendum 3). **`todo-calibrate`**: 0.15 m/s², inside the 0.1-0.2 m/s² of a
+/// level-road coast-to-throttle transition, not fitted.
+pub const BRAKE_RELEASE_ACCEL_MPS2: f64 = 0.15;
+
+/// The keyed stream the per-stop brake-hold draw comes from ([`brake_hold_card`]).
+pub const BRAKE_HOLD_STREAM: &str = "node/vehicle/brake-hold";
+
+/// The model id of the brake-hold model ([`brake_hold_card`]).
+pub const BRAKE_HOLD_ID: &str = "node/vehicle/brake-hold";
+
+/// The model card of the opt-in brake-hold model (`messages.bsm.brake_hold`): the driver's
+/// foot on the service brake at low speed and at stops, released on pulling away.
+pub fn brake_hold_card() -> v2xw_core::card::ModelCard {
+    use v2xw_core::card::{Family, ModelCard, Parameter, Source, SourceKind};
+    let mut card = ModelCard::new(
+        BRAKE_HOLD_ID,
+        Family::Generator,
+        "0.3.0",
+        "The brake switch comes on below a low speed when the driver decelerates beyond a \
+         small threshold and stays on until the commanded acceleration turns positive, plus \
+         a short pedal overlap, and at any speed beyond a larger threshold; at each stop one \
+         keyed draw decides whether the driver holds the brake while standing, released a \
+         pull-away overlap after the acceleration turns positive; a commanded acceleration \
+         beyond a small release threshold takes the brake off at once.",
+    );
+    let fit = || Source::new(SourceKind::Dataset, BRAKE_HOLD_FIT_SOURCE);
+    let mut push = |name: &str, unit: &str, v: f64, lo: f64, hi: f64| {
+        let mut p = Parameter::new(name, unit, serde_json::json!(v), fit());
+        p.range = Some(vec![serde_json::json!(lo), serde_json::json!(hi)]);
+        card.parameters.push(p);
+    };
+    push("stop_hold_p", "1", BRAKE_HOLD_STOP_P, 0.0, 1.0);
+    push("low_speed_mps", "m/s", BRAKE_LOW_SPEED_MPS, 0.0, 20.0);
+    push(
+        "low_speed_decel_mps2",
+        "m/s^2",
+        BRAKE_LOW_DECEL_MPS2,
+        0.0,
+        0.7,
+    );
+    push(
+        "high_speed_decel_mps2",
+        "m/s^2",
+        BRAKE_HIGH_DECEL_MPS2,
+        0.5,
+        3.0,
+    );
+    push(
+        "pull_away_overlap_s",
+        "s",
+        BRAKE_PULL_AWAY_OVERLAP_S,
+        0.0,
+        2.0,
+    );
+    push("release_overlap_s", "s", BRAKE_RELEASE_OVERLAP_S, 0.0, 2.0);
+    let mut r = Parameter::new(
+        "release_accel_mps2",
+        "m/s^2",
+        serde_json::json!(BRAKE_RELEASE_ACCEL_MPS2),
+        Source::new(
+            SourceKind::TodoCalibrate,
+            "design value: a driver accelerating beyond it is on the throttle; Orem \
+             ev64-jn8c BSMs with the brake on have a near-zero accelerometer",
+        ),
+    );
+    r.range = Some(vec![serde_json::json!(0.0), serde_json::json!(0.5)]);
+    r.calibration = Some(
+        "Fit to the Orem ev64-jn8c distribution of accel_long while the brake is on, by \
+         speed band (P(a >= x | brake on)), jointly with the two overlaps so that \
+         P(brake on | band) keeps its fitted values; the SM-MBR BrakeAcceleration rate \
+         with and without a 0.5 m/s^2 margin is the held-out check."
+            .to_string(),
+    );
+    card.parameters.push(r);
+    let mut s = Parameter::new(
+        "standstill_mps",
+        "m/s",
+        serde_json::json!(STANDSTILL_MPS),
+        Source::new(
+            SourceKind::Standard,
+            "SAE J2735 2024-09 DE_Speed: LSB 0.02 m/s",
+        ),
+    );
+    s.range = Some(vec![serde_json::json!(0.0), serde_json::json!(0.02)]);
+    card.parameters.push(s);
+    card.sources.push(Source::new(
+        SourceKind::Dataset,
+        "USDOT ITS DataHub Utah (Orem) connected-vehicle BSMs, data.transportation.gov \
+         ev64-jn8c, 2025-02-02..08: P(brake on) and P(accel >= 0 | brake on) by speed band",
+    ));
+    card
+}
 
 /// How far before a turn the driver signals, metres: 100 ft (California Vehicle Code
 /// §22108, and most US state codes).
@@ -140,6 +274,20 @@ pub struct OwnVehicle {
     standing_since: Option<SimTime>,
     /// The vehicle's role, for the CAM.
     role: v2xw_msg::cam::VehicleRole,
+    /// Whether the brake-hold model is on ([`brake_hold_card`]).
+    brake_hold: bool,
+    /// Whether the model has the brake on now.
+    held: bool,
+    /// When the brake comes off: set once the commanded acceleration turns positive.
+    release_at: Option<SimTime>,
+    /// Whether the current stop's hold draw has been taken.
+    stop_decided: bool,
+    /// Whether the brake now on is the one held at a stop (its release takes the
+    /// pull-away overlap).
+    from_stop: bool,
+    /// The keyed uniform draw for the next stop ([`BRAKE_HOLD_STREAM`]), supplied by the
+    /// runtime ([`OwnVehicle::supply_stop_draw`]).
+    stop_draw: Option<f64>,
 }
 
 impl Default for OwnVehicle {
@@ -153,6 +301,12 @@ impl Default for OwnVehicle {
             on_change: PathHistoryOnChange::Clear,
             standing_since: None,
             role: v2xw_msg::cam::VehicleRole::Default,
+            brake_hold: false,
+            held: false,
+            release_at: None,
+            stop_decided: false,
+            from_stop: false,
+            stop_draw: None,
         }
     }
 }
@@ -180,6 +334,68 @@ impl OwnVehicle {
     pub fn with_path_history_on_change(mut self, on_change: PathHistoryOnChange) -> Self {
         self.on_change = on_change;
         self
+    }
+
+    /// This vehicle with the brake-hold model on or off (`messages.bsm.brake_hold`; off in
+    /// [`OwnVehicle::default`]).
+    #[must_use]
+    pub fn with_brake_hold(mut self, on: bool) -> Self {
+        self.brake_hold = on;
+        self
+    }
+
+    /// Whether the brake-hold model waits for its next per-stop draw
+    /// ([`OwnVehicle::supply_stop_draw`]); never with the model off.
+    pub fn needs_stop_draw(&self) -> bool {
+        self.brake_hold && self.stop_draw.is_none()
+    }
+
+    /// Hands the brake-hold model the uniform `[0, 1)` draw its next stop is decided by,
+    /// from the node's keyed stream [`BRAKE_HOLD_STREAM`].
+    pub fn supply_stop_draw(&mut self, u: f64) {
+        self.stop_draw = Some(u);
+    }
+
+    /// The brake-hold model's step ([`brake_hold_card`]).
+    fn step_brake_hold(&mut self, bus: &VehicleBus) {
+        let (v, a) = (bus.speed_mps, bus.a_long_mps2);
+        if v < STANDSTILL_MPS {
+            if !self.stop_decided {
+                if let Some(u) = self.stop_draw.take() {
+                    self.stop_decided = true;
+                    self.held = u < BRAKE_HOLD_STOP_P;
+                    self.from_stop = self.held;
+                    self.release_at = None;
+                }
+            }
+        } else {
+            self.stop_decided = false;
+            if v < BRAKE_LOW_SPEED_MPS && a <= -BRAKE_LOW_DECEL_MPS2 {
+                self.held = true;
+                self.from_stop = false;
+                self.release_at = None;
+            }
+        }
+        if self.held {
+            if a > BRAKE_RELEASE_ACCEL_MPS2 {
+                self.held = false;
+                self.release_at = None;
+            } else if a > 0.0 {
+                let overlap_s = if self.from_stop {
+                    BRAKE_PULL_AWAY_OVERLAP_S
+                } else {
+                    BRAKE_RELEASE_OVERLAP_S
+                };
+                let overlap = (overlap_s * 1e9).round() as SimTime;
+                let at = *self.release_at.get_or_insert(bus.t.saturating_add(overlap));
+                if bus.t >= at {
+                    self.held = false;
+                    self.release_at = None;
+                }
+            } else {
+                self.release_at = None;
+            }
+        }
     }
 
     /// What a pseudonym change does to the path history.
@@ -217,6 +433,9 @@ impl OwnVehicle {
             self.standing_since.get_or_insert(bus.t);
         } else {
             self.standing_since = None;
+        }
+        if self.brake_hold {
+            self.step_brake_hold(&bus);
         }
         self.bus = Some(bus);
     }
@@ -264,13 +483,23 @@ impl OwnVehicle {
         bits
     }
 
+    /// Whether the brake switch is on: past [`BRAKE_SWITCH_DECEL_MPS2`], or with the
+    /// brake-hold model on, held or past [`BRAKE_HIGH_DECEL_MPS2`].
+    fn brake_switch(&self, bus: &VehicleBus) -> bool {
+        if self.brake_hold {
+            self.held || bus.a_long_mps2 <= -BRAKE_HIGH_DECEL_MPS2
+        } else {
+            bus.brake_applied()
+        }
+    }
+
     /// The J2735 brake status: every wheel braked when the brake switch is on.
     pub fn brakes(&self) -> BrakeSystemStatus {
         let Some(bus) = self.bus else {
             return BrakeSystemStatus::UNAVAILABLE;
         };
         BrakeSystemStatus {
-            wheel_brakes: if bus.brake_applied() {
+            wheel_brakes: if self.brake_switch(&bus) {
                 BrakeAppliedStatus::ALL_WHEELS
             } else {
                 BrakeAppliedStatus::NONE
@@ -395,6 +624,149 @@ mod tests {
         heavy.heavy = true;
         v.set_bus(heavy);
         assert!(v.events(3_000_000_000).is_some());
+    }
+
+    fn moving(t_s: f64, v: f64, a: f64) -> VehicleBus {
+        VehicleBus {
+            speed_mps: v,
+            ..bus(t_s, a)
+        }
+    }
+
+    /// Brake hold on, a stop whose draw holds the brake: on while standing with the
+    /// accelerometer at zero, still on during the pedal overlap after the commanded
+    /// acceleration turns positive, and released after it. Fault: drop `self.held ||` in
+    /// `brake_switch` -> the standstill assertion is red; drop the `a > 0.0` release -> the
+    /// released assertion is red.
+    #[test]
+    fn brake_hold_is_released_when_accelerating() {
+        let mut v = OwnVehicle::default().with_brake_hold(true);
+        assert!(v.needs_stop_draw());
+        v.supply_stop_draw(0.0);
+        assert!(!v.needs_stop_draw());
+        v.set_bus(moving(1.0, 8.0, 0.3));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::NONE);
+        v.set_bus(moving(2.0, 0.0, 0.0));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::ALL_WHEELS);
+        assert!(v.needs_stop_draw(), "the stop took its draw");
+        v.set_bus(moving(30.0, 0.0, 0.0));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::ALL_WHEELS);
+        v.set_bus(moving(30.1, 0.1, 0.1));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::ALL_WHEELS);
+        v.set_bus(moving(30.1 + BRAKE_PULL_AWAY_OVERLAP_S, 0.9, 0.1));
+        assert_eq!(
+            v.brakes().wheel_brakes,
+            BrakeAppliedStatus::NONE,
+            "released"
+        );
+        // Slowing gently below the low speed puts it on again, and it stays on while
+        // coasting until the acceleration turns positive.
+        v.set_bus(moving(40.0, 3.0, -BRAKE_LOW_DECEL_MPS2));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::ALL_WHEELS);
+        v.set_bus(moving(40.5, 2.9, -0.05));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::ALL_WHEELS);
+        v.set_bus(moving(41.0, 2.9, 0.4));
+        v.set_bus(moving(42.0, 3.2, 0.4));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::NONE);
+        // Above the low speed the same gentle slowing is engine drag, not the brake.
+        v.set_bus(moving(
+            50.0,
+            BRAKE_LOW_SPEED_MPS + 1.0,
+            -BRAKE_LOW_DECEL_MPS2,
+        ));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::NONE);
+        let card = brake_hold_card();
+        assert!(card.validate().is_ok());
+        assert_eq!(card.todo_calibrate().count(), 1);
+        assert!(card.parameters.iter().any(|p| p.name == "stop_hold_p"));
+    }
+
+    /// A commanded acceleration beyond [`BRAKE_RELEASE_ACCEL_MPS2`] takes the brake off at
+    /// once, inside either pedal overlap: no brake on with the car clearly accelerating.
+    /// Fault: drop the `a > BRAKE_RELEASE_ACCEL_MPS2` branch in `step_brake_hold` -> both
+    /// asserts are red (the overlap keeps the brake on).
+    #[test]
+    fn brake_hold_is_off_at_once_when_clearly_accelerating() {
+        let mut v = OwnVehicle::default().with_brake_hold(true);
+        v.supply_stop_draw(0.0);
+        v.set_bus(moving(2.0, 0.0, 0.0));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::ALL_WHEELS);
+        v.set_bus(moving(10.0, 0.05, BRAKE_RELEASE_ACCEL_MPS2 + 0.3));
+        assert_eq!(
+            v.brakes().wheel_brakes,
+            BrakeAppliedStatus::NONE,
+            "pull-away overlap cut"
+        );
+        v.set_bus(moving(20.0, 3.0, -BRAKE_LOW_DECEL_MPS2));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::ALL_WHEELS);
+        v.set_bus(moving(20.1, 3.0, BRAKE_RELEASE_ACCEL_MPS2 + 0.3));
+        assert_eq!(
+            v.brakes().wheel_brakes,
+            BrakeAppliedStatus::NONE,
+            "release overlap cut"
+        );
+    }
+
+    /// The per-stop draw decides the standstill hold: a draw at or above
+    /// [`BRAKE_HOLD_STOP_P`] leaves the brake off for the whole stop, one below it holds
+    /// it, and a stop takes one draw only. Fault: compare with `>` in `step_brake_hold` ->
+    /// both assertions are red.
+    #[test]
+    fn brake_hold_at_a_standstill_follows_the_per_stop_draw() {
+        let mut v = OwnVehicle::default().with_brake_hold(true);
+        v.supply_stop_draw(BRAKE_HOLD_STOP_P);
+        v.set_bus(moving(1.0, 0.0, 0.0));
+        v.supply_stop_draw(0.0);
+        v.set_bus(moving(2.0, 0.0, 0.0));
+        assert_eq!(
+            v.brakes().wheel_brakes,
+            BrakeAppliedStatus::NONE,
+            "one draw per stop"
+        );
+        v.set_bus(moving(3.0, 6.0, 1.0));
+        v.set_bus(moving(4.0, 0.0, 0.0));
+        assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::ALL_WHEELS);
+    }
+
+    /// The model's brake sequence over many stops is a function of the node's keyed
+    /// stream: two runs give the same sequence, and it holds at some stops and not at
+    /// others. Fault: draw from a stream keyed by a varying entity -> the first assertion
+    /// is red (with overwhelming probability).
+    #[test]
+    fn brake_hold_is_deterministic_across_runs() {
+        use v2xw_core::rng::{EntityRef, RngDomain, RngStream};
+        let run = || {
+            let mut rng = RngStream::derive(
+                7,
+                RngDomain::plugin(BRAKE_HOLD_STREAM),
+                EntityRef::Node(v2xw_core::ids::NodeId::new(3)),
+            );
+            let mut v = OwnVehicle::default().with_brake_hold(true);
+            let mut out = Vec::new();
+            for k in 0..64 {
+                if v.needs_stop_draw() {
+                    v.supply_stop_draw(rng.f64());
+                }
+                let t = f64::from(k) * 10.0;
+                v.set_bus(moving(t, 0.0, 0.0));
+                out.push(v.brakes().wheel_brakes != BrakeAppliedStatus::NONE);
+                v.set_bus(moving(t + 5.0, 8.0, 1.0));
+            }
+            out
+        };
+        let (a, b) = (run(), run());
+        assert_eq!(a, b);
+        assert!(a.iter().any(|&h| h) && a.iter().any(|&h| !h));
+    }
+
+    /// Brake hold off (the default): standing and slow driving leave the switch off.
+    #[test]
+    fn brake_hold_off_leaves_the_switch_to_deceleration() {
+        let mut v = OwnVehicle::default();
+        for (t, s) in [(1.0, 0.0), (2.0, 1.0), (3.0, 0.0)] {
+            v.set_bus(moving(t, s, 0.2));
+            assert_eq!(v.brakes().wheel_brakes, BrakeAppliedStatus::NONE);
+        }
     }
 
     fn fix(t_s: f64, x: f64) -> PositionEstimate {

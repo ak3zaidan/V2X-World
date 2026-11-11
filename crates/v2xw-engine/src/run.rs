@@ -7069,6 +7069,8 @@ impl Engine {
         // The 95 % radius an evasion attacker states in place of its own estimate
         // (`v2xw_threat::attack_evasion`).
         let mut stated_accuracy: Option<f64> = None;
+        let honest_claim = claim;
+        let honest_accel = bsm.accel_long_mps2;
         if !p2pcd && self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
                 .node_actor
@@ -7209,6 +7211,56 @@ impl Engine {
                 bsm.accel_long_mps2 = e.accel_long_mps2;
             }
         }
+        // A falsified BSM goes on the air as what it claims: the payload restated with the
+        // claimed position, speed, heading and acceleration, and signed again under the
+        // same header and signer identifier. Before, the claim lived only in the frame's
+        // metadata and the SPDU carried the sender's true kinematics, so the evidence a
+        // misbehaviour report attaches (the accused's signed BSMs as received) held what no
+        // receiver heard: 4,702 of 4,702 attack-report evidence BSMs in a p1-attack run.
+        let belief = belief.copied();
+        let on_air = (tx.msg_type == v2xw_msg::MsgType::Bsm
+            && (claim != honest_claim || bsm.accel_long_mps2 != honest_accel))
+            .then_some(tx.signed.as_ref())
+            .flatten()
+            .and_then(|f| {
+                let payload = ghost_bsm_payload(
+                    &f.payload,
+                    self.world.origin.into(),
+                    claim.0,
+                    claim.1,
+                    claim.2,
+                    0,
+                    bsm.accel_long_mps2,
+                )?;
+                if payload == f.payload {
+                    return None;
+                }
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    nodes,
+                    ..
+                } = self;
+                let mut null = crate::ctx::NullRecorder::new();
+                let mut ctx = EngineCtx::new(
+                    scheduler, rng, world, snapshot, provenance, params, &mut null,
+                );
+                let mut nctx = crate::adapters::node(&mut ctx);
+                nodes.get_mut(&node).and_then(|n| {
+                    n.security_mut().restate_payload(
+                        &mut nctx,
+                        f,
+                        &tx.signer,
+                        tx.msg_type,
+                        &payload,
+                    )
+                })
+            });
+        let signed = on_air.as_ref().or(tx.signed.as_ref());
         // The passive privacy observer hears the safety frame when it goes on the air
         // ([`Engine::start_frame`]): what it will read is taken here, with the claim the
         // frame carries. Only what a sniffer hears, when the scenario limits the
@@ -7330,7 +7382,7 @@ impl Engine {
                 .j2945_nav
                 .get(&node)
                 .copied()
-                .unwrap_or_else(|| host_state(b, t_generated));
+                .unwrap_or_else(|| host_state(&b, t_generated));
             let u = self
                 .rng
                 .checkout(
@@ -7459,7 +7511,7 @@ impl Engine {
             app,
             signature_valid,
             signer_validity,
-            spdu: tx.signed.as_ref().map(|f| {
+            spdu: signed.map(|f| {
                 let mut spdu = f.spdu.clone();
                 // The signature is the SPDU's last field (IEEE 1609.2 SignedData), so
                 // flipping its final octet leaves the frame parseable and the signature
@@ -7493,7 +7545,7 @@ impl Engine {
             mac_backoff_ns: 0,
             content: Some(message_content(
                 tx.msg_type,
-                tx.signed.as_ref().map(|f| f.payload.as_slice()),
+                signed.map(|f| f.payload.as_slice()),
                 &tx.signer,
                 claim,
                 crate::export::records_broadcast_accuracy(&self.scenario.exporters),
@@ -7721,19 +7773,19 @@ impl Engine {
                 continue;
             };
             let shift_ns = i128::from(g.generation_time) - i128::from(parent_gen);
-            let restated = if f2md {
-                ghost_bsm_payload(
-                    &payload,
-                    origin,
-                    Vec3::new(g.x_m, g.y_m, base.claimed_pos.z),
-                    g.speed_mps,
-                    g.heading_rad,
-                    shift_ns,
-                    g.accel_long_mps2,
-                )
-            } else {
-                None
-            };
+            // Every ghost BSM states its own claim on the air, an F2MD copy or a Sybil
+            // ghost alike: re-signing the beacon's payload put the attacker's own (true)
+            // position inside a frame that claims the ghost's, which is what a report
+            // about the ghost then attached as evidence. Only an F2MD copy is re-stamped.
+            let restated = ghost_bsm_payload(
+                &payload,
+                origin,
+                Vec3::new(g.x_m, g.y_m, base.claimed_pos.z),
+                g.speed_mps,
+                g.heading_rad,
+                if f2md { shift_ns } else { 0 },
+                g.accel_long_mps2,
+            );
             let own_payload = restated.as_deref().unwrap_or(payload.as_slice());
             // The signer's clock offset that stamps the copy's header at the beacon's
             // generationTime plus its shift (`sign_as` stamps `now` shifted by the offset).

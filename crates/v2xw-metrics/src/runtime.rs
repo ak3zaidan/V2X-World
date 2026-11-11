@@ -231,7 +231,8 @@ impl RuntimeProvider {
             .with_source(src.clone())
             .with_min_samples(1)
             .not_accounting_for("channels this provider was not told to count")
-            .not_accounting_for("events the engine produced and the recorder dropped"),
+            .not_accounting_for("events the engine produced and the recorder dropped")
+            .cumulative(),
             MetricDef::new(
                 "events_per_second",
                 "1/s",
@@ -246,7 +247,8 @@ impl RuntimeProvider {
             .with_min_samples(1)
             .not_accounting_for("the machine it ran on, which dominates it")
             .not_accounting_for("what else the machine was doing")
-            .as_diagnostic(),
+            .as_diagnostic()
+            .cumulative(),
             MetricDef::new(
                 "wall_clock_per_sim_second",
                 "s/s",
@@ -261,7 +263,8 @@ impl RuntimeProvider {
             .with_min_samples(1)
             .not_accounting_for("the machine, the thread count and the tier planner's choices")
             .not_accounting_for("time-dilation windows, which change what a simulated second costs")
-            .as_diagnostic(),
+            .as_diagnostic()
+            .cumulative(),
             MetricDef::new(
                 "memory_high_water_mark",
                 "B",
@@ -276,7 +279,8 @@ impl RuntimeProvider {
             .with_min_samples(1)
             .not_accounting_for("the allocator, the page size and the platform's accounting")
             .not_accounting_for("the engine's own byte counts, which are deterministic")
-            .as_diagnostic(),
+            .as_diagnostic()
+            .cumulative(),
         ]
     }
 
@@ -407,6 +411,27 @@ mod tests {
             .map(|d| d.name.as_str())
             .collect();
         assert_eq!(plain, vec!["events_processed"]);
+    }
+
+    /// Every figure accumulates over the run and is reported again at every flush, so a
+    /// sample is the run to date: declared windowed, pooling the windows by sums counted
+    /// the first events once per flush.
+    #[test]
+    fn every_figure_is_declared_run_to_date() {
+        let mut p = RuntimeProvider::new();
+        p.on_event(&rec());
+        let first = p.flush(1_000_000_000);
+        let second = p.flush(2_000_000_000);
+        let count = |s: &[MetricSample]| {
+            s.iter()
+                .find(|x| x.metric == "events_processed")
+                .and_then(|x| x.value.point())
+        };
+        assert_eq!(count(&first), Some(1.0));
+        assert_eq!(count(&second), Some(1.0), "the same event, reported again");
+        for d in p.defs() {
+            assert_eq!(d.aggregate, crate::def::Aggregate::Cumulative, "{}", d.name);
+        }
     }
 
     #[test]

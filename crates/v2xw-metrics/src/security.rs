@@ -491,7 +491,11 @@ impl SecurityProvider {
                 {
                     self.wait_ms.observe(((start - v.t_enqueue) as f64) / 1e6);
                 }
-                self.unverified.observe(false);
+                // A failed signature is not delivered (the receiver records the message
+                // lost), so it is in neither term of `unverified_ratio`.
+                if v.outcome == VerifyOutcome::Valid {
+                    self.unverified.observe(false);
+                }
             }
             VerifyOutcome::Skipped => {
                 // Delivered to the application without verification.
@@ -888,6 +892,23 @@ mod tests {
         let v = &sample(&s, "unverified_ratio").value;
         assert_eq!(v.point(), Some(0.5), "one of two deliveries was unverified");
         assert_eq!(v.n(), 2, "the dropped task is in neither term");
+    }
+
+    /// A message whose signature fails is not delivered (the receiver records it lost,
+    /// `signature-invalid`), so it is in neither term of "delivered unverified / delivered".
+    #[test]
+    fn an_invalid_signature_is_not_a_delivery() {
+        let mut p = SecurityProvider::new(0).with_min_samples(1);
+        for outcome in ["skipped", "valid", "invalid", "invalid"] {
+            p.on_event(&rec(
+                "node.verify",
+                json!({"t_enqueue":0,"node":1,"outcome":outcome,"cost_us":1000,"primitive":"p"}),
+            ));
+        }
+        let s = p.flush(1_000_000_000);
+        let v = &sample(&s, "unverified_ratio").value;
+        assert_eq!(v.point(), Some(0.5), "one of two deliveries was unverified");
+        assert_eq!(v.n(), 2, "the two failed messages were not delivered");
     }
 
     #[test]

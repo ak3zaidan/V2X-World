@@ -81,7 +81,15 @@ pub fn round_units(value: f64, unit: f64) -> f64 {
 /// Scales to wire units with a ceiling, for elements whose CDD comment reads "`n` … if the
 /// value is equal to or less than n × unit and greater than (n-1) × unit".
 pub fn ceil_units(value: f64, unit: f64) -> f64 {
-    (value / unit).ceil()
+    let x = value / unit;
+    // A value on the grid is that grid point, not the next one: 0.07 / 0.01 is
+    // 7.000000000000001 in binary floating point, and its ceiling would be 8.
+    let nearest = x.round();
+    if (x - nearest).abs() <= 1e-9 * nearest.abs().max(1.0) {
+        nearest
+    } else {
+        x.ceil()
+    }
 }
 
 /// Clamps a scaled value into `[min, max]`, mapping a non-finite input to `unavailable`.
@@ -382,6 +390,18 @@ mod tests {
         assert_eq!(yaw_rate_value(Some(0.0)), 0);
         // 1 rad/s is 57,2958 deg/s, which is 5730 hundredths (5729.58 rounds to 5730).
         assert_eq!(yaw_rate_value(Some(1.0)), 5730);
+    }
+
+    #[test]
+    fn the_ceiling_rule_keeps_a_value_that_is_exactly_on_the_grid() {
+        // "Equal to or less than n × unit": 0,07 m/s is 7 × 0,01 m/s, so n = 7, even
+        // though 0.07 / 0.01 is 7.000000000000001 in binary floating point.
+        assert_eq!(speed_value(0.07), 7);
+        assert_eq!(speed_value(1.11), 111);
+        assert_eq!(semi_axis_length(0.56), 56);
+        assert_eq!(speed_confidence(Some(0.14)), 14);
+        // A value just above a grid point still goes up.
+        assert_eq!(speed_value(0.071), 8);
     }
 
     #[test]

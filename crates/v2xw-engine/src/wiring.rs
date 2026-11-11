@@ -3876,6 +3876,12 @@ fn node_capacities(scenario: &Scenario) -> NodeConfig {
         c.path_history_points = n as usize;
     }
     c.path_history_on_change = path_history_on_change(scenario);
+    c.brake_hold = scenario
+        .messages
+        .bsm
+        .as_ref()
+        .and_then(|b| b.brake_hold)
+        .unwrap_or(false);
     // Partially-Hybrid: a receiver checks the issuer's post-quantum signature on
     // each certificate it learns, once, on top of the classical message verification.
     c.cert_verify_op = crate::signature::certificate_pq_verify_op(scenario);
@@ -4954,6 +4960,19 @@ mod tests {
         p.full_cert_every.map(|d| d.as_nanos() / 1_000_000)
     }
 
+    /// `messages.bsm.brake_hold` reaches the node's config, off unless set. Fault: drop
+    /// the `c.brake_hold` line in `node_capacities` -> the `true` case is red.
+    #[test]
+    fn brake_hold_reaches_the_node_config() {
+        let mut s = Scenario::minimal();
+        assert!(!node_capacities(&s).brake_hold);
+        s.messages.bsm = Some(crate::scenario::schema::BsmSettings {
+            brake_hold: Some(true),
+            ..Default::default()
+        });
+        assert!(node_capacities(&s).brake_hold);
+    }
+
     /// `messages.bsm.path_history_on_change` reaches the node's config, and
     /// unset leaves the choice to the node's standard (`NodeConfig::path_history_on_change`).
     ///
@@ -4975,6 +4994,7 @@ mod tests {
         ] {
             s.messages.bsm = Some(crate::scenario::schema::BsmSettings {
                 path_history_on_change: Some(spec),
+                ..Default::default()
             });
             assert_eq!(node_capacities(&s).path_history_on_change, Some(want));
         }

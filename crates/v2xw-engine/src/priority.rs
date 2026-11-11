@@ -287,7 +287,7 @@ impl PriorityControllers {
             },
         );
         new.then(|| PriorityRecord {
-            t: (now_s * 1e9) as SimTime,
+            t: v2xw_core::time::secs_to_ns(now_s),
             junction: p.junction.index(),
             group,
             requester: hex(&requester),
@@ -347,7 +347,7 @@ impl PriorityControllers {
             for (n, r) in &lapsed {
                 st.requests.remove(n);
                 out.push(PriorityRecord {
-                    t: (now_s * 1e9) as SimTime,
+                    t: v2xw_core::time::secs_to_ns(now_s),
                     junction,
                     group: r.group,
                     requester: hex(n),
@@ -391,7 +391,7 @@ impl PriorityControllers {
                         world.signals[idx].offset_s = base;
                         st.base_offset = None;
                         out.push(PriorityRecord {
-                            t: (now_s * 1e9) as SimTime,
+                            t: v2xw_core::time::secs_to_ns(now_s),
                             junction,
                             group: 0,
                             requester: String::new(),
@@ -441,7 +441,7 @@ impl PriorityControllers {
                     if !st.announced_extend {
                         st.announced_extend = true;
                         out.push(PriorityRecord {
-                            t: (now_s * 1e9) as SimTime,
+                            t: v2xw_core::time::secs_to_ns(now_s),
                             junction,
                             group: req.group,
                             requester: hex(&requester),
@@ -459,7 +459,7 @@ impl PriorityControllers {
                 if cut > 1e-6 {
                     world.signals[idx].offset_s -= cut;
                     out.push(PriorityRecord {
-                        t: (now_s * 1e9) as SimTime,
+                        t: v2xw_core::time::secs_to_ns(now_s),
                         junction,
                         group: req.group,
                         requester: hex(&requester),
@@ -773,6 +773,32 @@ mod tests {
             );
             plan.offset_s -= d;
         }
+    }
+
+    /// A record's `t` is the instant it was heard at, to the nanosecond: 4.1 s is
+    /// 4 099 999 999.999… ns as an `f64` product, which a truncating cast filed 1 ns
+    /// before the instant the engine stamps the record at.
+    #[test]
+    fn a_record_is_stamped_at_the_instant_it_was_heard() {
+        let world = v2xw_world::procedural::grid(
+            &GridParams::legacy().with_size(2, 2).with_signals(true),
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let group = world.signals[0].heads[0].group;
+        let mut c = PriorityControllers::new(PriorityParams::default());
+        let now: SimTime = 4_100_000_000;
+        let rec = c
+            .request(
+                &world,
+                0,
+                [1; 8],
+                group,
+                5.0,
+                v2xw_core::time::ns_to_secs(now),
+            )
+            .expect("a new request is logged");
+        assert_eq!(rec.t, now);
     }
 
     #[test]

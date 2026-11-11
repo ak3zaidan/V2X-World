@@ -329,6 +329,9 @@ impl<'w> Assigner<'w> {
             if !done && k < max_it {
                 for ((s, b), measured) in states.iter_mut().zip(best).zip(measured_all) {
                     let mut measured = measured;
+                    // The route driven in this loading, read before a new best is added and
+                    // the list is pruned: pruning shifts the indices `s.chosen` points into.
+                    let before = s.alts[s.chosen].signature.clone();
                     let depart = trips[s.trip].depart_s;
                     let (best_idx, is_new) = match b {
                         Some((path, _)) => {
@@ -369,9 +372,8 @@ impl<'w> Assigner<'w> {
                         EntityRef::custom(MODEL_ID, id ^ (u64::from(k) << 48)),
                     );
                     let weights: Vec<f64> = s.alts.iter().map(|a| a.probability).collect();
-                    let before = s.alts.get(s.chosen).map(|a| a.signature.clone());
                     s.chosen = rng.choose_index(&weights).min(s.alts.len() - 1);
-                    if before.as_ref() != Some(&s.alts[s.chosen].signature) {
+                    if before != s.alts[s.chosen].signature {
                         switched += 1;
                     }
                 }
@@ -664,6 +666,41 @@ mod tests {
             "two runs wrote different route files"
         );
         a.card().validate().expect("card");
+    }
+
+    #[test]
+    fn a_driver_who_remembers_one_route_switches_whenever_the_gap_is_open() {
+        // With one remembered route, the route driven next is the best route of this
+        // loading. A positive relative gap means some trip's driven route costs more than
+        // the best one, so it is a different route, and that trip switches.
+        let w = crate::graph::tests::grid();
+        let trips = demand(&w, 1600.0);
+        let params = AssignParams {
+            max_iterations: 4,
+            min_iterations: 4,
+            gap_tolerance: 0.0,
+            max_alternatives: 1,
+            ..AssignParams::default()
+        };
+        let r = Assigner::new(&w, params)
+            .run(&trips, None, |_| {})
+            .expect("runs");
+        let log = &r.routes.log;
+        let updated = &log[..log.len() - 1];
+        assert!(
+            updated.iter().any(|l| l.relative_gap > 0.0),
+            "the test needs a congested loading: {log:?}"
+        );
+        for l in updated {
+            if l.relative_gap > 0.0 {
+                assert!(
+                    l.switched_share > 0.0,
+                    "iteration {} has gap {} but no switch",
+                    l.iteration,
+                    l.relative_gap
+                );
+            }
+        }
     }
 
     #[test]

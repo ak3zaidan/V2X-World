@@ -300,6 +300,10 @@ impl v2xw_threat::Detector for HeadingRate {
                             detector: MODEL_ID.to_string(),
                             subject: subject.clone(),
                             score: Some(score),
+                            msg_cnt: None,
+                            prev_msg_cnt: None,
+                            dt_s: None,
+                            residual: None,
                         });
                     }
                 }

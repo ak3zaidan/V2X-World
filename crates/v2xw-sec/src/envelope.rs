@@ -992,6 +992,65 @@ impl Envelope {
         policy.choose(now, last_attached)
     }
 
+    /// `spdu` (a `SignedData` this signer produced) with its protected payload replaced
+    /// by `payload` and signed again by `signer`: the header (generation time, PSID,
+    /// P2PCD fields) and the signer identifier are the original's, octet for octet.
+    ///
+    /// What a falsifying sender puts on the air: the message it signs is the one with its
+    /// claimed kinematics, so a receiver that keeps it (a misbehaviour report's evidence)
+    /// holds the claim, not the sender's true state. Signing is a pure function of key and
+    /// digest in both backends, so this draws nothing and charges nothing.
+    ///
+    /// # Errors
+    /// The SPDU does not decode as `SignedData`, or the signature cannot be made.
+    pub fn resign_payload<C: Ctx + ?Sized>(
+        &self,
+        ctx: &mut C,
+        crypto: &mut dyn CryptoBackend<C>,
+        signer: &SignerHandle,
+        spdu: &[u8],
+        payload: &[u8],
+        msg_type: MsgType,
+    ) -> Result<SecuredPdu> {
+        let data: Ieee1609Dot2Data = coer::decode(msg_type, spdu)?;
+        let Ieee1609Dot2Content::signedData(mut signed) = data.content else {
+            return Err(SecError::NotSignedData {
+                found: "a content alternative other than signedData",
+            });
+        };
+        let sid = match &signed.signer {
+            SignerIdentifier::digest(_) => SignerIdChoice::Digest,
+            _ => SignerIdChoice::Certificate,
+        };
+        signed.tbs_data.payload = Box::new(SignedDataPayload::new(
+            Some(Ieee1609Dot2Data::new(
+                Uint8(PROTOCOL_VERSION),
+                Ieee1609Dot2Content::unsecuredData(Opaque(rasn::types::OctetString::from_slice(
+                    payload,
+                ))),
+            )),
+            None,
+            None,
+        ));
+        let tbs_coer = coer::encode(msg_type, &signed.tbs_data)?;
+        let digest = signing_digest(&tbs_coer, signer.cert_coer());
+        signed.signature = crypto
+            .sign_prehashed(ctx, &signer.key, &digest)?
+            .to_ieee1609_signature()?;
+        let data = Ieee1609Dot2Data::new(
+            Uint8(PROTOCOL_VERSION),
+            Ieee1609Dot2Content::signedData(signed),
+        );
+        let encoded = coer::encoded(msg_type, &data)?;
+        let spdu_digest = crate::hashedid::hashed_id8(&encoded.bytes);
+        Ok(SecuredPdu {
+            payload_bytes: u32::try_from(payload.len()).unwrap_or(u32::MAX),
+            encoded,
+            signer_id: sid,
+            digest: spdu_digest,
+        })
+    }
+
     /// Builds the `HeaderInfo`, applying the profile's constraints.
     fn header_info(&self, spec: &HeaderInfoSpec, now: SimTime) -> Result<HeaderInfo> {
         let generation_time = self.wall.time64(now)?;

@@ -73,6 +73,19 @@
 //! ([`STATIC_HOLD_EXIT_EPOCHS`] consecutive epochs at or above the threshold) and moves to
 //! the solution when that is more than [`STATIC_HOLD_MAX_DIST_M`] away (`staticHoldMaxDist`).
 //!
+//! Static hold, vehicle speed: `static_hold_vehicle_speed` keeps the held *position* but
+//! outputs the vehicle's own wheel-speed velocity (its odometry, along its heading) instead
+//! of zero, as an OBU that reads its speed from the vehicle bus does (the THEA CV pilot's
+//! OBUs are integrated on the vehicle's CAN bus). A car creeping under the threshold then
+//! sends an unchanged position with a non-zero speed: SM-MBR ConstantPosition, by the
+//! mechanism, not by a rate. A standing car's wheel speed is zero, so a stop stays silent.
+//! With the vehicle's speed the hold holds only while the vehicle stands
+//! ([`STANDSTILL_GATE_MPS`], half the J2735 speed LSB): at any speed the BSM can carry the
+//! position follows the solution, so a car slowing to a stop or pulling away is not frozen.
+//! `standstill_speed_sigma_mps > 0` then reports, at standstill, `|N(0, σ)|` quantised to
+//! the 0.02 m/s LSB, as a BSM speed taken from a receiver's Doppler rather than a clean
+//! CAN zero would (Tampa's locked devices: 54 % of creeping pairs under 0.1 m/s).
+//!
 //! Both are off by default, so a scenario that does not ask for them keeps its runs.
 //!
 //! # Quality classes
@@ -501,6 +514,19 @@ pub struct GaussMarkovParams {
     /// The static-hold threshold, m/s: below it the receiver holds its position and
     /// reports zero velocity. `0` is off. Read only when `smoothing_tau_s > 0`.
     pub static_hold_mps: f64,
+    /// Whether the speed output under the static hold is the vehicle's own wheel speed
+    /// rather than zero: an OBU on the vehicle bus takes its BSM speed from the vehicle
+    /// while the receiver holds the position (module docs, "Static hold, vehicle speed").
+    /// `false`, the default, is the receiver alone (u-blox: "the velocity is set to zero").
+    /// Read only when `static_hold_mps > 0`.
+    #[serde(skip_serializing_if = "is_false")]
+    pub static_hold_vehicle_speed: bool,
+    /// The reported speed's noise at standstill, m/s: while the vehicle-speed hold holds,
+    /// the BSM speed is `|N(0, σ)|` quantised to the J2735 0.02 m/s LSB (module docs,
+    /// "Static hold, vehicle speed"). `0`, the default, reports the vehicle's own speed.
+    /// Read only with `static_hold_vehicle_speed`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub standstill_speed_sigma_mps: f64,
     /// The one-sigma horizontal accuracy the receiver **states** (J2735
     /// `PositionalAccuracy.semiMajor`), metres: the median over devices. `0`, the default,
     /// states the model's own honest 95 % radius (`k·√(σ_w² + σ_b²)`, module docs).
@@ -541,6 +567,10 @@ fn is_zero(x: &f64) -> bool {
     *x == 0.0
 }
 
+fn is_false(x: &bool) -> bool {
+    !*x
+}
+
 impl Default for GaussMarkovParams {
     fn default() -> Self {
         Self {
@@ -563,6 +593,8 @@ impl Default for GaussMarkovParams {
             sigma_heading_rad: 0.0,
             smoothing_tau_s: 0.0,
             static_hold_mps: 0.0,
+            static_hold_vehicle_speed: false,
+            standstill_speed_sigma_mps: 0.0,
             stated_sigma_m: 0.0,
             stated_sigma_log_sd: 0.0,
             quality: GnssQuality::Reid2019,
@@ -626,6 +658,17 @@ pub const STATIC_HOLD_EXIT_EPOCHS: u32 = 2;
 /// quit"); quit below the speed threshold, the hold is re-entered at once, at the new
 /// position. **ASSUMPTION**: the value is the integrator's (u-blox ships the hold off).
 pub const STATIC_HOLD_MAX_DIST_M: f64 = 0.5;
+
+/// The J2735 `Speed` LSB, m/s.
+pub const J2735_SPEED_LSB_MPS: f64 = 0.02;
+
+/// The vehicle speed under which the vehicle-speed hold (`static_hold_vehicle_speed`)
+/// holds, m/s: half the J2735 `Speed` LSB, the largest speed the OBU's own speed source
+/// encodes as zero (round to nearest). The OBU holds its position only while the vehicle
+/// it reads says it is standing; at any speed the BSM can carry, the position follows the
+/// solution. **ASSUMPTION** (`todo-calibrate`): derived from the encoding, not measured;
+/// the wheel-speed sensor's own minimum detectable speed may sit above it.
+pub const STANDSTILL_GATE_MPS: f64 = 0.5 * J2735_SPEED_LSB_MPS;
 
 /// The fitted Gauss-Markov GNSS model.
 #[derive(Debug, Clone)]
@@ -945,12 +988,15 @@ impl GaussMarkovGnss {
     /// while would hold it: the same reason [`GaussMarkovGnss::advance_bias`] starts the
     /// bias at its stationary variance. Started from the raw fix, the first τ_s of every
     /// run would carry the full white error while the receiver reported the smoothed one.
+    #[allow(clippy::too_many_arguments)]
     fn receiver_output(
         &mut self,
         node: NodeId,
         z: Vec3,
         white: Vec3,
         v: Vec3,
+        wheel: Vec3,
+        standstill_v: Option<Vec3>,
         dt_s: f64,
     ) -> (Vec3, Vec3, f64) {
         let tau = self.params.smoothing_tau_s;
@@ -959,6 +1005,18 @@ impl GaussMarkovGnss {
         }
         let beta = 1.0 - math::exp(-dt_s.max(0.0) / tau);
         let hold = self.params.static_hold_mps;
+        // The speed output while held: zero (the receiver alone) or the vehicle's own.
+        // With the vehicle's speed, the hold holds only while the vehicle stands
+        // (`STANDSTILL_GATE_MPS`): holding at 0.02-0.3 m/s froze the position of every car
+        // decelerating to a stop and pulling away, with its non-zero CAN speed, an SM-MBR
+        // ConstantPosition from almost every stopping car (K3 Addendum 3).
+        let vehicle_speed = self.params.static_hold_vehicle_speed;
+        let rolling = vehicle_speed && wheel.norm_2d() >= STANDSTILL_GATE_MPS;
+        let held_v = if vehicle_speed {
+            standstill_v.unwrap_or(wheel)
+        } else {
+            Vec3::ZERO
+        };
         let state = self.state.entry(node).or_default();
         // The carrier-phase delta between two epochs is the range change over the whole
         // interval, the integral of the range rate: to first order the mean of the
@@ -1002,24 +1060,24 @@ impl GaussMarkovGnss {
         let moving = v.norm_2d() >= hold;
         let Some(at) = state.held_at else {
             // Not held: the hold is entered at the first epoch under the threshold.
-            if moving {
+            if moving || rolling {
                 return (p, v, white_out);
             }
             state.held_at = Some(p);
             state.moving_epochs = 0;
-            return (p, Vec3::ZERO, white_out);
+            return (p, held_v, white_out);
         };
         state.moving_epochs = if moving { state.moving_epochs + 1 } else { 0 };
-        if state.moving_epochs >= STATIC_HOLD_EXIT_EPOCHS {
+        if rolling || state.moving_epochs >= STATIC_HOLD_EXIT_EPOCHS {
             state.held_at = None;
             state.moving_epochs = 0;
             return (p, v, white_out);
         }
         if p.distance_2d(at) > STATIC_HOLD_MAX_DIST_M {
             state.held_at = Some(p);
-            return (p, Vec3::ZERO, white_out);
+            return (p, held_v, white_out);
         }
-        (at, Vec3::ZERO, white_out)
+        (at, held_v, white_out)
     }
 }
 
@@ -1172,8 +1230,27 @@ impl GnssModel for GaussMarkovGnss {
         // receiver does not know it is faulty, and the whole point of the faulty class is
         // that its reported confidence stays honest-looking while its error grows.
         let vel = Vec3::new(gt.vel.x + dvx, gt.vel.y + dvy, gt.vel.z);
-        let (pos, vel, white_out) =
-            self.receiver_output(node, pos, Vec3::new(nx, ny, nz), vel, dt_s);
+        // The standstill speed noise, drawn only when it is on so that a run without it
+        // keeps every other draw.
+        let sigma_ss = self.params.standstill_speed_sigma_mps;
+        let standstill_v = (self.params.static_hold_vehicle_speed && sigma_ss > 0.0).then(|| {
+            let draw = ctx
+                .rng(RngDomain::Gnss, EntityRef::Node(node))
+                .normal(0.0, sigma_ss)
+                .abs();
+            let speed = math::quantize_to(draw, J2735_SPEED_LSB_MPS);
+            let (s, c) = math::sin_cos(gt.heading_rad);
+            Vec3::new(speed * c, speed * s, 0.0)
+        });
+        let (pos, vel, white_out) = self.receiver_output(
+            node,
+            pos,
+            Vec3::new(nx, ny, nz),
+            vel,
+            gt.vel,
+            standstill_v,
+            dt_s,
+        );
         let sigma_nominal = self.sigma_white_h(env, false) * white_out;
         let bias_nominal = self.sigma_bias_h_m * env_scale(env.sky).unwrap_or(1.0);
         // A deployed receiver's stated accuracy grows where its sky does: NYC's CV-pilot
@@ -1564,6 +1641,84 @@ pub fn card(
             },
         ),
     ];
+    if params.static_hold_vehicle_speed {
+        let mut p = Parameter::new(
+            "static_hold_vehicle_speed",
+            "bool",
+            serde_json::json!(true),
+            Source {
+                kind: SourceKind::TodoCalibrate,
+                reference: "u-blox 8 / M8 Receiver Description, Static hold (the receiver \
+                            sets velocity to zero, so a held BSM's non-zero speed is not \
+                            the receiver's); FDOT, THEA Connected Vehicle Pilot (OBUs \
+                            integrated on the vehicle CAN bus)"
+                    .to_string(),
+                accessed: Some("2026-11-10".to_string()),
+                note: Some(
+                    "ASSUMPTION: the OBU's BSM speed is the vehicle's wheel speed, exact \
+                     (no minimum detectable speed) while the receiver holds"
+                        .to_string(),
+                ),
+            },
+        );
+        p.calibration = Some(
+            "Confirm the CV-pilot OBU's speed source per vendor (THEA Phase 3 interface and \
+             data documents, rosap dot_32763) and the wheel-speed sensor's minimum speed; \
+             then compare the locked class's transmitted speed distribution at 0.02-0.3 m/s \
+             with Tampa's (a distribution check, never a fit to its ConstantPosition rate)."
+                .to_string(),
+        );
+        card.parameters.push(p);
+        let mut g = Parameter::new(
+            "static_hold_standstill_gate_mps",
+            "m/s",
+            serde_json::json!(STANDSTILL_GATE_MPS),
+            Source {
+                kind: SourceKind::TodoCalibrate,
+                reference: "SAE J2735 Speed, LSB 0.02 m/s (round to nearest): half an LSB is \
+                            the largest vehicle speed the BSM encodes as zero"
+                    .to_string(),
+                accessed: Some("2026-11-10".to_string()),
+                note: Some(
+                    "ASSUMPTION: the OBU holds its position only while its vehicle-bus speed \
+                     encodes as standstill; derived from the encoding, not measured"
+                        .to_string(),
+                ),
+            },
+        );
+        g.calibration = Some(
+            "Read the CV-pilot OBU's hold logic or its wheel-speed sensor's minimum \
+             detectable speed from the vendor (THEA Phase 3 documents); check that the \
+             locked class's held-position pairs occur at standstill, not while decelerating \
+             or pulling away (Tampa: 54 % of creeping pairs under 0.1 m/s)."
+                .to_string(),
+        );
+        card.parameters.push(g);
+        let mut n = Parameter::new(
+            "standstill_speed_sigma_mps",
+            "m/s",
+            serde_json::json!(params.standstill_speed_sigma_mps),
+            Source {
+                kind: SourceKind::TodoCalibrate,
+                reference: "Tampa CV-pilot locked-class BSMs: 54 % of creeping pairs \
+                            (both speeds >= 0.02 m/s, v < 0.5) report under 0.1 m/s, a \
+                            standing car's Doppler speed noise under a position hold"
+                    .to_string(),
+                accessed: Some("2026-11-10".to_string()),
+                note: Some(
+                    "0, the default, reports the vehicle's own speed at standstill (a clean \
+                     CAN zero)"
+                        .to_string(),
+                ),
+            },
+        );
+        n.calibration = Some(
+            "Fit sigma to the Tampa locked class's share of standstill BSM speeds at \
+             0.02-0.1 m/s (a fitted quantity: no public held-out data covers it)."
+                .to_string(),
+        );
+        card.parameters.push(n);
+    }
     // The fits themselves, so a reader can see how well one scale stands in for three
     // measured percentiles.
     for fit in fits {
@@ -2208,6 +2363,87 @@ mod tests {
             assert!(
                 (sampled - predicted).abs() < 0.10 * predicted,
                 "p={q}: sampled {sampled} m against the fit's {predicted} m"
+            );
+        }
+    }
+
+    /// Static hold with the vehicle's speed (`static_hold_vehicle_speed`): the hold holds
+    /// only at standstill ([`STANDSTILL_GATE_MPS`]), so a car creeping at 0.05 or 0.2 m/s
+    /// (as through every stop and pull-away) is never frozen; a standing car with
+    /// `standstill_speed_sigma_mps` sends the same J2735 position with a speed of at least
+    /// the 0.02 m/s LSB (SM-MBR ConstantPosition, by mechanism); with sigma 0 a stop stays
+    /// silent, and the receiver alone reports zero speed under the hold.
+    /// Faults: drop `rolling` in `receiver_output` -> the "never frozen" assert is red;
+    /// `standstill_v` ignored (`held_v = wheel`) -> the first assert is red.
+    #[test]
+    fn the_vehicle_speed_hold_holds_only_at_standstill() {
+        // J2735 Latitude LSB, 1e-7 degree, in metres on the WGS-84 mean radius.
+        let lsb = 6_371_008.8 * 1e-7_f64.to_radians();
+        let q = |x: f64| (x / lsb).round();
+        let repeats = |tracks: &[Vec<(PositionEstimate, Vec3)>]| {
+            tracks
+                .iter()
+                .flat_map(|t| t.windows(2))
+                .filter(|w| {
+                    let (a, b) = (&w[0].0, &w[1].0);
+                    q(a.pos.x) == q(b.pos.x)
+                        && q(a.pos.y) == q(b.pos.y)
+                        && a.ground_speed_mps() >= 0.02
+                        && b.ground_speed_mps() >= 0.02
+                })
+                .count()
+        };
+        let frozen = |tracks: &[Vec<(PositionEstimate, Vec3)>]| {
+            tracks
+                .iter()
+                .flat_map(|t| t.windows(2))
+                .filter(|w| w[0].0.pos == w[1].0.pos)
+                .count()
+        };
+        let wheel = GaussMarkovParams {
+            static_hold_vehicle_speed: true,
+            ..smoothing()
+        };
+        let noisy = GaussMarkovParams {
+            standstill_speed_sigma_mps: 0.05,
+            ..wheel
+        };
+        let stand = track(noisy, 0.0, 20, 300);
+        let pairs: usize = stand.iter().map(|t| t.len() - 1).sum();
+        let n = repeats(&stand);
+        assert!(n * 2 > pairs, "{n} of {pairs} standstill pairs repeated");
+        let off_grid = |v: f64| (v / 0.02 - (v / 0.02).round()).abs() > 1e-6;
+        assert!(
+            !stand
+                .iter()
+                .flat_map(|t| t.windows(2))
+                .filter(|w| w[0].0.pos == w[1].0.pos)
+                .any(|w| off_grid(w[1].0.ground_speed_mps())),
+            "the held standstill speed is on the 0.02 m/s grid"
+        );
+        for v in [0.05, 0.2] {
+            assert_eq!(frozen(&track(wheel, v, 20, 300)), 0, "{v} m/s never frozen");
+        }
+        assert_eq!(
+            repeats(&track(wheel, 0.0, 20, 300)),
+            0,
+            "a stop stays silent"
+        );
+        assert_eq!(
+            repeats(&track(smoothing(), 0.05, 20, 300)),
+            0,
+            "the receiver alone reports zero speed under the hold"
+        );
+        let card = GaussMarkovGnss::new(noisy).card().clone();
+        card.validate().expect("validates");
+        for name in [
+            "static_hold_vehicle_speed",
+            "static_hold_standstill_gate_mps",
+            "standstill_speed_sigma_mps",
+        ] {
+            assert!(
+                card.parameters.iter().any(|p| p.name == name),
+                "{name} is on the card"
             );
         }
     }

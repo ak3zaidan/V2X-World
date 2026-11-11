@@ -282,8 +282,6 @@ struct SensedCell {
     rsrp_dbm: f64,
     /// That SCI's announced reservation period in slots, 0 for "no reservation".
     rri_slots: u32,
-    /// The announced allocation length in sub-channels.
-    len: u32,
     /// Linear S-RSSI, mW, summed over everything that arrived on the resource.
     srssi_mw: f64,
 }
@@ -293,7 +291,6 @@ impl SensedCell {
         slot: u64::MAX,
         rsrp_dbm: f64::NEG_INFINITY,
         rri_slots: 0,
-        len: 0,
         srssi_mw: 0.0,
     };
 }
@@ -381,13 +378,11 @@ impl SensingHistory {
                     slot: res.slot,
                     rsrp_dbm,
                     rri_slots,
-                    len: res.len,
                     srssi_mw: 0.0,
                 };
             } else if rsrp_dbm > cell.rsrp_dbm {
                 cell.rsrp_dbm = rsrp_dbm;
                 cell.rri_slots = rri_slots;
-                cell.len = res.len;
             }
         }
     }
@@ -1111,10 +1106,12 @@ impl SpsEngine {
                 if cell.rri_slots == 0 || cell.rsrp_dbm < threshold_dbm {
                     continue;
                 }
+                // Every sub-channel of the reservation has its own cell, so each cell
+                // blocks its own sub-channel only.
                 let period = u64::from(cell.rri_slots);
                 let mut t = slot + period;
                 while t <= to {
-                    drop_resource(t, sc, sc + cell.len.max(1), &mut keep);
+                    drop_resource(t, sc, sc + 1, &mut keep);
                     t += period;
                 }
             }
@@ -2135,6 +2132,27 @@ mod tests {
         let mut once = engine(SpsParams::molina_masegosa(10));
         once.note_sensed(node, SlResource::new(10, 2, 1), -80.0, 0);
         assert!(once.exclude(node, 50, 1, -110.0).iter().all(|k| *k));
+    }
+
+    #[test]
+    fn a_multi_subchannel_reservation_excludes_only_its_own_subchannels() {
+        let mut e = engine(SpsParams::molina_masegosa(10));
+        let node = NodeId::new(1);
+        // A neighbour reserved sub-channels 0 and 1 of slot 10 (start 0, length 2) with a
+        // 100 ms period. Projected to slot 110 it shares a sub-channel with the
+        // one-sub-channel candidates on 0 and 1, and with no other.
+        e.note_sensed(node, SlResource::new(10, 0, 2), -80.0, 100);
+        let keep = e.exclude(node, 50, 1, -110.0);
+        let excluded: Vec<SlResource> = e
+            .candidates(50, 1)
+            .iter()
+            .zip(&keep)
+            .filter_map(|(c, k)| (!k).then_some(*c))
+            .collect();
+        assert_eq!(
+            excluded,
+            vec![SlResource::new(110, 0, 1), SlResource::new(110, 1, 1)]
+        );
     }
 
     #[test]

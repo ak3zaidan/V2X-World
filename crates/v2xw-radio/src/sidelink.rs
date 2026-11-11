@@ -1216,7 +1216,8 @@ impl SidelinkOccupancy {
     #[must_use]
     pub fn cr(&self, now_slot: u64) -> f64 {
         let from = now_slot.saturating_sub(self.cr_past_slots);
-        let to = from + self.cr_window_slots;
+        // [n - a, n + b]: the end is fixed by n, also while n - a saturates at 0.
+        let to = now_slot + (self.cr_window_slots - self.cr_past_slots);
         let count = self.used.range((from, 0)..(to, 0)).count() as f64;
         let total = (self.cr_window_slots * u64::from(self.subchannels)) as f64;
         if total == 0.0 {
@@ -1670,6 +1671,19 @@ mod tests {
         }
         let v = cr.cr(500);
         assert!(v > 0.0 && v < 0.01, "CR {v} should be small but non-zero");
+    }
+
+    #[test]
+    fn the_cr_window_ends_b_slots_after_n_at_start_up_too() {
+        // a = 500, b = 499: at n = 100 the window is [0, 599]. A grant at slot 700 is
+        // outside it, whatever the saturation of n − a does to the start.
+        let pool = PoolConfig::molina_masegosa_highway();
+        let mut occ = SidelinkOccupancy::new(&pool);
+        assert_eq!(occ.cr_split(), (500, 499));
+        occ.note_used(700, 0);
+        assert_eq!(occ.cr(100), 0.0);
+        occ.note_used(599, 0);
+        assert!(occ.cr(100) > 0.0);
     }
 
     #[test]

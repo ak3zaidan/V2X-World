@@ -60,6 +60,7 @@ fn the_path_history_rule_at_a_change_reaches_the_node() {
     ] {
         s.messages.bsm = Some(BsmSettings {
             path_history_on_change: Some(spec),
+            ..Default::default()
         });
         assert_eq!(v2xw_engine::wiring::path_history_on_change(&s), Some(want));
     }

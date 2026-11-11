@@ -1756,6 +1756,19 @@ pub struct GnssSettings {
     /// `smoothing_tau_s`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub static_hold_mps: Option<f64>,
+    /// Whether the speed under the static hold is the vehicle's own wheel speed rather
+    /// than zero: an OBU on the vehicle bus sends the vehicle's speed while its receiver
+    /// holds the position, so a car creeping under the hold sends an unchanged position
+    /// with a non-zero speed (SM-MBR ConstantPosition). Unset or false is the receiver
+    /// alone (zero speed, u-blox). Read only with a hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_hold_vehicle_speed: Option<bool>,
+    /// The reported speed's noise at standstill, m/s: while the vehicle-speed hold holds a
+    /// standing car, its BSM speed is `|N(0, σ)|` on the 0.02 m/s grid, as a speed taken
+    /// from the receiver's Doppler would be. Unset or 0 sends the vehicle's own speed (a
+    /// clean zero). Read only with `static_hold_vehicle_speed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standstill_speed_sigma_mps: Option<f64>,
     /// The receiver's velocity output noise, m/s per horizontal axis, drawn afresh at every
     /// fix. Unset is the GPS SPS committed velocity accuracy (0.2 m/s at 95 %, σ 0.102 m/s),
     /// which as a white 10 Hz noise makes consecutive BSMs' speeds differ by sd 0.14 m/s,
@@ -1832,6 +1845,12 @@ impl GnssSettings {
         }
         if let Some(v) = self.static_hold_mps {
             p.static_hold_mps = v;
+        }
+        if let Some(v) = self.static_hold_vehicle_speed {
+            p.static_hold_vehicle_speed = v;
+        }
+        if let Some(v) = self.standstill_speed_sigma_mps {
+            p.standstill_speed_sigma_mps = v;
         }
         if let Some(v) = self.velocity_noise_mps {
             p.sigma_velocity_mps = v;
@@ -3591,6 +3610,11 @@ pub struct BsmSettings {
     /// A set value holds for every node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path_history_on_change: Option<PathHistoryOnChangeSpec>,
+    /// Whether the brake switch follows the opt-in driver brake model fitted to deployed
+    /// CV data: on when slowing at low speed until the driver accelerates, and held at a
+    /// share of stops (`v2xw_node::vehicle::brake_hold_card`). Off unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brake_hold: Option<bool>,
 }
 
 /// What a pseudonym change does to the path history (`messages.bsm.path_history_on_change`;

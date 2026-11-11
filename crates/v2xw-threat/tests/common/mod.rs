@@ -88,6 +88,8 @@ pub struct Scenario {
     pub gnss_sigma_m: f64,
     /// The master seed.
     pub seed: u64,
+    /// `DataReplay`'s lag in claims, when a test sets it; the attack's default otherwise.
+    pub replay_lag_samples: Option<usize>,
 }
 
 impl Default for Scenario {
@@ -98,6 +100,7 @@ impl Default for Scenario {
             dt_s: 1.0,
             gnss_sigma_m: 0.0,
             seed: 20_260_922,
+            replay_lag_samples: None,
         }
     }
 }
@@ -129,6 +132,9 @@ pub fn run(s: &Scenario) -> RunOut {
     let mut attacker = s.attack.map(|kind| {
         let mut p = LegacyAttackerParams::new(kind);
         p.dt_s = s.dt_s;
+        if let Some(lag) = s.replay_lag_samples {
+            p.magnitudes.replay_lag_samples = lag;
+        }
         LegacyAttacker::new(
             TX,
             p,

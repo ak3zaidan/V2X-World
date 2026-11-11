@@ -827,6 +827,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "keep (SAE J2945/1, the default for a vehicle sending BSMs; a CAM-only ETSI station clears unless this is set); clear to study what clearing buys for privacy.",
     },
     Basic {
+        path: "messages.bsm.brake_hold",
+        explain: "Whether a vehicle reports its brake the way drivers use it, fitted to deployed connected-vehicle data (Orem CV pilot) by speed band: on when slowing at low speed until the driver accelerates again, with a short pedal overlap, and held at a share of stops while standing; off, the brake is on only while it decelerates hard.",
+        recommended: "Off (today's default); on to match deployed BSM brake data (Orem CV pilot), e.g. for misbehaviour-detection false-positive studies.",
+    },
+    Basic {
         path: "nodes.verify_queue_depth",
         explain: "How many received messages can wait for signature verification; when the processor falls behind, messages beyond it are dropped.",
         recommended: "16 to 256; 64 is one second of 6 neighbours at 10 Hz.",
@@ -1139,6 +1144,16 @@ const ADVANCED: &[Basic] = &[
         path: "actors.vehicles.gnss.static_hold_mps",
         explain: "Below this speed the GPS receiver treats the vehicle as stopped: it holds the position and reports zero speed. Needs the smoothing.",
         recommended: "0.3 m/s (the US real-world presets); 0 for off.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.static_hold_vehicle_speed",
+        explain: "Whether, while the GPS receiver holds a slow vehicle's position, the safety message's speed comes from the vehicle's own wheel speed (an on-board unit on the vehicle bus) instead of the receiver's zero. On, a car creeping under the hold sends the same position with a small speed, which SM-MBR's ConstantPosition check reports; a standing car still sends zero.",
+        recommended: "Off (today's default, the receiver alone); on for OBUs that read the vehicle bus, e.g. to study ConstantPosition false positives at creep on CV-pilot-like devices.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.standstill_speed_sigma_mps",
+        explain: "With the vehicle-speed hold on, how much a standing car's reported speed jitters: each held message sends the size of a random draw with this spread, rounded to the 0.02 m/s step, as a speed from the GPS receiver's Doppler would. A non-zero speed with an unchanged position is what SM-MBR's ConstantPosition check reports.",
+        recommended: "0 (unset, a clean zero at standstill); to be fitted to Tampa's standstill speeds of 0.02-0.1 m/s.",
     },
     Basic {
         path: "actors.vehicles.gnss.velocity_noise_mps",

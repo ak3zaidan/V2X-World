@@ -187,14 +187,16 @@ fn ssm(a: &TriggerActor) -> SsmActor {
     }
 }
 
-/// The step's draw in `[0, 1)`, keyed by `(seed, item, step)`.
+/// The step's draw in `[0, 1)`, keyed by `(seed, item, step)`: the item keys the stream
+/// and the step positions it. ChaCha's word position is 68 bits wide, so an item packed
+/// above bit 64 of the position wrapped every 16 items and item 16 drew item 0's sequence.
 fn draw(view: &TriggerView<'_>) -> f64 {
     let mut s = RngStream::derive(
         view.seed,
         RngDomain::plugin(RNG_MODEL_ID),
-        EntityRef::Global,
+        EntityRef::custom(RNG_MODEL_ID, view.item as u64),
     );
-    s.set_word_pos(((view.item as u128) << 64) | (u128::from(view.step) * 2));
+    s.set_word_pos(u128::from(view.step) * 2);
     s.f64()
 }
 
@@ -501,6 +503,27 @@ mod tests {
         };
         assert_eq!(steps(3), steps(3));
         assert_ne!(steps(3), steps(4));
+    }
+
+    /// Every item has its own sequence, not only the first sixteen: an item packed above
+    /// bit 64 of a 68-bit word position wrapped, and item 16 fired with item 0.
+    #[test]
+    fn items_sixteen_apart_draw_different_sequences() {
+        let none: [TriggerActor; 0] = [];
+        let steps = |item: usize| -> Vec<u64> {
+            (0..200u64)
+                .filter(|&step| {
+                    Condition::Probability { p: 0.5 }
+                        .eval(&TriggerView {
+                            item,
+                            ..view(&none, step)
+                        })
+                        .is_some()
+                })
+                .collect()
+        };
+        assert_ne!(steps(0), steps(16));
+        assert_ne!(steps(3), steps(19));
     }
 
     #[test]

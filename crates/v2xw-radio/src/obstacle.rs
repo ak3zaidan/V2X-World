@@ -1827,7 +1827,8 @@ fn vehicle_card() -> ModelCard {
 /// The Boban vehicle knife-edge loss, dB.
 ///
 /// `A_sk = 6.9 + 20·log10(sqrt((v − 0.1)² + 1) + v − 0.1)` for `v > −0.7`, else 0, with
-/// `v = sqrt(2H/r_f)` and `r_f = sqrt(λ·d1·d2/(d1 + d2))` the Fresnel radius. Valid
+/// `v = sqrt(2)·H/r_f` and `r_f = sqrt(λ·d1·d2/(d1 + d2))` the Fresnel radius (so `v` is
+/// the ITU-R P.526 Eq. 26 parameter, [`knife_edge_parameter`]). Valid
 /// because λ ≈ 5 cm is much smaller than a vehicle.
 #[must_use]
 pub fn boban_vehicle_loss_db(h_m: f64, d1_m: f64, d2_m: f64, lambda_m: f64) -> f64 {
@@ -1838,7 +1839,7 @@ pub fn boban_vehicle_loss_db(h_m: f64, d1_m: f64, d2_m: f64, lambda_m: f64) -> f
     if r_f <= 0.0 {
         return 0.0;
     }
-    let v = math::sqrt(2.0 * h_m / r_f);
+    let v = math::sqrt(2.0) * h_m / r_f;
     if v <= -0.7 {
         return 0.0;
     }
@@ -2716,7 +2717,7 @@ mod tests {
     fn the_boban_vehicle_knife_edge_is_a_knife_edge() {
         let lambda = numeric::wavelength_m(5.9e9);
         // A van 1 m above the line of sight, halfway along a 40 m link: the Fresnel
-        // radius is sqrt(λ·20·20/40) = 0.504 m, so v = sqrt(2/0.504) = 1.99 and the loss
+        // radius is sqrt(λ·20·20/40) = 0.504 m, so v = sqrt(2)/0.504 = 2.81 and the loss
         // is the J(ν) curve at that point.
         let loss = boban_vehicle_loss_db(1.0, 20.0, 20.0, lambda);
         assert!(loss > 12.0, "a van should cost more than 12 dB: {loss}");
@@ -2729,6 +2730,23 @@ mod tests {
         let truck = boban_vehicle_loss_db(2.0, 13.0, 13.0, lambda);
         assert!(truck > 20.0, "{truck}");
         assert!(truck > loss);
+    }
+
+    #[test]
+    fn the_boban_parameter_is_the_p526_knife_edge_parameter() {
+        // Boban's A_sk is P.526 Eq. 31 at v = sqrt(2)·H/r_f, which with
+        // r_f = sqrt(λ·d1·d2/(d1 + d2)) is exactly P.526 Eq. 26,
+        // h·sqrt(2(d1 + d2)/(λ·d1·d2)). For H = 1 m at 20 m + 20 m: r_f = 0.504 m and
+        // v = 2.81, not sqrt(2/0.504) = 1.99.
+        let lambda = numeric::wavelength_m(5.9e9);
+        for (h, d1, d2) in [(1.0, 20.0, 20.0), (0.1, 50.0, 50.0), (2.0, 13.0, 40.0)] {
+            let want = knife_edge_loss_db(knife_edge_parameter(h, d1, d2, lambda));
+            let got = boban_vehicle_loss_db(h, d1, d2, lambda);
+            assert!(
+                (got - want).abs() < 1e-9,
+                "H {h}: {got} dB, P.526 {want} dB"
+            );
+        }
     }
 
     #[test]

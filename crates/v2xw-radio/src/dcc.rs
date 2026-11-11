@@ -1879,10 +1879,13 @@ impl PerWindow {
     }
 
     fn bump(ring: &mut Vec<(u64, u32)>, buckets: usize, k: u64) {
+        // One slot more than the window: the sub-interval in progress must not overwrite
+        // the oldest completed one, which `average_per` still counts.
+        let slots = buckets + 1;
         if ring.is_empty() {
-            ring.resize(buckets, (u64::MAX, 0));
+            ring.resize(slots, (u64::MAX, 0));
         }
-        let slot = (k % buckets as u64) as usize;
+        let slot = (k % slots as u64) as usize;
         if ring[slot].0 != k {
             ring[slot] = (k, 0);
         }
@@ -3391,6 +3394,29 @@ mod tests {
         assert_eq!(w.average_per(host, 20 * s, |_| true), None);
         // A vehicle never decoded is not in the average, whatever it sent.
         assert_eq!(w.average_per(NodeId::new(9), 5 * s, |_| true), None);
+    }
+
+    #[test]
+    fn the_per_window_keeps_five_completed_seconds_once_the_current_one_has_traffic() {
+        // vPERInterval 5 s of 1 s sub-intervals: asked at 5.5 s the window is the five
+        // completed seconds 0..5. A sends 10 BSMs a second and the host decodes 8, so the
+        // PER is 1 − 40/50 = 0.2. A has already sent at 5.1 s; that BSM is outside the
+        // window and must not push second 0 out of it.
+        let mut w = PerWindow::new(J2945Params::J2945_1);
+        let (host, a) = (NodeId::new(0), NodeId::new(1));
+        let ms = 1_000_000u64;
+        for i in 0..50u64 {
+            let t = i * 100 * ms;
+            w.note_sent(a, t);
+            if i % 5 != 0 {
+                w.note_received(host, a, t + ms);
+            }
+        }
+        w.note_sent(a, 5_100 * ms);
+        let avg = w
+            .average_per(host, 5_500 * ms, |_| true)
+            .expect("one neighbour");
+        assert!((avg - 0.2).abs() < 1e-12, "PER 0.2, got {avg}");
     }
 
     #[test]

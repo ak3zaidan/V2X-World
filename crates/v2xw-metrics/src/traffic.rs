@@ -110,6 +110,7 @@ impl TrafficControlProvider {
                 .with_dims([Dim::T])
                 .with_source(src.clone())
                 .with_min_samples(1)
+                .cumulative()
                 .not_accounting_for(
                     "a jam shorter than the gridlock timeout, and a vehicle the timeout is \
                      off for (0 s); a pedestrian's signal call, which the detectors do not see",
@@ -220,6 +221,16 @@ mod tests {
         assert_eq!(get("traffic_teleports"), 2);
         assert_eq!(get("signal_gap_outs"), 5);
         assert_eq!(p.rejected(), 0);
+    }
+
+    /// `traffic.control` carries running totals and the last one is reported at every
+    /// flush, so a sample is the run to date; declared windowed, pooling the windows by
+    /// sums counted one teleport once per window.
+    #[test]
+    fn the_counts_are_declared_run_to_date() {
+        for d in TrafficControlProvider::definitions() {
+            assert_eq!(d.aggregate, crate::def::Aggregate::Cumulative, "{}", d.name);
+        }
     }
 
     #[test]

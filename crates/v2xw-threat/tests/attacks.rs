@@ -328,6 +328,20 @@ fn the_heading_family_edits_the_heading_and_nothing_else() {
     }
 }
 
+/// A lag of 0 claims back has nothing to replay: the attacker sends its own claim instead
+/// of indexing one past the newest one (the scenario key has no lower bound).
+#[test]
+fn data_replay_with_no_lag_sends_the_current_claim_instead_of_panicking() {
+    let out = run(&Scenario {
+        replay_lag_samples: Some(0),
+        ..Scenario::attacking(AttackKind::DataReplay)
+    });
+    assert_eq!(out.emissions.len(), 60);
+    for i in attacking(&out) {
+        assert_pos_untouched(&out.emissions[i], &out.honest[i]);
+    }
+}
+
 #[test]
 fn data_replay_retransmits_the_claim_five_messages_back_with_its_old_generation_time() {
     let out = run(&Scenario::attacking(AttackKind::DataReplay));

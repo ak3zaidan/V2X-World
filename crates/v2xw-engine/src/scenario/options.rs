@@ -3422,6 +3422,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "messages.path_history_points" => "Path history points per message",
         "messages.bsm" => "BSM (SAE J2945/1)",
         "messages.bsm.path_history_on_change" => "Path history at a pseudonym change",
+        "messages.bsm.brake_hold" => "Driver brake at low speed and at stops (Orem fit)",
         "security.signer_id_policy.on_new_neighbour" => "Certificate for new neighbours",
         "radio.tiers.propagation" => "Signal propagation detail",
         "radio.tiers.phy" => "Physical layer detail",
@@ -3650,6 +3651,8 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.gnss" => "GNSS receivers",
         "actors.vehicles.gnss.rtk" => "RTK-corrected receivers",
         "actors.vehicles.gnss.quality" => "Receiver quality",
+        "actors.vehicles.gnss.static_hold_vehicle_speed" => "Vehicle speed under the static hold",
+        "actors.vehicles.gnss.standstill_speed_sigma_mps" => "Standstill speed noise",
         // end traffic audit
         // --- SCMS menus -------------------------------
         "security.scms.deployment" => "Deployment",

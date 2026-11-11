@@ -247,6 +247,27 @@ fn a_relay_retransmits_a_captured_frame_verbatim() {
     assert!(matches!(actions[0], AttackAction::Replay { .. }));
 }
 
+/// A relay lag of 0 has nothing to replay: the relay refuses visibly instead of indexing
+/// one past the newest capture.
+#[test]
+fn a_relay_with_no_lag_refuses_instead_of_panicking() {
+    let mut params = ExtendedAttackerParams::new(ExtendedAttackKind::RelayReplay);
+    params.relay_lag_messages = 0;
+    let mut h = Harness::with(
+        params,
+        Capabilities::insider(20),
+        Vec::new(),
+        ghost_signers(6),
+        always(),
+    );
+    let rx: Vec<ObservedMessage> = (0..7u8)
+        .map(|i| heard(i, 100.0 + f64::from(i), NS_PER_S))
+        .collect();
+    let (out, _) = h.step(NS_PER_S, &rx);
+    assert!(out.ghosts.is_empty());
+    assert_eq!(h.attacker.refused(), 1);
+}
+
 #[test]
 fn a_relay_does_not_capture_one_reception_twice() {
     let mut h = Harness::new(

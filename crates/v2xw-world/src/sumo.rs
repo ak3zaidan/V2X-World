@@ -2779,6 +2779,13 @@ fn import_parsed(
             let mut heads: Vec<SignalHead> = Vec::new();
             let mut seen_lane: Vec<LaneId> = Vec::new();
             for (position, (lane, _)) in controlled.iter().enumerate() {
+                // A head faces the approach lane and stands at its stop line: a connector's
+                // approach is the lane that feeds it, and a movement without a connector is
+                // listed by its approach lane already.
+                let lane = &connections
+                    .iter()
+                    .find(|c| c.via == Some(*lane))
+                    .map_or(*lane, |c| c.from_lane);
                 let approach = lanes[lane.as_usize()].end();
                 if seen_lane.contains(lane) {
                     continue;
@@ -4029,6 +4036,49 @@ mod tests {
             world.roads.junction(plan.junction).control,
             JunctionControl::Signalised { .. }
         ));
+    }
+
+    /// A head faces the approach lane a driver reads it from and stands at that lane's
+    /// stop line (`SignalHead::lane`), as the OSM and procedural builders place it — not on
+    /// the connector, whose end is the far side of the junction.
+    #[test]
+    fn each_head_stands_at_the_stop_line_of_its_approach() {
+        let (world, _) = import(&crossroads());
+        let plan = &world.signals[0];
+        assert_eq!(plan.heads.len(), 2, "one head per approach: west and south");
+        for h in &plan.heads {
+            let lane = world.roads.lane(h.lane);
+            assert_ne!(
+                lane.kind,
+                LaneKind::Internal,
+                "head on connector {:?}",
+                h.lane
+            );
+            let end = lane.end();
+            assert!(
+                (h.position.x - end.x).abs() < 1e-6 && (h.position.y - end.y).abs() < 1e-6,
+                "head at {:?}, stop line at {end:?}",
+                h.position
+            );
+        }
+        // And so every controlled movement finds its head through its approach.
+        let approach_of = |l: LaneId| {
+            world
+                .roads
+                .connections()
+                .iter()
+                .find(|c| c.via == Some(l))
+                .map(|c| c.from_lane)
+        };
+        let timelines = plan.group_timelines(approach_of);
+        for (group, timeline) in &timelines {
+            assert!(
+                timeline
+                    .iter()
+                    .any(|(s, _)| *s != crate::model::SignalState::Off),
+                "group {group} shows nothing: {timeline:?}"
+            );
+        }
     }
 
     #[test]
