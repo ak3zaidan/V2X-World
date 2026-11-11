@@ -16,9 +16,10 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # Weekly, not on every push: a full run is about 15 jobs of up to 75 minutes each.
+  # Run it by hand (Actions > CI > Run workflow, or `gh workflow run CI`) before a release.
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
 
 concurrency:

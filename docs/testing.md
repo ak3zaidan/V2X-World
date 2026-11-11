@@ -101,7 +101,9 @@ What each suite and the Python cross-check tools prove, and how to run them:
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs, on Ubuntu, macOS and Windows: `cargo fmt --all -- --check`,
+`.github/workflows/ci.yml` runs weekly (Mondays 06:00 UTC) and on demand (`gh workflow run
+CI`), not on every push, so run `just ci` locally before you push. It runs, on Ubuntu, macOS
+and Windows: `cargo fmt --all -- --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --profile ci --workspace`.
 A `rust-slow` job runs the slow-marked tests on Ubuntu in four shards
 (`tools/ci/slow-tests.sh <shard> 4`). A
